@@ -9,6 +9,8 @@ import { completeStepTool } from './completeStep.js';
 import { startStepTool } from './startStep.js';
 import { submitPlanTool } from './submitPlan.js';
 import { chatWaitTool } from './chatWait.js';
+import { claimNextTaskTool } from './claimNextTask.js';
+import { listAttempts } from '../state/attemptStore.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { addAccount, recordSignIn } from '../accounts/registry.js';
 import type { Epic, Project, Task, Worker } from '../types/schema.js';
@@ -16,9 +18,9 @@ import type { Epic, Project, Task, Worker } from '../types/schema.js';
 // The wrapper's two account tools, and the in-session switch: once a seat's
 // account is spent, complete_step tells the worker to end its session and
 // start_step refuses to begin another step on that account; between tasks,
-// submit_plan and chat_wait tell an architect or a governor whose session can
-// end itself (acceptsAccountSwitch, set by the moe-account-switch mod) to end
-// its turn.
+// submit_plan, chat_wait and claim_next_task tell an architect or a governor
+// whose session can end itself (acceptsAccountSwitch, set by the
+// moe-account-switch mod) to end its turn.
 
 const VITEST_ACCOUNTS_FILE = process.env.MOE_ACCOUNTS_FILE;
 
@@ -56,15 +58,24 @@ function setupProject(steps: Task['implementationPlan']): void {
   const planning: Task = {
     ...task, id: 'task-2', implementationPlan: [], status: 'PLANNING', assignedWorkerId: 'architect-a', contextFetchedBy: ['architect-a'], order: 2,
   };
+  // An unassigned PLANNING row, and an architect between tasks to claim it. Its
+  // own epic: a team-less seat may not share an epic+status a live seat holds.
+  const claimable: Task = { ...planning, id: 'task-3', epicId: 'epic-2', assignedWorkerId: null, contextFetchedBy: [], order: 3 };
   const seat = (id: string, currentTaskId: string | null, status: Worker['status']): Worker => ({
     id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId, status,
     teamId: null, branch: 'main', modifiedFiles: [], startedAt: now, lastActivityAt: now, lastError: null, errorCount: 0,
   });
   fs.writeFileSync(path.join(moePath, 'project.json'), JSON.stringify(project, null, 2));
   fs.writeFileSync(path.join(moePath, 'epics', 'epic-1.json'), JSON.stringify(epic, null, 2));
+  fs.writeFileSync(path.join(moePath, 'epics', 'epic-2.json'), JSON.stringify({ ...epic, id: 'epic-2', order: 2 }, null, 2));
   fs.writeFileSync(path.join(moePath, 'tasks', 'task-1.json'), JSON.stringify(task, null, 2));
   fs.writeFileSync(path.join(moePath, 'tasks', 'task-2.json'), JSON.stringify(planning, null, 2));
-  for (const worker of [seat('worker-a', 'task-1', 'CODING'), seat('architect-a', 'task-2', 'PLANNING'), seat('governor-a', null, 'IDLE')]) {
+  fs.writeFileSync(path.join(moePath, 'tasks', 'task-3.json'), JSON.stringify(claimable, null, 2));
+  const seats = [
+    seat('worker-a', 'task-1', 'CODING'), seat('architect-a', 'task-2', 'PLANNING'),
+    seat('architect-b', null, 'IDLE'), seat('governor-a', null, 'IDLE'),
+  ];
+  for (const worker of seats) {
     fs.writeFileSync(path.join(moePath, 'workers', `${worker.id}.json`), JSON.stringify(worker, null, 2));
   }
 }
@@ -359,5 +370,96 @@ describe('switching accounts between tasks', () => {
     const result = await waiting;
     expect(result).not.toHaveProperty('timedOut');
     expect(result).toMatchObject({ hasMessage: false, accountSwitch: { from: 'acct-1', to: 'acct-2', fromPeakPercent: 95 } });
+  });
+
+  describe('claim_next_task', () => {
+    const claim = (workerId: string, acceptsAccountSwitch = true, extra: Record<string, unknown> = {}) =>
+      claimNextTaskTool(state).handler({ workerId, statuses: ['PLANNING'], acceptsAccountSwitch, ...extra }, state) as Promise<Record<string, any>>;
+
+    /** architect-b, holding no task, leased on acct-1, which is now at `utilization`. */
+    async function idleArchitectOnAcct1(utilization: number): Promise<void> {
+      await load();
+      twoAccounts();
+      expect(await lease('architect-b')).toMatchObject({ accountId: 'acct-1' });
+      await reportUsage('acct-1', utilization, 'architect-b');
+    }
+
+    it('tells a seat between tasks to end its turn instead of claiming, and writes nothing', async () => {
+      await idleArchitectOnAcct1(0.93);
+      const expected = {
+        hasNext: false,
+        accountSwitch: {
+          from: 'acct-1',
+          to: 'acct-2',
+          fromPeakPercent: 93,
+          switchAtPercent: 90,
+          reason: 'usage',
+          instruction: 'ACCOUNT-SWITCH: Claude account One is at 93% of its usage limit (Moe switches at 90%). Claim nothing more and end your turn now: Moe restarts this seat on Two, and the new session claims the next task.',
+        },
+      };
+      const ranked = await claim('architect-b');
+      expect(ranked).toEqual(expected);
+      expect(ranked).not.toHaveProperty('nextAction');
+      expect(ranked.accountSwitch.instruction.startsWith('ACCOUNT-SWITCH:')).toBe(true);
+      // Naming the row is switched exactly like a ranked claim.
+      expect(await claim('architect-b', true, { taskId: 'task-3' })).toEqual(expected);
+
+      expect(state.getTask('task-3')?.assignedWorkerId).toBeNull();
+      expect(listAttempts(state, 'task-3')).toEqual([]);
+      expect(state.getWorker('architect-b')?.currentTaskId).toBeNull();
+      expect(state.getWorker('architect-b')?.status).toBe('IDLE');
+    });
+
+    it('claims as before for a session that cannot end itself', async () => {
+      await idleArchitectOnAcct1(0.93);
+      const result = await claim('architect-b', false);
+      expect(result).not.toHaveProperty('accountSwitch');
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-3');
+      expect(state.getTask('task-3')?.assignedWorkerId).toBe('architect-b');
+      expect(state.getWorker('architect-b')?.currentTaskId).toBe('task-3');
+    });
+
+    it('claims as before under the switch percent', async () => {
+      await idleArchitectOnAcct1(0.5);
+      const result = await claim('architect-b');
+      expect(result).not.toHaveProperty('accountSwitch');
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-3');
+      expect(state.getTask('task-3')?.assignedWorkerId).toBe('architect-b');
+    });
+
+    it('gives a seat that holds a task the unchanged alreadyAssigned reply', async () => {
+      await load();
+      twoAccounts();
+      await lease('architect-a');
+      await reportUsage('acct-1', 0.93, 'architect-a');
+      const flagged = await claim('architect-a');
+      expect(flagged).not.toHaveProperty('accountSwitch');
+      expect(flagged.alreadyAssigned).toMatchObject({ taskId: 'task-2', status: 'PLANNING' });
+      expect(flagged).toEqual(await claim('architect-a', false));
+      expect(state.getTask('task-3')?.assignedWorkerId).toBeNull();
+    });
+
+    it('claims as before for a seat that never leased', async () => {
+      await load();
+      twoAccounts();
+      await reportUsage('acct-1', 0.97, null);
+      const result = await claim('architect-b');
+      expect(result).not.toHaveProperty('accountSwitch');
+      expect(result.hasNext).toBe(true);
+      expect(result.task.id).toBe('task-3');
+      expect(state.getTask('task-3')?.assignedWorkerId).toBe('architect-b');
+    });
+
+    it('still sends a governor to enter_governance', async () => {
+      await load();
+      twoAccounts();
+      await lease('governor-a');
+      await reportUsage('acct-1', 0.93, 'governor-a');
+      const result = await claim('governor-a');
+      expect(result).not.toHaveProperty('accountSwitch');
+      expect(result).toMatchObject({ hasNext: false, nextAction: { tool: 'moe.enter_governance' } });
+    });
   });
 });

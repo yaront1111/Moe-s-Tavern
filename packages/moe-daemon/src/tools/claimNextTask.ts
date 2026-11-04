@@ -6,6 +6,7 @@ import { MoeError, missingRequired, notAllowed, invalidState, notFound, invalidI
 import { WORKER_TYPE_SCHEMA, normalizeWorkerType, refreshWorkerType } from './joinTeam.js';
 import { closeOpenAttempts, currentAttempt, listAttempts, openAttempt } from '../state/attemptStore.js';
 import { endReloadHold } from '../state/workerLifecycle.js';
+import { ACCEPTS_ACCOUNT_SWITCH, accountSwitchReply, idleSwitchFor } from '../state/accountStore.js';
 import { planSubmissionSnapshot } from '../state/taskStore.js';
 import { resolveAttemptWorkspace, resolveWorktreeMode } from '../state/validators.js';
 import { validateEntityId } from '../util/sanitize.js';
@@ -389,7 +390,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
     // would hold the fleet-wide mutex across it. Every read and write of the
     // claim stays inside that runExclusive.
     blocking: true,
-    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim.',
+    description: 'Claim a task: by id (taskId) or the next prioritized task matching statuses. Assigns workerId if provided. Agents claim only PLANNING (architect), WORKING (worker), or REVIEW (qa) — other columns are human-gated. WORKING claims are withheld until every dependsOn task is DONE/ARCHIVED (a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). When nothing is claimable it returns hasNext:false with a nextAction (moe.wait_for_task; moe.enter_governance for governors); a worker that already holds a task gets hasNext:false with alreadyAssigned naming it instead of a new claim. With acceptsAccountSwitch (set only by the moe-account-switch mod), a seat holding no task whose Claude account must switch gets hasNext:false with accountSwitch instead of a claim and must end its turn.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -419,7 +420,8 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
         preferAdjacentInEpic: {
           type: 'boolean',
           description: 'When true (default), among claimable tasks of EQUAL priority prefer those in the worker\'s current/last epic. A higher-priority task in another epic always wins. Lets a worker waiting on wait_for_task pick up the next claimable task in the same epic.'
-        }
+        },
+        acceptsAccountSwitch: ACCEPTS_ACCOUNT_SWITCH
       },
       required: ['statuses'],
       additionalProperties: false
@@ -444,6 +446,7 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
           host?: unknown;
           workerType?: unknown;
           executionRoute?: unknown;
+          acceptsAccountSwitch?: unknown;
         };
         const statuses = params.statuses || [];
         if (statuses.length === 0) {
@@ -546,6 +549,25 @@ export function claimNextTaskTool(_state: StateManager): ToolDefinition {
               taskId: finalizing.taskId,
               workerId: finalizing.workerId,
             });
+          }
+
+          // A seat between tasks whose Claude account must switch (the
+          // moe-account-switch mod sets the flag on a session that ends
+          // itself) claims nothing: a new task would run on the spent account.
+          // After every answer above, so a held task's resume or refusal wins
+          // (idleSwitchFor is null while the seat holds one), and before any
+          // ranking or write. No nextAction: a claim or wait hint would put the
+          // next task on that account; the relaunched session claims it.
+          const change = params.acceptsAccountSwitch === true ? idleSwitchFor(state, params.workerId) : null;
+          if (change) {
+            logger.info({ workerId: params.workerId, to: change.to }, 'Claim skipped: Claude account switch due');
+            return {
+              hasNext: false,
+              accountSwitch: accountSwitchReply(
+                change,
+                `Claim nothing more and end your turn now: Moe restarts this seat on ${change.toLabel}, and the new session claims the next task.`
+              ),
+            };
           }
         }
 

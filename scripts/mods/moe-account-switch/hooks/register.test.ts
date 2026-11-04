@@ -158,6 +158,45 @@ test('without a leased account an account switch is ignored', async ($, on) => {
   expect(seen.commands).toEqual([])
 })
 
+// An architect whose row ended without submit_plan (archive_task) claims its
+// next row in-session: the claim is a switch point too.
+const CLAIM_SWITCH = switchReply('Claim nothing more and end your turn now: Moe restarts this seat on Two, and the new session claims the next task.', { hasNext: false })
+
+test('a claim answered with a switch claims nothing more and ends the session after the turn', async ($, on) => {
+  mock.env(on, { ...SEAT, MOE_WORKER_ID: 'architect-1' })
+  const clock = mock.clock(on)
+  const seen = engine(on, { claim_next_task: CLAIM_SWITCH })
+  await $.turn.start({ text: 'plan', turnId: 't1' })
+  expect(await call($, 'claim_next_task', { statuses: ['PLANNING'] })).toEqual({ result: JSON.stringify(CLAIM_SWITCH) })
+  expect(seen.calls[0]).toMatchObject({ statuses: ['PLANNING'], acceptsAccountSwitch: true })
+
+  // A second claim in that turn is refused before it reaches the daemon.
+  expect((await call($, 'claim_next_task', { statuses: ['PLANNING'] })).deny).toBe(CLAIM_SWITCH.accountSwitch.instruction)
+  expect(seen.aborted).toEqual(['t1'])
+  expect(seen.calls).toHaveLength(1)
+
+  await $.turn.complete({ ...TURN, turnId: 't1' })
+  expect(seen.toasts).toEqual([`Moe: ${CAUSE}. This session ends in 10 s and restarts on the next account.`])
+  await clock.advance(EXIT_DELAY_MS - 1)
+  expect(seen.commands).toEqual([])
+  await clock.advance(1)
+  expect(seen.commands).toEqual(['exit'])
+})
+
+test('without a leased account a claim carries no acceptsAccountSwitch', async ($, on) => {
+  mock.env(on, { MOE_WORKER_ID: 'architect-1' })
+  const clock = mock.clock(on)
+  const seen = engine(on, { claim_next_task: CLAIM_SWITCH })
+  await $.turn.start({ text: 'plan', turnId: 't1' })
+  await call($, 'claim_next_task', { statuses: ['PLANNING'] })
+  expect(seen.calls[0]).toMatchObject({ statuses: ['PLANNING'] })
+  expect(seen.calls[0]).not.toHaveProperty('acceptsAccountSwitch')
+  await $.turn.complete({ ...TURN, turnId: 't1' })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual([])
+  expect(seen.toasts).toEqual([])
+})
+
 test("a subagent's turn ending leaves the session running", async ($, on) => {
   mock.env(on, SEAT)
   const clock = mock.clock(on)

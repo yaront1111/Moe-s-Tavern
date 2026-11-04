@@ -4,10 +4,11 @@ import type { EngineInterface, Register, Timer, ToolCallResult } from 'claude-co
 // whose loop relaunches it) ends its session when Moe says so, and the wrapper
 // relaunches it. Three triggers:
 // - Account switch: the seat moves to the next Claude account the way a
-//   headless worker does. This mod marks submit_plan and chat_wait as calls the
-//   session can act on (acceptsAccountSwitch) and notices the accountSwitch a
-//   moe reply carries, or claude stopping at the usage limit. Needs a leased
-//   seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by scripts/moe-agent.{sh,ps1}).
+//   headless worker does. This mod marks submit_plan, chat_wait and
+//   claim_next_task as calls the session can act on (acceptsAccountSwitch) and
+//   notices the accountSwitch a moe reply carries, or claude stopping at the
+//   usage limit. Needs a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by
+//   scripts/moe-agent.{sh,ps1}).
 // - END_SESSION: the sessionHandoff a moe reply addresses to this seat
 //   (report_blocked freed it, or a claim_next_task/wait_for_task refusal over a
 //   resource-held task). A TUI cannot end itself, and the next task needs a
@@ -39,10 +40,14 @@ const ENDED_FALLBACK = 'End your turn now: Moe relaunches this seat.'
 export const IDLE = 'SESSION-END: this seat holds no task, so this session is ending. End your turn now: the wrapper claims the next task in a fresh session.'
 
 const MOE_TOOL = /^mcp__.+__moe_([a-z_]+)$/
-/** The daemon switches a seat between tasks only when the call says the session can end itself. */
-const MARKED = new Set(['submit_plan', 'chat_wait'])
+/**
+ * The daemon switches a seat between tasks only when the call says the session
+ * can end itself. claim_next_task covers a row that ended without submit_plan
+ * (archive_task), so the next in-session claim lands on the next account.
+ */
+const MARKED = new Set(['submit_plan', 'chat_wait', 'claim_next_task'])
 /** Replies whose top-level accountSwitch tells the seat to switch. */
-const SIGNALS = new Set(['submit_plan', 'chat_wait', 'complete_step'])
+const SIGNALS = new Set(['submit_plan', 'chat_wait', 'claim_next_task', 'complete_step'])
 /** Calls that start new work: refused once a switch is due. */
 const HELD = new Set(['claim_next_task', 'wait_for_task', 'chat_wait', 'start_step'])
 

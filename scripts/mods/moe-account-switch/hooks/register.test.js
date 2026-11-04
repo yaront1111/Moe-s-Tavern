@@ -1,0 +1,818 @@
+import { expect, mock, test } from 'claude-code/testing';
+import { EXIT_DELAY_MS, IDLE } from './register.ts';
+const SEAT = { MOE_WORKER_ID: 'governor-1', MOE_ACCOUNT_ID: 'acct-1' };
+const CAUSE = 'Claude account One is at 93% of its usage limit (Moe switches at 90%)';
+const switchReply = (next, rest = {}) => ({
+    ...rest,
+    accountSwitch: {
+        from: 'acct-1', to: 'acct-2', fromPeakPercent: 93, switchAtPercent: 90, reason: 'usage',
+        instruction: `ACCOUNT-SWITCH: ${CAUSE}. ${next}`,
+    },
+});
+const WAIT_SWITCH = switchReply('End your turn now and do not call chat_wait again: Moe restarts this seat on Two.', { hasMessage: false });
+const PLAN_SWITCH = switchReply('Your submission for task-1 is recorded. End your turn now and do not claim or plan another task: Moe restarts this seat on Two, and the new session picks up the next task.', { success: true });
+const TURN = { answer: 'ok', durationMs: 1, isAborted: false, reason: 'answer' };
+// Stands for core and the moe daemon: answers each moe tool with its reply as
+// JSON text (as the MCP adapter sends it), a string reply as a tool error, and
+// records what reached the daemon and what the mod asked of the engine. A call
+// on $ (turn.abort, ui.toast, session.usage, session.cwd, process.run) is
+// answered with { value }.
+const usage = (...percents) => ({
+    startedAt: 0, context: { window: 200_000 },
+    rateLimits: percents.map((percentUsed, i) => ({ kind: i === 0 ? 'five_hour' : 'spend_limit', percentUsed })),
+});
+/** The mod's child that names its own CLI: it prints its parent's PID, 4242 here. */
+const PID = ['sh', '-c', 'echo "$PPID"'];
+const KILL = ['sh', '-c', 'kill -TERM "$1"', 'sh', '4242'];
+function engine(on, replies = {}, readUsage = usage, world = {}) {
+    const held = [];
+    const seen = {
+        calls: [], commands: [], toasts: [], aborted: [],
+        processes: [], completions: 0, usageReads: 0, stopFailures: 0, timers: 0,
+        /** Answers every /exit still held open. */
+        release: () => { for (const answer of held.splice(0))
+            answer(); },
+    };
+    on('tool.call', ($, e) => {
+        seen.calls.push({ ...e });
+        const reply = replies[e.tool.replace(/^mcp__moe__moe_/, '')] ?? { success: true };
+        return typeof reply === 'string' ? { isError: true, result: reply } : { result: JSON.stringify(reply) };
+    });
+    on('turn.start', ($, e) => ({ turnId: e.turnId }));
+    on('turn.complete', ($, e) => { seen.completions++; return { text: e.answer }; });
+    on('session.usage', async () => { seen.usageReads++; return { value: await readUsage() }; });
+    // A glob can observe the timer without duplicating mock.clock's exact hook.
+    on('clock.*', ($, e, next) => { if (next.event === 'clock.after')
+        seen.timers++; return next(e); });
+    on('turn.abort', ($, e) => { seen.aborted.push(e.turnId); return { value: undefined }; });
+    on('command.run', ($, e) => {
+        seen.commands.push(e.command);
+        if (world.exitFails)
+            throw new Error('no /exit here');
+        if (world.exitHangs)
+            return new Promise(resolve => { held.push(() => resolve({})); });
+        return {};
+    });
+    on('process.run', ($, e) => {
+        seen.processes.push([...e.argv]);
+        const pid = e.argv.join('\n') === PID.join('\n');
+        if (world.runThrows === (pid ? 'pid' : 'kill'))
+            throw new Error(`cannot start ${e.argv[0]}`);
+        return { value: {
+                exitCode: (pid ? world.pidExit : world.killExit) ?? 0, stdout: pid ? world.pidStdout ?? '4242\n' : '',
+                stderr: '', isStdoutTruncated: false, isStderrTruncated: false,
+            } };
+    });
+    on('session.cwd', () => ({ value: world.cwd ?? '/proj' }));
+    on('session.surfaces', () => ({ value: (world.surfaces ?? (() => ['terminal']))() }));
+    on('ui.toast', ($, e) => { seen.toasts.push(e.text); return { value: undefined }; });
+    on('classic.StopFailure', () => { seen.stopFailures++; return {}; });
+    return seen;
+}
+const call = ($, name, args = {}) => $.tool.call({ tool: `mcp__moe__moe_${name}`, ...args });
+test('a switch reply ends the session once the turn is over, and only once', async ($, on) => {
+    mock.env(on, SEAT);
+    const clock = mock.clock(on);
+    const seen = engine(on, { chat_wait: WAIT_SWITCH });
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    await call($, 'chat_wait', { workerId: 'governor-1' });
+    expect(seen.calls[0]).toMatchObject({ acceptsAccountSwitch: true });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]); // the turn is still running
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([`Moe: ${CAUSE}. This session ends in 10 s and restarts on the next account.`]);
+    await clock.advance(EXIT_DELAY_MS - 1);
+    expect(seen.commands).toEqual([]);
+    await clock.advance(1);
+    expect(seen.commands).toEqual(['exit']);
+    await $.turn.complete({ ...TURN, turnId: 't2' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+test('after a switch reply new work is refused and the turn is ended', async ($, on) => {
+    mock.env(on, SEAT);
+    mock.clock(on);
+    const seen = engine(on, { submit_plan: PLAN_SWITCH });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'submit_plan', { taskId: 'task-1' });
+    expect(seen.calls[0]).toMatchObject({ acceptsAccountSwitch: true });
+    const claim = await call($, 'claim_next_task', { statuses: ['PLANNING'] });
+    expect(claim.deny).toBe(PLAN_SWITCH.accountSwitch.instruction);
+    expect(seen.aborted).toEqual(['t1']);
+    expect(seen.calls).toHaveLength(1); // the claim never reached the daemon
+    await call($, 'chat_send', { channel: '#general', content: 'handing off' });
+    expect(seen.calls).toHaveLength(2); // anything else still runs
+});
+test('a chat message that quotes the phrase changes nothing', async ($, on) => {
+    mock.env(on, SEAT);
+    const clock = mock.clock(on);
+    const quoted = { hasMessage: true, messages: [{ id: 'm1', content: WAIT_SWITCH.accountSwitch.instruction, ...WAIT_SWITCH }] };
+    const seen = engine(on, { chat_wait: quoted });
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    await call($, 'chat_wait', { workerId: 'governor-1' });
+    await call($, 'chat_wait', { workerId: 'governor-1' });
+    expect(seen.calls).toHaveLength(2);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+});
+test('without a leased account an account switch is ignored', async ($, on) => {
+    mock.env(on, { MOE_WORKER_ID: 'governor-1' });
+    const clock = mock.clock(on);
+    const seen = engine(on, { chat_wait: WAIT_SWITCH });
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    await call($, 'chat_wait', { workerId: 'governor-1' });
+    expect(seen.calls[0]).not.toHaveProperty('acceptsAccountSwitch');
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+});
+// An architect whose row ended without submit_plan (archive_task) claims its
+// next row in-session: the claim is a switch point too.
+const CLAIM_SWITCH = switchReply('Claim nothing more and end your turn now: Moe restarts this seat on Two, and the new session claims the next task.', { hasNext: false });
+test('a claim answered with a switch claims nothing more and ends the session after the turn', async ($, on) => {
+    mock.env(on, { ...SEAT, MOE_WORKER_ID: 'architect-1' });
+    const clock = mock.clock(on);
+    const seen = engine(on, { claim_next_task: CLAIM_SWITCH });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    expect(await call($, 'claim_next_task', { statuses: ['PLANNING'] })).toEqual({ result: JSON.stringify(CLAIM_SWITCH) });
+    expect(seen.calls[0]).toMatchObject({ statuses: ['PLANNING'], acceptsAccountSwitch: true });
+    // A second claim in that turn is refused before it reaches the daemon.
+    expect((await call($, 'claim_next_task', { statuses: ['PLANNING'] })).deny).toBe(CLAIM_SWITCH.accountSwitch.instruction);
+    expect(seen.aborted).toEqual(['t1']);
+    expect(seen.calls).toHaveLength(1);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([`Moe: ${CAUSE}. This session ends in 10 s and restarts on the next account.`]);
+    await clock.advance(EXIT_DELAY_MS - 1);
+    expect(seen.commands).toEqual([]);
+    await clock.advance(1);
+    expect(seen.commands).toEqual(['exit']);
+});
+test('without a leased account a claim carries no acceptsAccountSwitch', async ($, on) => {
+    mock.env(on, { MOE_WORKER_ID: 'architect-1' });
+    const clock = mock.clock(on);
+    const seen = engine(on, { claim_next_task: CLAIM_SWITCH });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'claim_next_task', { statuses: ['PLANNING'] });
+    expect(seen.calls[0]).toMatchObject({ statuses: ['PLANNING'] });
+    expect(seen.calls[0]).not.toHaveProperty('acceptsAccountSwitch');
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+    expect(seen.toasts).toEqual([]);
+});
+test("a subagent's turn ending leaves the session running", async ($, on) => {
+    mock.env(on, SEAT);
+    const clock = mock.clock(on);
+    const seen = engine(on, { chat_wait: WAIT_SWITCH });
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    await call($, 'chat_wait', { workerId: 'governor-1' });
+    await $.turn.complete({ ...TURN, turnId: 'sub-1', agentId: 'agent-1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+test("a worker's step-boundary switch ends an interactive worker's session too", async ($, on) => {
+    mock.env(on, { ...SEAT, MOE_WORKER_ID: 'worker-1' });
+    const clock = mock.clock(on);
+    const seen = engine(on, {
+        complete_step: switchReply('Step step-1 is saved. End your session now and do not start another step.', { success: true }),
+    });
+    await $.turn.start({ text: 'work', turnId: 't1' });
+    await call($, 'complete_step', { taskId: 'task-1', stepId: 'step-1' });
+    expect(seen.calls[0]).not.toHaveProperty('acceptsAccountSwitch');
+    expect((await call($, 'start_step', { taskId: 'task-1', stepId: 'step-2' })).deny).toMatch(/^ACCOUNT-SWITCH: /);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+test('a start_step refusal that names the switch counts as the signal', async ($, on) => {
+    mock.env(on, { ...SEAT, MOE_WORKER_ID: 'worker-1' });
+    const clock = mock.clock(on);
+    const seen = engine(on, {
+        start_step: `MCP error -32003: ACCOUNT-SWITCH: ${CAUSE}. Do not start step step-2 in this session; it stays pending.`,
+    });
+    await $.turn.start({ text: 'work', turnId: 't1' });
+    await call($, 'start_step', { taskId: 'task-1', stepId: 'step-2' });
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+for (const [percent, exits] of [[100, true], [40, false]]) {
+    test(`a rate-limit stop at ${percent}% usage ${exits ? 'ends' : 'leaves'} the session`, async ($, on) => {
+        mock.env(on, SEAT);
+        const clock = mock.clock(on);
+        const seen = engine(on, {}, () => usage(percent));
+        await $.classic.StopFailure({ error: 'rate_limit' });
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(exits ? ['exit'] : []);
+    });
+}
+test('a swallowed StopFailure still rotates at main completion', {
+    plugins: [{ name: 'swallow-stop-failure', tier: 'prepend', register(on) {
+                on('classic.StopFailure', () => ({}));
+            } }],
+}, async ($, on) => {
+    mock.env(on, SEAT);
+    const seen = engine(on, {}, () => usage(100));
+    const clock = mock.clock(on);
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    await $.classic.StopFailure({ error: 'rate_limit' });
+    expect(seen.stopFailures).toBe(0);
+    expect(seen.usageReads).toBe(0);
+    expect(seen.timers).toBe(0);
+    expect(await $.turn.complete({ ...TURN, turnId: 't1', reason: 'error' })).toEqual({ text: 'ok' });
+    expect(seen.completions).toBe(1);
+    expect(seen.usageReads).toBe(1);
+    expect(seen.timers).toBe(1);
+    await clock.advance(EXIT_DELAY_MS - 1);
+    expect(seen.commands).toEqual([]);
+    await clock.advance(1);
+    expect(seen.commands).toEqual(['exit']);
+    expect(seen.toasts).toEqual(['Moe: this Claude account reached its usage limit. This session ends in 10 s and restarts on the next account.']);
+});
+for (const percents of [[100], [99.9, 100], [0, 101], [0, 99.9], []]) {
+    test(`completion without StopFailure checks all windows: ${JSON.stringify(percents)}`, async ($, on) => {
+        mock.env(on, SEAT);
+        const seen = engine(on, {}, () => usage(...percents));
+        const clock = mock.clock(on);
+        expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+        expect(seen.stopFailures).toBe(0);
+        expect(seen.usageReads).toBe(1);
+        const exits = percents.some(percent => percent >= 100);
+        expect(seen.timers).toBe(exits ? 1 : 0);
+        expect(seen.toasts).toHaveLength(exits ? 1 : 0);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(exits ? ['exit'] : []);
+    });
+}
+for (const env of [{ MOE_WORKER_ID: '', MOE_ACCOUNT_ID: 'acct-1' }, { MOE_WORKER_ID: 'governor-1', MOE_ACCOUNT_ID: '' }, { MOE_WORKER_ID: '', MOE_ACCOUNT_ID: '' }]) {
+    test(`completion ignores a missing seat variable: ${JSON.stringify(env)}`, async ($, on) => {
+        mock.env(on, env);
+        const seen = engine(on, {}, () => usage(100));
+        const clock = mock.clock(on);
+        expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+        expect(seen.usageReads).toBe(0);
+        expect(seen.toasts).toEqual([]);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+    });
+}
+test('a subagent does not read spent usage but the next main completion does', async ($, on) => {
+    mock.env(on, SEAT);
+    const seen = engine(on, {}, () => usage(100));
+    const clock = mock.clock(on);
+    await $.turn.complete({ ...TURN, turnId: 'sub-1', agentId: 'agent-1' });
+    expect(seen.usageReads).toBe(0);
+    expect(seen.toasts).toEqual([]);
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+for (const failure of ['usage', 'env']) {
+    test(`${failure} failure leaves completion and future work unchanged`, async ($, on) => {
+        let broken = true;
+        on('env.get', ($, e) => {
+            if (broken && failure === 'env')
+                throw new Error('env unavailable');
+            return { value: SEAT[e.name] };
+        });
+        const seen = engine(on, {}, () => {
+            if (broken && failure === 'usage')
+                throw new Error('usage unavailable');
+            return usage(100);
+        });
+        const clock = mock.clock(on);
+        expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+        expect(seen.completions).toBe(1);
+        expect(seen.toasts).toEqual([]);
+        expect(seen.timers).toBe(0);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+        broken = false;
+        expect((await call($, 'start_step')).deny).toBe(undefined);
+        expect(seen.calls).toHaveLength(1);
+        expect(await $.turn.complete({ ...TURN, turnId: 't2' })).toEqual({ text: 'ok' });
+        expect(seen.completions).toBe(2);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(['exit']);
+    });
+}
+test('a pending daemon instruction exits without reading unavailable usage', async ($, on) => {
+    mock.env(on, SEAT);
+    const seen = engine(on, { chat_wait: WAIT_SWITCH }, () => { throw new Error('usage unavailable'); });
+    const clock = mock.clock(on);
+    await call($, 'chat_wait');
+    expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+    expect(seen.usageReads).toBe(0);
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+    expect(seen.toasts[0]).toContain(CAUSE);
+});
+for (const order of ['stop-first', 'completion-first', 'concurrent']) {
+    test(`${order} and repeated completions schedule only one exit`, async ($, on) => {
+        mock.env(on, SEAT);
+        const seen = engine(on, {}, () => usage(100));
+        const clock = mock.clock(on);
+        const complete = () => $.turn.complete({ ...TURN, turnId: 't1' });
+        const stop = () => $.classic.StopFailure({ error: 'rate_limit' });
+        if (order === 'stop-first') {
+            await stop();
+            await complete();
+        }
+        if (order === 'completion-first') {
+            await complete();
+            await stop();
+        }
+        if (order === 'concurrent')
+            await Promise.all([complete(), complete(), stop()]);
+        await Promise.all([complete(), complete()]);
+        expect(seen.timers).toBe(1);
+        expect(seen.toasts).toHaveLength(1);
+        await clock.advance(EXIT_DELAY_MS * 2);
+        expect(seen.commands).toEqual(['exit']);
+    });
+}
+test('usage awaiting a daemon signal cannot replace its instruction', async ($, on) => {
+    mock.env(on, SEAT);
+    let resolveUsage;
+    const seen = engine(on, { chat_wait: WAIT_SWITCH }, () => new Promise(resolve => { resolveUsage = resolve; }));
+    const clock = mock.clock(on);
+    const completion = $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.settle();
+    expect(seen.usageReads).toBe(1);
+    await call($, 'chat_wait');
+    resolveUsage(usage(100));
+    expect(await completion).toEqual({ text: 'ok' });
+    expect((await call($, 'start_step')).deny).toBe(WAIT_SWITCH.accountSwitch.instruction);
+    expect(seen.toasts[0]).toContain(CAUSE);
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+// The daemon's END_SESSION handoff: report_blocked freed the seat, or a claim
+// was refused over a resource-held task. Needs only MOE_WORKER_ID.
+const WORKER = { MOE_WORKER_ID: 'architect-1' };
+const REASON = 'End this session so the wrapper can checkpoint the task it launched. Do not call moe.claim_next_task or moe.wait_for_task inside this session.';
+const handoff = (fields = {}) => ({
+    success: true, taskId: 'task-1', taskStatus: 'BLOCKED', seatFreed: true,
+    sessionHandoff: { action: 'END_SESSION', taskId: 'task-1', workerId: 'architect-1', reason: REASON, ...fields },
+});
+const HELD = {
+    hasNext: false, alreadyAssigned: { taskId: 'task-1', title: 'bench run', status: 'BLOCKED', blockedResourceId: 'bench' },
+    sessionHandoff: { action: 'END_SESSION', taskId: 'task-1', workerId: 'governor-1', reason: 'You hold task-1, BLOCKED on resource bench. Save the handoff and end this session.' },
+};
+const ENDED_TOAST = 'Moe: this task session is over. This session ends in 10 s and Moe relaunches it.';
+const ACCOUNT_TOAST = `Moe: ${CAUSE}. This session ends in 10 s and restarts on the next account.`;
+test('an END_SESSION handoff ends an unrotated seat once the main turn is over, and only once', async ($, on) => {
+    mock.env(on, WORKER);
+    const clock = mock.clock(on);
+    const seen = engine(on, { report_blocked: handoff() });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    expect(await call($, 'report_blocked', { taskId: 'task-1' })).toEqual({ result: JSON.stringify(handoff()) });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]); // the turn is still running
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([ENDED_TOAST]);
+    await clock.advance(EXIT_DELAY_MS - 1);
+    expect(seen.commands).toEqual([]);
+    await clock.advance(1);
+    expect(seen.commands).toEqual(['exit']);
+    await $.turn.complete({ ...TURN, turnId: 't2' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+test('a claim refused over a resource-held task ends a leased seat as a task session', async ($, on) => {
+    mock.env(on, SEAT);
+    const clock = mock.clock(on);
+    const seen = engine(on, { claim_next_task: HELD });
+    await $.turn.start({ text: 'govern', turnId: 't1' });
+    expect(await call($, 'claim_next_task')).toEqual({ result: JSON.stringify(HELD) });
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([ENDED_TOAST]);
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+test('after an END_SESSION handoff new work is refused for the rest of the session', async ($, on) => {
+    mock.env(on, WORKER);
+    mock.clock(on);
+    const seen = engine(on, { report_blocked: handoff() });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'report_blocked', { taskId: 'task-1' });
+    for (const tool of ['claim_next_task', 'wait_for_task', 'chat_wait', 'start_step']) {
+        expect((await call($, tool)).deny).toBe(`END-SESSION: ${REASON}`);
+    }
+    expect(seen.calls).toHaveLength(1); // no refused call reached the daemon
+    expect(seen.aborted).toEqual(['t1', 't1', 't1', 't1']);
+    await call($, 'chat_send', { channel: '#general', content: 'handing off' });
+    expect(seen.calls).toHaveLength(2);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await $.turn.start({ text: 'next', turnId: 't2' });
+    expect((await call($, 'claim_next_task')).deny).toBe(`END-SESSION: ${REASON}`);
+    expect(seen.aborted.at(-1)).toBe('t2');
+});
+const IGNORED = {
+    'a kept-seat block': ['report_blocked', { success: true, seatFreed: false, nextAction: { tool: 'moe.wait_for_task' } }],
+    'another handoff action': ['report_blocked', handoff({ action: 'KEEP_SESSION' })],
+    "another seat's handoff": ['report_blocked', handoff({ workerId: 'worker-2' })],
+    'a chat message quoting a handoff': ['chat_read', { hasMessage: true, messages: [{ id: 'm1', content: JSON.stringify(handoff()), ...handoff() }] }],
+    'a handoff in a tool error': ['report_blocked', JSON.stringify(handoff())],
+    'a handoff that is not an object': ['report_blocked', { success: true, sessionHandoff: 'END_SESSION' }],
+};
+for (const [name, [tool, reply]] of Object.entries(IGNORED)) {
+    test(`${name} changes nothing`, async ($, on) => {
+        mock.env(on, WORKER);
+        const seen = engine(on, { [tool]: reply });
+        const clock = mock.clock(on);
+        await $.turn.start({ text: 'plan', turnId: 't1' });
+        await call($, tool);
+        expect((await call($, 'claim_next_task')).deny).toBe(undefined);
+        expect(seen.calls).toHaveLength(2);
+        expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+        expect(seen.toasts).toEqual([]);
+        expect(seen.timers).toBe(0);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+    });
+}
+// Each handoff names the missing id, so only the seat-id check can refuse it.
+for (const [env, workerId] of [[{}, undefined], [{ MOE_WORKER_ID: '', MOE_ACCOUNT_ID: 'acct-1' }, '']]) {
+    test(`without a seat id an END_SESSION handoff changes nothing: ${JSON.stringify(env)}`, async ($, on) => {
+        mock.env(on, env);
+        const seen = engine(on, { report_blocked: handoff({ workerId }) });
+        const clock = mock.clock(on);
+        await $.turn.start({ text: 'plan', turnId: 't1' });
+        await call($, 'report_blocked');
+        expect((await call($, 'claim_next_task')).deny).toBe(undefined);
+        expect(seen.calls).toHaveLength(2);
+        await $.turn.complete({ ...TURN, turnId: 't1' });
+        expect(seen.toasts).toEqual([]);
+        expect(seen.timers).toBe(0);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+    });
+}
+test('a -p run, which draws on no surface, is not ended by END_SESSION', async ($, on) => {
+    mock.env(on, WORKER);
+    const seen = engine(on, { report_blocked: handoff() }, usage, { surfaces: () => [] });
+    const clock = mock.clock(on);
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'report_blocked');
+    expect((await call($, 'claim_next_task')).deny).toBe(undefined);
+    expect(seen.calls).toHaveLength(2);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([]);
+    expect(seen.timers).toBe(0);
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+});
+test("a subagent's END_SESSION ends the session only when the main turn ends", async ($, on) => {
+    mock.env(on, WORKER);
+    const clock = mock.clock(on);
+    const seen = engine(on, { report_blocked: handoff() });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'report_blocked', { taskId: 'task-1', agentId: 'agent-1' });
+    await $.turn.complete({ ...TURN, turnId: 'sub-1', agentId: 'agent-1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.toasts).toEqual([]);
+    expect(seen.commands).toEqual([]);
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+for (const failure of ['surfaces', 'env']) {
+    test(`a ${failure} failure leaves an END_SESSION reply and the session unchanged`, async ($, on) => {
+        if (failure === 'env')
+            on('env.get', () => { throw new Error('env unavailable'); });
+        else
+            mock.env(on, WORKER);
+        const seen = engine(on, { report_blocked: handoff() }, usage, {
+            surfaces: failure === 'surfaces' ? () => { throw new Error('surfaces unavailable'); } : undefined,
+        });
+        const clock = mock.clock(on);
+        await $.turn.start({ text: 'plan', turnId: 't1' });
+        expect(await call($, 'report_blocked')).toEqual({ result: JSON.stringify(handoff()) });
+        expect(seen.calls).toHaveLength(1);
+        expect((await call($, 'claim_next_task')).deny).toBe(undefined);
+        expect(seen.calls).toHaveLength(2);
+        expect(await $.turn.complete({ ...TURN, turnId: 't1' })).toEqual({ text: 'ok' });
+        expect(seen.toasts).toEqual([]);
+        expect(seen.timers).toBe(0);
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+    });
+}
+for (const first of ['account switch', 'END_SESSION']) {
+    test(`the first signal wins: ${first} first`, async ($, on) => {
+        mock.env(on, SEAT);
+        mock.clock(on);
+        const seen = engine(on, { submit_plan: PLAN_SWITCH, report_blocked: handoff({ workerId: 'governor-1' }) });
+        await $.turn.start({ text: 'govern', turnId: 't1' });
+        const signals = first === 'END_SESSION' ? ['report_blocked', 'submit_plan'] : ['submit_plan', 'report_blocked'];
+        for (const tool of signals)
+            await call($, tool);
+        const accountFirst = first === 'account switch';
+        expect((await call($, 'claim_next_task')).deny).toBe(accountFirst ? PLAN_SWITCH.accountSwitch.instruction : `END-SESSION: ${REASON}`);
+        await $.turn.complete({ ...TURN, turnId: 't1' });
+        expect(seen.toasts).toEqual([accountFirst ? ACCOUNT_TOAST : ENDED_TOAST]);
+    });
+}
+for (const kind of ['END_SESSION', 'account switch']) {
+    test(`a failed /exit asks for one by hand: ${kind}`, async ($, on) => {
+        const ended = kind === 'END_SESSION';
+        mock.env(on, ended ? WORKER : SEAT);
+        const clock = mock.clock(on);
+        const seen = engine(on, ended ? { report_blocked: handoff() } : { chat_wait: WAIT_SWITCH }, usage, { exitFails: true });
+        await $.turn.start({ text: 'plan', turnId: 't1' });
+        await call($, ended ? 'report_blocked' : 'chat_wait');
+        await $.turn.complete({ ...TURN, turnId: 't1' });
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(['exit']);
+        expect(seen.toasts).toEqual(ended
+            ? [ENDED_TOAST, 'Moe: this task session is over. Type /exit and Moe relaunches it.']
+            : [ACCOUNT_TOAST, 'Moe: this seat must restart on the next Claude account. Type /exit and Moe relaunches it.']);
+    });
+}
+for (const [reason, deny] of [
+    [7, 'END-SESSION: End your turn now: Moe relaunches this seat.'],
+    ['  ', 'END-SESSION: End your turn now: Moe relaunches this seat.'],
+    ['  Stop here.  ', 'END-SESSION: Stop here.'],
+]) {
+    test(`an END_SESSION reason of ${JSON.stringify(reason)} refuses with ${JSON.stringify(deny)}`, async ($, on) => {
+        mock.env(on, WORKER);
+        const clock = mock.clock(on);
+        const seen = engine(on, { report_blocked: handoff({ reason }) });
+        await $.turn.start({ text: 'plan', turnId: 't1' });
+        await call($, 'report_blocked');
+        expect((await call($, 'claim_next_task')).deny).toBe(deny);
+        await $.turn.complete({ ...TURN, turnId: 't1' });
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(['exit']);
+    });
+}
+// A seat the wrapper's loop claims for (MOE_SESSION_ENDS_WHEN_IDLE), and its
+// .moe/workers record as core's file reader serves it (none: unreadable).
+const LOOP_SEAT = { MOE_WORKER_ID: 'architect-1', MOE_SESSION_ENDS_WHEN_IDLE: '1', MOE_PROJECT_PATH: '/proj' };
+const IDLE_TOAST = 'Moe: this seat holds no task. This session ends in 10 s and the wrapper claims the next one.';
+function record(on, workerId, currentTaskId) {
+    on('fs.read', ($, e) => {
+        const path = e.path.replaceAll('\\', '/');
+        if (currentTaskId === undefined || !path.endsWith(`/proj/.moe/workers/${workerId}.json`))
+            throw new Error(`ENOENT ${e.path}`);
+        return { value: JSON.stringify({ id: workerId, currentTaskId }) };
+    });
+}
+test('a claimed seat left holding no task ends its session once the turn is over', async ($, on) => {
+    mock.env(on, LOOP_SEAT);
+    const clock = mock.clock(on);
+    record(on, 'architect-1', null);
+    const seen = engine(on, { claim_next_task: { hasNext: false, nextAction: { tool: 'moe.wait_for_task' } } });
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await call($, 'claim_next_task', { statuses: ['PLANNING'] });
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([IDLE_TOAST]);
+    // Nothing claims inside a session that is about to end: the next one does.
+    await $.turn.start({ text: 'one more', turnId: 't2' });
+    expect((await call($, 'claim_next_task', { statuses: ['PLANNING'] })).deny).toBe(IDLE);
+    expect(seen.aborted).toEqual(['t2']);
+    expect(seen.calls).toHaveLength(1);
+    await clock.advance(EXIT_DELAY_MS - 1);
+    expect(seen.commands).toEqual([]);
+    await clock.advance(1);
+    expect(seen.commands).toEqual(['exit']);
+});
+for (const [label, env, workerId, currentTaskId] of [
+    ['still holds its task', LOOP_SEAT, 'architect-1', 'task-1'],
+    ['has no readable record', LOOP_SEAT, 'architect-1', undefined],
+    ['is not claimed for by the loop (a governor, --no-auto-claim)', { MOE_WORKER_ID: 'governor-1', MOE_PROJECT_PATH: '/proj' }, 'governor-1', null],
+]) {
+    test(`a seat that ${label} keeps its session`, async ($, on) => {
+        mock.env(on, env);
+        const clock = mock.clock(on);
+        record(on, workerId, currentTaskId);
+        const seen = engine(on);
+        await $.turn.start({ text: 'work', turnId: 't1' });
+        await $.turn.complete({ ...TURN, turnId: 't1' });
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual([]);
+        expect(seen.toasts).toEqual([]);
+    });
+}
+test('an interrupted turn keeps a taskless session; the next finished turn ends it', async ($, on) => {
+    mock.env(on, LOOP_SEAT);
+    const clock = mock.clock(on);
+    record(on, 'architect-1', null);
+    const seen = engine(on);
+    await $.turn.start({ text: 'notify', turnId: 't1' });
+    await $.turn.complete({ ...TURN, turnId: 't1', isAborted: true, reason: 'aborted' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual([]);
+    await $.turn.start({ text: 'notify', turnId: 't2' });
+    await $.turn.complete({ ...TURN, turnId: 't2' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+});
+// claude's /exit opens 'Background work is running' (no timeout) over running
+// background work, so an /exit can leave the CLI up. 60 s on, with no main turn
+// running, the mod ends its own CLI. The delay is FORCE_EXIT_DELAY_MS, spelled
+// out so this file still links against a register.ts without it.
+const FORCE_MS = 60_000;
+const LIMIT = 'ACCOUNT-SWITCH: this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.';
+const KINDS = ['switch', 'ended', 'idle'];
+const ENDING_TOAST = {
+    switch: 'Moe: this Claude account reached its usage limit. This session ends in 10 s and restarts on the next account.',
+    ended: ENDED_TOAST,
+    idle: IDLE_TOAST,
+};
+const MANUAL = {
+    switch: 'Moe: this seat must restart on the next Claude account. Type /exit and Moe relaunches it.',
+    ended: 'Moe: this task session is over. Type /exit and Moe relaunches it.',
+    idle: 'Moe: this seat holds no task. Type /exit and Moe claims the next one.',
+};
+/** What ran besides the PID read: the terminations. */
+const kills = (seen) => seen.processes.filter(argv => argv.join('\n') !== PID.join('\n'));
+/** A seat whose main turn t1 has just ended with the session's ending decided: a hard limit, END_SESSION or idle. */
+async function ending($, on, kind, world = {}) {
+    mock.env(on, kind === 'switch' ? SEAT : kind === 'ended' ? WORKER : LOOP_SEAT);
+    if (kind === 'idle')
+        record(on, 'architect-1', null);
+    const seen = engine(on, { report_blocked: handoff() }, () => usage(kind === 'switch' ? 100 : 0), world);
+    const clock = mock.clock(on);
+    await $.turn.start({ text: 'work', turnId: 't1' });
+    if (kind === 'ended')
+        await call($, 'report_blocked', { taskId: 'task-1' });
+    await $.turn.complete({ ...TURN, turnId: 't1' });
+    expect(seen.toasts).toEqual([ENDING_TOAST[kind]]);
+    return { seen, clock };
+}
+test('a hard limit whose /exit never returns has its own CLI terminated once, 60 s after /exit', {
+    plugins: [{ name: 'swallow-stop-failure', tier: 'prepend', register(on) {
+                on('classic.StopFailure', () => ({}));
+            } }],
+}, async ($, on) => {
+    mock.env(on, SEAT);
+    const seen = engine(on, {}, () => usage(100), { exitHangs: true });
+    const clock = mock.clock(on);
+    await $.turn.start({ text: 'plan', turnId: 't1' });
+    await $.classic.StopFailure({ error: 'rate_limit' });
+    await $.turn.complete({ ...TURN, turnId: 't1', reason: 'error' });
+    await clock.advance(EXIT_DELAY_MS);
+    expect(seen.commands).toEqual(['exit']);
+    expect(seen.processes).toEqual([PID]);
+    await clock.advance(FORCE_MS - 1);
+    expect(seen.processes).toEqual([PID]);
+    await clock.advance(1);
+    expect(seen.processes).toEqual([PID, KILL]);
+    expect(seen.toasts).toEqual([ENDING_TOAST.switch]);
+    await clock.advance(2 * FORCE_MS);
+    expect(seen.processes).toEqual([PID, KILL]);
+    expect(seen.commands).toEqual(['exit']);
+    // This CLI outlived its SIGTERM: the person is asked for /exit, once.
+    expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch]);
+    seen.release();
+    await clock.settle();
+});
+for (const kind of KINDS) {
+    test(`${kind}: an /exit that never returns is followed by one termination 60 s later`, async ($, on) => {
+        const { seen, clock } = await ending($, on, kind, { exitHangs: true });
+        await clock.advance(EXIT_DELAY_MS + FORCE_MS - 1);
+        expect(seen.commands).toEqual(['exit']);
+        expect(seen.processes).toEqual([PID]);
+        await clock.advance(1);
+        expect(seen.processes).toEqual([PID, KILL]);
+        expect(seen.toasts).toEqual([ENDING_TOAST[kind]]);
+        seen.release();
+        await clock.settle();
+    });
+    test(`${kind}: a refused /exit asks for one by hand and terminates nothing`, async ($, on) => {
+        const { seen, clock } = await ending($, on, kind, { exitFails: true });
+        await clock.advance(EXIT_DELAY_MS + 2 * FORCE_MS);
+        expect(seen.commands).toEqual(['exit']);
+        expect(kills(seen)).toEqual([]);
+        expect(seen.toasts).toEqual([ENDING_TOAST[kind], MANUAL[kind]]);
+    });
+}
+for (const cwd of ['C:\\proj', '\\\\wsl.localhost\\d\\proj']) {
+    test(`a Windows session in ${cwd} ends its CLI with a quote-free PowerShell script`, async ($, on) => {
+        const { seen, clock } = await ending($, on, 'switch', { exitHangs: true, cwd });
+        await clock.advance(EXIT_DELAY_MS);
+        expect(seen.commands).toEqual(['exit']);
+        expect(seen.processes).toEqual([]); // the script names the CLI itself, at the fallback
+        await clock.advance(FORCE_MS);
+        expect(seen.processes).toHaveLength(1);
+        const argv = seen.processes[0] ?? [];
+        expect(argv.slice(0, 4)).toEqual(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command']);
+        expect(argv).toHaveLength(5);
+        const script = argv[4] ?? '';
+        expect(script).not.toContain('"');
+        for (const part of ['$PID', 'ParentProcessId', 'CreationDate', "'conhost.exe'", 'Stop-Process -Id $cli.ProcessId -Force']) {
+            expect(script).toContain(part);
+        }
+        await clock.advance(FORCE_MS - 1);
+        expect(seen.processes).toHaveLength(1);
+        seen.release();
+        await clock.settle();
+    });
+}
+test('a main turn running at the check delays the termination to the first check after it ends', async ($, on) => {
+    const { seen, clock } = await ending($, on, 'switch', { exitHangs: true });
+    await clock.advance(EXIT_DELAY_MS);
+    await $.turn.start({ text: 'a background task finished', turnId: 't2' });
+    await clock.advance(2 * FORCE_MS); // checks at 60 s and 120 s find t2 running
+    expect(kills(seen)).toEqual([]);
+    await $.turn.complete({ ...TURN, turnId: 't2' });
+    expect(seen.toasts).toEqual([ENDING_TOAST.switch]); // the attempt in flight goes on
+    await clock.advance(FORCE_MS - 1);
+    expect(kills(seen)).toEqual([]);
+    await clock.advance(1);
+    expect(kills(seen)).toEqual([KILL]);
+    expect(seen.commands).toEqual(['exit']);
+    seen.release();
+    await clock.settle();
+});
+const FAILURES = {
+    'a PID read that exits 1': { pidExit: 1 },
+    'a PID read that names pid 1': { pidStdout: '1\n' },
+    'a PID read that names no number': { pidStdout: 'x\n' },
+    'a PID read that cannot start': { runThrows: 'pid' },
+    'a termination that exits 1': { killExit: 1 },
+    'a termination that cannot start': { runThrows: 'kill' },
+    'a CLI that outlives its termination': {},
+};
+for (const [name, world] of Object.entries(FAILURES)) {
+    const named = world.pidExit === undefined && world.pidStdout === undefined && world.runThrows !== 'pid';
+    const delivered = named && world.killExit === undefined && world.runThrows === undefined;
+    for (const kind of KINDS) {
+        test(`${kind}: ${name} leaves the manual /exit, once`, async ($, on) => {
+            const { seen, clock } = await ending($, on, kind, { ...world, exitHangs: true });
+            await clock.advance(EXIT_DELAY_MS + FORCE_MS - 1);
+            expect(seen.toasts).toEqual([ENDING_TOAST[kind]]); // /exit may still end it
+            await clock.advance(1);
+            // A delivered termination gets a full delay to end the CLI; a failed one asks at once.
+            expect(seen.toasts).toEqual(delivered ? [ENDING_TOAST[kind]] : [ENDING_TOAST[kind], MANUAL[kind]]);
+            await clock.advance(3 * FORCE_MS);
+            expect(seen.commands).toEqual(['exit']);
+            expect(kills(seen)).toEqual(named ? [KILL] : []);
+            expect(seen.toasts).toEqual([ENDING_TOAST[kind], MANUAL[kind]]);
+            seen.release();
+            await clock.settle();
+        });
+    }
+}
+for (const [name, world] of [
+    ['a refused /exit', { exitFails: true }],
+    ['a failed termination', { killExit: 1, exitHangs: true }],
+]) {
+    test(`after ${name} the next main turn's end, aborted or not, tries again`, async ($, on) => {
+        const { seen, clock } = await ending($, on, 'switch', world);
+        await clock.advance(EXIT_DELAY_MS + FORCE_MS);
+        expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch]);
+        await $.turn.start({ text: 'usage limit reset, continue', turnId: 't2' });
+        expect((await call($, 'claim_next_task')).deny).toBe(LIMIT);
+        expect(seen.aborted).toEqual(['t2']);
+        await $.turn.complete({ ...TURN, turnId: 't2', isAborted: true, reason: 'aborted' });
+        expect(seen.toasts).toEqual([ENDING_TOAST.switch, MANUAL.switch, ENDING_TOAST.switch]);
+        await clock.advance(EXIT_DELAY_MS - 1);
+        expect(seen.commands).toEqual(['exit']);
+        await clock.advance(1);
+        expect(seen.commands).toEqual(['exit', 'exit']);
+        seen.release();
+        await clock.settle();
+    });
+}
+for (const [name, answerAt] of [['detaches at once (a background session)', 0], ['is answered Stay after 30 s', 30_000]]) {
+    test(`an /exit that ${name} while the CLI runs on is still ended at the fallback`, async ($, on) => {
+        const { seen, clock } = await ending($, on, 'switch', { exitHangs: answerAt > 0 });
+        await clock.advance(EXIT_DELAY_MS + answerAt);
+        expect(seen.commands).toEqual(['exit']);
+        seen.release();
+        await clock.advance(FORCE_MS - answerAt - 1);
+        expect(kills(seen)).toEqual([]);
+        await clock.advance(1);
+        expect(kills(seen)).toEqual([KILL]);
+    });
+}
+const NO_ENDING = {
+    'a subagent turn at 100%': [SEAT, [100], 'agent-1'],
+    'a session without MOE_WORKER_ID at 100%': [{ MOE_ACCOUNT_ID: 'acct-1' }, [100]],
+    'a session without MOE_ACCOUNT_ID at 100%': [{ MOE_WORKER_ID: 'governor-1' }, [100]],
+    'a turn with every window below 100%': [SEAT, [99.9, 40]],
+};
+for (const [name, [env, percents, agentId]] of Object.entries(NO_ENDING)) {
+    test(`${name} gets no exit, PID read or termination`, async ($, on) => {
+        mock.env(on, env);
+        const seen = engine(on, {}, () => usage(...percents));
+        const clock = mock.clock(on);
+        await $.turn.start({ text: 'work', turnId: 't1' });
+        await $.turn.complete({ ...TURN, turnId: agentId ? 'sub-1' : 't1', ...(agentId ? { agentId } : {}) });
+        await clock.advance(2 * (EXIT_DELAY_MS + FORCE_MS));
+        expect(seen.commands).toEqual([]);
+        expect(seen.processes).toEqual([]);
+        expect(seen.toasts).toEqual([]);
+        expect(seen.timers).toBe(0);
+    });
+}
