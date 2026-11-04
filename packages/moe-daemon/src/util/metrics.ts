@@ -64,6 +64,18 @@ function isDelivered(task: Task): boolean {
 }
 
 /**
+ * A task's reopen count. task.reopenCount is canonical: every reopen path bumps
+ * it. metrics.reopenCount is its mirror, which is stale on rows reopened outside
+ * qa_reject before task-fc10f071 (set_task_status, StateManager.reopenTask, the
+ * board drag), so it is only the fallback for a row with no numeric reopenCount.
+ */
+function reopenCountOf(task: Task): number {
+  if (typeof task.reopenCount === 'number' && Number.isFinite(task.reopenCount)) return task.reopenCount;
+  const mirror = task.metrics?.reopenCount;
+  return typeof mirror === 'number' && Number.isFinite(mirror) ? mirror : 0;
+}
+
+/**
  * Compute aggregate metrics across the given tasks. Tasks without a metrics
  * record are still counted toward taskCount but contribute zero to numeric
  * averages (so a partially-instrumented project still gets a usable number).
@@ -96,7 +108,7 @@ export function computeMetricsAggregate(tasks: Task[]): MetricsAggregate {
         wallClockCount += 1;
       }
     }
-    reopenSum += m.reopenCount ?? task.reopenCount ?? 0;
+    reopenSum += reopenCountOf(task);
     totalRejectCount += m.rejectCount ?? 0;
     totalExecutedStepCount += m.executedStepCount ?? 0;
     totalToolCalls += m.agentToolCallCount ?? 0;
@@ -151,13 +163,29 @@ export function filterTasksForMetrics(tasks: Iterable<Task>, filter: MetricsFilt
   return out;
 }
 
+/**
+ * The stored metrics as list_metrics reports them. A row that carries a
+ * metrics.reopenCount mirror gets it overlaid from the canonical
+ * task.reopenCount on a COPY (read path: the stored object is never mutated).
+ * A row without a mirror gets no reopenCount key, and a non-object metrics
+ * passes through unchanged.
+ */
+function reportedMetrics(task: Task): TaskMetrics {
+  const stored = task.metrics ?? {};
+  const mirrored = stored.reopenCount !== undefined;
+  if (mirrored && typeof task.reopenCount === 'number' && Number.isFinite(task.reopenCount)) {
+    return { ...stored, reopenCount: task.reopenCount };
+  }
+  return stored;
+}
+
 export function toPerTaskMetric(task: Task): PerTaskMetric {
   return {
     taskId: task.id,
     epicId: task.epicId,
     status: task.status,
     title: task.title,
-    metrics: task.metrics ?? {},
+    metrics: reportedMetrics(task),
   };
 }
 
