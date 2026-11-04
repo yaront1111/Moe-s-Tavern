@@ -12,19 +12,26 @@
     {
       "stepId": "step-1",
       "description": "Tests first (red). Create packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts. Base it on /mnt/d/moe-scratch/7e735953-plan/proto-parkedUnlandedLanding.test.ts, which the architect proved red at 2a1c5a36 (5 failed, 1 passed). It reuses finalizingCloseRetry.test.ts's harness: ToolTestHarness, setupMoeFolder({ schemaVersion: 6 }), openAttempt with workspaceMode 'worktree' then setAttemptPhase 'finalizing', and the same three CLOSERS.\nSeed: task-1 in REVIEW, unassigned, needsHumanReview true, reopenCount 5, all steps COMPLETED, with worker-1's worktree attempt finalizing. Also seed worker-2 and qa-1.\nCases:\n(1) finalize_attempt 'unlanded' with reason 'conflict', and again with 'diverged' (which today goes BLOCKED). The reply has taskStatus 'REVIEW'.\n(2) Each closer: moe.deregister_worker, the DEAD-record prune (deleteWorker) and the startup purge. The attempt ends 'closed'.\nAfter every case assert all of:\n- the task is { status:'REVIEW', assignedWorkerId:null, needsHumanReview:true, reopenCount:5 };\n- landingRetry matches { reason, count:1 };\n- claim_next_task { statuses:['WORKING'], workerId:'worker-2' } and { statuses:['REVIEW'], workerId:'qa-1' } do not return task-1;\n- an explicit-taskId REVIEW claim by qa-1 rejects with /parked for human review/ (claimNextTask.ts:574).\n(3) Control: the same seed without the flag is still routed to WORKING.\nRecord the red run in complete_step's note. Write the file with your own Edit/Write tool (global rail 3).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/parkedUnlandedLanding.test.ts"
+      ],
+      "note": "Created state/parkedUnlandedLanding.test.ts (6 cases) with my own Write tool, adapted from the architect's proto. RED in a scratch clone of HEAD 6fbdc22f (npm ci there, nothing run in the worktree or shared checkout): 'Test Files 1 failed (1) | Tests 5 failed | 1 passed (6)'. The 5 failures are finalize_attempt unlanded (conflict), (diverged), moe.deregister_worker, the DEAD-record prune and the startup purge. Each got status WORKING (expected REVIEW). The control without the flag passes.",
+      "startedAt": "2026-11-04T06:15:07.534Z",
+      "completedAt": "2026-11-04T06:15:43.078Z"
     },
     {
       "stepId": "step-2",
       "description": "The fix (green). In packages/moe-daemon/src/state/workerLifecycle.ts, routeUnlandedLanding (:310 at 2a1c5a36; it came from efe07ce5's 3500ae19). Compute `const parked = task.status === 'REVIEW' && task.needsHumanReview === true;`. For a parked row:\n- keep the status and the assignment: routing is {} exactly as for a non-REVIEW row, so it never goes to WORKING or BLOCKED and gets no blocked fields;\n- STILL write landingRetry (count = prior + 1) and the one moe-daemon comment, with ', kept parked for human review (needsHumanReview)' appended. Then a human who later moves the row to WORKING hands the next worker a LANDING-RETRY with the rescue ref.\nUpdate the function's docblock with one sentence for the exception. Leave every other path byte-identical: non-parked REVIEW to WORKING or BLOCKED (diverged, count >= 3), non-REVIEW unchanged, and retryUnrecordedLanding's guards. Both callers, finalizeAttempt.ts:153 and retryUnrecordedLanding, get the fix through this one function, so neither caller file changes. The prototype is /mnt/d/moe-scratch/7e735953-plan/proto-workerLifecycle.diff; apply it with your own Edit tool. Error handling is unchanged: it is a single updateTask write, and retryUnrecordedLanding's try/catch still keeps a failed write from failing the close.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "packages/moe-daemon/src/state/workerLifecycle.ts"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:15:45.233Z"
     },
     {
       "stepId": "step-3",
@@ -53,7 +60,7 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-a0305b0b",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -68,7 +75,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T05:58:43.276Z",
-  "updatedAt": "2026-11-04T06:13:41.079Z",
+  "updatedAt": "2026-11-04T06:15:45.233Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T06:07:00.780Z",
@@ -77,16 +84,20 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T06:09:31.504Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
-    "architect-2a219562"
+    "architect-2a219562",
+    "worker-a0305b0b"
   ],
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:13:41.038Z",
   "executionContract": {
@@ -149,5 +160,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-04T06:13:41.079Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:15:07.534Z"
 }

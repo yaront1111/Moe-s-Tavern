@@ -27,19 +27,25 @@
     {
       "stepId": "step-2",
       "description": "The sh wrapper, scripts/moe-agent.sh (line numbers at d1062cb0). Touch only these functions; the VM-route blocks belong to open rows cc4213c0 (sh), 62ec51f1 and d861f3de (ps1). Edit in place with a TOOL-witnessed editor, never temp+mv, then run `bash -n scripts/moe-agent.sh`.\n\n1. wt_remote_holds (:7487) becomes tri-state:\n   - 0: origin's TARGET holds C;\n   - 1: the fetch worked and origin lacks C (merge-base exit 1);\n   - 2: unverifiable.\n   For 2, set LAND_RECHECK_DETAIL: \"git fetch failed: $LAND_FETCH_ERR\" when land_fetch fails, or \"git merge-base --is-ancestor exited $rc\" for any other exit. It still never pushes.\n\n2. wt_push_target (:7500):\n   - Set LAND_PUSH_UNVERIFIED=\"\" on entry.\n   - In the rc-2 branch, a 0 keeps today's APPLIED line and rc=0.\n   - A 2 sets LAND_PUSH_UNVERIFIED=true and appends \"; the re-check could not read origin's $1 ($LAND_RECHECK_DETAIL)\" to LAND_PUSH_DETAIL.\n   - rc stays 2 for both 1 and 2, so run_migration_landing's `2)` arm is unchanged; it has no journal and only prints the richer detail.\n\n3. A new helper `wt_journal_unverified JOURNAL`: 0 when the journal's pushResult starts with the prefix (one python read; 1 on any failure).\n\n4. wt_publish (:7520), the rc-2 arm:\n   - When LAND_PUSH_UNVERIFIED=true, keep the journal and set its pushResult with `wt_journal_push_result \"$1\" \"push remote-rejected-unverified: $LAND_PUSH_DETAIL\"`;\n   - else `rm -f \"$1\"` as today.\n   - LAND_CODE=MOE_PUSH_FAILED and LAND_MESSAGE are unchanged, so the unlanded remote route, the rescue ref and the failed row are as today (DoD 1).\n\n5. wt_land_rounds' journal check (:7571-7581). For jw=remote with an unverified journal, run wt_remote_holds \"${jt#refs/heads/}\" \"$ja\":\n   - 0: jc=\"$ja\" plus wt_journal_push_result \"$journal\" \"pushed $ja to origin/${jt#refs/heads/}\". L5 then takes the existing $jc path: LAND_WT_RECOVERED, then wt_land_published sends the row (pushed:true, from the 'pushed ' prefix) and finalizes landed (DoD 2).\n   - 1: rm -f the journal, which the fresh round supersedes.\n   - 2: refuse with LAND_OUTCOME=refused, MOE_COMMIT_REFUSED_UNRECONCILED_INTENT and \"receipt journal $journal holds a [remote rejected] push of $ja that no re-check could verify ($LAND_RECHECK_DETAIL)\".\n   Every other journal takes the existing receipt_landed_as logic, unchanged; put it in an else.\n\n6. receipt_replay (:6550): add a block BEFORE the existing `[ \"$wt\" = remote ]` reconcile_push block, for wt=remote with an unverified journal. A [remote rejected] C is never re-pushed; a fetch decides.\n   - rc 2: the still-unverified WARN, then continue.\n   - Compute phase=moe_pinned_attempt_phase \"$aid\" \"$tid\" \"$gen\" \"$owner\".\n   - rc 0 with phase not finalizing: the holds-C line, then continue. The journal stays for step 5.\n   - Before any drop or overwrite, re-read and compare (`[ \"$(receipt_journal_fields \"$f\")\" != \"$fields\" ]`, then the existing 'rewritten or removed meanwhile' line), per mem:gotcha-worktree-receipt-replay-race: a worktree journal has no live marker.\n   - rc 1: with phase finalizing, first replay_unlanded ... remote MOE_PUSH_FAILED \"origin's <T> does not hold the [remote rejected] landing $after\"; if that fails, keep the journal. Then rm, print the does-not-hold line, and continue.\n   - rc 0 with phase finalizing: wt_journal_push_result \"$f\" \"pushed $after to origin/<T>\", then fall through. The existing block reconciles (its fetch finds C, so there is no push), records the row pushed:true, finalizes landed and drops the journal.\n\n7. Fix the header comments of wt_remote_holds, wt_push_target, wt_publish, wt_land_rounds and receipt_replay.\n\nError handling: only ENOENT-free proof moves anything. A failed fetch never drops, marks or settles a journal, and no path re-pushes after [remote rejected].",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
       ],
-      "startedAt": "2026-11-04T06:06:45.737Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh changes:\n- wt_remote_holds is tri-state (0 held, 1 absent, 2 unverifiable) and sets LAND_RECHECK_DETAIL.\n- wt_push_target sets LAND_PUSH_UNVERIFIED and appends the re-check detail suffix. It still returns rc 2, so migration is unchanged.\n- New wt_journal_unverified helper.\n- wt_publish rc 2 marks the journal `push remote-rejected-unverified: …`. Beyond the plan, it then runs `wt_journal_unverified || rm -f`: an unmarked journal (C absent, or a failed best-effort mark) is dropped as before rather than left as a plain journal that a replay's reconcile_push would re-push.\n- wt_land_rounds: an unverified remote journal is proven by fetch. Held: jc=C, marked 'pushed …', then the existing LAND_WT_RECOVERED path. Absent: rm. Unverifiable: refused UNRECONCILED_INTENT. Every other journal goes through the existing receipt_landed_as path.\n- receipt_replay gets a pre-block. Unverifiable keeps the journal with a WARN. Held and not finalizing keeps it, with the holds-C line. Held and finalizing marks it 'pushed' and falls through to reconcile_push, which does not push. Absent routes a finalizing attempt through replay_unlanded first, then drops the journal. Every drop or mark re-reads and compares first.\n- Header comments updated.\n\nbash -n is OK. GREEN, sh: MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded gives 2 ok, 0 failed.",
+      "startedAt": "2026-11-04T06:06:45.737Z",
+      "completedAt": "2026-11-04T06:15:24.677Z"
     },
     {
       "stepId": "step-3",
       "description": "The ps1 twins in scripts/moe-agent.ps1 (line numbers at d1062cb0). The behavior and every shared string (step 1) are byte-identical to step 2. Keep the UTF-8 BOM. Edit in place with a TOOL-witnessed editor, then run the ParseFile check: powershell.exe -NoProfile with [System.Management.Automation.Language.Parser]::ParseFile on the wslpath -w path, exiting 1 on any error.\n\n1. Test-MoeRemoteHolds (:7099) returns [int] 0, 1 or 2, and sets $script:MoeRecheckDetail on 2: 'git fetch failed: ' + $script:MoeLandFetchErr, or \"git merge-base --is-ancestor exited <rc>\".\n2. Send-MoeLandPush (:7112): set $script:MoePushUnverified = $false on entry. On 0, the same APPLIED line and return 0. On 2, set $script:MoePushUnverified = $true and append the detail suffix to $script:MoePushDetail. Return 2 for both 1 and 2.\n3. Publish-MoeWorktreeLanding (:7138), the rc-2 arm: when $script:MoePushUnverified is set, Set-MoeJournalPushResult $Journal \"push remote-rejected-unverified: $($script:MoePushDetail)\"; otherwise Remove-Item as today.\n4. Invoke-MoeWorktreeRounds' journal check (:7214-7225). When Test-MoeWorktreeJournal holds, publicationMode is 'remote' and \"$($j.pushResult)\" -clike 'push remote-rejected-unverified: *', run Test-MoeRemoteHolds on the journal's target minus refs/heads/:\n   - 0: $jc = targetAfter, and mark 'pushed <C> to origin/<T>'. Complete-MoeWorktreeLanding (:7381) re-reads the journal from disk, so the mark reaches its row.\n   - 1: Remove-Item the journal and set $jc = ''.\n   - 2: the same refusal as sh.\n   Everything else stays on the existing Find-MoeJournaledLanding path.\n5. Invoke-MoeReceiptReplay (:2381): the same pre-block, before `if ($wt -and $j.publicationMode -ceq 'remote')`.\n   - Use Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId.\n   - Before a drop or mark, compare the re-read journal's targetAfter and targetBefore, as the existing rc-1 path does.\n   - Use Invoke-MoeReplayUnlanded $git $j 'remote' 'MOE_PUSH_FAILED' ... for a finalizing absent attempt.\n   - PITFALL: Send-MoeOwedLedgerRow (:2329) reads pushResult from the IN-MEMORY $j. On the held-and-finalizing fall-through, set $j.pushResult = \"pushed $after to origin/$t\" as well as writing the file, or the replayed row omits pushed.\n6. Fix the matching header comments.\n\nError handling: as in sh. Proof alone moves anything, and nothing re-pushes after [remote rejected].",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "startedAt": "2026-11-04T06:15:25.628Z"
     },
     {
       "stepId": "step-4",
@@ -88,7 +94,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:38:02.611Z",
-  "updatedAt": "2026-11-04T06:06:45.737Z",
+  "updatedAt": "2026-11-04T06:15:25.628Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:44:41.089Z",
@@ -98,7 +104,7 @@
     "firstClaimAt": "2026-11-04T05:45:19.172Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-c33f294e",
@@ -109,7 +115,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T06:00:21.505Z",
