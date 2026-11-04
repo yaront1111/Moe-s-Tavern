@@ -85,8 +85,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -101,7 +101,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T00:03:43.353Z",
-  "updatedAt": "2026-11-04T06:08:02.571Z",
+  "updatedAt": "2026-11-04T06:10:26.914Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T05:47:30.839Z",
@@ -111,7 +111,9 @@
     "firstClaimAt": "2026-11-04T05:47:49.758Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:09:58.265Z",
+    "wallClockMs": 1328507
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -239,9 +241,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a408f113@2026-11-04T05:57:57Z",
-    "at": "2026-11-04T06:04:01.623Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:07:48Z",
+    "at": "2026-11-04T06:10:26.914Z"
+  },
+  "completedAt": "2026-11-04T06:09:58.265Z",
+  "reviewCompletedAt": "2026-11-04T06:09:58.265Z",
+  "reviewSummary": "APPROVED. Reviewed completion 2a1c5a36 (git show; in control HEAD on moe/work-2026-10-24; recorded in task.commits). 5 files, +229/-27 = 202 net LOC, under cap. Scope = approvedScope (CONFIGURATION.md untouched as planned).\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout: npm ci ok, tsc --noEmit 0, tsc -p tt.json 0, full daemon vitest 287 files / 7484 passed | 24 skipped, 'intake pin ok', exit 0.\nDoD 1: MAX_PLAN_STEPS=100 is the one bound for sanitizeImplementationPlan (was 50), submit_plan's refusal (message unchanged, INVALID_INPUT field 'steps') and taskSizing warnSteps/maxSteps. Tests: 60 steps stored in memory/disk/reload; 100 stored; 101 refused, row untouched; sanitizer keeps 100 of 105; taskSizing 101 refused; B28 pins MAX_PLAN_STEPS.\nDoD 2: validatePlanningNotes runs right after validateExecutionContract, before Git reads, mutex and any write. Refusals tested with context.field: non-string, >5000 note, bare-string/51-entry/bad-entry/1001-char keyFiles, non-object, array, unknown key. Limits stored byte-for-byte; null stores none; omitted keeps stored set; executionContract control unchanged.\nDoD 3: MCP_SERVER.md states both bounds (Parameters comment, Step bounds, new Planning notes bullet); submitPlan.test.ts passes in the full suite.\nAdversarial: validation is pure, before the mutex; no other caller passes planningNotes outside the documented shape; no stored-row migration; raising the sanitizer to 100 narrows nothing. No tests deleted or weakened. Notes, not defects: bad planningNotes on an unknown task now gives INVALID_INPUT before NOT_FOUND (same as executionContract); schema maxItems/maxLength are docs only (McpAdapter does not validate schemas). Not re-run: worker's qualityGate (parity-check.sh, npm run lint); diff touches no scripts or role docs.",
+  "requiredCheckAtDone": null
 }
