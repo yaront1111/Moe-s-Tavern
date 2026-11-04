@@ -213,11 +213,13 @@ describe('runDoctor — daemon health reachability', () => {
 
 // Worktree readiness probes (epic-dce3a64f §7.3): a stubbed read-only Git runner drives each
 // condition; a real throwaway repository covers the listing and proves doctor writes nothing.
-type GitCall = 'version' | 'toplevel' | 'head' | 'target' | 'list';
+type GitCall = 'version' | 'toplevel' | 'head' | 'target' | 'list' | 'remote' | 'originTarget' | 'controlAncestor' | 'targetAncestor';
 const gitError = (code: number | string, stderr = '') => Object.assign(new Error(`git: ${stderr}`), { code, stderr });
 const callOf = (args: string[]): GitCall => {
-  const kind = ({ version: 'version', 'symbolic-ref': 'head', worktree: 'list' } as Record<string, GitCall>)[args[0]]
-    ?? (args[1] === '--show-toplevel' ? 'toplevel' : args[1] === '--verify' ? 'target' : undefined);
+  const kind = ({ version: 'version', 'symbolic-ref': 'head', worktree: 'list', remote: 'remote' } as Record<string, GitCall>)[args[0]]
+    ?? (args[0] === 'merge-base' ? (args[2] === 'refs/heads/moe/control' ? 'controlAncestor' : 'targetAncestor') : undefined)
+    ?? (args[1] === '--show-toplevel' ? 'toplevel' : undefined)
+    ?? (args[1] === '--verify' ? (args[3]?.startsWith('refs/remotes/origin/') ? 'originTarget' : 'target') : undefined);
   if (!kind) throw new Error(`unexpected git call: ${args.join(' ')}`);
   return kind;
 };
@@ -255,8 +257,10 @@ describe('runDoctor — worktree readiness probes', () => {
   }
 
   function stubGit(overrides: Overrides = {}): PlanPathGitRunner {
+    // No remote (local mode) and passing ancestry checks by default, so every other case keeps its meaning.
     const ready: Record<GitCall, string> = { version: 'git version 2.43.0\n', toplevel: `${root}\n`,
-      head: 'refs/heads/moe/control\n', target: 'b'.repeat(40), list: listing([root, 'refs/heads/moe/control']) };
+      head: 'refs/heads/moe/control\n', target: 'b'.repeat(40), list: listing([root, 'refs/heads/moe/control']),
+      remote: '', originTarget: 'c'.repeat(40), controlAncestor: '', targetAncestor: '' };
     return async (args, cwd, timeout, maxBuffer) => {
       calls.push(args);
       expect([cwd, timeout <= 2000, (maxBuffer ?? Infinity) <= 128 * 1024]).toEqual([root, true, true]);
@@ -350,8 +354,58 @@ describe('runDoctor — worktree readiness probes', () => {
     writeSettings({ ...ON, qualityGate: 'echo SHOULD-NOT-RUN' });
     const result = await doctor(stubGit());
     expect(calls).toEqual([['version'], ['rev-parse', '--show-toplevel'], ['symbolic-ref', '-q', 'HEAD'],
-      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}']]);
+      ['merge-base', '--is-ancestor', 'refs/heads/moe/control', 'refs/heads/main'],
+      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}'], ['remote']]);
     expect(result.output.join('\n')).not.toContain('SHOULD-NOT-RUN');
+  });
+
+  it('W4: in remote mode a target that origin\'s copy contains passes, read as last fetched with no fetch', async () => {
+    writeSettings(ON);
+    const result = await doctor(stubGit({ remote: 'origin\n' }));
+    expect(line(result.output, 'worktree target:')).toMatch(/^\[OK\] .*refs\/remotes\/origin\/main contains it/);
+    expect(calls).toEqual([['version'], ['rev-parse', '--show-toplevel'], ['symbolic-ref', '-q', 'HEAD'],
+      ['merge-base', '--is-ancestor', 'refs/heads/moe/control', 'refs/heads/main'],
+      ['worktree', 'list', '--porcelain', '-z'], ['rev-parse', '--verify', '--quiet', 'refs/heads/main^{commit}'], ['remote'],
+      ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/main^{commit}'],
+      ['merge-base', '--is-ancestor', 'refs/heads/main', 'refs/remotes/origin/main']]);
+    expect(result.exitCode).toBe(0);
+  });
+
+  const refFailures: Array<[string, string, () => Overrides, RegExp]> = [
+    ['W1: in remote mode a target origin does not have fails naming refs/remotes/origin/main and MOE_WORKTREE_CREATE_FAILED',
+      'worktree target', () => ({ remote: 'origin\n', originTarget: gitError(1) }),
+      /^\[FAIL\] .*refs\/remotes\/origin\/main.*MOE_WORKTREE_CREATE_FAILED/],
+    ['W2: in remote mode a local target holding commits origin lacks fails naming MOE_LAND_TARGET_DIVERGED',
+      'worktree target', () => ({ remote: 'origin\n', targetAncestor: gitError(1) }),
+      /^\[FAIL\] .*refs\/heads\/main holds commits refs\/remotes\/origin\/main lacks.*MOE_LAND_TARGET_DIVERGED/],
+    ['W3: in remote mode an unreadable target ancestry check fails with git\'s reason',
+      'worktree target', () => ({ remote: 'origin\n', targetAncestor: gitError(128, 'fatal: bad object') }),
+      /^\[FAIL\] .*exit 128: fatal: bad object/],
+    ['W5: an unreadable remote list fails the target probe',
+      'worktree target', () => ({ remote: gitError(129, 'usage: git remote') }),
+      /^\[FAIL\] .*cannot list remotes \(exit 129: usage: git remote\)/],
+    ['W6: a moe/control that is not an ancestor of the target fails naming MOE_CONTROL_CHECKOUT_DIVERGED',
+      'worktree control branch', () => ({ controlAncestor: gitError(1) }),
+      /^\[FAIL\] .*refs\/heads\/moe\/control holds commits main lacks.*MOE_CONTROL_CHECKOUT_DIVERGED/],
+    ['W7: an unreadable control ancestry check fails with git\'s reason',
+      'worktree control branch', () => ({ controlAncestor: gitError(128, 'fatal: Not a valid object name refs/heads/main') }),
+      /^\[FAIL\] .*exit 128: fatal: Not a valid object name/],
+  ];
+
+  it.each(refFailures)('%s', async (_title, label, overrides, pattern) => {
+    writeSettings(ON);
+    const result = await doctor(stubGit(overrides()));
+    expect(line(result.output, `${label}:`)).toMatch(pattern);
+    for (const other of LABELS.filter((l) => l !== label)) expect(line(result.output, `${other}:`)).toContain('[OK]');
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('W8: with worktreeMode off, a diverged moe/control and a target origin lacks are info and exit 0', async () => {
+    writeSettings({ worktreeMode: 'off' });
+    const result = await doctor(stubGit({ remote: 'origin\n', originTarget: gitError(1), controlAncestor: gitError(1) }));
+    expect(line(result.output, 'worktree control branch:')).toMatch(/^\[INFO\] .*MOE_CONTROL_CHECKOUT_DIVERGED/);
+    expect(line(result.output, 'worktree target:')).toMatch(/^\[INFO\] .*MOE_WORKTREE_CREATE_FAILED/);
+    expect(result.exitCode).toBe(0);
   });
 
   it('names the configured target, not main, in the control branch fix', async () => {
@@ -458,5 +512,46 @@ describe('runDoctor — worktree probes against a real repository', () => {
     git(project, 'worktree', 'remove', path.join(base, 'target checkout'));
     const ready = await runDoctor(project);
     expect([line(ready.output, 'worktree target:')?.slice(0, 4), ready.exitCode]).toEqual(['[OK]', 0]);
+  });
+
+  // A control checkout on moe/control at the target's commit, with ON settings and no task worktree.
+  function controlProject(name: string): string {
+    const project = path.join(base, name);
+    fs.mkdirSync(project);
+    git(project, 'init', '-q', '-b', 'main');
+    git(project, 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'init');
+    git(project, 'switch', '-q', '-c', 'moe/control');
+    fs.writeFileSync(path.join(scaffoldMoe(project), 'project.json'), JSON.stringify({ settings: ON }));
+    return project;
+  }
+
+  it('W9: a moe/control holding a commit the target lacks fails naming MOE_CONTROL_CHECKOUT_DIVERGED; behind the target it passes', async () => {
+    const project = controlProject('control project');
+    git(project, 'commit', '-q', '--allow-empty', '--no-verify', '-m', 'a human commit on moe/control');
+
+    const diverged = await runDoctor(project);
+    expect(line(diverged.output, 'worktree control branch:')).toMatch(/^\[FAIL\] .*MOE_CONTROL_CHECKOUT_DIVERGED/);
+    for (const label of LABELS.filter((l) => l !== 'worktree control branch')) expect(line(diverged.output, `${label}:`)).toContain('[OK]');
+    expect(diverged.exitCode).toBe(1);
+
+    // A landing on the target that contains moe/control: behind is normal between a landing and the follow.
+    git(project, 'update-ref', 'refs/heads/main', git(project, 'commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'landed').trim());
+    const behind = await runDoctor(project);
+    expect([line(behind.output, 'worktree control branch:')?.slice(0, 4), behind.exitCode]).toEqual(['[OK]', 0]);
+  });
+
+  it('W10: in remote mode a target origin lacks fails naming refs/remotes/origin/main; once pushed it passes', async () => {
+    const project = controlProject('remote project');
+    const origin = path.join(base, 'origin.git');
+    git(base, 'init', '-q', '--bare', origin);
+    git(project, 'remote', 'add', 'origin', origin);
+
+    const missing = await runDoctor(project);
+    expect(line(missing.output, 'worktree target:')).toMatch(/^\[FAIL\] .*refs\/remotes\/origin\/main.*MOE_WORKTREE_CREATE_FAILED/);
+    expect(missing.exitCode).toBe(1);
+
+    git(project, 'push', '-q', 'origin', 'main'); // also writes refs/remotes/origin/main
+    const pushed = await runDoctor(project);
+    expect([line(pushed.output, 'worktree target:')?.slice(0, 4), pushed.exitCode]).toEqual(['[OK]', 0]);
   });
 });

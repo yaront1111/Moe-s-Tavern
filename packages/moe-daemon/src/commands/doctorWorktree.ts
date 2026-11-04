@@ -18,7 +18,8 @@ const TASK_ID = /^task-[A-Za-z0-9_-]{1,64}$/;
 
 export interface WorktreeProbeOptions { git?: PlanPathGitRunner; now?: number }
 type Settings = Record<string, unknown>;
-type Git = (args: string[]) => Promise<{ ok: true; out: string } | { ok: false; why: string }>;
+// code: git's numeric exit status, when it ran and failed (merge-base --is-ancestor answers "no" with 1).
+type Git = (args: string[]) => Promise<{ ok: true; out: string } | { ok: false; why: string; code?: number }>;
 interface WorktreeRecord { path: string; branch?: string }
 
 const isRecord = (v: unknown): v is Settings => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -91,24 +92,67 @@ async function probeProjectRoot(git: Git, root: string, hard: boolean): Promise<
   return verdict(hard, false, `repository top level is ${shown(top)}, not the project; nested projects cannot use worktree mode`);
 }
 
+/** `git merge-base --is-ancestor A B`: true (exit 0), false (exit 1), or why it could not answer. */
+async function isAncestor(git: Git, ancestor: string, descendant: string): Promise<boolean | string> {
+  const read = await git(['merge-base', '--is-ancestor', ancestor, descendant]);
+  if (read.ok) return true;
+  return read.code === 1 ? false : read.why;
+}
+
 async function probeControlBranch(git: Git, target: string, hard: boolean): Promise<ProbeResult> {
   const read = await git(['symbolic-ref', '-q', 'HEAD']);
   if (!read.ok) return verdict(hard, false, `HEAD is detached or unreadable (${read.why}); need ${CONTROL_REF}`);
   const head = read.out.trim();
-  if (head === CONTROL_REF) return verdict(hard, true, `control checkout is on ${CONTROL_REF}`);
-  return verdict(hard, false, `control checkout HEAD is ${shown(head)}, not ${CONTROL_REF} (git switch -c moe/control ${shown(target)})`);
+  if (head !== CONTROL_REF) {
+    return verdict(hard, false, `control checkout HEAD is ${shown(head)}, not ${CONTROL_REF} (git switch -c moe/control ${shown(target)})`);
+  }
+  // The follow fast-forwards moe/control to the target, so moe/control must be its ancestor (behind or equal is
+  // normal between a landing and the follow). A non-literal target is the target line's failure, not this one's.
+  if (!cachedPlanRef(target)) return verdict(hard, true, `control checkout is on ${CONTROL_REF}`);
+  const follows = await isAncestor(git, CONTROL_REF, `refs/heads/${target}`);
+  if (follows === true) return verdict(hard, true, `control checkout is on ${CONTROL_REF}, an ancestor of ${target}`);
+  if (follows === false) {
+    return verdict(hard, false, `${CONTROL_REF} holds commits ${target} lacks, so the control checkout cannot follow the target `
+      + `(MOE_CONTROL_CHECKOUT_DIVERGED) and QA's landed gate stops every claim; reconcile moe/control by hand`);
+  }
+  return verdict(hard, false, `cannot tell whether ${CONTROL_REF} is an ancestor of ${target} (${follows})`);
 }
 
 async function probeTarget(git: Git, target: string, listed: WorktreeRecord[] | string, hard: boolean): Promise<ProbeResult> {
-  // cachedPlanRef is the daemon's literal-branch-name rule; it rejects revision syntax such as main~1.
-  if (!cachedPlanRef(target)) return verdict(hard, false, `target ${shown(target)} is not a literal branch name`);
+  // cachedPlanRef is the daemon's literal-branch-name rule (it rejects revision syntax such as main~1)
+  // and names origin's remote-tracking copy of the target.
+  const origin = cachedPlanRef(target);
+  if (!origin) return verdict(hard, false, `target ${shown(target)} is not a literal branch name`);
   const ref = `refs/heads/${target}`;
   const read = await git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
   if (!read.ok) return verdict(hard, false, `target ${target}: ${ref} does not resolve to a commit (${read.why})`);
   if (typeof listed === 'string') return verdict(hard, false, `target ${target}: cannot list worktrees (${listed})`);
   const holders = listed.filter((w) => w.branch === ref).map((w) => shown(w.path));
-  if (holders.length === 0) return verdict(hard, true, `target ${target} exists and is not checked out in any worktree`);
-  return verdict(hard, false, `target ${target} is checked out at ${holders.join(', ')}; landings update it by ref`);
+  if (holders.length > 0) return verdict(hard, false, `target ${target} is checked out at ${holders.join(', ')}; landings update it by ref`);
+  return probeOriginTarget(git, target, ref, origin, hard);
+}
+
+/**
+ * Remote mode is the launchers' rule: `git remote` prints anything. They then cut every new task worktree from
+ * origin's copy of the target and land onto it, so that copy must exist and contain the local target. Doctor
+ * never fetches: it reads origin's copy as last fetched.
+ */
+async function probeOriginTarget(git: Git, target: string, ref: string, origin: string, hard: boolean): Promise<ProbeResult> {
+  const remotes = await git(['remote']);
+  if (!remotes.ok) return verdict(hard, false, `target ${target}: cannot list remotes (${remotes.why})`);
+  if (remotes.out.trim() === '') return verdict(hard, true, `target ${target} exists and is not checked out in any worktree`);
+  const cut = await git(['rev-parse', '--verify', '--quiet', `${origin}^{commit}`]);
+  if (!cut.ok) {
+    return verdict(hard, false, `target ${target}: remote mode cuts every task worktree from ${origin}, which does not resolve `
+      + `(${cut.why}), so each worker seat would stop with MOE_WORKTREE_CREATE_FAILED; push ${target} to origin, or fetch it`);
+  }
+  const contained = await isAncestor(git, ref, origin);
+  if (contained === true) return verdict(hard, true, `target ${target} exists, is not checked out in any worktree, and ${origin} contains it`);
+  if (contained === false) {
+    return verdict(hard, false, `target ${target}: ${ref} holds commits ${origin} lacks, so every landing would stop with `
+      + `MOE_LAND_TARGET_DIVERGED; push or reconcile it (fetch first if origin moved elsewhere)`);
+  }
+  return verdict(hard, false, `target ${target}: cannot tell whether ${ref} is an ancestor of ${origin} (${contained})`);
 }
 
 function probeQualityGate(settings: Settings | undefined, hard: boolean): ProbeResult {
@@ -172,7 +216,11 @@ export async function probeWorktreeReadiness(
     // A root ending in /* would make runGit's safe.directory a subtree trust rule.
     if (root.replace(/\\/g, '/').endsWith('/*')) return { ok: false, why: 'project path ends in /*' };
     try { return { ok: true, out: await run(args, root, GIT_TIMEOUT_MS, GIT_MAX_BUFFER) }; }
-    catch (err) { return { ok: false, why: describeGitFailure(err) }; }
+    catch (err) {
+      // execFile's exit status is a number; ENOENT and the maxBuffer code are strings and stay out.
+      const code = (err as { code?: unknown } | null)?.code;
+      return { ok: false, why: describeGitFailure(err), ...(typeof code === 'number' ? { code } : {}) };
+    }
   };
   const version = await probeGitVersion(git, hard);
   const projectRoot = await probeProjectRoot(git, root, hard);

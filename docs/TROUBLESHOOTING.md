@@ -1251,8 +1251,8 @@ the exit code.
 | `worktree mode` | `project.json` is readable and `worktreeMode` is `'off'` or `'on'`. An unreadable file or another value is `[FAIL]` in either mode, never a silent `'off'`. |
 | `worktree git version` | git is 2.38 or newer (`merge-tree --write-tree`). |
 | `worktree project root` | The project is its repository's top level. |
-| `worktree control branch` | The control checkout's HEAD is exactly `refs/heads/moe/control`. |
-| `worktree target` | The target is an existing local branch that no worktree has checked out, the control checkout included. |
+| `worktree control branch` | The control checkout's HEAD is exactly `refs/heads/moe/control`, and `moe/control` is an ancestor of the target (behind or equal is normal between a landing and the follow). A `moe/control` holding commits the target lacks fails as `MOE_CONTROL_CHECKOUT_DIVERGED`: the control checkout never follows, and QA's landed gate stops every claim, until a human reconciles it. |
+| `worktree target` | The target is an existing local branch that no worktree has checked out, the control checkout included. With any Git remote (remote mode), `refs/remotes/origin/<target>` must also resolve and contain the local target: the launchers cut every task worktree from it (else `MOE_WORKTREE_CREATE_FAILED`) and land onto it (a local target holding commits origin lacks is `MOE_LAND_TARGET_DIVERGED`). Doctor never fetches, so it reads origin's copy as last fetched: fetch first if origin moved elsewhere. |
 | `worktree quality gate` | `settings.qualityGate` is non-blank: every worktree landing runs it, whatever `qualityGateScope` says. Doctor never runs it. |
 | `worktree stale task worktrees` | Soft `[WARN]` only: a registered `.worktrees/task-<id>` whose task is DONE or ARCHIVED and was last updated over 24 h ago (the cleanup is falling behind). Doctor removes nothing. |
 
