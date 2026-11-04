@@ -66,7 +66,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -92,7 +92,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:29:30.429Z",
-  "updatedAt": "2026-11-04T23:05:56.543Z",
+  "updatedAt": "2026-11-04T23:20:25.715Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:30:18.817Z",
@@ -102,7 +102,9 @@
     "firstClaimAt": "2026-11-04T20:30:21.371Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T23:19:51.843Z",
+    "wallClockMs": 10170472
   },
   "dependsOn": [
     "task-527735eafb9147cf8663ccee9a9e1b4c",
@@ -111,7 +113,8 @@
   "contextFetchedBy": [
     "architect-67c762f6",
     "architect-2a219562",
-    "worker-5772dacf"
+    "worker-5772dacf",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -199,10 +202,11 @@
   "planApprovedAt": "2026-11-04T21:00:58.413Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T22:34:47Z",
-    "at": "2026-11-04T23:05:56.543Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T23:06:06Z",
+    "at": "2026-11-04T23:20:25.714Z"
   },
   "workStartedAt": "2026-11-04T22:36:10.998Z",
   "reviewStartedAt": "2026-11-04T23:04:57.555Z",
@@ -239,5 +243,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T23:19:51.843Z",
+  "reviewCompletedAt": "2026-11-04T23:19:51.843Z",
+  "reviewSummary": "Reviewed completion b71a4bbe (on moe/work-2026-10-24 and origin; tree e5cd5443 = candidate treeSha; task worktree HEAD f5ce6bd3 has no diff to it). +64/-13 over the 4 approved files, within scope.\n- sh: finalize_postflight's local strong = pin verified-local OR RECEIPT_STRONG=true, used in exactly the CQ-V08 deferral and CQ-V08b removal ifs. RECEIPT_STRONG=true is set only in wt_land_published's strong branch (journal profile verified-local). It is blanked on run_landing's reset line and the per-iteration reset, not in receipt_send, never exported. Other finalize callers (cleanup trap, take_unlanded_route) are memoized or unlanded, so unaffected.\n- ps1: $strong = pin -or $r.ReceiptStrong -eq $true, same two ifs. $Res.ReceiptStrong is set only in Complete-MoeWorktreeLanding's strong branch, and $Res is $script:MoeLandingResult (:7740/:7767), reset to $null each iteration.\n- Pinned, legacy/observe-without-strong-journal and legacy-gate shared journal paths are unchanged. No new strings, codes or env names.\n- Rows SR-M1/M1-replay/M2 in both harnesses reuse sr_check/Assert-SrRow unchanged; sr_check asserts the strong journal fields, finalize count 0, phase finalizing and the deferral line.\nRe-ran checkRefs[0] verbatim (= task.verification), 23:08:47Z-23:19Z: CHAIN_EXIT=0. Every leg (5.1, 7, sh) printed '[strong receipt] ok T1..T5-replay, M1, M1-replay, M2', PASS postflight-vm-route, worktree-landing 18/0/0, 'PASS frozen candidate scenarios: 3' and @. ps1 legs also printed PASS parity-check.ps1. The sh leg also printed wt-completion and wt-replay ok, PASS parity-check.sh and lint OK.\nMy own mutant M-a (flag arm dropped) on a sh [strong receipt] slice: SR-M1 red, 'finalized before the receipt was recorded'. The unmutated control slice passed (rc 0). Worker's M-b/M-c evidence noted.\nGovernor points 1-4 and every acceptance criterion are met. Residual recovered-path stranding is filed as task-eafb62c4 (LOW), per plan step 4(4). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

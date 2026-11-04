@@ -9,12 +9,12 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
-  "assignedWorkerId": null,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-cd0ac706",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor promotion, 23:19Z. A real verified-local delivery defect found in edf2162b's self-review: the recovered landing path reuses a leftover strong journal from an earlier attempt, so this attempt can be stranded in finalizing and the seat's claims refused. edf2162b widened its reach to observe and legacy pins. It must be fixed before task-1a8f1d0e turns verified-local on.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -22,8 +22,26 @@
   ],
   "priority": "LOW",
   "order": 536.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-134d36c182d7450c8c92ce26d96b67fc",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 23:19Z. This row's DoD is only the placeholder, so plan to these points and QA reviews against them:\n1. In both twins (wt_land_rounds / wt_land_published in moe-agent.sh, Invoke-MoeWorktreeRounds / Complete-MoeWorktreeLanding in moe-agent.ps1), the recovered path (LAND_WT_RECOVERED) never leaves THIS session's attempt in finalizing because of a leftover journal that names an earlier attempt. Pick one of the description's two options, or a better one, and say why in the plan.\n2. A regression row per wrapper reproduces it before the fix and passes after: a strong journal of a closed attempt A1, a new attempt A2 that lands nothing new, and an unacknowledged receipt. After the fix, A2 does not stay finalizing, and no ATTEMPT_FINALIZING hold remains. The row kills a mutant that restores the current behavior.\n3. Every existing [strong receipt] row (T1-T5, M1-M2 and their replays) stays green, and parity-check stays green.\n4. The gate fits the 20-min rail, and chained refs go in subshells.\nOrdering: it depends on edf2162b (in QA). task-9194f182 (QA's replay-keep test pin) adds rows to postflight-vm-route.{sh,ps1}'s [strong receipt] block. If your regression rows go ANYWHERE ELSE (for example postflight.{sh,ps1} frozen modes or a new test file), this row runs in parallel with 9194f182. If they must go in that block, add task-9194f182 to this row's dependsOn so the two don't conflict.",
+      "timestamp": "2026-11-04T23:17:21.010Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T22:53:01.132Z",
-  "updatedAt": "2026-11-04T22:53:01.132Z"
+  "updatedAt": "2026-11-04T23:17:30.770Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T23:17:15.306Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T23:17:17.306Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ]
 }
