@@ -81,8 +81,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-af7be174",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -97,7 +97,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:50:08.712Z",
-  "updatedAt": "2026-11-04T00:21:27.848Z",
+  "updatedAt": "2026-11-04T00:23:03.399Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T00:08:34.448Z",
@@ -107,7 +107,9 @@
     "firstClaimAt": "2026-11-04T00:10:17.634Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:22:37.972Z",
+    "wallClockMs": 740338
   },
   "contextFetchedBy": [
     "architect-1dd28c7c",
@@ -224,9 +226,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-fdb2af60@2026-11-04T00:15:08Z",
-    "at": "2026-11-04T00:20:29.638Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-04T00:21:08Z",
+    "at": "2026-11-04T00:23:03.399Z"
+  },
+  "completedAt": "2026-11-04T00:22:37.972Z",
+  "reviewCompletedAt": "2026-11-04T00:22:37.972Z",
+  "reviewSummary": "Reviewed completion f3ac15138 (kind=completion, pushed, on moe/work-2026-10-24, contained in control HEAD). 3 files, +117/-7 (net 110), exactly the planned paths, no .moe paths, git diff --check clean.\n\nRe-ran task.verification verbatim in a fresh whole-tree git-archive snapshot (removed afterwards): exit 0, Test Files 5 passed (5), Tests 47 passed (47), 'unblockOwner ok'. qualityGate re-run in place: parity-check.sh PASS, npm run lint OK. No npm in the shared checkout.\n\nMutation check: restored the pre-fix handler (f3ac15138^) in the snapshot and ran only the new test: 1 failed, ghost/corpse/dead kept worker-gone/worker-idle/worker-dead, corpse claimable false. The test fails without the fix.\n\nDoD: (1) The new test drives a real MoeWebSocketServer on an ephemeral port, sends UPDATE_TASK {status:'WORKING'} for five BLOCKED rows (missing worker, IDLE with null currentTaskId, DEAD, BLOCKED pointing at the row, plus an IDLE-pointing control) and asserts the exact table: first three assignedWorkerId null and claimable, last two keep their assignee. Bounded frame wait, and afterEach cleans up. (2) The BLOCKED exit calls parkedHoldOwner(this.state, existing) imported from state/dependencyUnblock.js, with no inline currentTaskId check in the file. The entry arm is untouched and the write stays inside the withMutex callback. (3) docs/MCP_SERVER.md: only the ### moe.set_task_status /ws sentence changed, to 'enforces the same rules.'\n\nNot verified: the full daemon suite (mid-epic slice; the plan's architect reported it green) and the IDE plugins (no client change by contract). The docs/MCP_SERVER.md collision alert with task-87cba58c is moot, since this landing already happened. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }
