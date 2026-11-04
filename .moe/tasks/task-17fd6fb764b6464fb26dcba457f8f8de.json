@@ -53,7 +53,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -66,16 +66,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T08:32:51.123Z",
-  "updatedAt": "2026-11-04T08:50:40.615Z",
+  "updatedAt": "2026-11-04T08:52:15.761Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T08:32:52.813Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T08:51:58.807Z",
+    "wallClockMs": 1145994
   },
   "contextFetchedBy": [
     "architect-c33f294e",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-25f21f0a"
   ],
   "tier": "light",
   "effort": "high",
@@ -167,9 +170,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T08:48:15Z",
-    "at": "2026-11-04T08:50:40.615Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:50:52Z",
+    "at": "2026-11-04T08:52:15.761Z"
+  },
+  "completedAt": "2026-11-04T08:51:58.807Z",
+  "reviewCompletedAt": "2026-11-04T08:51:58.807Z",
+  "reviewSummary": "Reviewed completion bc4793cf (on moe/control HEAD, moe/work-2026-10-24; git show --stat: exactly scripts/mods/moe-account-switch/tsconfig.json and scripts/mods/moe-compaction-keeper/tsconfig.json, +8/-2, net 6 LOC). Diff adds compilerOptions.noEmit true to each file, extends line unchanged, valid JSON; nothing under hooks/ or .claude-plugin/ touched (DoD 3, invariants). Re-ran the task.verification command myself against the landing (BEFORE=bc4793cf^ AFTER=bc4793cf, tsc = moe-vscode/node_modules/.bin/tsc 7.0.2, scratch snapshots under mktemp, removed afterward): RESULT fail=0, exit 0. B/nobase both mods rc=2 errors [TS2307 TS5083 TS5097 TS7006] js=[hooks/register.js hooks/register.test.js] (bug reproduced); A/nobase both mods rc=1 same errors js=[] (DoD 1: nothing written without the base); B/base and A/base identical: moe-account-switch [TS2769 TS5097], moe-compaction-keeper [TS5097], js=[] (DoD 2: baseline unchanged, nothing emitted); claude plugin test under env -i + temp CLAUDE_CONFIG_DIR: 94 pass/0 fail (account-switch), 8 pass/0 fail (compaction-keeper). The RED/GREEN run is the regression proof for the epic rail; DoD 3 forbids adding a test file, so no test deletion/weakening. Control checkout scripts/mods is clean (git status empty). Mod runtime unchanged (hooks.json loads ./register.ts; option is inert at runtime). Not verified: nothing deferred. Non-blocking follow-ups the worker named (not filed): launchers copy .claude-plugin/types into new worktrees; durable guard against committed mod .js files (the landed register.js/register.test.js removal remains task-d27edf88's rework). Complexity pass: 6-line change, nothing to cut.",
+  "requiredCheckAtDone": null
 }
