@@ -47,8 +47,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-25f21f0a",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -79,17 +79,20 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T09:13:49.972Z",
-  "updatedAt": "2026-11-04T10:16:27.301Z",
+  "updatedAt": "2026-11-04T10:20:57.921Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T09:46:13.844Z",
     "plannedStepCount": 3,
     "plannedDistinctFileCount": 1,
-    "executedStepCount": 3
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T10:20:38.477Z",
+    "wallClockMs": 2064633
   },
   "contextFetchedBy": [
     "architect-2a219562",
     "worker-5772dacf",
-    "worker-a0305b0b"
+    "worker-a0305b0b",
+    "qa-25f21f0a"
   ],
   "tier": "light",
   "effort": "medium",
@@ -209,10 +212,15 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-5772dacf@2026-11-04T10:11:44Z",
-    "at": "2026-11-04T10:16:26.327Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T10:16:24Z",
+    "at": "2026-11-04T10:20:57.921Z"
   },
-  "landingRetry": null
+  "landingRetry": null,
+  "completedAt": "2026-11-04T10:20:38.477Z",
+  "reviewCompletedAt": "2026-11-04T10:20:38.477Z",
+  "reviewSummary": "Reviewed completion 566778a0 (on moe/work-2026-10-24, contained in HEAD). Diff is scripts/tests/local-runner-bridge.test.mjs only, +5/-2: I1 and I3 now poll `running(host.child)` up to 5 s in 100 ms steps, then assert `running(host.child) === false`. The :490 alive-while-running check, exit codes and frames are unchanged. `running` is the file's existing zombie-aware probe (:1145), so it is the S9 rule. `git diff` shows scripts/local-runner is untouched (guest-supervisor.py unchanged). Re-ran in a fresh env -i snapshot of HEAD (git archive minus .moe, daemon npm ci + build, outside the shared tree): bridge file unloaded: 91 tests, 90 pass, 0 fail, 1 skipped. bridge-load-repro.sh 10 (16 burners): 'failed runs: 0/10'. CI 14-file `node --test scripts/tests/local-runner*.test.mjs` list from ci.yml, MOE_* unset: exit 0, 741 tests, 738 pass, 0 fail, 3 skipped. Bite check: mutating I1 to poll `running(process.pid)` (live, runnable) fails after ~5 s with AssertionError, so a runnable survivor still fails and the wait is bounded. All 3 DoD items verified. Residual: the race itself is probabilistic, so 0/10 shows no regression, not proof. No burners left; scratch removed.",
+  "requiredCheckAtDone": null
 }
