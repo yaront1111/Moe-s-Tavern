@@ -317,10 +317,12 @@ test('Bash stream parser refuses a tool path holding a control character, forgin
         env: { ...fixtureEnvironment, MOE_GIT_TOP: root, MOE_GIT_REL: '', MOE_SERENA_PROJECT_ROOT: root, MOE_TOOL_WRITES_FILE: tools },
     });
     assert.equal(run.status, 0, run.stderr);
+    // Windows Python writes both in text mode (CRLF). Fold only CRLF pairs, so a lone CR in a raw path must still match.
+    const lf = text => text.replaceAll('\r\n', '\n');
     // The plain control path is witnessed, so the empty result for the refused ones is not vacuous.
-    assert.deepEqual(readFileSync(tools, 'utf8').split('\n').filter(Boolean), ['plain.txt']);
+    assert.deepEqual(lf(readFileSync(tools, 'utf8')).split('\n').filter(Boolean), ['plain.txt']);
     for (const [, , raw] of calls.slice(0, 3)) {
-        assert.ok(run.stdout.includes(`  [WARN] tool write outside the repo not harvested: ${raw}\n`), run.stdout);
+        assert.ok(lf(run.stdout).includes(`  [WARN] tool write outside the repo not harvested: ${raw}\n`), run.stdout);
     }
 });
 
