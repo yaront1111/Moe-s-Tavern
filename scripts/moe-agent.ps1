@@ -7401,7 +7401,15 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
             $Res.Outcome = 'refused'; $Res.Code = 'MOE_COMMIT_REFUSED_UNRECONCILED_INTENT'
             $L.Msg = "receipt journal $journal still owes the completion row of $jc"; return $false
         }
-        if ($Settings.configuredGate) {
+        if ($Settings.configuredGate -and $preflightTaskId -and (Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir)) {
+            # CQ-M07s: under the strong profile the owed checks run in check VMs on the frozen candidate, never on this host.
+            $frozen = $null; $script:CheckDispatchCode = ''
+            try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
+            if (-not ($frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -and (Invoke-MoeCheckDispatch $Git $frozen))) {
+                $code = if ($script:CheckDispatchCode) { $script:CheckDispatchCode } else { 'no dispatch' }
+                $Res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "the merged tree $m on $b was not frozen, recorded and passed by the check VMs ($code)"; return $false
+            }
+        } elseif ($Settings.configuredGate) {
             $frozen = $null; $gated = $false
             try {
                 try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
@@ -9497,6 +9505,140 @@ function Stop-MoeSeatVm {
         if ($p) { $p.Dispose() }
         if ($out) { Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue }
     }
+}
+
+# --- Verified-local check dispatch (CQ-M07s). Twin: CQ-M07r at 9e9e7345. -------
+# Under the strong profile a worktree completion's L6 runs the task's owed checks
+# in check VMs: the bundled local-runner/check-dispatch.mjs on the frozen candidate
+# commit (tree M, sole parent B), never the qualityGate on this host.
+# MOE_CHECK_DISPATCH_PATH overrides that CLI only without MOE_RUNTIME_PROTECTED=1.
+# Only fixed codes and a fullmatched environment id leave its reply, and its stderr
+# is discarded.
+$script:CheckDispatchGraceSec = 120
+$script:CheckDispatchProcess = $null
+$script:CheckDispatchCode = ''
+# Twin: resolve_check_dispatch_cli.
+function Resolve-MoeCheckDispatchCli {
+    $script:CheckDispatchCli = Join-Path $script:MoeScriptRoot 'local-runner\check-dispatch.mjs'
+    if (-not $env:MOE_CHECK_DISPATCH_PATH) { return }
+    if ($script:MoeRuntimeProtected) {
+        [Console]::Error.WriteLine('[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.')
+    } else { $script:CheckDispatchCli = $env:MOE_CHECK_DISPATCH_PATH }
+}
+Resolve-MoeCheckDispatchCli
+# A reply object's key, matched case-sensitively like Python's dict, or $null.
+function Find-MoeReplyKey($Object, [string]$Name) {
+    if ($Object -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+    foreach ($p in $Object.PSObject.Properties) { if ($p.Name -ceq $Name) { return $p } }
+    return $null
+}
+# Twin: check_dispatch_verdict. PASS, or the fixed code that refuses the reply in
+# file OUT with exit RC, plus ' environment=<id>' for a stop naming a well-formed
+# one. A stop or a code beats exit 0, and nothing else from the reply is ever
+# returned. A read error throws; the caller refuses it as REPLY_INVALID.
+function Get-MoeCheckDispatchVerdict([string]$Out, [int]$Rc, [string]$Task, [string]$Cand) {
+    $bad = 'MOE_CHECK_DISPATCH_REPLY_INVALID'; $fixed = '^[A-Z][A-Z0-9_]{0,63}\z'
+    try { $f = [IO.File]::OpenRead($Out) } catch {
+        $x = $_.Exception.GetBaseException()
+        if ($x -is [IO.FileNotFoundException] -or $x -is [IO.DirectoryNotFoundException]) { return 'MOE_CHECK_DISPATCH_NO_REPORT' }
+        throw
+    }
+    $raw = New-Object byte[] 1048577; $n = 0
+    try { while ($n -lt $raw.Length) { $k = $f.Read($raw, $n, $raw.Length - $n); if ($k -le 0) { break }; $n += $k } } finally { $f.Dispose() }
+    if ($n -eq 0) { return 'MOE_CHECK_DISPATCH_NO_REPORT' }
+    if ($n -gt 1048576) { return $bad }
+    try { $text = (New-Object Text.UTF8Encoding($false, $true)).GetString($raw, 0, $n) } catch { return $bad }
+    if ($text.EndsWith("`n")) { $text = $text.Substring(0, $text.Length - 1) }
+    # pwsh 7 unwraps a one-element JSON array; require an object before parsing.
+    if ($text.Contains("`n") -or $text.Contains("`r") -or -not $text.TrimStart(' ', "`t").StartsWith('{')) { return $bad }
+    try { $d = $text | ConvertFrom-Json -ErrorAction Stop } catch { return $bad }
+    if ($d -isnot [System.Management.Automation.PSCustomObject]) { return $bad }
+    $s = Find-MoeReplyKey $d 'stopped'
+    if ($s) {
+        $c = Find-MoeReplyKey $s.Value 'code'; $e = Find-MoeReplyKey $s.Value 'environment'
+        if (-not $c -or $c.Value -isnot [string] -or $c.Value -cnotmatch $fixed) { return $bad }
+        if ($e -and $e.Value -is [string] -and $e.Value -cmatch '^moe-local-vm-v1:[0-9a-f]{64}\z') { return "$($c.Value) environment=$($e.Value)" }
+        return $c.Value
+    }
+    $c = Find-MoeReplyKey $d 'code'
+    if ($c) { if ($c.Value -is [string] -and $c.Value -cmatch $fixed) { return $c.Value }; return $bad }
+    $t = Find-MoeReplyKey $d 'taskId'; $i = Find-MoeReplyKey $d 'candidateId'; $r = Find-MoeReplyKey $d 'results'
+    if (-not $t -or $t.Value -isnot [string] -or $t.Value -cne $Task -or -not $i -or $i.Value -isnot [string] -or $i.Value -cne $Cand -or
+        -not $r -or $r.Value -isnot [System.Array]) { return $bad }
+    if ($Rc -ne 0) { return 'MOE_CHECK_DISPATCH_NOT_PASSED' }
+    if ($r.Value.Count -gt 0) { return 'PASS' }
+    return $bad
+}
+# Twin: stop_check_dispatch, with the port's Windows deviation: no signal exists
+# that the wrapper could send this child alone, so it never signals it. The child
+# shares the console, so an operator's Ctrl+C reaches it once, as SIGINT, and
+# check-dispatch.mjs then deletes its VM. Wait GRACE seconds for it to exit, then
+# end its tree by the recorded process id only, never by name. The record is
+# cleared last, so the outer finally of a wrapper stopped mid-stop still finishes it.
+function Stop-MoeCheckDispatch([int]$GraceSec = 0) {
+    $p = $script:CheckDispatchProcess
+    if (-not $p) { return }
+    $ErrorActionPreference = 'Continue'
+    try {
+        if (-not $p.HasExited -and -not $p.WaitForExit($GraceSec * 1000)) {
+            & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /T /F /PID $p.Id 2>&1 | Out-Null
+            $null = $p.WaitForExit(5000)
+        }
+    } finally { $p.Dispose(); $script:CheckDispatchProcess = $null }
+}
+# Twin: run_check_dispatch's child. Spawns node on the CLI with the credentials and
+# the Git location variables removed, stdin empty, stdout to a file and stderr
+# discarded, then polls it in 1 s slices (a Ctrl+C lands between them) up to MS.
+function Invoke-MoeCheckDispatchChild([string]$Node, [long]$Ms, [hashtable]$Frozen) {
+    $files = @(); $saved = @{}
+    try {
+        try {
+            $files = @([IO.Path]::GetTempFileName(), [IO.Path]::GetTempFileName(), [IO.Path]::GetTempFileName())
+            Write-Host "Post-flight: owed checks in check VMs: task $preflightTaskId candidate $($Frozen.CandidateId)" -ForegroundColor Cyan
+            foreach ($n in @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'GIT_INDEX_FILE', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR')) {
+                $saved[$n] = [Environment]::GetEnvironmentVariable($n); Remove-Item -LiteralPath "Env:\$n" -ErrorAction SilentlyContinue
+            }
+            $script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', "$projectPath", '--task', $preflightTaskId, '--commit', $Frozen.Commit)) -RedirectStandardInput $files[0] -RedirectStandardOutput $files[1] -RedirectStandardError $files[2] -NoNewWindow -PassThru -ErrorAction Stop -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))
+        } catch { return 'MOE_CHECK_DISPATCH_NO_REPORT' }
+        finally { foreach ($n in $saved.Keys) { if ($null -ne $saved[$n]) { [Environment]::SetEnvironmentVariable($n, $saved[$n]) } } }
+        $p = $script:CheckDispatchProcess; $null = $p.Handle; $clock = [Diagnostics.Stopwatch]::StartNew()
+        while (-not $p.WaitForExit(1000)) {
+            if ($clock.ElapsedMilliseconds -ge $Ms) { Stop-MoeCheckDispatch 0; return 'MOE_CHECK_DISPATCH_TIMEOUT' }
+        }
+        $rc = $p.ExitCode; Stop-MoeCheckDispatch 0
+        if ($rc -isnot [int]) { $rc = 1 }   # an unknown exit is never a pass
+        try { return (Get-MoeCheckDispatchVerdict $files[1] $rc $preflightTaskId $Frozen.CandidateId) } catch { return 'MOE_CHECK_DISPATCH_REPLY_INVALID' }
+    } finally {
+        Stop-MoeCheckDispatch $script:CheckDispatchGraceSec   # only an interrupted wait still holds the record
+        foreach ($f in $files) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+}
+# Twin: run_check_dispatch. L6 under the strong profile: check-dispatch.mjs on the
+# frozen candidate's commit for this task, whose report must name that candidate.
+# $true only on PASS. Otherwise $false with $script:CheckDispatchCode set and,
+# after the project-top refusal, one `[WARN] MOE_CHECK_DISPATCH_REFUSED: <verdict>`
+# line. It never runs the qualityGate or records a CheckRun: the dispatch records
+# its own over /runner. The bound and its lease arithmetic are the sh twin's:
+# MOE_CHECK_DISPATCH_TIMEOUT_SEC, default 3600 s = check-dispatch.mjs's CHECK_BUDGET_MS.
+function Invoke-MoeCheckDispatch([hashtable]$Git, [hashtable]$Frozen) {
+    $script:CheckDispatchCode = ''
+    if ($Git.Rel) {
+        Write-Host '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.' -ForegroundColor Yellow
+        $script:CheckDispatchCode = 'MOE_WORKTREE_PROJECT_NOT_TOP'; return $false
+    }
+    $ms = Get-MoeLandLeaseBudget $(if ($env:MOE_CHECK_DISPATCH_TIMEOUT_SEC) { $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC } else { '3600' })
+    $node = $script:MoeNode
+    if (-not $node) { $found = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1; if ($found) { $node = $found.Path } }
+    if ($null -eq $ms) { $verdict = 'MOE_CHECK_DISPATCH_TIMEOUT_INVALID' }
+    elseif (-not $node -or -not (Test-Path -LiteralPath $script:CheckDispatchCli -PathType Leaf)) { $verdict = 'MOE_CHECK_DISPATCH_UNAVAILABLE' }
+    else { $verdict = Invoke-MoeCheckDispatchChild $node $ms $Frozen }
+    if ($verdict -ceq 'PASS') {
+        Write-Host "[OK] check VMs passed every owed check of candidate $($Frozen.CandidateId)." -ForegroundColor Green
+        return $true
+    }
+    $script:CheckDispatchCode = $verdict
+    [Console]::Error.WriteLine("[WARN] MOE_CHECK_DISPATCH_REFUSED: $verdict")
+    return $false
 }
 
 # Twin: seat_job_outcome. Only the FINAL stdout line is host-owned, never a guest's earlier marker.
@@ -11933,6 +12075,7 @@ $mentionsJson
     try { if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false } } catch {}
     try { Remove-MoeAgentGitGuard } catch {}
     try { Stop-MoeGateChild } catch {}
+    try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}
     try { Invoke-MoeTeardownRescue } catch {}
     try { Complete-MoePostflight | Out-Null } catch {}
     try { Remove-MoeGateWorkspace | Out-Null } catch {}

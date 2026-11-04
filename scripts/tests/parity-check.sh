@@ -38,12 +38,12 @@ extract_codes() { # $1 = file, $2 = prefix regex
   grep -oE "\b$2[A-Z0-9_]*\b" "$1" 2>/dev/null | grep -vE "$INTERNAL_PLUMBING" | grep -vE "$SH_ONLY" | sort -u || true
 }
 # The worktree-mode families follow the land-on-every-exit ones, then the
-# verified-local VM route's (CQ-M07m/M07n). MOE_WRAPPER_
-# is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
+# verified-local VM route's (CQ-M07m/M07n) and its check-VM gate's (CQ-M07r/M07s).
+# MOE_WRAPPER_ is not a family: moe-agent.sh carries sh-only internal MOE_WRAPPER_* names
 # (its hot-reload plumbing), so section 2 requires its codes by name.
 for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_' \
   'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_' \
-  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_'; do
+  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_' 'MOE_CHECK_DISPATCH_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -159,6 +159,11 @@ require_both "resume-budget prose" 'resume budget re-armed'
 for lit in get_execution_readiness executionRoute seat-start seat-job seat-stop vm-credential seatJob \
   MOE_AGENT_SEAT_PATH retry-sec 'no task is claimed; retrying in'; do
   require_both "vm route" "$lit"
+done
+# The check-VM gate (CQ-M07r/M07s): its start, pass, refusal and ignored-override lines.
+for lit in 'Post-flight: owed checks in check VMs: task' 'check VMs passed every owed check of candidate' \
+  'was not frozen, recorded and passed by the check VMs' 'only the bundled local-runner/check-dispatch.mjs runs.'; do
+  require_both "check dispatch" "$lit"
 done
 
 # Claude account rotation: the helper both wrappers call and the lease, wait and

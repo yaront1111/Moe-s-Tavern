@@ -862,6 +862,278 @@ function Invoke-VmcSections {
     }
 }
 
+# --- [strong gate] CQ-M07s: twin of postflight-vm-route.sh's [strong gate] (CQ-M07r).
+# Under verified-local a worktree completion's L6 runs the task's owed checks in check
+# VMs: R's fake dispatch CLI on the frozen candidate commit (tree M, sole parent B),
+# never the qualityGate on this host, whose canary writes $sgWitness. SGV, SGU, SG8
+# and G run the wrapper's functions in process. The port's Windows deviation: the
+# wrapper never signals the dispatch, so where sh expects one check-dispatch-term row
+# these rows expect none, and a dead fake. Runs in Invoke-SgSections' scope.
+function Initialize-SgFixture {
+    Initialize-VmjFixture; Remove-Item Env:\FAKE_CTX_LANDING
+    $p = Get-Content -Raw "$project\.moe\project.json" | ConvertFrom-Json
+    $p.settings | Add-Member -NotePropertyName qualityGate -NotePropertyValue "echo ran>`"$sgWitness`""
+    [IO.File]::WriteAllText("$project\.moe\project.json", ($p | ConvertTo-Json -Depth 8))
+    Remove-Item -LiteralPath $sgWitness -ErrorAction SilentlyContinue
+    $env:FAKE_TASK_STATUS = 'REVIEW'
+}
+function Assert-Sg($R, [bool]$Ok, [string]$Why) { if (-not $Ok) { Stop-Vmr $R $Why } }
+# A probe only, it never kills: no handle holds the logged pid, so Windows may have reused it. A fake that survives ends itself after 300 s.
+function Assert-SgDead([string]$Row, [int]$Id) {
+    $p = Get-Process -Id $Id -ErrorAction SilentlyContinue
+    if ($p -and $p.ProcessName -ceq 'node') { throw "VM ROUTE FAILED ([strong gate] $Row): the dispatch $Id outlived its stop" }
+}
+# Assert-SgRow R KIND [CODE [ENV]] -- sg_check: KIND pass (the check VMs passed, main
+# moved to C), host (legacy, observe: the host qualityGate ran, no dispatch) or refused
+# (the line names CODE, plus ' environment=ENV' for a well-formed stop id; nothing published).
+function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = '') {
+    $ev = "$project\.moe\evidence-rpcs.jsonl"; $raw = if (Test-Path -LiteralPath $ev) { [IO.File]::ReadAllText($ev) } else { '' }
+    $rows = @(Read-VmeJsonl $ev); $tools = @(Read-VmeJsonl $calls | ForEach-Object { $_.tool })
+    $text = $R.Text -replace '\x1b\[[0-9;]*m', ''; $lines = @($text -split '\r?\n')
+    $of = { param($t) @($rows | Where-Object { $_.tool -ceq $t }) }; $n = { param($l) @($lines | Where-Object { $_ -ceq $l }).Count }
+    $B = $script:VmjBase; $main = Invoke-VmcGit $project @('rev-parse', 'refs/heads/main')
+    # @() at each call: a one-row answer unrolls to a bare PSCustomObject, which has no .Count on 5.1.
+    $cand = @(& $of record_candidate); $d = @(& $of check-dispatch); $fin = @(& $of finalize_attempt); $done = @(& $of record_commit | Where-Object { $_.args.kind -ceq 'completion' })
+    Assert-Sg $R ($R.Code -eq 0 -and -not $R.Ran) "exit $($R.Code), host CLI ran=$($R.Ran)"
+    Assert-Sg $R (-not $raw.Contains('DISPATCH-CANARY') -and -not $text.Contains('DISPATCH-CANARY')) 'the dispatch reply or stderr leaked'
+    Assert-Sg $R (-not $text.Contains('MOE_CHECK_DISPATCH_PATH_IGNORED')) 'an unprotected override was ignored'
+    Assert-Sg $R ($cand.Count -eq 1 -and $cand[0].args.baseRevision -ceq $B -and @(& $of record_delivery_receipt).Count -eq 0) 'not one record_candidate on B, or a receipt was recorded'
+    $M = $cand[0].args.treeSha
+    if ($Kind -eq 'host') {
+        $runs = @(& $of record_check_run)
+        Assert-Sg $R ($d.Count -eq 0 -and (Test-Path -LiteralPath $sgWitness) -and [IO.File]::ReadAllText($sgWitness).Trim() -ceq 'ran') 'the dispatch ran, or the host qualityGate did not'
+        Assert-Sg $R ($runs.Count -eq 1 -and $runs[0].args.outcome -ceq 'passed' -and (& $n '[OK] qualityGate passed.') -eq 1) 'not one passed host CheckRun'
+    } else {
+        Assert-Sg $R (-not (Test-Path -LiteralPath $sgWitness) -and @(& $of record_check_run).Count -eq 0 -and -not $text.Contains('Post-flight: quality gate:')) 'the qualityGate ran on the host'
+        if ($Code -ceq 'MOE_CHECK_DISPATCH_UNAVAILABLE') { Assert-Sg $R ($d.Count -eq 0) 'a missing CLI ran' }
+        else {
+            Assert-Sg $R ($d.Count -eq 1) "$($d.Count) check-dispatch rows"
+            $x = $d[0].args; $cx = "$($x.argv[5])"   # PowerShell names are case-blind: never $X beside $x
+            Assert-Sg $R ($cx -cmatch '^[0-9a-f]{40}$' -and ($x.argv -join "`n") -ceq (@('--project', $project, '--task', 'task-postflight', '--commit', $cx) -join "`n")) "dispatch argv: $($x.argv -join ' ')"
+            Assert-Sg $R ($x.entry -ceq $sgFake -and $x.tree -ceq $M -and (@($x.parents) -join ' ') -ceq $B -and $x.heads.'refs/heads/main' -ceq $B) 'dispatch entry, tree, parents or main'
+            Assert-Sg $R ($x.candidateId -ceq $cand[0].args.id -and @($x.credentials).Count -eq 0) 'dispatch candidate, or a credential reached it'
+            Assert-Sg $R (-not (Invoke-VmcGit $project @('for-each-ref', '--contains', $cx)) -and @(& $of check-dispatch-term).Count -eq 0) 'a ref holds the frozen candidate commit, or the wrapper signalled the dispatch'
+            Assert-SgDead $R.Row $x.pid
+        }
+    }
+    if ($Kind -eq 'refused') {
+        $v = $Code + $(if ($EnvId) { " environment=$EnvId" } else { '' })
+        Assert-Sg $R ($main -ceq $B -and $done.Count -eq 1 -and $done[0].args.outcome -ceq 'failed' -and $done[0].args.code -ceq 'MOE_COMMIT_FAILED_GATE' -and $done[0].args.pushed -eq $false) 'main moved, or not one failed MOE_COMMIT_FAILED_GATE completion record'
+        Assert-Sg $R ($fin.Count -eq 1 -and $fin[0].args.outcome -ceq 'unlanded' -and $fin[0].args.unlandedReason -ceq 'gate' -and $fin[0].args.targetTip -ceq $B -and
+            $fin[0].args.PSObject.Properties.Name -ccontains 'landedRevision' -and $null -eq $fin[0].args.landedRevision) 'not one unlanded gate finalize on B'
+        $retry = Get-Content -Raw -LiteralPath "$project\.moe\landing-retry.json" | ConvertFrom-Json
+        Assert-Sg $R ($retry.reason -ceq 'gate' -and $retry.count -eq 1 -and (Invoke-VmcGit $project @('rev-parse', "$($retry.rescueRef)") -NoThrow) -ceq (Invoke-VmcGit $project @('rev-parse', 'refs/heads/moe/task/task-postflight'))) 'landing-retry or its rescue ref'
+        Assert-Sg $R ((Get-Content -Raw -LiteralPath "$project\.moe\attempts\attempt-postflight.json" | ConvertFrom-Json).phase -ceq 'closed') 'the attempt is not closed'
+        Assert-Sg $R (@($tools | Where-Object { $_ -cin @('set_task_status', 'complete_task', 'release_task', 'report_blocked', 'qa_approve', 'qa_reject') }).Count -eq 0) "a status RPC: $($tools -join ' ')"
+        Assert-Sg $R (@($lines | Where-Object { $_.Contains('MOE_CHECK_DISPATCH_REFUSED') }).Count -eq 1 -and (& $n "[WARN] MOE_CHECK_DISPATCH_REFUSED: $v") -eq 1) "not one REFUSED line naming $v"
+        Assert-Sg $R ((& $n "[WARN] MOE_COMMIT_FAILED_GATE: task task-postflight -- the merged tree $M on $B was not frozen, recorded and passed by the check VMs ($v); main did not move and the task's bytes stay on moe/task/task-postflight.") -eq 1) 'not one exact MOE_COMMIT_FAILED_GATE line'
+    } else {
+        Assert-Sg $R ($main -cne $B -and (Invoke-VmcGit $project @('rev-parse', "$main^@")) -ceq $B -and (Invoke-VmcGit $project @('rev-parse', "$main^{tree}")) -ceq $M) 'main is not one commit of M on B'
+        Assert-Sg $R ($done.Count -eq 1 -and $done[0].args.outcome -ceq 'committed' -and $done[0].args.sha -ceq $main -and $fin.Count -eq 1 -and $fin[0].args.outcome -ceq 'landed' -and $fin[0].args.landedRevision -ceq $main) 'the landing records'
+        if ($Kind -eq 'pass') {
+            $pos = { param($t, $k) for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].tool -ceq $t -and (-not $k -or $rows[$i].args.kind -ceq $k)) { return $i } }; return -1 }
+            Assert-Sg $R ($main -cne $d[0].args.argv[5] -and (& $pos check-dispatch) -lt (& $pos record_commit completion) -and (& $pos record_commit completion) -lt (& $pos finalize_attempt)) 'dispatch order'
+            Assert-Sg $R ((& $n "[OK] check VMs passed every owed check of candidate $($cand[0].args.id).") -eq 1 -and -not $text.Contains('MOE_CHECK_DISPATCH_REFUSED')) 'not one [OK] line'
+            Assert-Sg $R (-not (Test-Path -LiteralPath "$project\.git\moe\receipt\task-postflight.json")) 'the receipt journal stayed'
+        }
+    }
+}
+function Invoke-SgRow([string]$Row, [hashtable]$Set, [string]$Cli = 'codex', [string]$Readiness = $ready) {
+    foreach ($k in $Set.Keys) { Set-Item -LiteralPath "Env:\$k" -Value $Set[$k] }
+    try { return (Invoke-VmrRow $Row worker $Cli $Readiness on) } finally { foreach ($k in $Set.Keys) { Remove-Item -LiteralPath "Env:\$k" -ErrorAction SilentlyContinue } }
+}
+function Invoke-SgRows {
+    $strong = @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake }
+    Write-Host '[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs'
+    Assert-SgRow (Invoke-SgRow SG-pass ($strong + @{ FAKE_CHECK_DISPATCH = 'pass' })) pass
+    Write-Host '[strong gate] SG-legacy, SG-observe: the host qualityGate runs (Invoke-MoeFrozenGate -WorktreeMode), the override unused'
+    Assert-SgRow (Invoke-SgRow SG-legacy @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
+    Assert-SgRow (Invoke-SgRow SG-observe @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
+    Write-Host '[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line'
+    $stop = { param($c, $e) $h = @{ FAKE_CHECK_DISPATCH = 'stopped'; FAKE_CHECK_DISPATCH_CODE = $c }; if ($e) { $h.FAKE_CHECK_DISPATCH_ENVIRONMENT = $e }; $h }
+    foreach ($c in @(@('SG-nonzero', 'MOE_CHECK_DISPATCH_NOT_PASSED', '', @{ FAKE_CHECK_DISPATCH = 'not-passed' }),
+        @('SG-stopped', 'RUNNER_VM_DELETE_FAILED', '', (& $stop RUNNER_VM_DELETE_FAILED)), @('SG-nothing-owed', 'RUNNER_NOTHING_OWED', '', (& $stop RUNNER_NOTHING_OWED)),
+        @('SG-undeclared', 'RUNNER_DEPENDENCIES_UNDECLARED', '', (& $stop RUNNER_DEPENDENCIES_UNDECLARED)),
+        @('SG-crash', 'MOE_CHECK_DISPATCH_NO_REPORT', '', @{ FAKE_CHECK_DISPATCH = 'crash' }), @('SG-unparsable', 'MOE_CHECK_DISPATCH_REPLY_INVALID', '', @{ FAKE_CHECK_DISPATCH = 'garbage' }),
+        @('SG-env', 'RUNNER_ENVIRONMENT_NOT_APPROVED', $sgEnvId, (& $stop RUNNER_ENVIRONMENT_NOT_APPROVED $sgEnvId)),
+        @('SG-env-malformed', 'RUNNER_ENVIRONMENT_NOT_APPROVED', '', (& $stop RUNNER_ENVIRONMENT_NOT_APPROVED $sgEnvUpper)))) {
+        Assert-SgRow (Invoke-SgRow $c[0] ($strong + $c[3])) refused $c[1] $c[2]
+    }
+    Assert-SgRow (Invoke-SgRow SG-missing @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = "$tempRoot\no-such-dispatch.js" }) refused MOE_CHECK_DISPATCH_UNAVAILABLE
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $r = Invoke-SgRow SG-timeout ($strong + @{ FAKE_CHECK_DISPATCH = 'hang'; MOE_CHECK_DISPATCH_TIMEOUT_SEC = '2' })
+    Assert-Sg $r ($clock.Elapsed.TotalSeconds -lt 60) "the timed-out dispatch took $([int]$clock.Elapsed.TotalSeconds)s to stop"
+    Assert-SgRow $r refused MOE_CHECK_DISPATCH_TIMEOUT
+    Write-Host '[strong gate] SG-protected: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1, and never printed'
+    [IO.File]::WriteAllText("$tempRoot\daemon.cjs", '// never invoked')
+    $r = Invoke-SgRow SG-protected @{ MOE_RUNTIME_PROTECTED = '1'; MOE_DAEMON_PATH = "$tempRoot\daemon.cjs"; MOE_CHECK_DISPATCH_PATH = $sgFake } claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}'
+    Assert-Sg $r ($r.Code -eq 1 -and [regex]::Matches($r.Text, 'MOE_CHECK_DISPATCH_PATH_IGNORED').Count -eq 1 -and @($r.Text -split '\r?\n' | Where-Object { $_ -ceq $sgIgnored }).Count -eq 1) 'the override was not ignored with one warning'
+    Assert-Sg $r (-not $r.Text.Contains($sgFake)) 'the override value was printed'
+    Write-Host '[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected'
+}
+function Test-SgvRow([string]$Row, [int]$Rc, [string]$Want, [byte[]]$Bytes) {
+    $file = "$tempRoot\sgv.reply"; [IO.File]::WriteAllBytes($file, $Bytes)
+    $got = @(Get-MoeCheckDispatchVerdict $file $Rc 'task-v' 'cand-v')
+    if ($got.Count -ne 1 -or $got[0] -cne $Want) { throw "VM ROUTE FAILED ([strong gate] $Row): got '$($got -join ',')', expected '$Want'" }
+}
+# SGV: Get-MoeCheckDispatchVerdict returns PASS or one fixed code, never the reply (sh's
+# table, plus R's round-2 D and E rows, ported from their descriptions, and V-missing).
+function Invoke-SgvRows {
+    $bad = 'MOE_CHECK_DISPATCH_REPLY_INVALID'; $id = $sgEnvId; $nl = "`n"
+    $pass = '{"taskId":"task-v","candidateId":"cand-v","results":[{"command":"qualityGate","dispatchId":"dispatch-v","outcome":"passed","vm":"deleted","failure":null}]}'
+    $stopEnv = { param($e) '{"taskId":"task-v","candidateId":"cand-v","results":[],"stopped":{"code":"RUNNER_ENVIRONMENT_NOT_APPROVED","environment":' + $e + '}}' + "`n" }
+    $rows = @(@('V-empty', 0, 'MOE_CHECK_DISPATCH_NO_REPORT', ''), @('V-empty-rc3', 3, 'MOE_CHECK_DISPATCH_NO_REPORT', ''), @('V-not-json', 0, $bad, "not json$nl"),
+        @('V-array', 0, $bad, "[1]$nl"), @('V-pass', 0, 'PASS', "$pass$nl"), @('V-pass-bare', 0, 'PASS', $pass), @('V-pass-rc2', 2, 'MOE_CHECK_DISPATCH_NOT_PASSED', "$pass$nl"),
+        @('V-two-newlines', 0, $bad, "$pass$nl$nl"), @('V-results-object', 0, $bad, ('{"taskId":"task-v","candidateId":"cand-v","results":{"outcome":"passed"}}' + $nl)),
+        @('V-other-candidate', 0, $bad, ($pass.Replace('cand-v', 'cand-other') + $nl)), @('V-other-task', 0, $bad, ($pass.Replace('task-v', 'task-other') + $nl)),
+        @('V-no-results', 0, $bad, ('{"taskId":"task-v","candidateId":"cand-v","results":[]}' + $nl)), @('V-log-line', 0, $bad, "dispatch log$nl$pass$nl"),
+        @('V-indented', 0, $bad, ($pass.Replace(',"candidateId"', ",$nl`"candidateId`"") + $nl)), @('V-crlf', 0, $bad, "$pass`r$nl"),
+        @('V-stop-beats-rc0', 0, 'RUNNER_NOTHING_OWED', ('{"taskId":"task-v","candidateId":"cand-v","results":[],"stopped":{"code":"RUNNER_NOTHING_OWED"}}' + $nl)),
+        @('V-stop-lower', 2, $bad, ('{"stopped":{"code":"lower case"}}' + $nl)), @('V-code', 2, 'RUNNER_SEAM_UNAVAILABLE', ('{"code":"RUNNER_SEAM_UNAVAILABLE"}' + $nl)),
+        @('V-code-bad', 2, $bad, ('{"code":"bad code"}' + $nl)), @('V-stop-and-code', 2, 'RUNNER_CHECK_FAILED', ('{"code":"RUNNER_SEAM_UNAVAILABLE","stopped":{"code":"RUNNER_CHECK_FAILED"}}' + $nl)),
+        @('V-env', 2, "RUNNER_ENVIRONMENT_NOT_APPROVED environment=$id", (& $stopEnv "`"$id`"")),
+        @('V-at-limit', 0, 'PASS', ($pass + (' ' * (1048575 - $pass.Length)) + $nl)), @('V-oversize', 0, $bad, ($pass + (' ' * (1048576 - $pass.Length)) + $nl)))
+    foreach ($e in @("`"x$id`"", "`"$id\n`"", "`"$sgEnvUpper`"", "`"moe-local-vm-v1:$($sgHex.Substring(1))`"", '7', 'null')) {
+        $rows += , @("V-env-malformed $e", 2, 'RUNNER_ENVIRONMENT_NOT_APPROVED', (& $stopEnv $e))
+    }
+    foreach ($r in $rows) {
+        if ($r.Count -ne 4) { throw "harness: SGV row $($r[0]) has $($r.Count) fields, not 4" }   # a bare + in a row splices the array
+        Test-SgvRow $r[0] $r[1] $r[2] ([Text.Encoding]::UTF8.GetBytes($r[3]))
+    }
+    Test-SgvRow V-not-utf8 0 $bad ([byte[]](0xFF, 0x0A))
+    $got = Get-MoeCheckDispatchVerdict "$tempRoot\sgv-absent.reply" 0 'task-v' 'cand-v'
+    if ($got -cne 'MOE_CHECK_DISPATCH_NO_REPORT') { throw "VM ROUTE FAILED ([strong gate] V-missing): got '$got'" }
+}
+# Invoke-SguRow ROW EXPECTED [SET [REL [PROTECTED [GRACE]]]] -- run_check_dispatch's
+# twin in process; the last output line must be EXPECTED, and the credentials restored.
+function Invoke-SguRow([string]$Row, [string]$Want, [hashtable]$Set = @{}, [string]$Rel = '', [bool]$Protected = $false, [int]$Grace = 120) {
+    Remove-Item -LiteralPath $sguEv -ErrorAction SilentlyContinue
+    $err = New-Object IO.StringWriter; $prevErr = [Console]::Error; $text = @()
+    foreach ($k in $Set.Keys) { Set-Item -LiteralPath "Env:\$k" -Value $Set[$k] }
+    try {
+        [Console]::SetError($err); $script:MoeRuntimeProtected = $Protected; $script:CheckDispatchGraceSec = $Grace
+        $text = @(& { Resolve-MoeCheckDispatchCli; $ok = Invoke-MoeCheckDispatch @{ Rel = $Rel } $sguFrozen; "rc=$([int](-not $ok)) code=$script:CheckDispatchCode" } 6>&1 | ForEach-Object { "$_" })
+    } finally {
+        [Console]::SetError($prevErr); $script:MoeRuntimeProtected = $false
+        foreach ($k in $Set.Keys) { Remove-Item -LiteralPath "Env:\$k" -ErrorAction SilentlyContinue }
+    }
+    $script:SguOut = @($text) + @($err.ToString() -split '\r?\n' | Where-Object { $_ })
+    if ($text[-1] -cne $Want) { throw "VM ROUTE FAILED ([strong gate] $Row): got '$($text[-1])', expected '$Want': $($script:SguOut -join ' | ')" }
+    foreach ($n in $vmjCredentials) { if ([Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED ([strong gate] $Row): $n not restored" } }
+}
+function Get-SguCount([string]$Line) { return @($script:SguOut | Where-Object { $_ -ceq $Line }).Count }
+# Assert-SguDispatch ROW ENTRY -- exactly one dispatch ran, from ENTRY, on the frozen commit, with no credential; its pid.
+function Assert-SguDispatch([string]$Row, [string]$Entry) {
+    $d = @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })
+    if ($d.Count -ne 1 -or $d[0].args.entry -cne $Entry -or @($d[0].args.credentials).Count -or $d[0].args.candidateId -cne 'cand-sgu' -or
+        ($d[0].args.argv -join "`n") -cne (@('--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC) -join "`n")) { throw "VM ROUTE FAILED ([strong gate] $Row): dispatch rows $(ConvertTo-Json $d -Compress -Depth 5)" }
+    return (Get-SguPid)
+}
+function Get-SguPid { return [int]@(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })[0].args.pid }
+function Get-SguTerms { return @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch-term' }).Count }
+# Wait-SguDispatch -- until the fake's row exists (bounded), so a stop lands mid-dispatch.
+function Wait-SguDispatch([string]$Row) {
+    for ($i = 0; $i -lt 300 -and -not @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' }).Count; $i++) { Start-Sleep -Milliseconds 100 }
+    if (-not @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' }).Count) { throw "VM ROUTE FAILED ([strong gate] $Row): the dispatch never started" }
+}
+function Invoke-SguRows {
+    Write-Host '[strong gate] SGU: Invoke-MoeCheckDispatch in process: the bundled CLI, the override, the bound, the stop, the project top'
+    Invoke-SguRow U1 'rc=1 code=RUNNER_SEAM_UNAVAILABLE' @{ FAKE_CHECK_DISPATCH = 'code'; FAKE_CHECK_DISPATCH_CODE = 'RUNNER_SEAM_UNAVAILABLE' }
+    $null = Assert-SguDispatch U1 $sguStub; if ($script:SguOut -match 'MOE_CHECK_DISPATCH_PATH_IGNORED') { throw 'VM ROUTE FAILED ([strong gate] U1): an IGNORED line without an override' }
+    Invoke-SguRow U2 'rc=0 code=' @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }
+    $null = Assert-SguDispatch U2 $sgFake; if ((Get-SguCount '[OK] check VMs passed every owed check of candidate cand-sgu.') -ne 1) { throw 'VM ROUTE FAILED ([strong gate] U2): not one [OK] line' }
+    Invoke-SguRow U3 'rc=0 code=' @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' } '' $true
+    $null = Assert-SguDispatch U3 $sguStub
+    if (@($script:SguOut -match 'MOE_CHECK_DISPATCH_PATH_IGNORED').Count -ne 1 -or (Get-SguCount $sgIgnored) -ne 1 -or ($script:SguOut -join "`n").Contains($sgFake)) { throw 'VM ROUTE FAILED ([strong gate] U3): not exactly one IGNORED line, or the override path printed' }
+    foreach ($bound in @('0', '-1', 'abc', '86401', '1.0001')) {
+        Invoke-SguRow "U4 $bound" 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT_INVALID' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = $bound; FAKE_CHECK_DISPATCH = 'pass' }
+        if (Test-Path -LiteralPath $sguEv) { throw "VM ROUTE FAILED ([strong gate] U4 $bound): the dispatch ran" }
+    }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    Invoke-SguRow U5 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'; FAKE_CHECK_DISPATCH = 'hang-hard' } '' $false 1
+    Assert-SgDead U5 (Assert-SguDispatch U5 $sguStub)
+    if ($clock.Elapsed.TotalSeconds -gt 15 -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U5): $([int]$clock.Elapsed.TotalSeconds)s and $(Get-SguTerms) TERMs, expected at most 15 s and none" }
+    Invoke-SguRow U6 'rc=1 code=MOE_WORKTREE_PROJECT_NOT_TOP' @{ FAKE_CHECK_DISPATCH = 'pass' } 'sub'
+    if ((Test-Path -LiteralPath $sguEv) -or (Get-SguCount '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.') -ne 1) { throw 'VM ROUTE FAILED ([strong gate] U6): the dispatch ran, or not one NOT_TOP line' }
+    Invoke-SguStopRows
+}
+# U7: a runspace Stop() mid-dispatch, the PipelineStoppedException a Ctrl+C raises: the
+# invoker's finally waits the grace, ends the fake and clears the record. SG-interrupt: the outer
+# finally line (the twin of sh's EXIT-trap stop) sits right after Stop-MoeGateChild and
+# stops a still-recorded dispatch by itself.
+function Invoke-SguStopRows {
+    Remove-Item -LiteralPath $sguEv -ErrorAction SilentlyContinue; $done = "$sgu\u7.done"; $env:FAKE_CHECK_DISPATCH = 'hang-hard'; $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC = '60'
+    $ps = [powershell]::Create()
+    try {
+        $null = $ps.AddScript("param(`$P, `$F, `$Fz, `$Done)`n$sgDefs`n" + @'
+$projectPath = $P; $preflightTaskId = 'task-sgu'; $script:MoeNode = $null; $script:CheckDispatchCli = $F; $script:CheckDispatchGraceSec = 3; $script:CheckDispatchProcess = $null
+try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllText($Done, "record=$([bool]$script:CheckDispatchProcess)") }
+'@).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done)
+        $h = $ps.BeginInvoke(); Wait-SguDispatch U7
+        $clock = [Diagnostics.Stopwatch]::StartNew(); $ps.Stop(); $took = $clock.Elapsed.TotalSeconds
+        Assert-SgDead U7 (Assert-SguDispatch U7 $sgFake)
+        $rec = if (Test-Path -LiteralPath $done) { [IO.File]::ReadAllText($done) } else { 'no finally' }
+        if ($took -lt 2.5 -or $took -gt 20 -or $rec -cne 'record=False' -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U7): stop took $([int]$took)s, $rec, $(Get-SguTerms) TERMs; expected the 3 s grace, record=False and none" }
+    } finally { $ps.Dispose() }
+    $lines = [IO.File]::ReadAllLines($wrapper)
+    $g = @('    try { Stop-MoeGateChild } catch {}', '    try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}', '    try { Invoke-MoeTeardownRescue } catch {}', '    try { Complete-MoePostflight | Out-Null } catch {}')
+    $at = @(foreach ($l in $g) { $hit = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -ceq $l) { $i } }); if ($hit.Count -eq 1) { $hit[0] } else { -1 } })
+    if ($at[0] -lt 0 -or ($at -join ',') -cne (@(0..3 | ForEach-Object { $at[0] + $_ }) -join ',')) { throw "VM ROUTE FAILED ([strong gate] SG-interrupt): outer finally lines at $($at -join ','), expected four consecutive, each once" }
+    Remove-Item -LiteralPath $sguEv -ErrorAction SilentlyContinue
+    $script:CheckDispatchProcess = Start-Process -FilePath node -ArgumentList (ConvertTo-MoeArgumentLine @($sgFake, '--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC)) -RedirectStandardOutput "$sgu\g.out" -RedirectStandardError "$sgu\g.err" -NoNewWindow -PassThru
+    $script:CheckDispatchGraceSec = 1; Wait-SguDispatch SG-interrupt
+    & ([scriptblock]::Create($g[1].Trim()))
+    Assert-SgDead SG-interrupt (Get-SguPid)
+    if ($script:CheckDispatchProcess) { throw 'VM ROUTE FAILED ([strong gate] SG-interrupt): the outer finally kept the record' }
+    Remove-Item Env:\FAKE_CHECK_DISPATCH, Env:\MOE_CHECK_DISPATCH_TIMEOUT_SEC
+}
+# SG8: L6 takes the check VMs only for the strong profile, and before the legacy gate and the intent rule.
+function Test-Sg8 {
+    $fn = [Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$null).Find({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -ceq 'Invoke-MoeWorktreeRounds' }, $false)
+    $lines = @("$($fn.Extent.Text)" -split '\r?\n')
+    $at = { param($l, [bool]$Part) $hit = @(for ($i = 0; $i -lt $lines.Count; $i++) { if (($Part -and $lines[$i].Contains($l)) -or $lines[$i] -ceq $l) { $i } }); if ($hit.Count -eq 1) { $hit[0] } else { -1 } }
+    $order = @((& $at '        if ($Settings.configuredGate -and $preflightTaskId -and (Test-MoeStrongLandingTask $preflightTaskId $Git.GitDir)) {'), (& $at 'Invoke-MoeCheckDispatch' $true),
+        (& $at '        } elseif ($Settings.configuredGate) {'), (& $at 'Invoke-MoeFrozenGate' $true),
+        (& $at '        if (-not (Test-MoeWorktreeStrongIntent $m $b $(if ($Settings.configuredGate) { $frozen } else { $null }) $Git.GitDir $Res $L)) { return $false }'))
+    if ($order -contains -1 -or (& $at 'Test-MoeStrongLandingTask' $true) -ne $order[0] -or ($order -join ',') -cne (@($order | Sort-Object) -join ',')) {
+        throw "VM ROUTE FAILED ([strong gate] SG8): strong, dispatch, legacy, gate, intent at lines $($order -join ','), expected that order, each exactly once"
+    }
+}
+function Invoke-SgSections {
+    $saved = @{}; Get-ChildItem Env: | ForEach-Object { $saved[$_.Name] = $_.Value }
+    $vmjCredentials = @('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'CODEX_API_KEY')
+    $vmjToken = 'sk-ant-oat01-vmCanaryMustNeverEscapePipes0123456789'; $ready = '{"profile":"verified-local","ready":true,"missingCapabilities":[]}'
+    $sgFake = Join-Path $root 'scripts\tests\postflight-fake-check-dispatch.js'; $sgWitness = "$tempRoot\sg-witness"; $sgHex = '0123456789abcdef' * 4
+    $sgEnvId = "moe-local-vm-v1:$sgHex"; $sgEnvUpper = "moe-local-vm-v1:$($sgHex.ToUpperInvariant())"
+    $sgIgnored = '[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.'
+    $names = @('Resolve-MoeCheckDispatchCli', 'Find-MoeReplyKey', 'Get-MoeCheckDispatchVerdict', 'Stop-MoeCheckDispatch', 'Invoke-MoeCheckDispatchChild', 'Invoke-MoeCheckDispatch', 'Get-MoeLandLeaseBudget', 'ConvertTo-MoeArgumentLine')
+    $sgDefs = (@([Management.Automation.Language.Parser]::ParseFile($wrapper, [ref]$null, [ref]$null).FindAll({ param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -cin $names }, $false) | ForEach-Object { $_.Extent.Text }) -join "`n")
+    . ([scriptblock]::Create($sgDefs))
+    $sgu = "$tempRoot\sgu"; $sguProject = "$sgu\project"; $sguEv = "$sguProject\.moe\evidence-rpcs.jsonl"; $sguStub = "$sgu\scripts\local-runner\check-dispatch.mjs"
+    try {
+        Copy-Item (Join-Path $root 'scripts\tests\postflight-fake-agent-seat.js') "$tempRoot\seat.cjs"
+        [IO.File]::WriteAllText("$tempRoot\sg.gitconfig", "[user]`n name = sg`n email = sg@example.invalid`n[core]`n autocrlf = false`n")
+        $env:MOE_AGENT_SEAT_PATH = "$tempRoot\seat.cjs"; $env:MOE_ACCOUNT_ROTATION = 'on'; $env:MOE_ACCOUNTS_FILE = "$tempRoot\accounts\claude-accounts.json"; $env:FAKE_ACCOUNT_HOME = "$tempRoot\accounts"
+        $env:GIT_CONFIG_GLOBAL = "$tempRoot\sg.gitconfig"; $env:GIT_CONFIG_NOSYSTEM = '1'; $env:PATH = "$tempRoot;$env:PATH"; $env:SGU_FAKE = $sgFake
+        foreach ($n in $vmjCredentials) { Set-Item "Env:\$n" "outer-$n" }
+        New-Item -ItemType Directory -Force -Path "$sguProject\.moe\candidates", (Split-Path $sguStub) | Out-Null
+        [IO.File]::WriteAllText("$sguProject\a.txt", "sgu`n"); foreach ($g in @(@('init', '-q'), @('add', 'a.txt'), @('commit', '-qm', 'sgu'))) { Invoke-VmcGit $sguProject $g | Out-Null }
+        $sguC = Invoke-VmcGit $sguProject @('rev-parse', 'HEAD'); $sguFrozen = @{ CandidateId = 'cand-sgu'; Commit = $sguC }
+        [IO.File]::WriteAllText("$sguProject\.moe\candidates\cand-sgu.json", ('{"id":"cand-sgu","taskId":"task-sgu","treeSha":"' + (Invoke-VmcGit $sguProject @('rev-parse', 'HEAD^{tree}')) + '","createdAt":"2026-11-04T00:00:00.000Z"}'))
+        [IO.File]::WriteAllText($sguStub, "import { createRequire } from 'node:module';`ncreateRequire(import.meta.url)(process.env.SGU_FAKE);`n")
+        $script:MoeScriptRoot = "$sgu\scripts"; $script:MoeNode = $null; $script:CheckDispatchProcess = $null; $projectPath = $sguProject; $preflightTaskId = 'task-sgu'
+        Invoke-SgvRows; Invoke-SguRows; Test-Sg8
+        Write-Host '[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt'
+        $script:VmrSetup = { Initialize-SgFixture }; $script:VmjWorkspace = 'worktree'
+        Invoke-SgRows
+    } finally {
+        $script:VmrSetup = $null; $script:MoeScriptRoot = $null; $script:MoeRuntimeProtected = $false
+        if ($script:CheckDispatchProcess) { try { & taskkill /T /F /PID $script:CheckDispatchProcess.Id 2>&1 | Out-Null } catch {}; $script:CheckDispatchProcess = $null }
+        Get-ChildItem Env: | Where-Object { -not $saved.ContainsKey($_.Name) } | Remove-Item
+        foreach ($n in $saved.Keys) { Set-Item "Env:\$n" $saved[$n] }
+    }
+}
+
 $exitCode = 2
 try {
     if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'node is not available' }
@@ -899,6 +1171,7 @@ if (cli !== 'normalize') {
     if ($bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw 'wrapper lost its UTF-8 BOM' }
     Invoke-VmcSections
     Invoke-VmjSections
+    Invoke-SgSections
     $legacy = '{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
     $r = Invoke-VmrRow T-legacy worker claude $legacy '-'; Assert-VmrLaunched $r
     if (@(Get-Content "$project\.moe\evidence-rpcs.jsonl" | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tool -eq 'claim_next_task' -and $_.args.PSObject.Properties.Name -contains 'executionRoute' }).Count) { Stop-Vmr $r 'legacy claim marked vm' }

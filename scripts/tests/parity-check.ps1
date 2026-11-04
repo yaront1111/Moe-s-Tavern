@@ -38,10 +38,11 @@ $dynamicPatterns = @(
     'MOE_BOARD_[A-Z_]+',
     'MOE_PUSH_[A-Z_]+',
     'MOE_MIGRATION_[A-Z_]+',
-    # The verified-local VM route's families (CQ-M07m/M07n).
+    # The verified-local VM route's families (CQ-M07m/M07n), then its check-VM gate's (CQ-M07r/M07s).
     'MOE_VERIFIED_LOCAL_[A-Z_]+',
     'MOE_SEAT_[A-Z_]+',
-    'MOE_VM_[A-Z_]+'
+    'MOE_VM_[A-Z_]+',
+    'MOE_CHECK_DISPATCH_[A-Z_]+'
 )
 # $shOnly names a printed code whose condition only moe-agent.sh can meet: the
 # verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in BOTH
@@ -114,6 +115,9 @@ $required = [ordered]@{
     # marker, the seat CLI and account helper verbs, the job outcome marker and
     # the capacity wait.
     'vm route' = @('get_execution_readiness', 'executionRoute', 'seat-start', 'seat-job', 'seat-stop', 'vm-credential', 'seatJob', 'MOE_AGENT_SEAT_PATH', 'retry-sec', 'no task is claimed; retrying in')
+    # The check-VM gate (CQ-M07r/M07s): its start, pass, refusal and ignored-override lines.
+    'check dispatch' = @('Post-flight: owed checks in check VMs: task', 'check VMs passed every owed check of candidate',
+        'was not frozen, recorded and passed by the check VMs', 'only the bundled local-runner/check-dispatch.mjs runs.')
     # Claude account rotation: the helper both wrappers call and the lease, wait
     # and relaunch lines an operator greps for (the MOE_ACCOUNT_* codes are
     # compared above).
