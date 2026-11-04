@@ -78,8 +78,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "REVIEW",
-  "assignedWorkerId": "qa-1cd86a39",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -114,7 +114,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T07:53:40.368Z",
-  "updatedAt": "2026-11-04T12:35:07.075Z",
+  "updatedAt": "2026-11-04T12:42:04.010Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T10:56:51.016Z",
@@ -124,7 +124,9 @@
     "firstClaimAt": "2026-11-04T10:57:08.677Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 2,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T12:41:36.580Z",
+    "wallClockMs": 6267903
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -209,10 +211,11 @@
   "planApprovedAt": "2026-11-04T11:18:23.508Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-a0305b0b@2026-11-04T12:10:21Z",
-    "at": "2026-11-04T12:34:18.044Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T12:34:45Z",
+    "at": "2026-11-04T12:42:04.010Z"
   },
   "workStartedAt": "2026-11-04T12:11:32.920Z",
   "reviewStartedAt": "2026-11-04T12:33:28.789Z",
@@ -245,5 +248,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T12:41:36.580Z",
+  "reviewCompletedAt": "2026-11-04T12:41:36.580Z",
+  "reviewSummary": "Reviewed completion 060d7b8c (recorded, contained in moe/work-2026-10-24). Diff: 2 files, +89/-2, net 91 LOC, matches approved scope.\n\nDoD1: moe-agent.ps1 is ONE 20-line pure insertion right after Invoke-MoeVerifiedLocalGate. Condition text is exactly `$script:MoeVmRoute -and $script:LaunchOutage`. It prints the [launch-outage] line, does one best-effort #general chat_send (only with a channel id), and resets all six launch-success variables. The line and post text equal sh 8ca6a40b (moe-agent.sh 10101/10103). The resets match the ps1 launch-success branch.\n\nDoD2: the VR-outage row asserts every acceptance criterion in order (3 host launches all before the 4th read, no MOE_LAUNCH_PROBE, VM-marked claims after the flip and unmarked ones before, one outage-over line, one exact #general post, seat rows seat-start,seat-stop, exit 0). It then calls Assert-VmrOneReason $r vm-route per amend-1, with no second helper. An in-process AST check runs the block in 3 cases (sent, refused, no-channel).\n\nDoD3: I re-ran the gate on a git-archive snapshot of exactly 060d7b8c, since the task worktree is at 408a81ad. powershell.exe 5.1 and pwsh.exe 7 each printed the [seat outage] ok line, then PASS postflight-vm-route.ps1, EXIT=0. parity-check.sh PASS. BOM is ef bb bf. moe-agent.ps1 has 0 CR; the harness is ASCII, no BOM, 0 CR.\n\nMutants: I ran the extracted in-process check on pwsh.exe. The real wrapper printed BLOCK-CHECK-OK. All 7 mutants made it throw 'VM ROUTE FAILED (VR-outage block ...)': each of the six resets commented out, and the channel guard replaced by $true.\n\nNot run: full postflight.ps1, which belongs to the epic final task task-1a8f1d0e. The change is inert unless $script:MoeVmRoute is set. Reasoned only, with no row: VM claim-failed with a mention, an unparseable claim, and a held task through the outage. No blocking complexity findings.",
+  "requiredCheckAtDone": null
 }

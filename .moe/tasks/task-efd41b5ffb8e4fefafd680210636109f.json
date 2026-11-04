@@ -9,10 +9,56 @@
     "`node scripts/verify-release-version.mjs v0.8.0` prints PASS at the row's tip, run in a snapshot outside the shared checkout."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/verify-release-version.mjs: extend the guard to every field docs/RELEASING.md lists, plus the two stragglers step 2 syncs. Edit with the editing tool.\n\nKEEP THE CLI. It takes one tag argument and keeps the same tag regex. On success it prints `PASS release versions: X.Y.Z` to stdout and exits 0. Otherwise it prints every mismatch to stderr and exits 1.\n\nFIELDS, in this order, each with a label:\n- For each of packages/moe-daemon, packages/moe-proxy, packages/moe-claude-plugin and moe-vscode, three fields:\n  - `<dir>/package.json` (its version);\n  - `<dir>/package-lock.json version` (the top-level version);\n  - `<dir>/package-lock.json packages[\"\"].version`.\n- `packages/moe-claude-plugin/.claude-plugin/plugin.json` (its version).\n- `moe-jetbrains/build.gradle.kts`, read with the existing `version = \"...\"` multiline regex.\n- `installer/moe-installer.iss`, read with a multiline match of a line `AppVersion=<non-space version>` followed only by optional whitespace, so a CRLF copy still reads.\n\nSHAPE. Keep it table-driven: one entry per field ({label, file, read}). Parse each JSON file once. A single-field file's label is its path, so the existing rows' `stderr.includes(file)` still holds. No package.json path is a substring of its package-lock.json path. Message format, unchanged: `<label>: found <v>, expected <X.Y.Z>`. No new dependency: node:fs only.\n\nError handling: a missing, unreadable or malformed file, or a missing field, never throws a stack. It becomes that field's line, `<label>: found undefined, expected X.Y.Z` or `<label>: unreadable, expected X.Y.Z`. Every mismatch is reported in one run (exit 1), not just the first. The existing try/catch stays as the last-resort guard for the tag check.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/verify-release-version.mjs"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Sync the two stragglers to the release version, 0.8.0 today:\n- packages/moe-claude-plugin/.claude-plugin/plugin.json: `\"version\": \"0.1.0\"` becomes `\"version\": \"0.8.0\"`;\n- installer/moe-installer.iss line 3: `AppVersion=0.1.0` becomes `AppVersion=0.8.0`.\nChange nothing else in either file. Edit with the editing tool and keep LF endings (.gitattributes forces eol=lf).\n\nWhy sync instead of exempting them:\n- CLAUDE.md says releases have all package versions synced.\n- plugin.json is the claude-plugin package's own manifest, already at 0.8.0 in its package.json.\n- The installer's AppVersion is the version Windows lists for the installed app.\n- scripts/build-installer.ps1 and ISCC inject no version, release.yml never rewrites either file, and no test pins 0.1.0, so nothing depends on the old value.\n\nError handling: none needed at runtime. Step 3's per-field rows and the repo row fail if either file drifts again.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "packages/moe-claude-plugin/.claude-plugin/plugin.json",
+        "installer/moe-installer.iss"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/release-version.mjs, the node:test file CI runs (`node --test scripts/tests/release-version.mjs`, ci.yml:238).\n\nFIXTURE. fixture() writes every guarded file at 0.8.0:\n- the four package.json files (claude-plugin added);\n- the four package-lock.json files as {name, version, lockfileVersion: 3, packages: {\"\": {name, version}}};\n- plugin.json as {name: 'moe', version};\n- build.gradle.kts as `version = \"0.8.0\"`;\n- moe-installer.iss as a [Setup] section with AppName=Moe and AppVersion=0.8.0.\nThe test writes its own field list out by hand, one entry per field with a mutator, and never imports it from the guard. A field dropped from the guard then fails its row.\n\nROWS:\n- FAILING THEN PASSING, for every field. Mutate only that field to 0.6.0 -> exit 1; stderr names its label with `found 0.6.0, expected 0.8.0` and names no other field's label. Then restore it -> exit 0 with `PASS release versions: 0.8.0`. This is DoD 1's failing-then-passing case for both lockfile fields of each package, and for claude-plugin's package.json and plugin.json.\n- Two mismatched fields at once are both reported in one run (exit 1).\n- Error handling: a deleted packages/moe-claude-plugin/package-lock.json and a non-JSON plugin.json each exit 1, naming the file, with no stack trace (no stderr line matching /^\\s+at /).\n- The existing malformed-tag test stays.\n- A REPO ROW runs the guard with cwd = the repository root (resolved from import.meta.url) and the tag 'v' + packages/moe-daemon/package.json's version, and expects PASS. CI then fails on drift before any tag exists.\n\nEvery fixture stays under os.tmpdir() and is removed (keep the existing finally and its tmpdir assert).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/release-version.mjs"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "docs/RELEASING.md, section 1 'Bump versions'. Its list names exactly the fields the guard checks, in the guard's order:\n- the four packages' package.json and package-lock.json (top-level `version` and `packages[\"\"].version`);\n- packages/moe-claude-plugin/.claude-plugin/plugin.json (`version`);\n- moe-jetbrains/build.gradle.kts (`version = \"X.Y.Z\"`);\n- installer/moe-installer.iss (`AppVersion=X.Y.Z`).\n\nAdd one sentence after the list. The session mods' own scripts/mods/*/.claude-plugin/plugin.json files keep their own versions. They ship inside both IDE plugin bundles (scripts/bundle-manifest.json) and are never released on their own, so the guard does not check them.\n\nSection 2 keeps its text: the guard prints PASS, and the workflow stops on a mismatch, which is now true for every listed field. Edit with the editing tool. Docs-only, so no test runs here.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/RELEASING.md"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, once, from the task worktree root. Run checkRefs[0] exactly and submit its fresh exit code and output tail with moe.complete_task:\n\nbash -c 'S=$(mktemp -d) && git archive HEAD | tar -xf - -C \"$S\" && { git diff --quiet HEAD || git diff HEAD --binary | git -C \"$S\" apply; } && (cd \"$S\" && node scripts/verify-release-version.mjs v0.8.0 && node --test scripts/tests/release-version.mjs); rc=$?; rm -rf \"$S\"; exit $rc'\n\nThe command builds a snapshot outside the shared checkout: an archive of HEAD plus W's uncommitted diff. In it, the guard must print `PASS release versions: 0.8.0` (DoD 3) and every node:test row must pass.\n\nError handling for a red run:\n- A FAIL line names the field. Fix the guard, the fixture or the straggler.\n- Never weaken a row.\n- Never tag, push a tag or publish anything.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff, the final step. Use the adversarial-self-review skill.\n\n1. DOCS MATCH THE GUARD. Diff the RELEASING.md list against the guard's table: same files, same fields, same order.\n2. PROVE THE ROWS. Delete each lockfile field from the guard one at a time in a scratch copy (never in W): its row must fail. Then restore it.\n3. STRAGGLERS. `git grep -n 0.1.0` over installer/ and packages/moe-claude-plugin/ is empty.\n4. NO STACK TRACES. A missing file, malformed JSON, a missing packages[\"\"] key and a CRLF .iss each give a one-line verdict, never a stack trace.\n5. TAG RULE. The tag regex and the PASS text are byte-identical, because release.yml:42 and the docs depend on them.\n\nRecord the findings in the step note.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-5772dacf",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -24,11 +70,84 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T12:15:10.120Z",
-  "updatedAt": "2026-11-04T12:38:17.315Z",
+  "updatedAt": "2026-11-04T12:41:59.688Z",
   "metrics": {
-    "firstClaimAt": "2026-11-04T12:38:13.921Z"
+    "firstClaimAt": "2026-11-04T12:38:13.921Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
     "architect-67c762f6"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:41:47.566Z",
+  "executionContract": {
+    "intendedBehavior": "`node scripts/verify-release-version.mjs vX.Y.Z` fails, naming each field, when any of these differs from X.Y.Z: the daemon, proxy, claude-plugin or vscode package.json; any of their package-lock.json files' top-level `version` or `packages[\"\"].version`; moe-claude-plugin's .claude-plugin/plugin.json; build.gradle.kts `version`; or moe-installer.iss `AppVersion`. When all match it prints `PASS release versions: X.Y.Z`. The two stragglers are synced to 0.8.0, and RELEASING.md lists exactly the guarded fields.",
+    "acceptanceCriteria": [
+      "Every guarded field has a test row that fails with that field named and then passes once restored. This includes both lockfile fields of all four packages and claude-plugin's package.json and plugin.json.",
+      "A missing or malformed guarded file exits 1 with a one-line verdict, never a stack trace. Two mismatches are both reported in one run.",
+      "plugin.json and moe-installer.iss read 0.8.0 and are guarded. RELEASING.md's list equals the guard's table, and the session mods are named as deliberately unsynced, with the reason.",
+      "checkRefs[0] passes: the guard prints PASS for v0.8.0 in a snapshot outside the shared checkout, and every node:test row passes."
+    ],
+    "invariants": [
+      "The CLI keeps its contract: one tag argument, the same tag regex, `PASS release versions: X.Y.Z` with exit 0, otherwise exit 1 with the mismatches on stderr.",
+      "The test's field list is independent of the guard's, so dropping a field from the guard fails a row.",
+      "Nothing is tagged, pushed or published."
+    ],
+    "compatibility": [
+      "release.yml:42 (`node scripts/verify-release-version.mjs \"$GITHUB_REF_NAME\"`) and ci.yml:238 (`node --test scripts/tests/release-version.mjs`) are unchanged.",
+      "Messages for the existing four fields keep the `<file>: found <v>, expected <X.Y.Z>` shape."
+    ],
+    "approvedScope": [
+      "scripts/verify-release-version.mjs: the field table, its readers and its messages.",
+      "scripts/tests/release-version.mjs: the fixture, the per-field rows, the error-handling rows and the repo row.",
+      "docs/RELEASING.md section 1's list, plus one sentence on the session mods.",
+      "The version line of packages/moe-claude-plugin/.claude-plugin/plugin.json and the AppVersion line of installer/moe-installer.iss."
+    ],
+    "reuse": [
+      "The guard's existing tag regex, build.gradle.kts regex, message format and try/catch.",
+      "The test's existing fixture() tmpdir pattern and its tag-error rows."
+    ],
+    "sourceAssumptions": [
+      "At moe/work-2026-10-24 54dd64fb, every RELEASING.md-listed field reads 0.8.0: the four package.json files and both fields of all four lockfiles. plugin.json and moe-installer.iss read 0.1.0.",
+      "scripts/verify-release-version.mjs:10-16 checks only daemon, proxy and vscode package.json plus build.gradle.kts.",
+      "scripts/build-installer.ps1 and ISCC inject no version, and nothing else references the stragglers' version strings.",
+      "scripts/mods/moe-account-switch and moe-compaction-keeper plugin.json read 0.1.0. They ship inside both IDE bundles via scripts/bundle-manifest.json."
+    ],
+    "checkRefs": [
+      "bash -c 'S=$(mktemp -d) && git archive HEAD | tar -xf - -C \"$S\" && { git diff --quiet HEAD || git diff HEAD --binary | git -C \"$S\" apply; } && (cd \"$S\" && node scripts/verify-release-version.mjs v0.8.0 && node --test scripts/tests/release-version.mjs); rc=$?; rm -rf \"$S\"; exit $rc'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Exempt the two stragglers in RELEASING.md instead of syncing them: rejected. CLAUDE.md says all package versions are synced, and neither file has a reason to differ (nothing injects or reads them).\n- Sync the session mods' plugin.json too: rejected. They are internal mods inside the IDE bundles, never released on their own. The docs name them as unsynced.\n- Import the field list into the test: rejected, because a field dropped from the guard would then go unnoticed.",
+    "codebaseInsights": "- release.yml:42 runs the guard on the tag, and ci.yml:238 runs the test file.\n- Every lockfile carries both a top-level version and packages[\"\"].version.\n- installer/moe-installer.iss is LF, as .gitattributes forces. Its version is a plain AppVersion= line, built by hand with ISCC.\n- The claude-plugin package.json is already 0.8.0; only its .claude-plugin/plugin.json lags.",
+    "risks": "- The repo row ties CI to the real tree. A partial version bump on a PR is red until every field matches, which is the point.\n- Keep error handling one-line: a stack trace on a missing file would hide which field failed.\n- The snapshot command applies W's uncommitted diff onto an archive of HEAD. The plan adds no new files, so `git diff HEAD` covers every change.",
+    "keyFiles": [
+      "scripts/verify-release-version.mjs",
+      "scripts/tests/release-version.mjs",
+      "docs/RELEASING.md",
+      "packages/moe-claude-plugin/.claude-plugin/plugin.json",
+      "installer/moe-installer.iss",
+      ".github/workflows/release.yml (line 42, read only)",
+      ".github/workflows/ci.yml (line 238, read only)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6d1472171c4ed2006c861a43dd436f9edae67963",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:41:47.599Z",
+  "approvedPlanRevision": 1
 }
