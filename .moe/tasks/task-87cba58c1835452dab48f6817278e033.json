@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,15 +99,18 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-03T23:59:31.684Z",
-  "updatedAt": "2026-11-04T05:31:07.234Z",
+  "updatedAt": "2026-11-04T05:47:37.177Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T00:15:38.624Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 10
+    "executedStepCount": 10,
+    "doneAt": "2026-11-04T05:47:05.358Z",
+    "wallClockMs": 19886734
   },
   "contextFetchedBy": [
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-1cd86a39"
   ],
   "tier": "standard",
   "effort": "high",
@@ -228,9 +231,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T05:28:59Z",
-    "at": "2026-11-04T05:31:07.234Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T05:45:32Z",
+    "at": "2026-11-04T05:47:37.177Z"
+  },
+  "completedAt": "2026-11-04T05:47:05.358Z",
+  "reviewCompletedAt": "2026-11-04T05:47:05.358Z",
+  "reviewSummary": "Reviewed completion c54b063b (recorded, pushed, in moe/work-2026-10-24 and HEAD bf35a0a7): 4 files, +133/-3, ~130 net LOC, under the cap. Scope is exactly the four planned files; the docs edit stays inside the '### moe.submit_plan' Launch effort bullet. Owned files are unchanged since c54b063b.\n\nCode: submitPlan.ts's stored-effort branch is now maxEffort(clampEffort(...), effortFloor(tier, settings, lowEffortEligible)); effortFloor is undefined for docs/tests-only, so low efforts survive. The explicit-effort branch and effortRaised are untouched, as the contract requires. routing.ts resolveLaunch floors a stored effort with effortFloor(task.tier, settings, low); the tierEffort fallback and qa floor are unchanged. No new constant.\n\nVerification: re-ran task.verification verbatim on a git-archive snapshot of HEAD in /tmp (nvm Node 24, npm ci). Exit 0, 4 files / 131 tests passed, ends 'effortFloor ok'. Covers the new test, submitPlan.test, qaReject.test and routing.test.\n\nRED re-proof: restored both sources to c54b063b^ in the scratch snapshot and ran only the new file. 3 failed (omitted-effort heavy re-plan, explicit tier heavy, resolveLaunch floor), 2 controls passed. Scratch removed.\n\nDoD: (1) standard/high re-planned with 6 files and no effort is stored heavy at xhigh or max, launch hint equal: case 2. (2) resolveLaunch heavy/high is xhigh; light/standard high stay high; heavy/max stays max; lowEffortEligible heavy/low stays low: case 5, exact asserts. (3) docs sentence present. (4) vitest command green.\n\nAdversarial and ponytail: no new concurrency (resolveLaunch is pure). Garbage stored effort is still caught by isEffort and clampEffort. A custom routing.efforts list is clamped by effortFloor. Nothing to delete. effortRaised is not set when a kept stored effort is raised; the contract says it is unchanged. Full daemon suite not re-run: mid-epic bug row, and the plan's dry run was 7432 passed.",
+  "requiredCheckAtDone": null
 }
