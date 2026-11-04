@@ -9,9 +9,93 @@
     "Every scripts/tests file that reads the workflows passes and still asserts something real: a suite moved to the nightly is asserted there. CLAUDE.md, DEVELOPMENT.md and RELEASING.md describe the PR-versus-nightly split. The gate finishes in 20 min or less."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "ci.yml becomes the one definition of every job, callable with full: true; pull_request and push runs skip only the long suites. All edits are in .github/workflows/ci.yml. A dry-run diff at edc3e937 is /mnt/d/moe-scratch/plan-669e/ci.yml.diff, and the full file is /mnt/d/moe-scratch/plan-669e/ci.yml (sha256 94273943...). Write with your editing tool, never cp: a shell copy leaves no TOOL witness.\n\n(a) Header and triggers. Add a 5-line comment above `on:`: pull requests and pushes to main run the fast set, every step except those guarded by `inputs.full`. nightly.yml calls this file with full: true, which adds the bash, Windows PowerShell 5.1 and PowerShell 7 wrapper postflights (about 45, 85-100 and 90-110 min on hosted runners, too long for a per-push run). Keep `push`/`pull_request` `branches: [main]` byte-for-byte, then add:\n```\n  workflow_call:\n    inputs:\n      full:\n        description: Also run the long suites (the three wrapper postflights).\n        type: boolean\n        default: false\n      ref:\n        description: The branch, tag or SHA to check out; empty checks out the triggering event's ref.\n        type: string\n        default: ''\n      artifact-suffix:\n        description: Appended to every artifact name, so a run that calls this file more than once keeps the names unique.\n        type: string\n        default: ''\n  # A full run of a branch's own definitions, before nightly.yml is on main:\n  #   gh workflow run ci.yml --ref <branch> -f full=true\n  workflow_dispatch:\n    inputs:\n      full:\n        description: Also run the long suites (the three wrapper postflights).\n        type: boolean\n        default: true\n```\n\n(b) Concurrency. Keep the comment and add the line \"A nightly call appends the ref it tests, so its refs never queue behind each other.\" Set the group to `${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.ref }}`. On pull_request and push, inputs.ref is '', so a PR still has one group. Do not add cancel-in-progress.\n\n(c) All 5 `- uses: actions/checkout@v7` steps get `with:` / `ref: ${{ inputs.ref }}`: fresh-linux-install, build-typescript, test-typescript, build-plugin and build-all-platforms. An empty ref means the event's ref, so PR checkouts do not change.\n\n(d) The 5 upload-artifact names get `${{ inputs.artifact-suffix }}`: daemon-dist, proxy-dist, daemon-coverage, proxy-coverage and jetbrains-plugin. upload-artifact v4+ refuses a duplicate name within one run, and the nightly calls this file once per ref inside one run. Nothing downloads these artifacts by name: only ci.yml names them.\n\n(e) Replace the three wrapper postflight steps (ci.yml:310-331) with these six, in this order:\n```\n      - name: Test Bash worktree landing and parity\n        if: runner.os == 'Linux'\n        run: |\n          bash scripts/tests/worktree-landing.sh\n          bash scripts/tests/parity-check.sh\n\n      - name: Test Bash wrapper postflight (nightly)\n        # About 45 min on ubuntu-latest: only the nightly runs it.\n        if: inputs.full && runner.os == 'Linux'\n        run: node scripts/tests/postflight-safe.mjs bash\n\n      - name: Test Windows PowerShell worktree landing\n        # About 4 min. PowerShell 7's run of the same file is nightly-only, to keep this job near 20 min.\n        if: runner.os == 'Windows'\n        run: powershell -NoProfile -File scripts/tests/worktree-landing.ps1\n\n      - name: Test Windows PowerShell wrapper postflight (nightly)\n        # 85-100 min on windows-latest: only the nightly runs it.\n        if: inputs.full && runner.os == 'Windows'\n        run: node scripts/tests/postflight-safe.mjs powershell\n\n      - name: Test PowerShell 7 parity\n        if: runner.os == 'Windows'\n        run: pwsh -NoProfile -File scripts/tests/parity-check.ps1\n\n      - name: Test PowerShell 7 worktree landing and wrapper postflight (nightly)\n        # 90-110 min on windows-latest: only the nightly runs it.\n        if: inputs.full && runner.os == 'Windows'\n        run: |\n          pwsh -NoProfile -File scripts/tests/worktree-landing.ps1\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n          node scripts/tests/postflight-safe.mjs pwsh\n```\nError handling:\n- A single-command step's exit code is the step's result on both default shells: bash -e on Linux, and on Windows the runner's pwsh wrapper exits with $LASTEXITCODE.\n- The two-command pwsh step keeps the explicit LASTEXITCODE stop, so a worktree-landing failure never reaches the postflight.\n- On pull_request and push the inputs context is empty, so inputs.full is null and the nightly-only steps show as skipped.\n\n(f) In build-typescript, directly after its Setup Node.js step, add:\n```\n      - name: Test the PR and nightly workflow split\n        run: node --test scripts/tests/ci-workflows.test.mjs\n```\n\nEverything else stays byte-for-byte: every other step, `if:`, run line, `node-version: '24'` and the step order. Existing tests depend on it:\n- daemon-json-cap and seat-registration require their step in build-all-platforms with `if: runner.os != 'macOS'`.\n- Five local-runner tests match the 'Test local runner prerequisite bundles' run line with a regex.\n- local-runner-check TC1 requires every node-version to be '24'.\n\nPR job times after this change, from real step timings (runs 41848822541, 41862780104 and 41746515589):\n- fresh-linux-install 1.0 min, build-typescript 0.4, test-typescript 3.5, build-plugin 2.8.\n- Build (ubuntu): 48.4 - 43.5 (the Bash postflight step) + 1.5 (worktree-landing.sh) = about 6.4.\n- Build (windows): 10.9 (steps 1-20) + 3.9 (5.1 worktree-landing.ps1, 15:14:00-15:17:53 in 41848822541) + under 0.1 (parity-check.ps1, 1 s locally) + 0.8 (VS Code startup) = about 16.\n- Build (macos): 5.2, unchanged.\n\nThe longest remaining PR step is 3.9 min. Keeping pwsh 7's worktree-landing.ps1 in PR would put Windows at about 20 min with no margin, so that run moves to the nightly; the 5.1 run stays.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "note": "ci.yml: workflow_call inputs {full,ref,artifact-suffix} + workflow_dispatch(full default true); concurrency group gains -${{ inputs.ref }}; all 5 checkouts take ref: ${{ inputs.ref }}; all 5 artifact names take the suffix; the 3 wrapper postflight steps became 6 (fast legs unguarded on their OS; postflight-safe bash/powershell and pwsh worktree-landing+postflight behind inputs.full); build-typescript runs ci-workflows.test.mjs. Applied with Edit; result is byte-identical to the planned draft (cmp) and PyYAML parses it.",
+      "startedAt": "2026-11-04T19:03:15.356Z",
+      "completedAt": "2026-11-04T19:04:29.514Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "New .github/workflows/nightly.yml. It is a caller only and copies no steps, so ci.yml stays the one definition. Write exactly this, with your editing tool (dry-run copy: /mnt/d/moe-scratch/plan-669e/nightly.yml):\n```\nname: Nightly\n\n# The full CI set once a night: everything ci.yml runs on a pull request, plus the\n# long suites it skips there (the bash, Windows PowerShell 5.1 and PowerShell 7\n# wrapper postflights). It calls ci.yml with full: true instead of copying its\n# steps, so ci.yml stays the one definition of every job.\n#\n# Default-branch rule: GitHub fires `schedule` only from the default branch's\n# (main's) copy of this file, and the Actions tab offers \"Run workflow\" only for a\n# file on main too. So the nightly starts once this file reaches main (PR #230).\n# Until then, run a branch's own full set with:\n#   gh workflow run ci.yml --ref <branch> -f full=true\n# The step definitions come from the commit that started the run (main's for the\n# schedule, the chosen branch's for a dispatch), never from the ref under test:\n# a step added on another branch joins the nightly once it reaches main.\n#\n# Refs: the schedule tests each ref in the repository variable NIGHTLY_REFS, a\n# JSON array such as [\"main\",\"moe/work-2026-10-24\"] (unset: [\"main\"]). A value\n# that is not a JSON array fails the run when the matrix is expanded. A dispatch\n# with a ref tests only that ref:\n#   gh workflow run nightly.yml -f ref=moe/work-2026-10-24\non:\n  schedule:\n    # 03:17 UTC daily, off the top of the hour, when GitHub delays scheduled runs most.\n    - cron: '17 3 * * *'\n  workflow_dispatch:\n    inputs:\n      ref:\n        description: The branch, tag or SHA to test; empty tests each ref in vars.NIGHTLY_REFS (default main).\n        type: string\n        default: ''\n\npermissions:\n  contents: read\n\njobs:\n  full:\n    name: Full CI (${{ matrix.ref }})\n    strategy:\n      fail-fast: false\n      matrix:\n        ref: ${{ fromJSON(inputs.ref && format('[\"{0}\"]', inputs.ref) || vars.NIGHTLY_REFS || '[\"main\"]') }}\n    uses: ./.github/workflows/ci.yml\n    with:\n      full: true\n      ref: ${{ matrix.ref }}\n      # Artifact names must be unique within a run, and each ref's call uploads the same set.\n      artifact-suffix: -${{ strategy.job-index }}\n```\nWhy each piece:\n- matrix.ref, not a hard-coded branch: the consolidation branch changes over time. The human sets NIGHTLY_REFS; this task changes no settings.\n- strategy.job-index for the suffix: refs contain '/', which artifact names refuse.\n- No concurrency here: a caller group equal to the called group deadlocks, and ci.yml's group already carries inputs.ref, so two refs never queue behind each other.\n- permissions contents: read: a scheduled run that checks out any ref gets a read-only token. Nothing in ci.yml writes with GITHUB_TOKEN; artifacts and caches use the runner token.\n- No `if:` for forks: GitHub disables schedules in forks.\n\nError handling, all loud on the run page:\n- A malformed NIGHTLY_REFS fails the expression at matrix expansion.\n- A ref that does not exist fails at checkout.\n- A dispatch ref containing a double quote breaks fromJSON and fails the run. It never tests something else.\n\nThe full Windows job is about 11 + 4 + 84-100 + 4 + 90-108 + 1 = 195-230 min, under GitHub's 360-min job limit.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        ".github/workflows/nightly.yml"
+      ],
+      "modifiedFiles": [
+        ".github/workflows/nightly.yml"
+      ],
+      "note": "New nightly.yml written with Write: schedule cron '17 3 * * *' + workflow_dispatch(ref), permissions contents: read, one job `full` (fail-fast false, matrix.ref from inputs.ref / vars.NIGHTLY_REFS / [\"main\"]) calling ./.github/workflows/ci.yml with full: true, ref: matrix.ref, artifact-suffix: -strategy.job-index. Header documents the default-branch rule for schedule. Byte-identical to the planned draft; PyYAML parses it.",
+      "startedAt": "2026-11-04T19:04:30.240Z",
+      "completedAt": "2026-11-04T19:05:18.490Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "New scripts/tests/ci-workflows.test.mjs, plus one comment fix in scripts/tests/usage-receipt.test.mjs.\n\n(1) The test. The dry-run copy is /mnt/d/moe-scratch/plan-669e/ci-workflows.test.mjs (109 lines, sha256 d51643ce...). It passes on the step 1-2 YAML and kills all 17 mutations tried at edc3e937. Read it and Write it with your editing tool; if it is gone, rebuild it from this spec. It uses node:test, assert/strict and readFileSync only, normalizes CRLF, and reads the files through `new URL('../../.github/workflows/<f>', import.meta.url)`, so a missing file throws instead of passing. It parses by indentation, like the existing CI-reading rows, with no YAML dependency: top-level keys at column 0, jobs at 2, steps `      - ` at 6, step keys at 8, block-run lines at 10+. A step's commands are its trimmed run lines.\n\nLONG holds four commands, each with its OS:\n- `node scripts/tests/postflight-safe.mjs bash` (Linux)\n- `node scripts/tests/postflight-safe.mjs powershell` (Windows)\n- `pwsh -NoProfile -File scripts/tests/worktree-landing.ps1` (Windows)\n- `node scripts/tests/postflight-safe.mjs pwsh` (Windows)\n\nFAST holds four commands, each with its OS:\n- `bash scripts/tests/worktree-landing.sh` (Linux)\n- `bash scripts/tests/parity-check.sh` (Linux)\n- `powershell -NoProfile -File scripts/tests/worktree-landing.ps1` (Windows)\n- `pwsh -NoProfile -File scripts/tests/parity-check.ps1` (Windows)\n\nThe six rows:\n- R1 'ci.yml keeps its pull_request and push triggers on main and takes full, ref and artifact-suffix from a caller'. Checks four things:\n  - push and pull_request with `branches: [main]`, verbatim;\n  - workflow_call inputs exactly {full boolean/false, ref string/'', artifact-suffix string/''};\n  - workflow_dispatch inputs exactly {full boolean/true};\n  - the concurrency group ends in `-${{ inputs.ref }}`.\n- R2 'each long suite runs once, only under inputs.full and on its OS; nothing else waits for the nightly'. Each LONG command has exactly one owning step: build-all-platforms, guard `inputs.full && runner.os == '<OS>'`. The steps whose guard mentions inputs.full number exactly 3, and they hold exactly the LONG commands, plus the LASTEXITCODE stop line.\n- R3 'the fast legs of the wrapper suites stay in PR CI on their OS'. Each FAST command has one owning step, in build-all-platforms, with guard exactly `runner.os == '<OS>'`.\n- R4 'every checkout takes inputs.ref and every artifact name ends in inputs.artifact-suffix'. At least 5 checkouts, each directly followed by `with:` / `ref: ${{ inputs.ref }}`. At least 5 upload-artifact names, each ending in the suffix.\n- R5 'nightly.yml runs on a schedule and on workflow_dispatch with a ref, and calls ci.yml with full: true per ref'. Checks:\n  - the header (the text before `on:`) contains \"`schedule` only from the default branch\";\n  - a 5-field cron;\n  - workflow_dispatch inputs exactly {ref string/''};\n  - exactly one job with `uses:`, and that job has `uses: ./.github/workflows/ci.yml`, `fail-fast: false`, the exact fromJSON matrix line, and `with:` exactly {full: true, ref: ${{ matrix.ref }}, artifact-suffix: -${{ strategy.job-index }}}.\n- R6 'PR CI runs this file'. Exactly one step runs `node --test scripts/tests/ci-workflows.test.mjs`: in build-typescript, unguarded.\n\nThe 17 mutations killed in planning:\n- the bash postflight unguarded;\n- postflight-safe added back to the PR step;\n- full: false in the nightly;\n- one checkout without ref;\n- one artifact without the suffix;\n- no schedule;\n- no workflow_call ref input;\n- a fast leg guarded by inputs.full;\n- the header without the rule;\n- the split-test step removed;\n- the nightly calling release.yml;\n- the pwsh postflight on Linux;\n- concurrency without the ref;\n- the pull_request trigger dropped;\n- the dispatch ref input renamed;\n- a constant suffix;\n- the matrix ignoring NIGHTLY_REFS.\n\nThis test is how 'a suite moved to the nightly is asserted there': R2 and R5 prove the postflights run under full: true and that the nightly passes it.\n\n(2) usage-receipt.test.mjs:325. Replace the stale line numbers in the G1 comment, which this change shifts, with step names. Change \"builds both (ci.yml:222-231) before the step that runs this file (ci.yml:267).\" to \"builds both (its Build daemon and Build proxy steps) before the step that runs this file (Test agent runtime discovery).\" Change nothing else in that file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "newFiles": [
+        "scripts/tests/ci-workflows.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/ci-workflows.test.mjs",
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "note": "New scripts/tests/ci-workflows.test.mjs = the planned draft (logic unchanged) with R1:-R6: row labels added to the six test names (repo row-id convention, e.g. usage-receipt's 'G1:'), so the contract's 'R2 proves it' / 'R5 proves it' are traceable. RED: against edc3e937's ci.yml (+ new nightly.yml) in a /tmp scratch tree, R1, R2, R4, R6 fail (R3 pins fast legs that already existed; R5 reads nightly.yml). GREEN in the worktree: pass 6, fail 0. usage-receipt.test.mjs:325: G1 comment's stale ci.yml line numbers replaced with step names (Build daemon / Build proxy, Test agent runtime discovery); nothing else changed.",
+      "startedAt": "2026-11-04T19:05:19.137Z",
+      "completedAt": "2026-11-04T19:07:13.048Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs: describe the PR-versus-nightly split in three files. None is a role doc or skill, so no generated init file changes. The daemon's daemonGitDocs.test.ts scans every doc for 'never runs git' phrasing; do not use it.\n\n(1) CLAUDE.md:81. Replace only the first sentence of the CI paragraph. The old sentence starts \"CI (`.github/workflows/ci.yml`, PRs to main): role-doc lint\" and runs through \"including VS Code typecheck + startup tests.\". The new text: \"CI (`.github/workflows/ci.yml`, PRs and pushes to main) runs the fast set, each job about 20 min or less: role-doc lint, daemon+proxy build + `test:coverage`, Claude plugin build + tests, JetBrains `buildPlugin` + `./gradlew test`, and a 3-OS build matrix (ubuntu/windows/macos) including VS Code typecheck + startup tests. Only the nightly (`.github/workflows/nightly.yml`, a daily cron plus `workflow_dispatch` with a `ref` input) runs everything: it calls ci.yml with `full: true` for each ref in the `NIGHTLY_REFS` repository variable (default `main`), adding the bash, Windows PowerShell 5.1 and PowerShell 7 wrapper postflights.\" Keep the Docker and Releases sentences.\n\n(2) docs/DEVELOPMENT.md has two edits.\n(a) Add one paragraph after the one that starts \"Both smoke tests verify the same contract through ONE shared fake proxy\" (line 220), before \"### Running a Team\": \"CI runs these two harnesses only in the nightly: `postflight.sh` takes about 45 min on ubuntu-latest and `postflight.ps1` 85-110 min per PowerShell engine on windows-latest, too long for per-push PR CI. `.github/workflows/nightly.yml` (a daily cron plus `workflow_dispatch` with a `ref` input) calls `ci.yml` with `full: true` for each ref in the `NIGHTLY_REFS` repository variable, a JSON array (unset: `[\"main\"]`). PR CI keeps the fast legs: `worktree-landing.sh` and `parity-check.sh` on Linux, `worktree-landing.ps1` under Windows PowerShell 5.1 and `parity-check.ps1` under PowerShell 7 on Windows. GitHub fires `schedule` only from main's copy of nightly.yml; to run a branch's own full set before it reaches main, use `gh workflow run ci.yml --ref <branch> -f full=true`.\"\n(b) Line 292, the 'Windows engines' row. Its second cell says \"CI `windows-latest` runs the landing-guard and wrapper post-flight suites under Windows PowerShell 5.1 and PowerShell 7, onboarding on Windows Node, and the VS Code tests\". Make it \"PR CI `windows-latest` runs the landing-guard suites under Windows PowerShell 5.1 and PowerShell 7, `worktree-landing.ps1` under 5.1, `parity-check.ps1` under 7, onboarding on Windows Node, and the VS Code tests; the nightly adds the wrapper post-flight suites under 5.1 and 7 and `worktree-landing.ps1` under 7\". Make its third cell \"CI `build-all-platforms` (windows-latest); the post-flight suites only in `nightly.yml`\". Keep the fourth cell.\n\n(3) docs/RELEASING.md section 2 'Verify'. After \"The workflow runs the same check first and stops on a mismatch. Commit the bump to `main` before tagging.\" add: \"Pull request CI skips the long launcher suites; only the nightly (`.github/workflows/nightly.yml`) runs everything. Before tagging, check that the latest Nightly run that tested `main` is green (`gh run list --workflow nightly.yml --limit 3`), or start one with `gh workflow run nightly.yml -f ref=main` and wait for it to pass.\" Section 1's field list is untouched: verify-release-version.mjs mirrors it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASING.md"
+      ],
+      "modifiedFiles": [
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASING.md"
+      ],
+      "note": "Docs, verbatim per plan: CLAUDE.md:81 first CI sentence now says PRs+pushes run the fast set (each job ~20 min or less) and only nightly.yml (cron + workflow_dispatch ref) runs everything via ci.yml full: true per NIGHTLY_REFS ref; Docker/Releases sentences kept. DEVELOPMENT.md: new paragraph after the smoke-test paragraph (postflight harnesses nightly-only, timings, NIGHTLY_REFS, fast legs kept in PR, default-branch rule + `gh workflow run ci.yml --ref <branch> -f full=true`); Windows engines row cells 2 and 3 rewritten (still 4 cells). RELEASING.md section 2: check the latest Nightly on main before tagging. No 'never runs git' phrasing (daemonGitDocs.test.ts regex checked). No role doc/skill touched.",
+      "startedAt": "2026-11-04T19:07:14.161Z",
+      "completedAt": "2026-11-04T19:08:05.304Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run checkRefs[0] once, fresh, from the task worktree root, and submit its result as complete_task evidence. It takes about 5 s. Expected output, in order:\n- `YAML OK 5`: PyYAML 6.0.1 is installed on this host, and the parse covers ci, docker, nightly, pages and release.\n- ℹ pass 38, fail 0: ci-workflows 6, runtime-requirements 9 and local-runner-snapshot 23.\n- ℹ pass 17, fail 0: usage-receipt without G1.\n- the line `9`: the nine named CI-reading rows passed. These are daemon-json-cap and seat-registration 'CI runs this suite on Linux and Windows', plus local-runner SH4, E8, TC1, MX0, SC0, AS0 and the bundle row.\n- PASS parity-check.sh, and npm run lint exit 0.\n\nError handling. Every piece is chained with && under pipefail, so the first failure stops the gate:\n- a YAML error names the file and the line;\n- a failing node row names itself;\n- any count other than 9 means a CI-reading row failed or vanished. Rerun that node command without the grep to see which. Node counts a file with no matching row as one passing test, so the gate counts the named rows, not '# pass'.\n\nWhy those rows and not the whole files: in an unbuilt checkout such as the task worktree, whole daemon-json-cap, local-runner-agents and usage-receipt fail for reasons unrelated to this change, as measured at edc3e937 in an unbuilt clone. The causes are 'build the daemon first' (TY1), onboarding (G1), and the path-contract and named-host identity rows. Their CI-reading rows are what this change can break.\n\nAlso check `git diff --stat` against the task branch base: only the 7 paths of this plan. Do not run gh workflow run, set repository variables or change rulesets. Name those in the completion summary as the human's follow-ups: set NIGHTLY_REFS to [\"main\",\"moe/work-2026-10-24\"]. The PR job names are unchanged, so no required-check edit is needed. A pre-merge full run is `gh workflow run ci.yml --ref moe/work-2026-10-24 -f full=true`. The real proof is the next PR #230 run, every job about 20 min or less with the (nightly) steps skipped, which the governor watches.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] run fresh from the worktree root: YAML OK 5; pass 38 fail 0 (ci-workflows 6 + runtime-requirements 9 + local-runner-snapshot 23); usage-receipt without G1 pass 17 fail 0; named CI-reading row count 9; PASS parity-check.sh; npm run lint OK (architect 39, worker 30, qa 36 lines). Exit 0 in about 5 s. git status: exactly the 7 planned paths (5 modified, 2 new). The final verbatim run for complete_task evidence will be repeated after step 6.",
+      "startedAt": "2026-11-04T19:08:06.359Z",
+      "completedAt": "2026-11-04T19:08:41.123Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff, once, at the end. Check each item:\n(1) A pull_request or push run executes the same commands as before, minus exactly the four LONG ones. Diff the step list against edc3e937: no other `if:`, run line, node-version or order may change.\n(2) inputs.full on events without inputs: the inputs context is empty, `inputs.full` is null and the `&&` is false, so a nightly step is skipped, never failed.\n(3) Expression contexts that GitHub checks only at run start:\n- `inputs` is allowed in workflow-level concurrency (github, inputs, vars);\n- `strategy` and `matrix` are allowed in a reusable-call job's `with:`;\n- `inputs` and `vars` are allowed in that job's strategy;\n- `strategy` is a supported keyword on a job that calls a reusable workflow;\n- hyphenated names (inputs.artifact-suffix, strategy.job-index) are valid dereferences.\nA mistake here shows as 'Invalid workflow file' on the next PR #230 push, so re-read every `${{ }}` against those rules.\n(4) Collisions when the nightly calls ci.yml twice in one run: artifact names (suffix), the concurrency group (ref suffix), and deadlock (no group in the caller).\n(5) Refs: '/' inside branch names works for checkout and for the group string; a malformed NIGHTLY_REFS fails loudly.\n(6) The default-branch rule is stated in the header and in DEVELOPMENT.md. Definitions come from the caller commit.\n(7) Windows: both new single-command steps exit with the inner process's code, and the pwsh nightly step stops after a failed worktree-landing.ps1.\n(8) Does the new test pass when the code does nothing? Re-run at least three of the planned mutations against a scratch copy outside the worktree, never in W: postflight unguarded, full: false, a checkout without ref. Each must fail.\n(9) Docs: every number matches step 1's timing table, and no doc says the PR runs a postflight.\n(10) Would I be embarrassed if the next PR run failed to start? If any item is doubtful, fix it before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review, all 10 items:\n(1) PyYAML-driven compare vs edc3e937: a PR run's build-all-platforms command sequence (79 commands, with each command's if: guard) equals the old one minus exactly the 4 LONG commands. The other 4 jobs are unchanged except build-typescript's new split-test step. shell/working-directory keys, node-version and job names are unchanged.\n(2) A guard without a status function keeps the implicit success(). On PR/push, inputs.full is null, so the nightly steps are skipped, not failed.\n(3) Every ${{ }} re-read against GitHub's context table: concurrency (github/inputs/vars), the reusable-call job's strategy (inputs/vars) and with (matrix/strategy), and name (matrix). strategy is supported on a uses: job. Hyphenated dereferences (inputs.artifact-suffix, strategy.job-index) are legal.\n(4) Artifacts get -<job-index>, groups get -<ref>, and the caller has no group, so nothing deadlocks.\n(5) '/' in refs is fine. A malformed, non-array or empty NIGHTLY_REFS fails at matrix expansion.\n(6) The default-branch rule is in the nightly.yml header and in DEVELOPMENT.md.\n(7) The Windows single-command steps exit with the inner code through the runner's pwsh LASTEXITCODE epilogue, and the pwsh nightly step has an explicit stop.\n(8) Mutations run on /tmp scratch copies, all KILLED: bash postflight unguarded (R2), nightly full:false (R5), a checkout without ref (R4), postflight-safe back in the PR step (R2), a constant suffix (R5), the pull_request trigger dropped (R1), concurrency without the ref (R1), the matrix ignoring NIGHTLY_REFS (R5).\n(9) Doc numbers match the timing table. No in-scope doc says PR CI runs a postflight.\nTheoretical risks, not fixed (outside the plan):\n- The full Windows nightly job is an estimated 195-230 min, but two 180-min postflight-safe caps plus about 15 min could pass GitHub's 360-min job limit in the worst case.\n- GitHub probably refuses `gh workflow run ci.yml --ref <branch>` until main's ci.yml has workflow_dispatch, so the first full run may be the nightly after PR #230 merges.\nThe governor's \"tests run nowhere\" request is already its own row, task-5f5c8999, which depends on this task.",
+      "startedAt": "2026-11-04T19:08:41.895Z",
+      "completedAt": "2026-11-04T19:10:51.353Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -21,8 +105,167 @@
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 538.7,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-b433a3aecb0345569a04ba91f81b6b58",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 18:46Z, for @architect-cd0ac706. \"Only the nightly runs everything\" (the human, 18:10Z) has to mean everything. At HEAD edc3e937, these scripts/tests files are not named in any workflow, so today they run nowhere:\n- 7 node test files: account-trust-docs.test.mjs, agent-git-guard.test.mjs, doctor-ps1.test.mjs, postflight-owner-scope.test.mjs, protected-agent-command.test.mjs, serena-ignore.test.mjs, team-launch-quoting.test.mjs.\n- mention-provenance.{sh,ps1}, which only mention_provenance_cases.py / mention-provenance-seed.py drive. Decide whether the nightly runs them, and record the choice either way.\n- postflight-vm-route.{sh,ps1} are fine: postflight.{sh,ps1} source them, so the nightly's full postflight covers them.\nPlease put a DoD item in this plan: nightly.yml runs every scripts/tests/*.test.mjs (prefer a glob over a hand list, so a new file can't fall out again), and every file it skips is listed with its reason. If a fast PR job already exercises a file's surface, that file can also run per-push, as long as the per-push job stays within its budget. My 18:10Z ruling in #architects (msg-ea06d34e) still applies.",
+      "timestamp": "2026-11-04T18:42:43.090Z"
+    },
+    {
+      "id": "comment-38818a0b71204ebea1f72ccebee85812",
+      "author": "governor-e6142a94",
+      "content": "Governor, 19:03Z, for the worker and QA on this row. My 18:46Z planning input (comment-b433a3ae) asked this plan to wire the 7 scripts/tests suites that run in no workflow. It came in after revision 1 was planned, and that work is now split into its own row, task-5f5c8999. That row depends on this one and extends ci-workflows.test.mjs once it lands. This row's scope stays exactly revision 1. Don't add the wiring here, and QA should not reject this row for leaving it out.",
+      "timestamp": "2026-11-04T19:02:40.843Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T18:10:13.646Z",
-  "updatedAt": "2026-11-04T18:10:13.646Z"
+  "updatedAt": "2026-11-04T19:12:45.308Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T18:32:55.533Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 6
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-5772dacf",
+    "architect-67c762f6"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T19:00:58.024Z",
+  "executionContract": {
+    "intendedBehavior": "Pull-request and push-to-main CI (ci.yml) runs every job and step it ran before except the long suites. Those are postflight-safe.mjs bash/powershell/pwsh and PowerShell 7's worktree-landing.ps1, and they run only when a caller passes full: true. The fast legs of the three old postflight steps stay in PR CI as their own steps: worktree-landing.sh, parity-check.sh, worktree-landing.ps1 under 5.1 and parity-check.ps1 under 7. A new nightly.yml runs on a daily cron and on workflow_dispatch with a ref input. It calls ci.yml with full: true once per ref in one run, for each ref in vars.NIGHTLY_REFS (default [\"main\"]); a dispatch ref tests only that ref. Artifact names stay unique per call, and no step is copied. ci.yml also accepts workflow_dispatch (full, default true), so a branch can get its own full run before nightly.yml reaches main. A node test pins the split, and CLAUDE.md, DEVELOPMENT.md and RELEASING.md describe it.",
+    "acceptanceCriteria": [
+      "In ci.yml, the only steps guarded by inputs.full are three nightly-only steps. They hold exactly: postflight-safe.mjs bash (Linux); postflight-safe.mjs powershell (Windows); and pwsh worktree-landing.ps1 followed by postflight-safe.mjs pwsh (Windows). scripts/tests/ci-workflows.test.mjs R2 proves it.",
+      "By measured step timings, every PR job takes about 20 min or less: Build (windows) about 16, Build (ubuntu) about 6.4, Build (macos) 5.2, and the others under 4. The longest remaining PR step takes 3.9 min.",
+      "nightly.yml has a schedule cron and workflow_dispatch(ref), and one job that calls ./.github/workflows/ci.yml with full: true, ref: matrix.ref and artifact-suffix: -strategy.job-index, with fail-fast false. Its header documents the default-branch rule for schedule. ci-workflows.test.mjs R5 proves it.",
+      "The nine CI-reading rows pass unchanged: daemon-json-cap and seat-registration 'CI runs this suite on Linux and Windows', plus local-runner SH4, E8, TC1, MX0, SC0, AS0 and the bundle row. runtime-requirements, local-runner-snapshot and usage-receipt (without the build-dependent G1) also pass.",
+      "CLAUDE.md, docs/DEVELOPMENT.md (the smoke-test paragraph and the Windows engines row) and docs/RELEASING.md section 2 describe the PR-versus-nightly split. checkRefs[0] passes in about 5 s."
+    ],
+    "invariants": [
+      "A pull_request or push run executes the same commands as before except the four nightly-only ones. No other step's if: guard, run line, node-version or order changes.",
+      "PR job names are unchanged (Build (ubuntu-latest), Build (windows-latest), Build (macos-latest), Build TypeScript, Test TypeScript, Build JetBrains Plugin, Fresh Linux installation), so required status checks keep matching.",
+      "On a PR run the artifact names are unchanged, because the suffix is empty.",
+      "release.yml, docker.yml and pages.yml are untouched, and no GitHub setting, variable or ruleset changes. No role doc or skill changes, so no generated init file changes."
+    ],
+    "compatibility": [
+      "PR and push checkouts pass ref '', which is actions/checkout's default (the event's ref), as before.",
+      "The concurrency group string changes once, from CI-<pr> to CI-<pr>-; grouping stays per PR and in-progress runs still finish."
+    ],
+    "approvedScope": [
+      "ci.yml:\n- on.workflow_call.inputs {full, ref, artifact-suffix} and on.workflow_dispatch.inputs.full;\n- the ref suffix on the concurrency group;\n- `with: ref` on every checkout and the suffix on every artifact name;\n- six steps replacing the three wrapper postflight steps;\n- the build-typescript step 'Test the PR and nightly workflow split'.",
+      "nightly.yml (new): the schedule, workflow_dispatch.inputs.ref, permissions contents: read, and the single job `full` (matrix ref, uses ci.yml).",
+      "scripts/tests/ci-workflows.test.mjs (new): rows R1-R6. usage-receipt.test.mjs: the G1 comment only.",
+      "Docs: the CI sentence in CLAUDE.md, DEVELOPMENT.md's smoke-test paragraph and Windows engines row, and RELEASING.md section 2."
+    ],
+    "reuse": [
+      "nightly.yml calls ci.yml as a reusable workflow (workflow_call) instead of copying about 330 lines, so the step definitions stay in one file.",
+      "The gate reuses the existing CI-reading rows through --test-name-pattern instead of new copies, and checks their count by name."
+    ],
+    "sourceAssumptions": [
+      ".github/workflows/ci.yml at edc3e937 has 5 checkouts, 5 upload-artifact steps and the three wrapper postflight steps at :310-331. No test reads those three steps (grep).",
+      "daemon-json-cap.test.mjs:675 and seat-registration.test.mjs:330 scan back from their run line to `- name:` and to a 2-space job key, and require build-all-platforms with if: runner.os != 'macOS'.",
+      "Five rows regex the 'Test local runner prerequisite bundles' run line: local-runner-agents SH4 (:148), local-runner-pinned-client MX0 (:83), local-runner-seat-capacity SC0 (:31), local-runner-seat AS0 (:91) and local-runner-bundle (:308). local-runner-check E8 (:325) reads the same step, and TC1 (:1892) requires every node-version to be '24'.",
+      "GitHub Actions facts the design relies on:\n- the inputs context is empty on pull_request and push;\n- workflow-level concurrency allows the github, inputs and vars contexts;\n- a job that calls a reusable workflow may use strategy, and its with: allows matrix and strategy;\n- schedule fires only from the default branch's copy;\n- a local `uses: ./.github/workflows/x.yml` runs the caller commit's definition;\n- upload-artifact v4+ refuses a duplicate artifact name within one run."
+    ],
+    "checkRefs": [
+      "set -o pipefail && p='CI runs this suite on Linux and Windows|SH4 |E8 the CI|TC1 |MX0 |SC0 |AS0 |cross-platform CI permanently runs' && python3 -c 'import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]; print(\"YAML OK\", len(sys.argv) - 1)' .github/workflows/*.yml && node --test scripts/tests/ci-workflows.test.mjs scripts/tests/runtime-requirements.test.mjs scripts/tests/local-runner-snapshot.test.mjs && node --test --test-skip-pattern='^G1:' scripts/tests/usage-receipt.test.mjs && node --test --test-reporter=tap --test-name-pattern=\"^($p)\" scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/local-runner-{agents,bundle,check,pinned-client,seat-capacity,seat}.test.mjs | grep -cE \"^ok [0-9]+ - ($p)\" | grep -x 9 && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Reusable workflow (chosen). ci.yml gains workflow_call inputs (full, ref, artifact-suffix) and nightly.yml is a short caller. There is one definition, and the PR job names are unchanged.\n2. Copy ci.yml into nightly.yml. Rejected: about 330 duplicated lines that drift apart, against the DoD.\n3. Composite actions per step group. Rejected: more files, and still two job graphs to keep in step.\n4. A postflight-only nightly. Rejected: it would not run everything, and it rebuilds on its own.\n5. Keep pwsh 7's worktree-landing.ps1 in PR. Rejected: Windows reaches about 20 min with no margin for runner variance, so that run moves to the nightly and the 5.1 run stays.\n6. Concurrency in nightly.yml. Rejected: a caller group equal to the called group deadlocks. The called group already carries the ref.\n7. actionlint as the gate. It is not installed here, and the planning session was not allowed to download it. The gate is a PyYAML parse plus the structural node test. The real proof is the next PR #230 run, plus a full dispatch.\n8. Assert '# pass 9' for the CI rows. Rejected: node reports a file with no matching row as one passing test, which planning measured, so the gate counts the named rows.",
+    "codebaseInsights": "Step timings from runs 41848822541, 41862780104 and 41746515589 (gh run view --json jobs):\n- ubuntu job 48.4 min. The Bash postflight step was 43.5 of it: worktree-landing.sh 1.46 min, postflight-safe bash 42.5, parity 1 s.\n- windows: steps 1-20 took 10.9 min. 5.1 worktree-landing.ps1 3.9 min, the WinPS postflight 63.9 min (TIMEOUT) and 83.9 min (pass), VS Code startup 0.8. pwsh parity-check.ps1 took 1 s locally.\n- macos 5.2 min, test-typescript 3.5, build-plugin 2.8, fresh-linux 1.0, build-typescript 0.4.\nIn an unbuilt checkout, whole daemon-json-cap, local-runner-agents and usage-receipt fail for reasons unrelated to this change (TY1, G1, path-contract and named-host rows). Their CI rows pass. On the step 1-3 drafts in a clone at edc3e937, the gate passed in 5 s, and it failed for a dropped row, a dropped row pair and broken YAML. The drafts are in /mnt/d/moe-scratch/plan-669e/ (ci.yml, ci.yml.diff, nightly.yml, ci-workflows.test.mjs, gate.txt). isEpicFinal is the highest-order fallback on a 300+ task epic. The 2026-11-04 gate-budget rail and the task's own GATE paragraph scope verification to the workflow readers, and the epic-wide regression is exactly what the nightly provides.",
+    "risks": "- GitHub validates expression contexts only at run start. A mistake makes the next PR #230 push fail as 'Invalid workflow file', so re-check every ${{ }} (step 6, item 3); the governor watches that run.\n- Pre-merge dispatch: `gh workflow run ci.yml --ref <branch>` relies on ci.yml already being registered from main. If GitHub refuses it, the first full run is the nightly after #230 merges, so say that in the summary.\n- The nightly runs main's step definitions against the ref under test. A step added on the consolidation branch joins the nightly only after it merges; this is documented.\n- permissions contents: read. If a called step needs more in the nightly only (not expected; nothing writes with GITHUB_TOKEN), widen it there, never in ci.yml.\n- The full Windows job takes about 3.3-3.8 h, under the 6 h job limit. postflight-safe.mjs still bounds each harness itself.\n- The PR concurrency group string changes once, which is harmless.\n- Never set NIGHTLY_REFS, trigger runs or edit rulesets from the task: those are human follow-ups.",
+    "keyFiles": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/nightly.yml (new)",
+      "scripts/tests/ci-workflows.test.mjs (new)",
+      "scripts/tests/daemon-json-cap.test.mjs:675 (CI row)",
+      "scripts/tests/seat-registration.test.mjs:330 (CI row)",
+      "scripts/tests/local-runner-check.test.mjs:325, :1892",
+      "scripts/tests/usage-receipt.test.mjs:325",
+      "CLAUDE.md:81",
+      "docs/DEVELOPMENT.md:203-221, :292",
+      "docs/RELEASING.md:21-27",
+      "/mnt/d/moe-scratch/plan-669e/ (dry-run drafts)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "edc3e937ef390df064eccf1ffde6f1a813130d55",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T19:00:58.071Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T19:03:15.356Z",
+  "reviewStartedAt": "2026-11-04T19:11:41.613Z",
+  "verification": {
+    "command": "set -o pipefail && p='CI runs this suite on Linux and Windows|SH4 |E8 the CI|TC1 |MX0 |SC0 |AS0 |cross-platform CI permanently runs' && python3 -c 'import sys,yaml; [yaml.safe_load(open(f)) for f in sys.argv[1:]]; print(\"YAML OK\", len(sys.argv) - 1)' .github/workflows/*.yml && node --test scripts/tests/ci-workflows.test.mjs scripts/tests/runtime-requirements.test.mjs scripts/tests/local-runner-snapshot.test.mjs && node --test --test-skip-pattern='^G1:' scripts/tests/usage-receipt.test.mjs && node --test --test-reporter=tap --test-name-pattern=\"^($p)\" scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/local-runner-{agents,bundle,check,pinned-client,seat-capacity,seat}.test.mjs | grep -cE \"^ok [0-9]+ - ($p)\" | grep -x 9 && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "YAML OK 5\n✔ R1: ci.yml keeps its pull_request and push triggers on main and takes full, ref and artifact-suffix from a caller\n✔ R2: each long suite runs once, only under inputs.full and on its OS; nothing else waits for the nightly\n✔ R3: the fast legs of the wrapper suites stay in PR CI on their OS\n✔ R4: every checkout takes inputs.ref and every artifact name ends in inputs.artifact-suffix\n✔ R5: nightly.yml runs on a schedule and on workflow_dispatch with a ref, and calls ci.yml with full: true per ref\n✔ R6: PR CI runs this file\n...\nℹ tests 38\nℹ pass 38\nℹ fail 0\n...\nℹ tests 17\nℹ pass 17\nℹ fail 0\n9\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nEXIT=0",
+    "reportedAt": "2026-11-04T19:11:41.613Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/nightly.yml",
+    "scripts/tests/ci-workflows.test.mjs",
+    "scripts/tests/usage-receipt.test.mjs",
+    "CLAUDE.md",
+    "docs/DEVELOPMENT.md",
+    "docs/RELEASING.md"
+  ],
+  "completionSummary": "PR-vs-nightly CI split, per the approved plan, in 7 paths.\n- ci.yml is also a reusable workflow: workflow_call inputs full, ref and artifact-suffix, plus workflow_dispatch with full defaulting to true. The concurrency group ends in -${{ inputs.ref }}. All 5 checkouts take inputs.ref and all 5 artifact names take the suffix.\n- The 3 wrapper postflight steps became 6. PR CI keeps worktree-landing.sh + parity-check.sh on Linux, worktree-landing.ps1 under 5.1 and parity-check.ps1 under 7. Under inputs.full only: postflight-safe bash, postflight-safe powershell, and pwsh worktree-landing.ps1 + postflight-safe pwsh.\n- New nightly.yml: cron '17 3 * * *' + workflow_dispatch(ref), contents: read. One matrix job calls ci.yml with full: true per ref from NIGHTLY_REFS (default [\"main\"]). The header documents the default-branch rule.\n- New scripts/tests/ci-workflows.test.mjs, rows R1-R6, run in build-typescript.\n- usage-receipt G1 comment fix; docs in CLAUDE.md, DEVELOPMENT.md and RELEASING.md.\n\nEvidence:\n- The gate passes in about 5 s: YAML OK 5; 38/0; 17/0; the 9 named CI-reading rows; parity PASS; lint OK.\n- RED: R1, R2, R4 and R6 fail on edc3e937's ci.yml.\n- 8 mutations, all killed.\n- A PyYAML compare shows a PR run's commands and guards equal edc3e937's minus exactly the 4 long ones. Job names are unchanged.\n\nHuman follow-ups:\n- Set the repo variable NIGHTLY_REFS to [\"main\",\"moe/work-2026-10-24\"].\n- No required-check or ruleset change is needed.\n- `gh workflow run ci.yml --ref moe/work-2026-10-24 -f full=true` may be refused until main's ci.yml has workflow_dispatch. If so, the first full run is the nightly after PR #230 merges.\n- The real proof is the next PR #230 run.\n\nRisk: worst case, the Windows nightly job could pass the 360-min job limit (two 180-min postflight-safe caps); the typical estimate is 195-230 min.\n\nThe governor's tests-in-no-workflow request is task-5f5c8999.",
+  "commits": [
+    {
+      "sha": "d05e6e0b351e2787df490920ee19aaba644dd529",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T19:01:04Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/nightly.yml",
+        "CLAUDE.md",
+        "docs/DEVELOPMENT.md",
+        "docs/RELEASING.md",
+        "scripts/tests/ci-workflows.test.mjs",
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T19:12:45.308Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-5772dacf@2026-11-04T19:01:04Z",
+    "at": "2026-11-04T19:12:45.308Z"
+  }
 }

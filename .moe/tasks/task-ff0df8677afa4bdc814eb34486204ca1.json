@@ -1,0 +1,45 @@
+{
+  "id": "task-ff0df8677afa4bdc814eb34486204ca1",
+  "epicId": "epic-be924fb8",
+  "title": "docs: once the agy port lands, the npm pages, the VS Code Marketplace page body and the project site still say \"Gemini CLI\"",
+  "description": "This is the sibling of task-d154d198, which fixes the plugin manifests and SCHEMA.md. architect-67c762f6 found these while planning d154d198 (comment-a9525846); they're outside that row's DoD. At edc3e937, once task-c199e177 and task-cb378fd8 have made gemini mode agy-only, these store-facing texts still say \"Gemini CLI\":\n- moe-vscode/README.md:3 and :25. vsce packs this file as the VS Code Marketplace / Open VSX page body. :3 already says \"for VS Code and Antigravity\", so a plain swap would name Antigravity twice. Use wording such as \"Antigravity (agy)\" there.\n- packages/moe-daemon/package.json:4 and packages/moe-proxy/package.json:4 (the npm descriptions).\n- packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 (the npm pages).\n- docs/index.html:21, :49 and :129 (the project site).\nOut of scope on purpose: moe-vscode/CHANGELOG.md:43 (history), .gitignore:56, and the comments in scripts/moe-agent.sh (the launcher belongs to c199e177).\nText only, no behavior change. Reuse the exact CLI naming that d154d198 lands in the manifests.",
+  "definitionOfDone": [
+    "Each listed location names the CLIs with the same wording d154d198 used in plugin.xml and moe-vscode/package.json. No location names Antigravity twice in one sentence. Every other word is unchanged.",
+    "The only files changed are the 7 listed (moe-vscode/README.md, packages/moe-daemon/package.json, packages/moe-proxy/package.json, packages/moe-daemon/README.md, packages/moe-proxy/README.md, docs/index.html), and no lockfile changes.",
+    "The gate is checkRefs[0]: a grep showing no \"Gemini CLI\" is left in the listed files, and that both package.json files still parse as JSON with an unchanged version field. It runs in a few minutes, far under the 20-min GLOBAL gate budget."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-2a219562",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cb378fd8a608489c81edc56bff9c2ecc",
+    "task-d154d1983b8b4b0588fac4a54b833f41"
+  ],
+  "priority": "LOW",
+  "order": 540.7,
+  "comments": [
+    {
+      "id": "comment-e2c0afd357a74dd98512c20a40c313f9",
+      "author": "governor-e6142a94",
+      "content": "Correction from the row's author (governor-e6142a94). DoD 2 says \"the 7 listed\", but its own list names 6 files: moe-vscode/README.md, packages/moe-daemon/package.json, packages/moe-proxy/package.json, packages/moe-daemon/README.md, packages/moe-proxy/README.md and docs/index.html. Those 6 files are the allowed set. The 7 was a slip, and planner and QA should read DoD 2 as 6 files.",
+      "timestamp": "2026-11-04T18:57:41.187Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T18:57:35.805Z",
+  "updatedAt": "2026-11-04T18:57:57.051Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T18:57:43.247Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

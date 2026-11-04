@@ -1,0 +1,47 @@
+{
+  "id": "task-5f5c8999391149d98a63746799064e57",
+  "epicId": "epic-be924fb8",
+  "title": "ci: 7 scripts/tests node suites run in no workflow, so \"only the nightly runs everything\" misses them; wire every scripts/tests/*.test.mjs into CI by a check that fails when a new file is left out",
+  "description": "At edc3e937, these files are named in no .github/workflows file (checked by grepping each basename):\n- scripts/tests/account-trust-docs.test.mjs\n- agent-git-guard.test.mjs\n- doctor-ps1.test.mjs\n- postflight-owner-scope.test.mjs\n- protected-agent-command.test.mjs\n- serena-ignore.test.mjs\n- team-launch-quoting.test.mjs\nAlso unwired: scripts/tests/mention-provenance.{sh,ps1}, which only mention_provenance_cases.py / mention-provenance-seed.py drive. (postflight-vm-route.{sh,ps1} are covered, because postflight.{sh,ps1} run them.)\n\nThe human ruled on 2026-11-04 (18:10Z) that \"only nightly should run all\". task-669e6aff makes nightly.yml call ci.yml with full: true, so the nightly runs exactly ci.yml's set and these suites still run nowhere. architect-cd0ac706 spotted it while planning cb378fd8; governor input is comment-b433a3ae on 669e6aff.\n\nWire each suite where it fits:\n- per-push/PR, if it is fast and within the PR budget;\n- otherwise nightly-only, through 669e6aff's full: true switch.\nAdd a guard so a new scripts/tests/*.test.mjs can't fall out again. That is either a glob in the workflow or an assertion in 669e6aff's scripts/tests/ci-workflows.test.mjs: every scripts/tests/*.test.mjs is named by a workflow or sits in an explicit skip list with a reason. Decide on mention-provenance and record the decision.",
+  "definitionOfDone": [
+    "Every scripts/tests/*.test.mjs at the landing commit runs in at least one workflow (per-push or nightly), or is in an explicit skip list that names a reason and, if it is broken, a fix row id.",
+    "A guard makes a new scripts/tests/*.test.mjs that no workflow runs and the skip list does not name a test failure. It is shown to kill a mutant: a temporary unwired file makes it fail.",
+    "Each newly wired suite passes in this row's gate on the engines CI runs it on. A suite that fails is fixed here if the fix is small. Otherwise it goes in the skip list with a filed fix row, and is not wired red.",
+    "The mention-provenance.{sh,ps1} decision (wire it nightly, or skip it with a reason) is recorded in the workflow or the skip list.",
+    "Per-push and PR CI gain only suites that keep the PR jobs within their current wall time plus at most a few minutes. Anything long is nightly-only.",
+    "checkRefs[0] finishes within 20 min on this host (GLOBAL gate-budget rail), and independent legs run in parallel."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-67c762f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-669e6affa6fd41a7b654b0bddb696312"
+  ],
+  "priority": "MEDIUM",
+  "order": 541.7,
+  "comments": [
+    {
+      "id": "comment-87ece39db85b4f4dbb3e71d7a7686229",
+      "author": "governor-e6142a94",
+      "content": "Planning input from the governor, 19:16Z. architect-cd0ac706's sketch (msg-b0e8402a) is the intended shape for this row. It was written for 669e6aff, but that row stays at revision 1:\n1. The nightly runs every scripts/tests/*.test.mjs by a glob, not a hand list. Every skipped file is listed with its reason. A mechanical check fails when a *.test.mjs is neither run nor skip-listed. Extend the scripts/tests/ci-workflows.test.mjs that 669e6aff lands.\n2. mention-provenance.{sh,ps1}: decide whether the nightly runs them through mention_provenance_cases.py / mention-provenance-seed.py or skip-lists them, and record the decision either way.\n3. postflight-vm-route.{sh,ps1} need no entry, because the nightly's full postflight.{sh,ps1} sources them.\n4. Per-push only when a fast PR job already exercises the file's surface within budget.\nTime the gate once at plan time. It must fit 20 min.",
+      "timestamp": "2026-11-04T19:09:05.323Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T19:02:36.892Z",
+  "updatedAt": "2026-11-04T19:09:05.323Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T19:03:16.349Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ]
+}

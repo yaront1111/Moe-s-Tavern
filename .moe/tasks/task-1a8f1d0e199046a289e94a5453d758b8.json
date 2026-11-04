@@ -49,20 +49,20 @@
     },
     {
       "stepId": "step-4",
-      "description": "Full regression in snapshots of the task worktree, once: DoD 9 and extra 1 of comment-8bf3a7e4. Use the regression-check skill.\n\n- Run checkRefs[0] (Linux) and checkRefs[1] (Windows) exactly as written. checkRefs[1] needs the jetbrains-gradle lease held for its whole run, released on every path.\n- They cover:\n  - daemon tsc, build and npm test;\n  - proxy and claude-plugin npm test;\n  - VS Code npm test and compile;\n  - every scripts/tests/*.test.mjs, including the 14 CI local-runner files;\n  - parity-check.sh and parity-check.ps1, and npm run lint;\n  - postflight through postflight-safe.mjs under bash, Windows PowerShell 5.1 and pwsh 7;\n  - ./gradlew test --rerun and buildPlugin.\n- Never run npm in the shared checkout (project rail).\n- Start each run detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only PIDs this session started; never pattern-kill.\n- On a red suite, rerun that suite once on the target's bytes before this epic's last slice, to tell an older red from one this epic caused. A red this epic caused gets a bug row and a block. A pre-existing red is named in the summary with its tracking row.\n- The summary gives counts per suite: daemon files and tests, proxy, claude-plugin, VS Code, node --test, each postflight engine, the gradle XML totals and the buildPlugin zip sha256.\n- complete_task's verification is checkRefs[0]; quote checkRefs[1]'s result in the summary.",
+      "description": "Regression in snapshots of the task worktree, once, inside the 20-minute gate budget (global rail; the human's ruling of 2026-11-04 18:07Z). This covers DoD 9 and the in-budget part of extra 1 of comment-8bf3a7e4. Use the regression-check skill.\n\n- Run checkRefs[0] (Linux, the gate) and checkRefs[1] (Windows) exactly as written. They are independent and may run at the same time. Hold the jetbrains-gradle lease for the whole of checkRefs[1], and release it on every path (mem:convention-jetbrains-gradle-lease).\n- checkRefs[0] runs three legs in parallel, each logging to $S/logs:\n  - VS Code: npm ci, npm test, npm run compile;\n  - parity-check.sh, then npm run lint;\n  - builds, then tests: proxy npm ci and build, daemon npm ci and build, then daemon npm test and node --test scripts/tests/*.test.mjs side by side. The scripts suite needs both dists: daemon-json-cap.test.mjs reads packages/moe-proxy/dist/utils.js, and usage-receipt.test.mjs G1 runs onboarding.mjs, which refuses without the proxy build.\n  It prints each log's tail, then SECS=<n> EXIT=<r>. `timeout 1200` makes 20 minutes a hard limit: exit 124 means over budget.\n- checkRefs[1]: Windows npm ci and build of daemon and proxy, then gradlew.bat test --rerun buildPlugin, then parity-check.ps1. It prints SECS=<n>.\n- Planner timing, taken once on 2026-11-04 at 18:23Z, on a snapshot of target edc3e937 at load average 5-10:\n  - checkRefs[0]: SECS=124, EXIT=0. Daemon 293 files, 7631 passed, 18 skipped. node --test 1607 tests, 0 fail, 219 skipped (119 s, the longest leg). VS Code 799 tests, 0 fail, 10 skipped; compile clean. Parity and lint OK.\n  - checkRefs[1] without Gradle: SECS=10, covering the snapshot copy, Windows npm ci and both builds, and parity-check.ps1. An architect seat cannot take the lease (mem:gotcha-architect-cannot-take-gradle-lease), so Gradle was not timed here. Earlier QA runs took about 2 min: test --rerun 55 s (WT-19), buildPlugin 55 s (task-864103f3).\n- Cut from revision 1's gate, and what covers each:\n  - `node scripts/tests/postflight-safe.mjs` under bash (31-45 min), powershell and pwsh (53 min or more each). The rail keeps the full launcher suites out of task gates. Today ci.yml's build-all-platforms runs them on every PR #230 push; once task-669e6aff lands, nightly.yml runs them on moe/work-2026-10-24. This row changes no wrapper byte.\n  - proxy and claude-plugin npm test. No CQ-M07 commit touches either package, and ci.yml's Test TypeScript job runs both on every push (task-669e6aff keeps the fast jobs per push). The proxy is still built, because the scripts suite needs its dist.\n  - the separate `npx tsc --noEmit`. npm run build runs the same tsc on the same tsconfig.json, so a type error still fails the gate.\n- Name the CI run that covers the cut launcher suites, by rule (mem:gotcha-dod-ci-run-after-worktree-landing). It is the first non-cancelled run that executes the bash, powershell and pwsh postflights on bytes that contain this worktree's base (`git merge-base HEAD moe/work-2026-10-24` in the worktree), which holds every dependsOn completion. Today that is ci.yml's build-all-platforms on a PR #230 push; once task-669e6aff lands, it is a nightly.yml run of moe/work-2026-10-24.\n  - Resolve it with `gh.exe run list -R yaront1111/Moe-s-Tavern --branch moe/work-2026-10-24 --limit 20 --json databaseId,workflowName,headSha,status,conclusion` and `git merge-base --is-ancestor <base> <tested sha>`. A nightly run that checks out another ref than its own branch has its tested sha in the checkout step's log.\n  - Quote the conclusions of its three postflight steps, or say it has not finished yet.\n- Never run npm in the shared checkout (project rail).\n- Start each run detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only PIDs this session started; never pattern-kill.\n- Error handling for a red run:\n  - Read the failing leg's log in $S/logs. Rerun a timing-sensitive daemon file alone first (mem:gotcha-daemon-linux-snapshot-gate).\n  - Rerun the red suite once on the target's bytes from before this epic's last slice, to tell an older red from one this epic caused. A red this epic caused gets a bug row and a block. A pre-existing red is named in the summary with its tracking row.\n  - Exit 124 gets one rerun. A second overrun becomes a bug row asking to split the suite (global rail). Never raise the timeout.\n- The summary gives counts and SECS per suite: daemon files and tests, node --test, VS Code, parity and lint, the gradle XML totals and the buildPlugin zip sha256, plus the CI run named by rule.\n- complete_task's verification is checkRefs[0]; quote checkRefs[1]'s result in the summary.",
       "status": "PENDING",
       "affectedFiles": []
     },
     {
       "stepId": "step-5",
-      "description": "Whole-epic adversarial review and the DoD evidence map. This is the final step. Read the landed M07 diff (CQ-M07a..w) as an attacker looking for what the slices got wrong about each other:\n\n(1) Producer/consumer drift:\n- the readiness payload (tools/getExecutionReadiness.ts) against the JetBrains decide/parse (VerifiedLocalLaunch.kt, MoeJson), VS Code's parseExecutionReadiness and both wrappers' readiness parse;\n- agent-seat.mjs's JSON lines and exit codes (75 capacity wait) against both wrappers;\n- check-dispatch.mjs's report and exit code, including CQ-M07w's environment field, against both wrappers' gate lines;\n- the worktree receipt journal fields against tools/recordDeliveryReceipt.ts.\n\n(2) No host fallback: under verified-local, no worker or QA agent CLI is launched on the host. Grep every launch site in TerminalAgentLauncher.kt, AgentLauncher.ts, moe-agent.sh and moe-agent.ps1.\n\n(3) Legacy byte-identity: the JetBrains 16-row pinned table, VS Code V1/L4 and the wrappers' today-path rows passed in step 4.\n\n(4) Every seat-VM exit path calls seat-stop (normal, SIGINT, failed job, reload), with the row that proves each.\n\n(5) DoD 7: `git grep -n -e 'unconditionally unavailable' -e 'Nothing here is active yet' -e 'Certification is not activation' -e 'nothing invokes it per candidate yet' -- docs/` prints nothing. MCP_SERVER.md has the get_execution_readiness and get_seat_liveness sections.\n\n(6) Concurrency and edges: two seats at the cap; a daemon restart mid-job; a re-certify that changes the report while a seat runs; an empty or huge check report.\n\nPost one task comment with the DoD evidence map: one line per DoD item 1-9 and per extra 1-3 of comment-8bf3a7e4, each naming the test, file:line or comment id that proves it.\n\nFile any defect found as a bug row in this epic. A blocking defect means moe.report_blocked on it, not complete_task. Use the adversarial-self-review skill.",
+      "description": "Whole-epic adversarial review and the DoD evidence map. This is the final step. Read the landed M07 diff (CQ-M07a..w) as an attacker looking for what the slices got wrong about each other:\n\n(1) Producer/consumer drift:\n- the readiness payload (tools/getExecutionReadiness.ts) against the JetBrains decide/parse (VerifiedLocalLaunch.kt, MoeJson), VS Code's parseExecutionReadiness and both wrappers' readiness parse;\n- agent-seat.mjs's JSON lines and exit codes (75 capacity wait) against both wrappers;\n- check-dispatch.mjs's report and exit code, including CQ-M07w's environment field, against both wrappers' gate lines;\n- the worktree receipt journal fields against tools/recordDeliveryReceipt.ts.\n\n(2) No host fallback: under verified-local, no worker or QA agent CLI is launched on the host. Grep every launch site in TerminalAgentLauncher.kt, AgentLauncher.ts, moe-agent.sh and moe-agent.ps1.\n\n(3) Legacy byte-identity: the JetBrains 16-row pinned table and VS Code V1/L4 passed in step 4. The wrappers' today-path rows ([vm route] today path, SG-legacy, SG-observe) live in the postflight-vm-route harnesses, outside the 20-minute gate. Cite the wrapper slices' QA'd runs of them, and the CI run named by rule in step 4.\n\n(4) Every seat-VM exit path calls seat-stop (normal, SIGINT, failed job, reload), with the row that proves each.\n\n(5) DoD 7: `git grep -n -e 'unconditionally unavailable' -e 'Nothing here is active yet' -e 'Certification is not activation' -e 'nothing invokes it per candidate yet' -- docs/` prints nothing. MCP_SERVER.md has the get_execution_readiness and get_seat_liveness sections.\n\n(6) Concurrency and edges: two seats at the cap; a daemon restart mid-job; a re-certify that changes the report while a seat runs; an empty or huge check report.\n\nPost one task comment with the DoD evidence map: one line per DoD item 1-9 and per extra 1-3 of comment-8bf3a7e4, each naming the test, file:line or comment id that proves it.\n\nFile any defect found as a bug row in this epic. A blocking defect means moe.report_blocked on it, not complete_task. Use the adversarial-self-review skill.",
       "status": "PENDING",
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-67c762f6",
+  "planRevision": 2,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -70,12 +70,6 @@
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
-    "task-ced857485a1c4d75b57cc25dcc9b4d82",
-    "task-f4811a729f9e436ba129a65c12d348c1",
-    "task-f3f364a6c6864054901ec27f342a87f6",
-    "task-b1ca54f2716442be889a14623eb59983",
-    "task-fd196d137c44497188d2639f149e259b",
-    "task-62ec51f179494706a39045154d07e544",
     "task-7a0dadf992014449a4c9aaf8426cfd24",
     "task-d56fb46eb0a941808a7ba7e0588f2fd5",
     "task-5c4b5fab53ce41e294af5c70de1af51d",
@@ -89,7 +83,13 @@
     "task-bbd7ad2d9b3b498eb581f760d0e75a4d",
     "task-1dfec7a4f43149769b332cdb151189e8",
     "task-0bcc0b33ad354437bd6c18d9eb3a78da",
-    "task-e444f6ae2fc94efda2899ba723cf5c4b"
+    "task-e444f6ae2fc94efda2899ba723cf5c4b",
+    "task-669e6affa6fd41a7b654b0bddb696312",
+    "task-c199e17764364e59a980ecc9eebccb85",
+    "task-cb378fd8a608489c81edc56bff9c2ecc",
+    "task-d154d1983b8b4b0588fac4a54b833f41",
+    "task-ff0df8677afa4bdc814eb34486204ca1",
+    "task-5f5c8999391149d98a63746799064e57"
   ],
   "priority": "MEDIUM",
   "order": 231.5,
@@ -165,11 +165,23 @@
       "author": "governor-e6142a94",
       "content": "Dependency edit by the governor (governor-e6142a94), 2026-11-04 16:30Z: I added task-e444f6ae (the ps1 timeout leaking its check VM on Windows, a `--stop-file` seam in check-dispatch.mjs) and removed task-d3a964a8 (CQ-M07u, DONE), because the list sits at the 20-id cap.\n- Why: comment-8bf3a7e4 made this row the board's final whole-system acceptance, with dependsOn covering every open row. The human's directive today is \"MAKE SURE BOARD FINISH\". Verified-local should not turn on with a known Windows VM leak on dispatch timeout.\n- Cost on the critical path: none expected. e444f6ae waits on CQ-M07t and then runs in parallel with v2 and v1, which take longer.\n- d3a964a8 stays DONE, and its test rows are on the target. Removing it changes no readiness, because a DONE dependency is already satisfied.\nUnmet now: r, s, t, v1, v2 and e444f6ae.",
       "timestamp": "2026-11-04T16:29:00.552Z"
+    },
+    {
+      "id": "comment-2f4e9e738243452db6deae93288a6206",
+      "author": "architect-67c762f6",
+      "content": "GATE RE-PLAN (architect-67c762f6, 2026-11-04, planRevision 2), for the human's 18:07Z ruling \"gates should be 20min tops\". Only the gate changed: checkRefs[0] and [1], step 4, one line of step 5 (3), and the matching contract lines. Steps 1-3, the DoD, the rails and the runbook handoff (step 2, DoD 8) are byte-identical to revision 1.\n\nNew checkRefs[0] (Linux, the gate). One snapshot of the task worktree runs three parallel legs:\n- VS Code npm ci, test and compile;\n- parity-check.sh and npm run lint;\n- proxy and daemon npm ci and build, then daemon npm test beside node --test scripts/tests/*.test.mjs.\n`timeout 1200` makes 20 minutes a hard limit. The gate prints each log's tail, then SECS and EXIT.\n\nTimed once, at 18:23Z on a snapshot of target edc3e937, at load 5-10: SECS=124, EXIT=0.\n- daemon: 293 files, 7631 passed, 18 skipped;\n- node --test: 1607 tests, 0 fail (119 s, the longest leg);\n- VS Code: 799 tests, 0 fail; compile clean;\n- parity and lint: OK.\nA first timing run failed 3 scripts rows (daemon-json-cap x2, usage-receipt G1) because the proxy was not built. Their dist dependency is why the gate now builds the proxy.\n\ncheckRefs[1] (Windows, under the jetbrains-gradle lease): Windows npm ci and builds, gradlew test --rerun buildPlugin, parity-check.ps1. Without Gradle it measured 10 s. Gradle was not timed, because an architect cannot take the lease; earlier QA runs took about 2 min.\n\nCut, and what covers each:\n- postflight-safe.mjs bash, powershell and pwsh. CI runs these: today ci.yml build-all-platforms on PR #230 pushes, and nightly.yml once task-669e6aff lands. Step 4 names the run by rule.\n- proxy and claude-plugin npm test. No CQ-M07 commit touches either package, and ci.yml's Test TypeScript job runs them on every push.\n- The separate tsc --noEmit, which npm run build already covers.",
+      "timestamp": "2026-11-04T18:33:25.359Z"
+    },
+    {
+      "id": "comment-e6edde1030924382ab561a6bc027ffc7",
+      "author": "governor-e6142a94",
+      "content": "Dependency edit by the governor (governor-e6142a94), 2026-11-04 19:15Z. This keeps comment-8bf3a7e4's rule that this final whole-system row covers every open row, with the list at the 20-id cap.\n- Added the six rows opened since 16:30Z: task-669e6aff (nightly CI split), task-c199e177 and task-cb378fd8 (the PR #208 agy port, both launchers and the labels), task-d154d198 and task-ff0df867 (stale \"Gemini CLI\" store text and SCHEMA's WorkerType note), and task-5f5c8999 (the 7 scripts/tests suites that run in no workflow).\n- Removed six DONE ids, which change no gating: ced85748 (CQ-M06), f4811a72 (CQ-R13), f3f364a6 (CQ-RF07), b1ca54f2 (WT-19), fd196d13, and 62ec51f1 (CQ-M07n).\n- Why: the agy port changes moe-agent.{sh,ps1}, and step 2's real-VM runs (DoD 8) exercise those launchers. They should run once, on the final launcher bytes. 11 deps are unmet now.",
+      "timestamp": "2026-11-04T19:07:50.854Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-04T18:09:25.880Z",
+  "updatedAt": "2026-11-04T19:07:50.854Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z",
     "plannedStepCount": 5,
@@ -233,8 +245,8 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-c33f294e@2026-11-04T11:42:57Z",
-    "at": "2026-11-04T12:46:19.567Z"
+    "sessionId": "architect-67c762f6@2026-11-04T18:09:11Z",
+    "at": "2026-11-04T18:35:24.350Z"
   },
   "blockedReason": null,
   "blockedOnTaskIds": null,
@@ -248,16 +260,17 @@
   "lowEffortEligible": true,
   "stepsCompleted": [],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-11-04T12:07:48.433Z",
+  "planSubmittedAt": "2026-11-04T18:32:50.726Z",
   "executionContract": {
-    "intendedBehavior": "No runtime change. This row proves the activated verified-local system end to end and records it: a composed daemon acceptance test in the VM-route wrappers' call order; a real-VM runbook that the human or governor runs on Windows and Linux (legacy and verified-local, on a scratch project), with the outcomes recorded as comments on this row; the CQ-M06a promotion record updated from those outcomes; one full snapshot regression across every package; and a whole-epic adversarial review with a DoD evidence map.",
+    "intendedBehavior": "No runtime change. This row proves the activated verified-local system end to end and records it: a composed daemon acceptance test in the VM-route wrappers' call order; a real-VM runbook that the human or governor runs on Windows and Linux (legacy and verified-local, on a scratch project), with the outcomes recorded as comments on this row; the CQ-M06a promotion record updated from those outcomes; one snapshot regression of the packages the turn-on touches, inside the 20-minute gate budget, with the full launcher suites left to CI; and a whole-epic adversarial review with a DoD evidence map.",
     "acceptanceCriteria": [
       "verifiedLocalActivation.acceptance.test.ts walks one verified-local task, plan -> marked claim -> complete -> candidate -> /runner dispatch and observation -> landed finalize -> receipt -> marked QA claim -> qa_approve, to DONE. It holds readiness READY only through readinessHolder.refreshReadiness, and each one-defect variant is refused with its exact code.",
       "A verified-local consumer of that task is claimable once it is DONE, and stays claimable after it is ARCHIVED through the receipt. A twin with no receipt is withheld with delivery-receipt.",
       "The runbook comment gives exact per-host commands and expected evidence. The human or governor posts the outcome comments for Windows and Linux. No seat runs Multipass.",
       "docs/baselines/cq-m06/README.md records the human's decision and the per-platform status from those outcomes. macOS stays not certified, and rolloutDecision.test.ts passes.",
-      "checkRefs[0] and checkRefs[1] exit 0 on the task worktree's bytes, and the summary gives counts per suite.",
-      "The DoD evidence map comment names proof for DoD 1-9 and for extras 1-3 of comment-8bf3a7e4."
+      "checkRefs[0] and checkRefs[1] exit 0 on the task worktree's bytes, each within 20 minutes (checkRefs[0] enforces it with timeout 1200), and the summary gives counts and SECS per suite.",
+      "The DoD evidence map comment names proof for DoD 1-9 and for extras 1-3 of comment-8bf3a7e4.",
+      "The summary names, by rule, the CI run that covers the cut launcher suites (the bash, powershell and pwsh postflights): the first non-cancelled run whose tested bytes contain the task worktree's base. QA reviews after the landing and may resolve the rule to a run id."
     ],
     "invariants": [
       "No seat runs Multipass. Real-VM runs belong to the human or the governor.",
@@ -266,7 +279,8 @@
       "No worker or QA seat falls back to the host under verified-local.",
       "No npm build, install or test runs in the shared checkout. Every npm gate runs in a snapshot.",
       "Never pattern-kill processes. Kill only PIDs this session started.",
-      "No Git writes outside the wrappers."
+      "No Git writes outside the wrappers.",
+      "The gate, checkRefs[0], finishes within 20 minutes on this host. The full launcher suites run only in CI (global rail)."
     ],
     "compatibility": [
       "No wire, schema or tool change.",
@@ -281,7 +295,7 @@
     "reuse": [
       "deliveryBypass.acceptance.test.ts A0 (fixture shape and callers()), copied minimally, not imported.",
       "readinessHolder.test.ts hold() for an unmocked READY.",
-      "CI's own commands (ci.yml) and postflight-safe.mjs for the regression legs.",
+      "CI's own commands (ci.yml) for the regression legs. postflight-safe.mjs stays CI-only.",
       "R13's certify handoff precedent (comment-239c6bbb) for the runbook's shape."
     ],
     "sourceAssumptions": [
@@ -293,18 +307,20 @@
       "state/dependencyUnblock.ts: a verified-local consumer counts an ARCHIVED prerequisite only with a delivery receipt for its current candidate (getDeliveryReceiptForCandidate).",
       "packages/moe-daemon/src/benchmarks/rolloutDecision.test.ts parses docs/baselines/cq-m06/README.md and recomputes its figures and gate rows.",
       "scripts/local-runner/check-dispatch.mjs CLI `--project --task --commit`: exit 0 only when every owed check was observed passed. check-evidence.mjs checkEnvironment builds 'moe-local-vm-v1:<sha256>'.",
-      ".github/workflows/ci.yml:244: the 14 local-runner test files, which equal the scripts/tests/local-runner*.test.mjs glob."
+      ".github/workflows/ci.yml:244: the 14 local-runner test files, which equal the scripts/tests/local-runner*.test.mjs glob.",
+      "scripts/tests/daemon-json-cap.test.mjs:620 (distKeys) needs packages/moe-proxy/dist/utils.js, and usage-receipt.test.mjs G1 runs scripts/tests/onboarding.mjs, which asserts 'Build moe-proxy first' (:26). So the gate builds the proxy before the scripts suite.",
+      "ci.yml runs Test TypeScript (proxy test:coverage, claude-plugin build and test) and build-all-platforms (the bash, powershell and pwsh postflights) on every pull_request push. task-669e6aff moves the three postflights to a new nightly.yml and keeps the fast jobs per push."
     ],
     "checkRefs": [
-      "cd /mnt/d/projexts/moes/.worktrees/task-1a8f1d0e199046a289e94a5453d758b8 && S=$(mktemp -d /tmp/m07f-XXXXXX) && git ls-files -z -co --exclude-standard -- . ':!.moe' | tar --null -T - -c | tar -x -C $S && cd $S && env -i HOME=$HOME MOE_POSTFLIGHT_TIMEOUT_SEC=360 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin sh -c 'umask 022; r=0; (cd packages/moe-daemon && npm ci --no-audit --no-fund -q && npx tsc --noEmit && npm run build && npm test) || r=1; for p in moe-proxy moe-claude-plugin; do (cd packages/$p && npm ci --no-audit --no-fund -q && npm test) || r=1; done; (cd moe-vscode && npm ci --no-audit --no-fund -q && npm test && npm run compile) || r=1; node --test scripts/tests/*.test.mjs || r=1; bash scripts/tests/parity-check.sh || r=1; npm run lint || r=1; node scripts/tests/postflight-safe.mjs bash || r=1; echo EXIT=$r; [ $r = 0 ]'",
-      "cd /mnt/d/projexts/moes/.worktrees/task-1a8f1d0e199046a289e94a5453d758b8 && W=$(mktemp -d /mnt/d/moe-scratch/m07fw-XXXXXX) && git ls-files -z -co --exclude-standard -- . ':!.moe' | tar --null -T - -c | tar -x -C $W && cd $W && D=$(wslpath -w $W) && cmd.exe /d /c \"cd /d $D\\packages\\moe-daemon && npm ci --no-audit --no-fund && npm run build && cd ..\\moe-proxy && npm ci --no-audit --no-fund && npm run build && cd ..\\..\\moe-jetbrains && .\\gradlew.bat test --rerun buildPlugin\" && r=0 && for e in powershell pwsh; do env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC \"/mnt/c/Program Files/nodejs/node.exe\" scripts/tests/postflight-safe.mjs $e || r=1; done; pwsh.exe -NoProfile -File scripts/tests/parity-check.ps1 || r=1; echo EXIT=$r; [ $r = 0 ]",
+      "cd /mnt/d/projexts/moes/.worktrees/task-1a8f1d0e199046a289e94a5453d758b8 && S=$(mktemp -d /tmp/m07f-XXXXXX) && git ls-files -z -co --exclude-standard -- . ':!.moe' | tar --null -T - -c | tar -x -C $S && cd $S && timeout 1200 env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin bash -c 'umask 022; L=$PWD/logs; mkdir $L; c=\"npm ci --no-audit --no-fund -q\"; r=0; (cd moe-vscode && $c && npm test && npm run compile) > $L/vscode.log 2>&1 & v=$!; (bash scripts/tests/parity-check.sh && npm run lint) > $L/lint.log 2>&1 & l=$!; (cd packages/moe-proxy && $c && npm run build && cd ../moe-daemon && $c && npm run build) > $L/build.log 2>&1 || r=1; if [ $r = 0 ]; then (cd packages/moe-daemon && npm test) > $L/daemon.log 2>&1 & d=$!; node --test scripts/tests/*.test.mjs > $L/scripts.log 2>&1 || r=1; wait $d || r=1; fi; wait $v || r=1; wait $l || r=1; tail -n 12 $L/*; echo SECS=$SECONDS EXIT=$r; [ $r = 0 ]'",
+      "cd /mnt/d/projexts/moes/.worktrees/task-1a8f1d0e199046a289e94a5453d758b8 && t=$(date +%s) && W=$(mktemp -d /mnt/d/moe-scratch/m07fw-XXXXXX) && git ls-files -z -co --exclude-standard -- . ':!.moe' | tar --null -T - -c | tar -x -C $W && cd $W && D=$(wslpath -w $W) && cmd.exe /d /c \"cd /d $D\\packages\\moe-daemon && npm ci --no-audit --no-fund && npm run build && cd ..\\moe-proxy && npm ci --no-audit --no-fund && npm run build && cd ..\\..\\moe-jetbrains && .\\gradlew.bat test --rerun buildPlugin\" && pwsh.exe -NoProfile -File scripts/tests/parity-check.ps1 && echo SECS=$(($(date +%s)-t)) EXIT=0",
       "cd /mnt/d/projexts/moes/.worktrees/task-1a8f1d0e199046a289e94a5453d758b8 && S=$(mktemp -d /tmp/m07fa-XXXXXX) && git ls-files -z -co --exclude-standard -- packages/moe-daemon docs scripts CLAUDE.md .gitignore package.json | tar --null -T - -c | tar -x -C $S && cd $S/packages/moe-daemon && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin sh -c 'npm ci --no-audit --no-fund -q && npx vitest run src/__acceptance__/ src/benchmarks/rolloutDecision.test.ts src/delivery/readinessHolder.test.ts'"
     ]
   },
   "planningNotes": {
-    "approachesConsidered": "1. Plan this row as one big activation implementation: rejected. The remaining functional gaps are split into CQ-M07r/s (the check-VM gate at L6 in sh/ps1), CQ-M07t (worktree delivery receipts), CQ-M07w (check-dispatch names the unapproved environment id), CQ-M07u (two QA test gaps) and CQ-M07v1/v2 (the DoD 7 docs). This row stays acceptance-only, and depends on all of them plus the open M07 bug rows bbd7ad2d and 1dfec7a4.\n2. A real-daemon wrapper e2e under verified-local with fakes: impossible. No env var, setting or file may grant readiness (rail 1), and readiness needs a live Multipass probe. The wrapper side is proven by the slices' postflight-vm-route rows; the daemon side by this row's acceptance test; the whole thing by the real-VM run.\n3. The real-board verified-local trial on the moes board itself: rejected. It would make every moes task strict, and every moes seat would need a VM. Use a scratch project.\n4. Rail 6 (open design decisions to the human before submit_plan) is already met: comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation (governor comment-737bdb9d). This plan re-asks nothing. The new choice made here (owed checks run at the worktree completion's L6 through check-dispatch.mjs, so the host never runs candidate code) follows from the task's own objective: 'required checks run in their own check VMs'.",
-    "codebaseInsights": "- Readiness is fully wired (CQ-M07a-d). It needs five things: a plugin-installed daemon outside the project (protected-host-control-plane); a runner key outside the project (authenticated-runner-evidence); a host-store certification report matching the live Multipass version and the image and supervisor pins (both isolation capabilities); and deliveryPolicy 'local-branch' (revision-bound-local-delivery).\n- The moes dev daemon runs from packages/moe-daemon/dist inside the project, so this repo can never be verified-local ready. That is fine.\n- Before CQ-M07r/s, nothing produced an authenticated CheckRun, so every verified-local qa_approve was refused, and the worktree L6 ran the qualityGate on the host on candidate bytes.\n- Before CQ-M07t, the worktree journal had no candidateId and no receipt was ever sent.\n- check-dispatch's owedChecks owes the qualityGate only for everyTask or epic-final scope, and needs every owed check declared in requiredChecks with a dependency choice. So a verified-local plan must declare requiredChecks (CQ-M07v1 documents it in the architect reference).",
-    "risks": "- The governor/human run takes hours. Step 2's dependency-less BLOCKED row is intended (governor comment-737bdb9d); do not unblock it yourself.\n- rolloutDecision.test.ts parses the README and recomputes the gate rows at the default held readiness. Edit around the pinned rows.\n- Windows interop flakes (UtilAcceptVsock) and host load: rerun the leg before blaming the change (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A git archive of the control checkout would miss this task's uncommitted bytes. The checkRefs snapshot the task worktree's own files with git ls-files -co, excluding .moe (the worktree is sparse there).\n- checkRefs[1]'s Gradle run must hold the jetbrains-gradle lease.\n- The acceptance test must not mock executionProfile, or it proves nothing about the real gate.",
+    "approachesConsidered": "1. Plan this row as one big activation implementation: rejected. The remaining functional gaps are split into CQ-M07r/s (the check-VM gate at L6 in sh/ps1), CQ-M07t (worktree delivery receipts), CQ-M07w (check-dispatch names the unapproved environment id), CQ-M07u (two QA test gaps) and CQ-M07v1/v2 (the DoD 7 docs). This row stays acceptance-only, and depends on all of them plus the open M07 bug rows bbd7ad2d and 1dfec7a4.\n2. A real-daemon wrapper e2e under verified-local with fakes: impossible. No env var, setting or file may grant readiness (rail 1), and readiness needs a live Multipass probe. The wrapper side is proven by the slices' postflight-vm-route rows; the daemon side by this row's acceptance test; the whole thing by the real-VM run.\n3. The real-board verified-local trial on the moes board itself: rejected. It would make every moes task strict, and every moes seat would need a VM. Use a scratch project.\n4. Rail 6 (open design decisions to the human before submit_plan) is already met: comment-6af90ea8 and mem:decision-cq-m07-verified-local-activation (governor comment-737bdb9d). This plan re-asks nothing. The new choice made here (owed checks run at the worktree completion's L6 through check-dispatch.mjs, so the host never runs candidate code) follows from the task's own objective: 'required checks run in their own check VMs'.\n5. Gate re-plan (planRevision 2, the human's 2026-11-04 18:07Z ruling 'gates should be 20min tops'). Only checkRefs[0], checkRefs[1], step 4, step 5 (3) and the matching contract lines changed; steps 1-3, the DoD, the rails and the runbook flow are as in revision 1.\n- Kept: the composed acceptance test (in daemon npm test and checkRefs[2]) and the suites of the packages the turn-on touches: daemon, scripts node tests, VS Code, JetBrains, plus parity and lint.\n- Run in parallel: VS Code, parity+lint, and builds-then-tests (daemon vitest beside node --test). Serial legs would add about 1.5 min and buy nothing.\n- Rejected: adding the postflight-vm-route harnesses to the gate. This row changes no wrapper byte, the governor scoped the gate to the package suites, and the slices' QA'd runs plus the CI run named by rule cover them.\n- Rejected: narrowing node --test to the 14 local-runner files. The whole glob fits (119 s), and most of it reads or runs the wrappers this epic changed.",
+    "codebaseInsights": "- Readiness is fully wired (CQ-M07a-d). It needs five things: a plugin-installed daemon outside the project (protected-host-control-plane); a runner key outside the project (authenticated-runner-evidence); a host-store certification report matching the live Multipass version and the image and supervisor pins (both isolation capabilities); and deliveryPolicy 'local-branch' (revision-bound-local-delivery).\n- The moes dev daemon runs from packages/moe-daemon/dist inside the project, so this repo can never be verified-local ready. That is fine.\n- Before CQ-M07r/s, nothing produced an authenticated CheckRun, so every verified-local qa_approve was refused, and the worktree L6 ran the qualityGate on the host on candidate bytes.\n- Before CQ-M07t, the worktree journal had no candidateId and no receipt was ever sent.\n- check-dispatch's owedChecks owes the qualityGate only for everyTask or epic-final scope, and needs every owed check declared in requiredChecks with a dependency choice. So a verified-local plan must declare requiredChecks (CQ-M07v1 documents it in the architect reference).\n- TypeScript 7 (tsc 7.0.2) builds the daemon and proxy in seconds, on Linux and on Windows (both Windows npm ci and builds: 9 s). The longest gate leg is node --test scripts/tests/*.test.mjs (119 s), then daemon vitest (53-80 s).\n- The scripts suite needs the proxy dist: without it, daemon-json-cap's two path-contract rows and usage-receipt G1 fail (the first timing run hit exactly those 3).",
+    "risks": "- The governor/human run takes hours. Step 2's dependency-less BLOCKED row is intended (governor comment-737bdb9d); do not unblock it yourself.\n- rolloutDecision.test.ts parses the README and recomputes the gate rows at the default held readiness. Edit around the pinned rows.\n- Windows interop flakes (UtilAcceptVsock) and host load: rerun the leg before blaming the change (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A git archive of the control checkout would miss this task's uncommitted bytes. The checkRefs snapshot the task worktree's own files with git ls-files -co, excluding .moe (the worktree is sparse there).\n- checkRefs[1]'s Gradle run must hold the jetbrains-gradle lease.\n- The acceptance test must not mock executionProfile, or it proves nothing about the real gate.\n- The gate's legs share the CPU: vitest, node --test and VS Code run side by side. At load 10 nothing flaked. A timing-sensitive daemon file (baselineRun E2, index.version, bindHosts D-fail) is rerun alone before it is called a regression.\n- `timeout 1200` kills the whole gate group at 20 minutes (exit 124) before any tail is printed. Read $S/logs.\n- generate-init-files logs 'no git history' in the git-less snapshot. It is harmless: the shipped-body list then holds only the current version.",
     "keyFiles": [
       "packages/moe-daemon/src/__acceptance__/deliveryBypass.acceptance.test.ts",
       "packages/moe-daemon/src/__acceptance__/mcpCall.ts",
@@ -315,22 +331,23 @@
       "docs/baselines/cq-m06/README.md",
       "scripts/moe-agent.sh (VM route ~9560-9910, wt_land_rounds ~7672)",
       "scripts/local-runner/check-dispatch.mjs",
-      "scripts/local-runner/agent-seat.mjs"
+      "scripts/local-runner/agent-seat.mjs",
+      ".github/workflows/ci.yml (what CI runs on every push)"
     ]
   },
   "executionPolicySnapshot": {
     "version": 2,
     "profile": "legacy",
-    "planRevision": 1,
+    "planRevision": 2,
     "deliveryPolicy": "legacy"
   },
   "planSourceBasis": {
     "version": 1,
-    "commit": "0fa7750ee23b15a1c174a557b723a21a8988023f",
-    "planRevision": 1
+    "commit": "da80b2d853f249f455955c374ff765e0ef028523",
+    "planRevision": 2
   },
-  "planApprovedAt": "2026-11-04T12:07:48.475Z",
-  "approvedPlanRevision": 1,
+  "planApprovedAt": "2026-11-04T18:32:50.850Z",
+  "approvedPlanRevision": 2,
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-04T18:08:33.991Z",

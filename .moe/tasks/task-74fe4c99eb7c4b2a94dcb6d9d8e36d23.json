@@ -103,11 +103,11 @@
   ],
   "planRevision": 2,
   "status": "REVIEW",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "qa-96811257",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Governor, 18:41Z: the MOE_CONTROL_CHECKOUT_BEHIND block is cleared. moe/control is now at edc3e937, so the completion is in the control HEAD. The blocker was an uncommitted edit to scripts/moe-agent.ps1 in the control checkout, made by the human's own Claude session, not by a seat. With the human's approval I set that edit aside, fast-forwarded control da80b2d8..edc3e937 and re-applied it. Back to REVIEW for QA's landed gate.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "dependsOn": [
@@ -133,11 +133,23 @@
       "author": "governor-e6142a94",
       "content": "@worker-5772dacf CQ-M07r's round-2 pins have landed on the target as da80b2d8 (scripts/tests/postflight-vm-route.sh only). Per amend-1, diff your three ported rows (SG-interrupt, V-results-object, V-two-newlines) against `git show da80b2d8 -- scripts/tests/postflight-vm-route.sh`. If they match 1:1, say so in your completion summary. If they don't, fix them before complete_task.",
       "timestamp": "2026-11-04T16:23:03.346Z"
+    },
+    {
+      "id": "comment-a04d1fdf9787445aa837d64506201b9e",
+      "author": "worker-5772dacf",
+      "content": "MOE_WORKTREE_STRAY_EDIT: this session wrote 23 path(s) into the control checkout instead of its worktree /mnt/d/projexts/moes/.worktrees/task-74fe4c99eb7c4b2a94dcb6d9d8e36d23. They were neither landed nor reverted; a human decides.\n- docs/ARCHITECTURE.md\n- docs/MCP_SERVER.md\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeMessageDispatcher.kt\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt\n- moe-jetbrains/src/test/kotlin/com/moe/services/MoeMessageDispatcherBoardVersionTest.kt\n- moe-vscode/src/providers/BoardViewProvider.ts\n- moe-vscode/src/services/MoeDaemonClient.ts\n- moe-vscode/tests/worker-heartbeat.test.cjs\n- packages/moe-daemon/src/index.ts\n- packages/moe-daemon/src/server/WebSocketServer.test.ts\n- packages/moe-daemon/src/server/WebSocketServer.ts\n- packages/moe-daemon/src/state/StateManager.ts\n- packages/moe-daemon/src/state/deliveryProjection.test.ts\n- packages/moe-daemon/src/state/persistence.ts\n- packages/moe-daemon/src/tools/getCommitScope.test.ts\n- packages/moe-daemon/src/util/claimEligibility.memo.test.ts\n- packages/moe-daemon/src/util/claimEligibility.ts\n- packages/moe-daemon/src/util/logger.ts\n- packages/moe-proxy/src/index.ts\n+3 more",
+      "timestamp": "2026-11-04T18:12:14.381Z"
+    },
+    {
+      "id": "comment-a88018deb946495997617293dc8cc7fc",
+      "author": "governor-e6142a94",
+      "content": "@qa-96811257 Governor ruling on this row's QA re-run, 18:50Z. Please read it before you start the gate.\nThis row was planned before the human's 18:07Z ruling. Its checkRefs[0] runs the FULL postflight.ps1 on pwsh.exe and powershell.exe one after the other, about 2-3.5 h. GLOBAL rail customRules[4] (prop-bb985ab8, human-approved) now caps a gate at 20 min, QA's re-run included, and reserves the full launcher suites for the nightly. Those two rules conflict, and the newer, human-approved rail wins.\n\nRun checkRefs[0] verbatim with ONE substitution: `postflight.ps1` becomes `postflight-vm-route.ps1`, the standalone harness this row extends (\"Run alone with powershell.exe or pwsh.exe -NoProfile -File\"). Everything else stays the same: both engines, the env scrub, MOE_POSTFLIGHT_TIMEOUT_SEC=360, both parity checks, `npm run lint`, and EXIT=0.\n\nThe full suite is covered twice:\n- The worker's verification ran the full checkRefs[0] on these exact bytes, the completion edc3e937, with exitCode 0.\n- PR #230's CI run 41884735266 on edc3e937 runs both full Windows postflights. I'm watching it, and if a postflight step goes red on this row's code I reopen the row.\n\nIf the scoped run goes past 20 min, stop and tell me. Review the substance as usual, including the 1:1 check of SG-interrupt, V-results-object and V-two-newlines against `git show da80b2d8 -- scripts/tests/postflight-vm-route.sh`. Note the substitution in your qa_approve summary.",
+      "timestamp": "2026-11-04T18:44:52.911Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:19.711Z",
-  "updatedAt": "2026-11-04T18:11:58.230Z",
+  "updatedAt": "2026-11-04T18:44:52.911Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:08:35.564Z",
     "plannedStepCount": 6,
@@ -147,7 +159,9 @@
   "contextFetchedBy": [
     "architect-c33f294e",
     "worker-5772dacf",
-    "architect-cd0ac706"
+    "architect-cd0ac706",
+    "qa-25f21f0a",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -274,5 +288,11 @@
     "kind": "completion",
     "sessionId": "worker-5772dacf@2026-11-04T15:18:36Z",
     "at": "2026-11-04T18:11:58.230Z"
-  }
+  },
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-74fe4c99eb7c4b2a94dcb6d9d8e36d23: completion edc3e937ef390df064eccf1ffde6f1a813130d55 is not in the control HEAD da80b2d853f249f455955c374ff765e0ef028523 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only"
 }

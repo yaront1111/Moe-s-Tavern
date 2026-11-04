@@ -46,7 +46,7 @@
     },
     {
       "stepId": "step-5",
-      "description": "Verification, once, from the task worktree: run checkRefs[0] exactly. It runs postflight.sh, then postflight.ps1 under pwsh.exe and powershell.exe, each with MOE_*/CLAUDE*/FAKE_* scrubbed and MOE_POSTFLIGHT_TIMEOUT_SEC=360, then parity-check.sh, parity-check.ps1 and npm run lint.\n- Start it detached (nohup, record $!) and poll with bounded until-loops (mem:gotcha-qa-ps1-postflight-from-wsl). Kill only that recorded PID.\n- A UtilAcceptVsock error with no harness output is an interop flake: rerun that leg.\n- A red row: rerun it on the target's bytes before blaming this change.\n- complete_task's verification is this command. The summary lists T1-T4 per engine and the section counts.",
+      "description": "Verification, once: run checkRefs[0] exactly as written, from any cwd (it cds into this row's task worktree at scripts/tests). This is the narrowed mid-epic gate the human chose at about 18:05Z on 2026-11-04 (this row's reopenReason).\n- Do not run the full postflight.sh or postflight.ps1. PR #230's CI runs them at every landing and merges only at all-green CI, and the epic-final row task-1a8f1d0e keeps a full gate. DoD 5 is met by checkRefs[0] plus that CI run. QA re-runs checkRefs[0] verbatim.\n\nWhat it runs. MOE_*, CLAUDE* and FAKE_* are unset; MOE_POSTFLIGHT_TIMEOUT_SEC=360 and MOE_WORKTREE_ONLY reach Windows through WSLENV.\n- One background chain per Windows engine (powershell = 5.1, pwsh = 7), each stopping at its first failure:\n  - ParseFile on scripts/moe-agent.ps1 under that engine;\n  - postflight-vm-route.ps1 through pwsh -> cmd -> <engine>. The cmd hop keeps pwsh's PSModulePath, as CI's node hop does, so a 5.1 module-autoload slip (Get-FileHash, New-Guid and the like) fails here as it would in CI;\n  - worktree-landing.ps1 through pwsh -> <engine>, CI's own chain;\n  - postflight-worktree.cjs in ps1 mode on that engine.\n- In the foreground, also stopping at its first failure: bash -n scripts/moe-agent.sh, postflight-vm-route.sh, worktree-landing.sh, postflight-worktree.cjs in sh mode, parity-check.sh, parity-check.ps1 (pwsh) and npm run lint.\n- postflight-worktree.cjs runs only the cases that assert on the receipt journal, the owed rows or the pre-flight replay, through MOE_WORKTREE_ONLY: wt-completion, wt-replay, wt-replay-remote, wt-remote-rejected, wt-fails and wt-crash. Its `codes` case is left out because parity-check.sh compares the same code families.\n- Each chain ends with a lone `@` line only when every command in it passed. The command prints the last 3 lines of each log and exits 0 only when all three `@` lines are present.\n\nHow to run it: detached, then poll; never as one long foreground call (mem:gotcha-qa-ps1-postflight-from-wsl, mem:decision-mid-epic-launcher-gate-narrow).\n- Write checkRefs[0] verbatim to a scratch file outside the checkout, for example /mnt/d/moe-scratch/t5277/gate.sh.\n- Start `nohup bash -c 'bash /mnt/d/moe-scratch/t5277/gate.sh; echo CHAIN_EXIT=$?' > /mnt/d/moe-scratch/t5277/gate.out 2>&1 &` and record `$!`.\n- Poll with `timeout 540 bash -c 'until grep -q ^CHAIN_EXIT= /mnt/d/moe-scratch/t5277/gate.out; do sleep 15; done'` loops. Kill only that recorded PID.\n- Plan-time dry run on a sparse clone of the target at da80b2d8, before CQ-M07s lands: CHAIN_EXIT=0 in 10.5 min at load ~5 (5.1 chain 10 min, pwsh 7 chain 10.5 min, bash chain 8.7 min). Each engine printed `worktree-landing: 18 passed, 0 failed, 0 errors` and `[worktree] 6 ok, 0 failed`; both vm-route harnesses and both parity checks printed PASS, and lint was OK. With CQ-M07s's rows and this row's, expect about 15-20 min.\n- A red check, with both wrapper copies broken, exited 1 at once with no `@` line, and ParseFile printed the error and its line.\n\nError handling for a red run:\n- The tail's `==> <dir>/<log> <==` headers name the log directory: read the failing log there.\n- A Windows leg that wrote only a `UtilAcceptVsock ... accept4 failed` line and exited 1 is a WSL interop flake, not a test result: rerun the whole command.\n- A red row in a suite this row did not edit: rerun the same command on a clone of the target before blaming the change (clone --shared --no-checkout, sparse '/*' '!/.moe/', check out the target sha, change only the cd path).\n- If CHAIN_EXIT has not appeared after 60 min, kill the recorded PID only and report the hang. Never pattern-kill.\n- Never weaken, skip or reorder a row to get green.\n\nEvidence: complete_task's verification is checkRefs[0] verbatim, its exit code and the printed tail. The completion summary lists, per engine (sh, 5.1, 7), the [strong receipt] T1-T4 result lines from the vm-route logs, the worktree-landing count and the `[worktree] 6 ok, 0 failed` line.",
       "status": "PENDING",
       "affectedFiles": []
     },
@@ -57,9 +57,9 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-2a219562",
+  "planRevision": 2,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,11 +77,17 @@
       "author": "governor-e6142a94",
       "content": "For the re-planner, from the governor: hard budget from the human at 18:07Z, \"gates should be 20min tops\" (rail proposal prop-440d064f, pending).\n- checkRefs[0] must finish within 20 minutes of wall time on this host, for the worker and again for QA's verbatim re-run.\n- Before submitting, time each leg once from a task worktree: postflight-vm-route.sh, postflight-vm-route.ps1 on pwsh.exe and on powershell.exe, worktree-landing.{sh,ps1}, parity and lint. Run the independent legs in parallel, as e444f6ae's gate does: its ps5 and ps7 run as background jobs.\n- If the total is still over 20 minutes, cut a leg whose coverage PR #230's CI already gives, and name the cut in the plan. Never cut t's own new rows.\n- Keep steps 1-4 and 6 of revision 1 unchanged.",
       "timestamp": "2026-11-04T18:08:26.581Z"
+    },
+    {
+      "id": "comment-bac012b53a4449fabccc831ef7d8caf7",
+      "author": "architect-2a219562",
+      "content": "Plan revision 2 (verification-only re-plan, per the human's decision at about 18:05Z on 2026-11-04). Steps 1-4 and 6 are unchanged. Step 5 and checkRefs[0] are replaced. The rest of the execution contract is unchanged.\n\nDoD 5 still names the full postflight.sh and postflight.ps1. Under that decision it is met by checkRefs[0] plus PR #230's CI, which runs the full suites at every landing and merges only at all-green CI. Do not run the full suites for this row.\n\ncheckRefs[0] (992 chars) runs from the task worktree with MOE_*, CLAUDE* and FAKE_* unset and MOE_POSTFLIGHT_TIMEOUT_SEC=360:\n- the vm-route harnesses on bash, PS 5.1 and pwsh 7;\n- worktree-landing on bash, PS 5.1 and pwsh 7;\n- the six postflight-worktree.cjs journal, receipt and replay cases on sh, PS 5.1 and pwsh 7: wt-completion, wt-replay, wt-replay-remote, wt-remote-rejected, wt-fails and wt-crash;\n- parity-check.sh, parity-check.ps1 and npm run lint;\n- bash -n and ParseFile.\n\nA plan-time dry run on the target's bytes (da80b2d8) passed in 10.5 min. QA re-runs checkRefs[0] verbatim. Run it detached, as step 5 says.",
+      "timestamp": "2026-11-04T18:47:01.990Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T11:56:50.151Z",
-  "updatedAt": "2026-11-04T18:08:26.581Z",
+  "updatedAt": "2026-11-04T18:47:51.916Z",
   "metrics": {
     "firstClaimAt": "2026-11-04T12:11:04.157Z",
     "plannedStepCount": 6,
@@ -98,7 +104,7 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-11-04T12:13:36.131Z",
+  "planSubmittedAt": "2026-11-04T18:46:43.757Z",
   "executionContract": {
     "intendedBehavior": "Under verified-local, a worktree completion records its delivery receipt. The worktree journal carries the frozen candidateId and the CQ-V07 intent fields (treeSha, baseRevision, planRevision, profile), and after C is published both wrappers send moe.record_delivery_receipt (candidateId, target, targetBefore B, targetAfter C, landedRevision C, pushResult) before finalize_attempt. An unacknowledged receipt keeps the attempt finalizing (MOE_FINALIZE_DEFERRED_RECEIPT) and the journal on disk until a pre-flight replay records it and finalizes. A strong journal is dropped only once its attempt is closed. legacy and observe worktree landings are unchanged.",
     "acceptanceCriteria": [
@@ -135,13 +141,13 @@
       "state/dependencyUnblock.ts: a verified-local consumer counts an ARCHIVED prerequisite only with a delivery receipt for its current candidate."
     ],
     "checkRefs": [
-      "cd /mnt/d/projexts/moes/.worktrees/task-527735eafb9147cf8663ccee9a9e1b4c || exit 1; P='D:\\projexts\\moes\\.worktrees\\task-527735eafb9147cf8663ccee9a9e1b4c\\scripts\\tests'; U=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /'); r=0; env $U MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash scripts/tests/postflight.sh || r=1; for e in pwsh.exe powershell.exe; do env $U MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\postflight.ps1\" || r=1; done; bash scripts/tests/parity-check.sh || r=1; pwsh.exe -NoProfile -File \"$P\\parity-check.ps1\" || r=1; npm run lint || r=1; echo EXIT=$r; [ $r = 0 ]"
+      "cd /mnt/d/projexts/moes/.worktrees/task-527735ea*/scripts/tests||exit 1;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_WORKTREE_ONLY MOE_WORKTREE_ONLY=wt-completion,wt-replay,wt-replay-remote,wt-remote-rejected,wt-fails,wt-crash;A=postflight-worktree.cjs;F=postflight-fake-proxy.js;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B worktree-landing.ps1&&node $A ps1 \\$PWD/../moe-agent.ps1 \\$PWD/$F \\$env:TEMP $e\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash worktree-landing.sh&&node $A sh $PWD/../moe-agent.sh $PWD/$F /tmp $BASH&&bash parity-check.sh&&pwsh.exe $B parity-check.ps1&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c ^@$) = 3 ]"
     ]
   },
   "planningNotes": {
-    "approachesConsidered": "- Split sh and ps1 now (the description's split clause): not needed. The estimate is about 80 runtime lines and 170 test lines, within the caps. Steps 1-2 and 3-4 keep the halves separate for review.\n- A new receipt sender for worktree mode: rejected. receipt_send / Send-MoeReceipt and finalize_postflight's CQ-V08 deferral already implement the strong rules; worktree mode only never fed them (RECEIPT_JOURNAL unset, no candidateId in the journal).\n- A daemon change: none needed. The receipt store binds on the candidate and never checks git.",
+    "approachesConsidered": "- Split sh and ps1 now (the description's split clause): not needed. The estimate is about 80 runtime lines and 170 test lines, within the caps. Steps 1-2 and 3-4 keep the halves separate for review.\n- A new receipt sender for worktree mode: rejected. receipt_send / Send-MoeReceipt and finalize_postflight's CQ-V08 deferral already implement the strong rules; worktree mode only never fed them (RECEIPT_JOURNAL unset, no candidateId in the journal).\n- A daemon change: none needed. The receipt store binds on the candidate and never checks git.\n- Gate, plan revision 2 (the human's 2026-11-04 narrowing): one checkRef of at most 1000 chars that covers the human's list. A node -e launcher for the 5.1 vm-route leg did not fit; a cmd hop gives 5.1 the same pwsh PSModulePath (verified with Get-FileHash). Splitting the gate over two checkRefs entries was rejected, because QA re-runs checkRefs[0] verbatim. The cjs codes and wt-teardown cases were left out: parity-check.sh compares the code families, and this row does not change the Ctrl+C teardown path.",
     "codebaseInsights": "- In worktree mode, finalize_postflight's strong deferral never fires, because RECEIPT_JOURNAL is unset there. Setting it, and sending the receipt before finalize, is the whole fix on the publish path.\n- receipt_replay already reads profile from a journal to decide `strong`. Worktree journals never had profile, so the strong rules skipped them.",
-    "risks": "- Older strong rows from CQ-M07m2/n2 or r/s may pin the strong journal's exact keys. Update only by the five added keys, and name them in the summary.\n- PS 5.1 ConvertTo-Json -Depth 5 -Compress read-back must match after the new keys.\n- planRevision must be written as an integer, not a string, in both wrappers.\n- The ~1h45m gate: run detached.",
+    "risks": "- Older strong rows from CQ-M07m2/n2 or r/s may pin the strong journal's exact keys. Update only by the five added keys, and name them in the summary.\n- PS 5.1 ConvertTo-Json -Depth 5 -Compress read-back must match after the new keys.\n- planRevision must be written as an integer, not a string, in both wrappers.\n- The gate no longer runs postflight.sh or postflight.ps1. Shared-mode receipt rows and the other worktree cases run only in PR #230's CI after landing, so keep every non-strong byte identical (step 6 (1)); a red there comes back as a fix row.\n- DoD 5 still names the full suites; step 5 maps it to checkRefs[0] plus CI, per the human's decision.\n- The gate takes about 15-20 min: run it detached (step 5).",
     "keyFiles": [
       "scripts/moe-agent.sh",
       "scripts/moe-agent.ps1",
@@ -154,19 +160,26 @@
   "executionPolicySnapshot": {
     "version": 2,
     "profile": "legacy",
-    "planRevision": 1,
+    "planRevision": 2,
     "deliveryPolicy": "legacy"
   },
   "planSourceBasis": {
     "version": 1,
-    "commit": "0fa7750ee23b15a1c174a557b723a21a8988023f",
-    "planRevision": 1
+    "commit": "edc3e937ef390df064eccf1ffde6f1a813130d55",
+    "planRevision": 2
   },
-  "planApprovedAt": "2026-11-04T12:13:36.167Z",
-  "approvedPlanRevision": 1,
+  "planApprovedAt": "2026-11-04T18:46:43.789Z",
+  "approvedPlanRevision": 2,
   "planningEntry": {
     "from": "WORKING",
     "at": "2026-11-04T18:07:18.627Z",
     "seq": 1
+  },
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-2a219562@2026-11-04T18:07:25Z",
+    "at": "2026-11-04T18:47:51.916Z"
   }
 }
