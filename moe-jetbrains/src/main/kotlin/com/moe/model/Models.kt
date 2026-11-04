@@ -291,7 +291,9 @@ data class DaemonInfo(
     val port: Int,
     val pid: Int,
     val startedAt: String,
-    val projectPath: String
+    val projectPath: String,
+    // The daemon records it only for a --host or MOE_BIND_HOST other than 127.0.0.1 (packages/moe-daemon/src/index.ts startDaemon).
+    val bindHost: String? = null
 )
 
 data class ActivityEvent(

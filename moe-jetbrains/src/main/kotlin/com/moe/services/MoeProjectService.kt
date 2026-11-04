@@ -173,6 +173,13 @@ class MoeProjectService @JvmOverloads constructor(
             return
         }
         if (!daemonSupervisor.isReachable(daemonInfo)) {
+            // A live daemon bound off 127.0.0.1 is out of reach, not stale. Its bind is the operator's choice: keep its daemon.json
+            // and schedule no reconnect, which would only overwrite this status. Restart Daemon tries again.
+            daemonSupervisor.offLoopbackBindRefusal(daemonInfo)?.let {
+                connecting = false
+                publishStatus(false, it)
+                return
+            }
             // Clean up stale daemon.json so next reconnect can spawn a fresh daemon
             val deleted = daemonSupervisor.deleteDaemonInfoIfUnchanged(daemonInfo)
             log.info("Removed stale daemon.json in connect() (PID ${daemonInfo.pid} not reachable): $deleted")

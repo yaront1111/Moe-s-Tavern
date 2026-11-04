@@ -160,6 +160,14 @@ class MoeDaemonSupervisor(
             if (!replacedUnverified(info)) return false
         }
 
+        // A live daemon bound off 127.0.0.1 is out of reach, not stale: keep its daemon.json and start no second daemon.
+        val bindRefusal = if (info != null && sameProject == true) offLoopbackBindRefusal(info) else null
+        if (bindRefusal != null) {
+            log.warn(bindRefusal)
+            onStatus(false, bindRefusal)
+            return false
+        }
+
         // Clean up stale daemon.json so connectWithRetry reads fresh data from the new daemon
         if (info != null && sameProject != null && deleteDaemonInfoIfUnchanged(info)) {
             log.info("Removed stale daemon.json (PID ${info.pid} not reachable or another project)")
@@ -919,6 +927,31 @@ class MoeDaemonSupervisor(
     }
 
     /**
+     * Why the daemon [info] names must be kept although [isReachable] failed; null to go on as before. A live
+     * daemon whose recorded bindHost does not serve 127.0.0.1 (the only address this plugin dials) is out of
+     * reach, not stale: deleting its daemon.json and spawning would start a second writer on the same .moe/.
+     *
+     * bindHost is only compared and shown, never dialed, resolved or probed: daemon.json is repository content.
+     * An absent, empty or loopback-serving bind, a pid <= 0 (no daemon has it; on Windows 0 is the idle process),
+     * a record from the other side of the WSL boundary (its pid lives in another namespace and is never probed)
+     * or a dead pid all read as null. The pid is probed last. Any failure also reads as null, as in [isReachable].
+     */
+    fun offLoopbackBindRefusal(info: DaemonInfo): String? = try {
+        val host = info.bindHost
+        when {
+            host.isNullOrEmpty() || host in LOOPBACK_SERVING_BIND_HOSTS -> null
+            info.pid <= 0 || isOtherSideOfWsl(info.projectPath, isWindows()) || !isProcessAlive(info.pid) -> null
+            // Fixed words first, never the host, so a Swing label never renders repository text as HTML.
+            else -> "The Moe daemon for this project (pid ${info.pid}) listens on $host, but this IDE connects on 127.0.0.1 only, " +
+                "so Moe kept .moe/daemon.json and started no second daemon. Stop that daemon, or restart it without --host " +
+                "or MOE_BIND_HOST, then use Restart Daemon."
+        }
+    } catch (ex: Exception) {
+        log.debug("Failed to check the daemon.json bindHost: ${ex.message}")
+        null
+    }
+
+    /**
      * Kill the daemon process we spawned if it's still running.
      * This is called on dispose or if startup fails.
      */
@@ -1013,6 +1046,10 @@ class MoeDaemonSupervisor(
 
         // The daemon's symbolic bind host: loopback plus the WSL virtual adapter, never every interface.
         private const val WSL_BIND_HOST = "wsl"
+
+        // The binds that serve 127.0.0.1, the only address this plugin dials: the daemon's probeHostFor
+        // (packages/moe-daemon/src/server/probeHost.ts) probes each at 127.0.0.1. The daemon never records 127.0.0.1 itself.
+        private val LOOPBACK_SERVING_BIND_HOSTS = setOf("127.0.0.1", "0.0.0.0", "::", WSL_BIND_HOST)
 
         // The daemon writes a few hundred bytes; 64 KiB still fits a 32K-character project path.
         internal const val MAX_DAEMON_JSON_BYTES = 64 * 1024

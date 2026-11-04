@@ -320,6 +320,68 @@ class MoeDaemonSupervisorTest {
         }
     }
 
+    // A live daemon bound off 127.0.0.1 is out of reach, not stale (task-fe811130).
+    @Test
+    fun `BH1 a live daemon bound off loopback keeps its daemon json and starts no second daemon`() {
+        for ((index, host) in listOf("::1", "192.0.2.10", "localhost", "127.0.0.2").withIndex()) {
+            val root = initializedRoot("off-loopback-$index")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", root.canonicalPath, bindHost = host))
+            val before = file.readBytes()
+            var starts = 0
+            val statuses = mutableListOf<Pair<Boolean, String>>()
+            val service = supervisor(root, onStatus = { connected, message -> statuses += connected to message },
+                portProbe = { _, _ -> false }, processAliveProbe = { it == 42 },
+                processStarter = { starts++; FakeProcess() })
+            assertFalse(host, service.ensureDaemonRunning())
+            assertEquals(host, 0, starts)
+            assertArrayEquals(host, before, file.readBytes())
+            assertEquals("$host: $statuses", 1, statuses.size)
+            assertFalse(host, statuses[0].first)
+            assertTrue("$host: ${statuses[0].second}", host in statuses[0].second && "127.0.0.1" in statuses[0].second)
+        }
+    }
+
+    @Test
+    fun `BH2 a dead or non-positive pid, or a bind that serves loopback, is replaced as today`() {
+        val rows = listOf<Triple<String?, Int, Boolean>>(
+            Triple(null, 42, true), Triple("", 42, true), Triple("wsl", 42, true), Triple("0.0.0.0", 42, true),
+            Triple("::", 42, true), Triple("127.0.0.1", 42, true), Triple("::1", 42, false), Triple("::1", 0, true)
+        )
+        for ((index, row) in rows.withIndex()) {
+            val (host, pid, alive) = row
+            val root = initializedRoot("replaced-$index")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, pid, "now", root.canonicalPath, bindHost = host))
+            var starts = 0
+            val statuses = mutableListOf<String>()
+            val service = supervisor(root, onStatus = { _, message -> statuses += message },
+                portProbe = { _, _ -> false }, processAliveProbe = { alive },
+                processStarter = { starts++; FakeProcess() })
+            assertTrue("$row", service.ensureDaemonRunning())
+            assertEquals("$row", 1, starts)
+            assertFalse("$row", file.exists())
+            assertTrue("$row: $statuses", statuses.isEmpty())
+            service.killSpawnedDaemon()
+        }
+    }
+
+    @Test
+    fun `BH3 an other-side record bound off loopback never has its pid probed`() {
+        for (open in listOf(true, false)) {
+            val root = initializedRoot("other-side-bound-$open")
+            val file = writeDaemonInfo(root, DaemonInfo(9876, 42, "now", otherSideSpelling(root.canonicalPath), bindHost = "::1"))
+            val before = file.readBytes()
+            var starts = 0
+            val probed = mutableListOf<Int>()
+            val service = supervisor(root, processAliveProbe = { probed += it; true }, portProbe = { _, _ -> open },
+                processStarter = { starts++; FakeProcess() })
+            assertEquals(!open, service.ensureDaemonRunning())
+            assertEquals(if (open) 0 else 1, starts)
+            assertTrue("$probed", probed.isEmpty())
+            if (open) assertArrayEquals(before, file.readBytes()) else assertFalse(file.exists())
+            service.killSpawnedDaemon()
+        }
+    }
+
     @Test
     fun `protected replacement never captures or prompts for an other-side daemon`() = ReplacementFixture().use { f ->
         writeDaemonInfo(f.root, f.info.copy(projectPath = otherSideSpelling(f.root.canonicalPath)))

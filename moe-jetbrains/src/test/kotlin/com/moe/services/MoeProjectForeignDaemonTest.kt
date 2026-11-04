@@ -93,6 +93,53 @@ class MoeProjectForeignDaemonTest {
         }
     }
 
+    // A live daemon bound off 127.0.0.1 is out of reach, not stale (task-fe811130).
+    @Test
+    fun `BH4 connect keeps a live off-loopback daemon's json, starts nothing and schedules no reconnect`() = withFixture { f ->
+        f.daemonJson.writeText(Gson().toJson(f.writeDaemonJson("S1").copy(bindHost = "::1")))
+        val before = f.daemonJson.readText()
+        val starts = AtomicInteger()
+        injectSupervisor(f, MoeDaemonSupervisor(f.basePath, "Test", portProbe = { _, _ -> false },
+            processAliveProbe = { it == 4242 }, processStarter = { starts.incrementAndGet(); error("must not spawn") }))
+
+        f.service.connect()
+
+        assertEquals(before, f.daemonJson.takeIf { it.exists() }?.readText())
+        assertEquals(0, starts.get())
+        assertTrue("status must name the bind: ${f.statuses}", f.statuses.any { "::1" in it && "127.0.0.1" in it })
+        assertNull(f.service.field("reconnectFuture"))
+        assertNull(f.service.field("wsClient"))
+        f.assertNoWebSocketRequest()
+    }
+
+    @Test
+    fun `BH5 connect's own stale check removes every record but a live off-loopback one`() {
+        val rows = listOf<Triple<String?, Boolean, Boolean>>(
+            Triple("::1", true, true), Triple(null, true, false), Triple("wsl", true, false), Triple("::1", false, false)
+        )
+        for (row in rows) withFixture { f ->
+            val (host, alive, kept) = row
+            f.daemonJson.writeText(Gson().toJson(f.writeDaemonJson("S1").copy(bindHost = host)))
+            val before = f.daemonJson.readText()
+            val supervisor = MoeDaemonSupervisor(f.basePath, "Test", portProbe = { _, _ -> false },
+                processAliveProbe = { alive }, processStarter = { error("must not spawn") })
+            // ensureDaemonRunning then returns before it reads daemon.json, so connect()'s own branch decides alone.
+            (MoeDaemonSupervisor::class.java.getDeclaredField("windowsRestartInFlight").apply { isAccessible = true }
+                .get(supervisor) as java.util.concurrent.atomic.AtomicBoolean).set(true)
+            injectSupervisor(f, supervisor)
+
+            f.service.connect()
+
+            if (kept) assertEquals("$row", before, f.daemonJson.takeIf { it.exists() }?.readText())
+            else assertFalse("$row", f.daemonJson.exists())
+            assertEquals("$row: ${f.statuses}", kept, f.statuses.any { "::1" in it })
+            assertEquals("$row", kept, f.service.field("reconnectFuture") == null)
+        }
+    }
+
+    private fun injectSupervisor(f: Fixture, supervisor: MoeDaemonSupervisor) =
+        MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }.set(f.service, supervisor)
+
     @Test
     fun `a replacement naming another project is kept byte for byte`() = withFixture { f ->
         assertReplacementKept(f, OTHER)
