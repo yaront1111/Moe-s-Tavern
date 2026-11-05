@@ -22,7 +22,7 @@ import { claimNextTaskTool } from './claimNextTask.js';
 import { getTools } from './index.js';
 import { openAttempt, setAttemptPhase, listAttempts } from '../state/attemptStore.js';
 import { MoeError } from '../util/errors.js';
-import { UNLANDED_REASONS, type ExecutionWorkspaceMode } from '../types/schema.js';
+import { UNLANDED_REASONS, type ExecutionWorkspaceMode, type Task, type TaskCommit } from '../types/schema.js';
 import { vi } from 'vitest';
 import { getContextTool } from './getContext.js';
 
@@ -552,11 +552,19 @@ describe('moe.finalize_attempt — unlanded worktree landings', () => {
     expect(task().landingRetry!.count).toBe(1);
   });
 
-  it.each(['landed', 'nothing-to-commit', 'rescued', 'failed'])('shared %s ignores unlanded-only fields without task writes', async outcome => {
+  it.each(['landed', 'nothing-to-commit', 'failed'])('shared %s ignores unlanded-only fields without task writes', async outcome => {
     const held = await worktreeAttempt('shared'); const before = taskBytes();
     await finalize(payload(held, { outcome, landedRevision: outcome === 'landed' ? LANDED : null,
       unlandedReason: 'bogus', conflictPaths: 1, rescueRef: false, targetTip: 'HEAD' }));
     expect(taskBytes()).toBe(before);
+  });
+
+  it('shared rescued ignores unlanded-only fields and routes from the task\'s own ledger', async () => {
+    const held = await worktreeAttempt('shared');
+    await finalize(payload(held, { outcome: 'rescued', landedRevision: null,
+      unlandedReason: 'bogus', conflictPaths: 1, rescueRef: false, targetTip: 'HEAD' }));
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: {
+      reason: 'contention', paths: [], rescueRef: 'refs/moe/rescue/task-1', targetTip: null, count: 1 } });
   });
 
   it('accepts another runner but still refuses a superseded generation before any write', async () => {
@@ -603,5 +611,126 @@ describe('moe.finalize_attempt — unlanded worktree landings', () => {
     await h.state.updateTask('task-1', { status: 'REVIEW' });
     await finalize(payload(await worktreeAttempt(), { outcome: 'landed', landedRevision: LANDED }));
     expect('landingRetry' in await contextTask()).toBe(false);
+  });
+});
+
+// =============================================================================
+// A shared checkout has no `unlanded` report: a completion whose landing parked
+// the bytes on a rescue ref (gate, peel, commit or CAS failure, teardown)
+// finalizes `rescued`. Closing that attempt used to lift qa_approve's hold with
+// nothing on a branch; under the legacy policy QA's commit gate only warns, and
+// a DONE task is never pre-flighted again, so the bytes stayed off every branch
+// for good (P2-2.2.2 in sentinal: DONE 2026-07-28, commits=[], 13 paths dirty
+// 100 days later). The row now routes back exactly as an unlanded worktree
+// landing does, and the next session's pre-flight lands the kept baseline.
+// =============================================================================
+describe('moe.finalize_attempt — rescued shared-checkout landings', () => {
+  const h = new ToolTestHarness();
+  const ROUND_START = '2026-11-05T00:00:00.000Z';
+  const NEWEST = 'refs/moe/rescue/task-1/20261105T010000Z';
+  const task = () => h.state.getTask('task-1')!;
+  const taskBytes = () => fs.readFileSync(path.join(h.moePath, 'tasks/task-1.json'), 'utf8');
+  const finalize = (args: Record<string, unknown>) =>
+    finalizeAttemptTool(h.state).handler(args, h.state) as Promise<Record<string, unknown>>;
+  const ledger = (kind: TaskCommit['kind'], recordedAt: string, over: Partial<TaskCommit> = {}): TaskCommit => ({
+    sha: 'd5'.repeat(20), ref: 'refs/heads/moe/work-2026-11-05', kind, status: 'REVIEW', role: 'worker',
+    sessionId: `worker-1@${ROUND_START}`, paths: ['src/a.ts', 'docs/b.md'], pushed: false,
+    recordedBy: 'worker-1', recordedAt, ...over,
+  });
+  /** The row a wrapper's rescue_ref records: kind rescue, its reason in the message. */
+  const rescue = (reason: string, recordedAt = '2026-11-05T01:00:00.000Z', ref = NEWEST) => ledger('rescue', recordedAt,
+    { ref, message: `MOE_RESCUE_REF task=task-1 ref=${ref} sha=${'d5'.repeat(20)} reason=${reason}` });
+
+  beforeEach(() => { h.init(); h.setupMoeFolder(); h.createEpic(); });
+  afterEach(() => h.cleanup());
+
+  /** task-1 in REVIEW after complete_task: unassigned, both steps done, its round opened at ROUND_START. */
+  async function seed(over: Partial<Task> = {}): Promise<void> {
+    h.createTask({ id: 'task-1', status: 'REVIEW', assignedWorkerId: null, reopenCount: 1, workStartedAt: ROUND_START,
+      implementationPlan: ['step-1', 'step-2'].map(stepId => ({ stepId, description: stepId, status: 'COMPLETED' })),
+      stepsCompleted: ['step-1', 'step-2'], ...over });
+    await h.state.load();
+  }
+  async function attempt(mode: ExecutionWorkspaceMode | 'legacy' = 'shared') {
+    const opened = await openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-1', runnerId: 'runner-pilot',
+      workspace: h.testDir, ...(mode === 'legacy' ? {} : { workspaceMode: mode }) });
+    return setAttemptPhase(h.state, opened.id, 'finalizing');
+  }
+  const report = (held: { id: string; generation: number }, outcome = 'rescued', over: Record<string, unknown> = {}) => ({
+    taskId: 'task-1', workerId: 'worker-1', runnerId: 'runner-pilot', attemptId: held.id, generation: held.generation,
+    outcome, ...over });
+
+  it('routes the REVIEW row to WORKING with the retry its newest rescue this round describes', async () => {
+    await seed({ commits: [rescue('ref-contention', '2026-11-05T00:30:00.000Z', 'refs/moe/rescue/task-1/20261105T003000Z'),
+      rescue('teardown')] });
+    const plan = task().implementationPlan; const held = await attempt();
+    const result = await finalize(report(held));
+    expect(result).toMatchObject({ phase: 'closed', outcome: 'rescued', taskStatus: 'WORKING', landingRetry: task().landingRetry });
+    expect(task()).toMatchObject({ status: 'WORKING', assignedWorkerId: null, reopenCount: 1,
+      implementationPlan: plan, stepsCompleted: ['step-1', 'step-2'] });
+    expect(task().landingRetry).toEqual({ reason: 'contention', paths: ['src/a.ts', 'docs/b.md'], rescueRef: NEWEST,
+      targetTip: null, count: 1, at: expect.any(String) });
+    expect(JSON.parse(taskBytes()).landingRetry).toEqual(task().landingRetry);
+    expect(task().comments).toHaveLength(1);
+    for (const text of ['shared-checkout landing', held.id, NEWEST, 'src/a.ts', 'Landing unlanded (contention) 1 time(s)', 'task WORKING']) {
+      expect(task().comments[0].content).toContain(text);
+    }
+  });
+
+  it('carries reason gate when the quality gate parked the bytes', async () => {
+    await seed({ commits: [rescue('gate-failed')] });
+    await finalize(report(await attempt()));
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: 'gate', rescueRef: NEWEST, count: 1 } });
+  });
+
+  it('names the task\'s rescue namespace when no rescue was recorded this round', async () => {
+    await seed({ commits: [rescue('teardown', '2026-11-04T23:59:59.000Z')] });
+    await finalize(report(await attempt()));
+    expect(task().landingRetry).toMatchObject({ reason: 'contention', paths: [], rescueRef: 'refs/moe/rescue/task-1' });
+  });
+
+  it('routes an attempt with no recorded workspace mode, which is a shared one', async () => {
+    await seed({ commits: [rescue('teardown')] });
+    await finalize(report(await attempt('legacy')));
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { rescueRef: NEWEST, count: 1 } });
+  });
+
+  const KEPT: Array<[string, Partial<Task>, ExecutionWorkspaceMode]> = [
+    ['a completion recorded this round', { commits: [rescue('teardown'), ledger('completion', '2026-11-05T02:00:00.000Z')] }, 'shared'],
+    ['a row no longer in REVIEW', { status: 'WORKING' }, 'shared'],
+    ['a REVIEW row another seat holds', { assignedWorkerId: 'qa-1' }, 'shared'],
+    ['a worktree attempt, whose unpublished landing reports unlanded', {}, 'worktree'],
+  ];
+  it.each(KEPT)('writes nothing to the task for %s', async (_label, over, mode) => {
+    await seed({ commits: [rescue('teardown')], ...over });
+    const held = await attempt(mode); const before = taskBytes();
+    expect(await finalize(report(held))).toMatchObject({ phase: 'closed', outcome: 'rescued' });
+    expect(taskBytes()).toBe(before);
+  });
+
+  it('never routes a failed report, which is also a completion with nothing of its own to land', async () => {
+    await seed();
+    const held = await attempt(); const before = taskBytes();
+    expect(await finalize(report(held, 'failed'))).toMatchObject({ phase: 'closed', taskStatus: 'REVIEW' });
+    expect(taskBytes()).toBe(before);
+  });
+
+  it('blocks the third rescued landing in a row, as an unlanded worktree landing is blocked', async () => {
+    await seed({ commits: [rescue('gate-failed')] });
+    for (let i = 0; i < 3; i++) {
+      if (i > 0) await h.state.updateTask('task-1', { status: 'REVIEW' });
+      await finalize(report(await attempt()));
+      expect(task().landingRetry!.count).toBe(i + 1);
+      expect(task().status).toBe(i < 2 ? 'WORKING' : 'BLOCKED');
+    }
+    expect(task()).toMatchObject({ blockedFromStatus: 'WORKING', blockedReason: expect.stringContaining(NEWEST) });
+  });
+
+  it('a later landed completion clears the retry, so the row reaches QA again', async () => {
+    await seed({ commits: [rescue('teardown')] });
+    await finalize(report(await attempt()));
+    await h.state.updateTask('task-1', { status: 'REVIEW' });
+    await finalize(report(await attempt(), 'landed', { landedRevision: LANDED }));
+    expect(task()).toMatchObject({ status: 'REVIEW', landingRetry: null });
   });
 });

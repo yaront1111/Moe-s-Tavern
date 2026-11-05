@@ -10,7 +10,7 @@ import type { StateManager } from './StateManager.js';
 import type { ExecutionAttempt, LandingRetry, ProjectSettings, Task, TaskStatus, Worker } from '../types/schema.js';
 import { logger } from '../util/logger.js';
 import { generateId } from '../util/ids.js';
-import { completionCommitsForReview } from '../delivery/policy.js';
+import { completionCommitsForReview, roundCommits } from '../delivery/policy.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 import { releaseDeregisteredClaims } from './resourceStore.js';
 import { forgetAccountLease } from './accountStore.js';
@@ -260,11 +260,12 @@ async function beginReloadHold(state: StateManager, worker: Worker, reason: stri
  * closed, a finalize whose acknowledgement failed), and the close then lifts
  * qa_approve's hold without an acknowledged landing — exactly what a QA claim's
  * supersede did before the task-scoped hold existed. Under the legacy delivery
- * policy the soft NO-COMPLETION-COMMIT warning is then the only guard; strict
- * policies still refuse the approval. So a worktree attempt whose unassigned
- * REVIEW row has no completion recorded for its round is routed back for a
- * landing retry after its close (retryUnrecordedLanding), as an unlanded
- * finalize routes it, instead of being left for QA's landed gate to park.
+ * policy the soft NO-COMPLETION-COMMIT warning would then be the only guard, and
+ * a shared-checkout row approved past it reached DONE over bytes no branch held,
+ * for good: no pre-flight ever runs for a DONE task again. So an attempt, in
+ * either workspace mode, whose unassigned REVIEW row has no completion recorded
+ * for its round is routed back for a landing retry after its close
+ * (retryUnrecordedLanding), as an unlanded finalize routes it.
  *
  * ALSO THE DEAD-RECORD BACKSTOP. deleteWorker (the stale-record prune) and the
  * startup purge call it for a DEAD record, and only for one. deregister marks
@@ -296,32 +297,65 @@ export async function closeOwnFinalizingAttempts(state: StateManager, workerId: 
 }
 
 /**
- * The close above ended a landing the daemon has no completion for. On a
- * worktree attempt whose task is in REVIEW, held by no seat, with no completion
- * entry for its current round (completionCommitsForReview, the rule QA's
- * commit gate uses), nothing is known to have published, and QA's landed gate
- * would park the row BLOCKED. Route it as an unlanded finalize would, with
- * reason contention (a reason both launchers' worktree_resume accept), no paths
- * and the task branch as the ref that holds the bytes. Any other row keeps the
- * plain close. Never reads git: a commit the dead runner published unrecorded
- * is settled by the next pre-flight's receipt replay. Never throws: a failed
- * write is logged and leaves the row in REVIEW, and the close stands.
+ * The close above ended a landing the daemon has no completion for. On an
+ * attempt whose task is in REVIEW, held by no seat, with no completion entry for
+ * its current round (unlandedReviewRow), nothing is known to have published.
+ * Route it as an unlanded finalize would: a worktree attempt with reason
+ * contention (a reason both launchers' worktree_resume accept), no paths and
+ * the task branch as the ref that holds the bytes, instead of being left for
+ * QA's landed gate to park BLOCKED; a shared-checkout attempt (a legacy one
+ * with no recorded mode is one) with the record sharedLandingRetry reads from
+ * the task's ledger, so the next session's pre-flight lands the kept baseline.
+ * Any other row keeps the plain close. Never reads git: a commit the dead
+ * runner published unrecorded is settled by the next pre-flight (the receipt
+ * replay in a worktree; in a shared checkout its recovery finds those bytes
+ * already committed and lands nothing). Never throws: a failed write is
+ * logged and leaves the row in REVIEW, and the close stands.
  */
 async function retryUnrecordedLanding(state: StateManager, attempt: ExecutionAttempt): Promise<void> {
   try {
     const task = state.getTask(attempt.taskId);
-    if (attempt.workspaceMode !== 'worktree' || !task || task.status !== 'REVIEW' || task.assignedWorkerId
-      || completionCommitsForReview(task).length > 0) return;
+    if (!task || !unlandedReviewRow(task)) return;
     await routeUnlandedLanding(state, task, attempt,
-      { reason: 'contention', paths: [], rescueRef: `refs/heads/moe/task/${task.id}`, targetTip: null },
+      attempt.workspaceMode === 'worktree'
+        ? { reason: 'contention', paths: [], rescueRef: `refs/heads/moe/task/${task.id}`, targetTip: null }
+        : sharedLandingRetry(task),
       attempt.workerId,
       `The runner of ${attempt.workerId} ended mid-landing: attempt ${attempt.id} was closed with no completion recorded for this round.`);
   } catch (error) {
     logger.warn(
       { workerId: attempt.workerId, attemptId: attempt.id, taskId: attempt.taskId, error },
-      'closeOwnFinalizingAttempts: failed to route an unrecorded worktree landing for a retry; the row stays in REVIEW'
+      'closeOwnFinalizingAttempts: failed to route an unrecorded landing for a retry; the row stays in REVIEW'
     );
   }
+}
+
+/**
+ * A REVIEW row held by no seat with no completion recorded for its current
+ * round (completionCommitsForReview, the rule QA's commit gate uses): the row a
+ * landing that never reached a branch must not leave for qa_approve.
+ */
+export function unlandedReviewRow(task: Task): boolean {
+  return task.status === 'REVIEW' && !task.assignedWorkerId && completionCommitsForReview(task).length === 0;
+}
+
+/**
+ * The retry record for a shared-checkout landing that left a REVIEW row's bytes
+ * off every branch. A shared checkout has no task branch, so the record comes
+ * from the task's own ledger: the newest rescue ref recorded this round, with
+ * its paths and reason gate when the quality gate parked it (the wrapper's
+ * `reason=gate-failed` message), else contention. With no rescue recorded the
+ * bytes are only in the shared checkout under the task's kept baseline, which
+ * the next session's pre-flight lands; the record then names the task's rescue
+ * namespace and no paths.
+ */
+export function sharedLandingRetry(task: Task): Omit<LandingRetry, 'count' | 'at'> {
+  const rescues = roundCommits(task, 'rescue').filter((c) => typeof c.ref === 'string' && c.ref !== '');
+  const rescue = rescues[rescues.length - 1];
+  if (!rescue) return { reason: 'contention', paths: [], rescueRef: `refs/moe/rescue/${task.id}`, targetTip: null };
+  const gate = typeof rescue.message === 'string' && /\breason=gate-failed\b/.test(rescue.message);
+  const paths = Array.isArray(rescue.paths) ? rescue.paths.filter((p): p is string => typeof p === 'string' && p !== '') : [];
+  return { reason: gate ? 'gate' : 'contention', paths, rescueRef: rescue.ref, targetTip: null };
 }
 
 /**

@@ -11,11 +11,16 @@ import type { ExecutionAttempt, ExecutionAttemptPhase, ExecutionWorkspaceMode, T
 // leaves its attempt finalizing and nothing published. The close of that
 // attempt (moe.deregister_worker, or removing the seat's DEAD record) must route
 // the REVIEW row back for a landing retry exactly as an unlanded finalize does,
-// instead of leaving it for QA's landed gate to park BLOCKED. Every other row
-// keeps the plain close.
+// instead of leaving it for QA's landed gate to park BLOCKED.
+//
+// A shared-checkout runner that ends the same way gets the same routing. Its
+// plain close used to leave the row for qa_approve, whose legacy commit gate
+// only warns, and a DONE task is never pre-flighted again: P2-2.2.2 (sentinal,
+// 2026-07-28) sat DONE with commits=[] and its 13 paths dirty for 100 days.
+// Every other row keeps the plain close.
 // =============================================================================
 
-describe('a finalizing close with no completion recorded routes a worktree landing for a retry', () => {
+describe('a finalizing close with no completion recorded routes the landing for a retry', () => {
   const h = new ToolTestHarness();
   const ROUND_START = '2026-11-04T00:00:00.000Z';
   const PLAN = ['step-1', 'step-2'].map((stepId) => ({
@@ -29,6 +34,15 @@ describe('a finalizing close with no completion recorded routes a worktree landi
     role: 'worker', sessionId: `worker-1@${ROUND_START}`, paths: ['src/a.ts'], pushed: true,
     recordedBy: 'worker-1', recordedAt,
   });
+  /** The ledger row a wrapper's rescue_ref records (kind rescue, the reason in its message). */
+  const rescue = (recordedAt: string, reason: string): TaskCommit => {
+    const ref = `refs/moe/rescue/task-1/${recordedAt.replace(/[-:]|\.\d+/g, '')}`;
+    return {
+      sha: 'e6'.repeat(20), ref, kind: 'rescue', status: 'REVIEW', role: 'worker',
+      sessionId: `worker-1@${ROUND_START}`, paths: ['src/a.ts', 'src/b.ts'], pushed: false,
+      recordedBy: 'worker-1', recordedAt, message: `MOE_RESCUE_REF task=task-1 ref=${ref} sha=${'e6'.repeat(20)} reason=${reason}`,
+    };
+  };
 
   beforeEach(() => {
     h.init();
@@ -112,12 +126,63 @@ describe('a finalizing close with no completion recorded routes a worktree landi
     expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: 'contention', count: 1 } });
   });
 
+  it.each(['shared', 'legacy'] as const)('a %s-checkout attempt routes the row too, naming the task\'s rescue namespace', async (mode) => {
+    const held = await seed({}, mode);
+
+    await CLOSERS['moe.deregister_worker']();
+
+    expect(phases()).toEqual([[1, 'closed']]);
+    expect(task()).toMatchObject({
+      status: 'WORKING', assignedWorkerId: null, reopenCount: 1,
+      implementationPlan: PLAN, stepsCompleted: ['step-1', 'step-2'],
+    });
+    expect(task().landingRetry).toEqual({
+      reason: 'contention', paths: [], rescueRef: 'refs/moe/rescue/task-1', targetTip: null,
+      count: 1, at: expect.any(String),
+    });
+    for (const text of [held.id, 'no completion recorded', 'refs/moe/rescue/task-1', 'task WORKING']) {
+      expect(task().comments[0].content).toContain(text);
+    }
+  });
+
+  it('a shared close names the newest rescue ref recorded this round, with its paths and reason', async () => {
+    await seed({ commits: [
+      rescue('2026-11-03T23:00:00.000Z', 'gate-failed'),
+      rescue('2026-11-04T00:20:00.000Z', 'gate-failed'),
+      rescue('2026-11-04T00:30:00.000Z', 'teardown'),
+    ] }, 'shared');
+
+    await CLOSERS['moe.deregister_worker']();
+
+    expect(task().landingRetry).toEqual({
+      reason: 'contention', paths: ['src/a.ts', 'src/b.ts'], rescueRef: 'refs/moe/rescue/task-1/20261104T003000Z',
+      targetTip: null, count: 1, at: expect.any(String),
+    });
+  });
+
+  it('a shared close whose newest rescue this round is a gate failure carries reason gate', async () => {
+    await seed({ commits: [rescue('2026-11-04T00:20:00.000Z', 'gate-failed')] }, 'shared');
+
+    await CLOSERS['moe.deregister_worker']();
+
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: 'gate', count: 1 } });
+  });
+
+  it('a rescue recorded before this round started is not this round\'s, so the namespace is named', async () => {
+    await seed({ commits: [rescue('2026-11-03T23:59:59.000Z', 'teardown')] }, 'shared');
+
+    await CLOSERS['moe.deregister_worker']();
+
+    expect(task().landingRetry).toMatchObject({ rescueRef: 'refs/moe/rescue/task-1', paths: [] });
+  });
+
   const KEPT: Array<[string, Partial<Task>, ExecutionWorkspaceMode | 'legacy']> = [
     ['a REVIEW row with a completion recorded this round', { commits: [completion('2026-11-04T00:10:00.000Z')] }, 'worktree'],
-    ['a shared-mode attempt', {}, 'shared'],
-    ['an attempt with no recorded mode', {}, 'legacy'],
     ['a row no longer in REVIEW', { status: 'WORKING' }, 'worktree'],
     ['a REVIEW row another seat holds', { assignedWorkerId: 'qa-1' }, 'worktree'],
+    ['a shared REVIEW row with a completion recorded this round', { commits: [completion('2026-11-04T00:10:00.000Z')] }, 'shared'],
+    ['a shared row no longer in REVIEW', { status: 'WORKING' }, 'shared'],
+    ['a shared REVIEW row another seat holds', { assignedWorkerId: 'qa-1' }, 'shared'],
   ];
 
   it.each(KEPT)('keeps the plain close for %s', async (_label, over, mode) => {

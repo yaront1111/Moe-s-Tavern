@@ -502,7 +502,7 @@ interface Task {
   codexModel?: string;                            // Planner's codex model (provider 'codex'); qa_reject resets to the codex default
   priorAttempt?: PriorAttempt;                  // Snapshot from moe.request_replan
   priorHandoffs?: HandoffNote[];                // Newest-first; capped at 20
-  landingRetry?: LandingRetry | null;           // Set by finalize_attempt 'unlanded', or by the finalizing close of a worktree landing with no completion recorded; landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
+  landingRetry?: LandingRetry | null;           // Set by finalize_attempt 'unlanded' or a routed shared-checkout 'rescued', or by the finalizing close of a landing with no completion recorded; landed/nothing-to-commit null it. Absent until first retry. See `landingRetry` below
 
   // Plan-size warnings from the latest submit_plan (warn-zone only; cleared
   // when a compliant plan lands) — lets boards/governors see size pressure.
@@ -858,15 +858,15 @@ Readers must use `readRequiredCheckSnapshot` (`delivery/requiredChecks.ts`), whi
 
 ### `landingRetry` (WT-03)
 
-`Task.landingRetry` records the last worktree landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Two paths set it: `moe.finalize_attempt`'s outcome `'unlanded'`, and the close of a worktree attempt whose unassigned `REVIEW` task has no completion recorded for its round (`moe.deregister_worker`, or removing a `DEAD` worker record), which sets reason `'contention'` with the task branch as `rescueRef`. `moe.finalize_attempt`'s `'landed'` and `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
+`Task.landingRetry` records the last landing that published nothing. It is optional and absent until the first retry, so older rows load unchanged with no migration and no `schemaVersion` bump. Three paths set it, each only while the task is in `REVIEW`, held by no seat, with no completion recorded for its round (except the first, which needs no such check): `moe.finalize_attempt`'s outcome `'unlanded'`; its outcome `'rescued'` from a shared-checkout (or mode-less) attempt; and the close of an attempt (`moe.deregister_worker`, or removing a `DEAD` worker record). A worktree attempt's close sets reason `'contention'` with the task branch as `rescueRef`. A shared-checkout `'rescued'` finalize or close reads the record from the task's ledger: the round's newest `rescue` entry gives `rescueRef` and `paths`, and reason `'gate'` when its message says `reason=gate-failed`, else `'contention'`; with no rescue entry in the round, `rescueRef` is the task's namespace `refs/moe/rescue/<taskId>` and `paths` is empty. `moe.finalize_attempt`'s `'landed'` and `'nothing-to-commit'` set it to `null`. Board `UPDATE_TASK` echoes cannot restore, clear or forge it. How each field is fed, and the routing that goes with it, is under `moe.finalize_attempt` in [`docs/MCP_SERVER.md`](MCP_SERVER.md).
 
 ```typescript
 type UnlandedReason = 'conflict' | 'contention' | 'gate' | 'diverged' | 'remote';  // UNLANDED_REASONS
 
 interface LandingRetry {
-  reason: UnlandedReason;     // Why the worktree landing published nothing
-  paths: string[];            // Normalized project-relative conflict paths, when reported (finalize_attempt's `conflictPaths` parameter)
-  rescueRef: string;          // Ref holding the unpublished bytes: a refs/moe/rescue/<taskId>/... ref, or the task branch refs/heads/moe/task/<taskId> when a finalizing close set the retry
+  reason: UnlandedReason;     // Why the landing published nothing
+  paths: string[];            // Normalized project-relative conflict paths, when reported (finalize_attempt's `conflictPaths` parameter); for a shared-checkout retry, the paths of the round's newest rescue entry
+  rescueRef: string;          // Ref holding the unpublished bytes: a refs/moe/rescue/<taskId>/... ref (the namespace refs/moe/rescue/<taskId> when a shared-checkout round recorded no rescue), or the task branch refs/heads/moe/task/<taskId> when a worktree attempt's finalizing close set the retry
   targetTip: string | null;   // The attempted 40-hex target tip, or null when not reported
   count: number;              // Consecutive unlanded finalizes since landed/nothing-to-commit, starting at 1
   at: string;                 // ISO timestamp of this unlanded finalize

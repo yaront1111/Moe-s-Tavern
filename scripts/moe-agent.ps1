@@ -8624,7 +8624,8 @@ function Invoke-MoeWorktreeSweepRemove([hashtable]$Git, [string]$TaskId) {
 }
 
 # Section 4 steps 1-3 (shared by the pre-flight and the idle paths): scope,
-# DONE/ARCHIVED cleanup, recovery landing of a lingering baseline.
+# DONE/ARCHIVED cleanup (an unlanded baseline is recovered first, then dropped),
+# recovery landing of a lingering baseline.
 function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]$TaskId, [string]$Status, [string]$Title, [string]$Sid) {
     $out = @{ Scope = $null; Skip = $false; Recovered = $null }
     $scope = Get-MoeCommitScope $TaskId 'preflight' $Sid
@@ -8640,11 +8641,24 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
         $out.Skip = $true
         return $out
     }
+    # A finished task's baseline goes too — once its bytes are on a branch. One
+    # its last session never landed (a rescued or interrupted completion, a
+    # session killed before its post-flight) is the only record of which dirty
+    # paths are the task's, and nothing pre-flights a finished task again, so
+    # dropping it here would strand those bytes for good. It falls through to
+    # the recovery below instead (under the task's own status, not a stale
+    # hint), and goes once it reads landed.
+    $taskOver = $false
     if ($scope.Status -eq 'DONE' -or $scope.Status -eq 'ARCHIVED') {
-        Remove-MoeBaseline $baselinePath
-        Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
-        $out.Skip = $true
-        return $out
+        $blDone = Read-MoeBaseline $baselinePath
+        if (-not $blDone -or $blDone.Landed) {
+            Remove-MoeBaseline $baselinePath
+            Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
+            $out.Skip = $true
+            return $out
+        }
+        $taskOver = $true
+        $Status = $scope.Status
     }
     if (-not $Status -and $scope.Status) { $Status = $scope.Status }
     if (-not $Title -and $scope.Title) { $Title = $scope.Title }
@@ -8690,6 +8704,18 @@ function Invoke-MoeRecoveryCheck([hashtable]$Git, [hashtable]$Settings, [string]
         if ($rec.Outcome -eq 'committed') {
             Write-Host "MOE_CHECKPOINT_RECOVERED task=$TaskId sha=$($rec.Sha)" -ForegroundColor Green
         }
+    }
+    if ($taskOver) {
+        # Nothing after this applies to a finished task. Its baseline goes once
+        # the recovery left it landed (a committed landing at DONE/ARCHIVED has
+        # already removed it); a live or foreign owner, or a recovery that did
+        # not complete, keeps it for the next pre-flight.
+        $blAfter = Read-MoeBaseline $baselinePath
+        if (-not $blAfter -or $blAfter.Landed) {
+            Remove-MoeBaseline $baselinePath
+            Clear-MoeLiveMarkerFile $Git.GitDir $TaskId
+        }
+        $out.Skip = $true
     }
     return $out
 }
