@@ -64,20 +64,30 @@
     {
       "stepId": "step-4",
       "description": "Verification, run once. Run executionContract.checkRefs[0] verbatim from the task worktree; it changes into scripts/tests itself. Its legs run in parallel:\n- Each Windows engine runs ParseFile on moe-agent.ps1, then postflight-vm-route.ps1 (5.1 through the cmd hop), then postflight.ps1 limited to the frozen-candidate modes pass, record_candidate-refuse, record_candidate-malformed and intent-strong (Send-MoeCandidate's shared-mode caller, legacy and strong), then parity-check.ps1.\n- bash runs bash -n, postflight-vm-route.sh, the same 4 modes of postflight.sh, parity-check.sh and npm run lint.\nExit 0 needs three '@' markers plus three 'PASS frozen candidate scenarios: 4' lines. A dry run on 7a48aa92, before the new rows, took 514 s at load ~2; the new rows add about 1-3 min. The budget is 20 minutes (project rail).\nSubmit the run's command, exit code and output tail as the complete_task verification.\nError handling for a red run:\n- Read the leg logs it tails ($L/powershell, $L/pwsh, $L/sh), fix the cause, and re-run the whole command.\n- A leg that dies at once with a WSL interop error (UtilAcceptVsock) and no harness output is a launch failure. Re-run it; it is not the change (mem:gotcha-qa-ps1-postflight-from-wsl).\n- If the gate ever needs more than 20 minutes, report that instead of trimming coverage.\nKill only PIDs your session started. Never run npm build, ci, install or test here (project rails).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-05T10:47:18.028Z"
+      "note": "I ran checkRefs[0] verbatim from the task worktree (10:47:24Z-10:56:12Z, 8 min 48 s, within the 20 min budget). Exit 0. The tails: powershell and pwsh each end 'PASS frozen candidate scenarios: 4 / PASS parity-check.ps1 / @'; sh ends 'OK: docs/roles/qa.md has 36 lines (max 40) / @'. Step 5's review found two small byte changes: literal U+FEFF/U+FFFD in the sh python become \ufeff/� escapes, and the sh 'today' row pins the values as well as the key order. checkRefs[0] will be re-run on the final bytes before complete_task.",
+      "startedAt": "2026-11-05T10:47:18.028Z",
+      "completedAt": "2026-11-05T10:56:31.382Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review (load adversarial-self-review) of the whole diff, then prove the rows bite.\nRun each mutant in a scratch snapshot on /mnt/d (never in W, never with sed -i on tracked files), using the fast slices from mem:pattern-vm-route-strong-receipt-slice. Each mutant must turn its row red, in both wrappers:\n1. Drop the strong gate, so the field is sent for any task with requiredChecks. Red row: SG-legacy.\n2. Measure the base tree instead of FROZEN_TREE / $Frozen.Tree. Red row: PE-pass (vm-job.txt).\n3. Sort case-insensitively (sh key=str.lower; ps1 Sort-Object). Red row: PE-pass, and the fake refuses the unsorted list.\n4. Call ls-tree without a pathspec for an empty path list. Red row: PE-empty.\n5. Skip non-blob records instead of omitting the field. Red row: PE-unmeasured.\nAlso check:\n- legacy and observe add no git call, context parse or output line;\n- nothing reads an env var, setting or CLI-writable file to decide strong or the paths (task rails);\n- the [WARN] bytes match across the wrappers;\n- the ps1 BOM is intact;\n- the frozen-mode payloads are unchanged;\n- no existing test assertion was weakened.\nList the mutants and their red rows in the completion summary. If this review changes any byte, re-run checkRefs[0] and submit that fresh run.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial review fixes:\n(1) The sh python held literal U+FEFF/U+FFFD characters; they are now chr(0xfeff)/chr(0xfffd). python decodes -c argv by locale, so a non-UTF-8 locale would have silently disabled those checks. The added sh diff is now pure ASCII, and a unit check of unsupported() passes.\n(2) Payload pins strengthened. The sh rows pin the 8 today values as well as the key order; ps1 adds workerId, id, baseRevision and treeSha.\nMutants, run in scratch snapshots with the PE slices, each red in BOTH wrappers:\n1. No strong gate → SG-legacy.\n2. Base tree measured → PE-pass (no vm-job.txt).\n3. Case-insensitive sort (sh str.lower, ps1 Sort-Object) → PE-pass; the fake refuses record_candidate.\n4. ls-tree with no pathspec for an empty list → PE-empty (whole tree listed).\n5. Non-blob records skipped → PE-unmeasured.\nThe unmutated final-bytes controls: SLICE-OK on sh, pwsh 7 and PS 5.1.\nChecks:\n- Legacy and observe only add the read-only strong predicate, which the legacy landing already calls: no git, no context parse, no output.\n- PREFLIGHT_CONTEXT and $preflightContext are reset at the loop top and filled only from get_context, so no env var, setting or file decides strong or the paths.\n- The WARN text is equal across the wrappers (script check).\n- The BOM is ef bb bf.\n- The frozen modes pass in the gate.\n- No assertion was removed or weakened; the removed lines are only call sites that gained FAKE_CTX_CONTRACT or an extra argument.\nTheoretical, not fixed: on PS 5.1, a configured path containing a double quote is mangled by native arg passing. That entry would be omitted, and the daemon then fails closed with protected-check-changed.\nRe-ran checkRefs[0] on the final bytes: exit 0 in 8 min 35 s.",
+      "startedAt": "2026-11-05T10:56:32.228Z",
+      "completedAt": "2026-11-05T11:09:26.427Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-57d48f38",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -89,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T07:29:12.529Z",
-  "updatedAt": "2026-11-05T10:47:18.028Z",
+  "updatedAt": "2026-11-05T11:11:04.691Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-05T07:36:23.692Z",
@@ -99,7 +109,7 @@
     "firstClaimAt": "2026-11-05T10:00:25.085Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-26393a1d",
@@ -112,7 +122,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T10:27:47.043Z",
@@ -189,11 +201,47 @@
   "planApprovedAt": "2026-11-05T10:27:47.082Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-26393a1d@2026-11-05T10:00:22Z",
-    "at": "2026-11-05T10:29:03.350Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-57d48f38@2026-11-05T10:28:07Z",
+    "at": "2026-11-05T11:11:04.691Z"
   },
-  "workStartedAt": "2026-11-05T10:29:21.214Z"
+  "workStartedAt": "2026-11-05T10:29:21.214Z",
+  "reviewStartedAt": "2026-11-05T11:10:00.508Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)/scripts/tests\"||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=pass,record_candidate-refuse,record_candidate-malformed,intent-strong;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B postflight.ps1&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash postflight.sh&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|rios: 4') = 6 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.XhszaTZk1Q/powershell <==\nPASS frozen candidate scenarios: 4\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.XhszaTZk1Q/pwsh <==\nPASS frozen candidate scenarios: 4\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.XhszaTZk1Q/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\n(final-bytes run 2026-11-05T11:00:27Z-11:09:02Z, 8 min 35 s; exit 0)",
+    "reportedAt": "2026-11-05T11:10:00.508Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "Both wrappers now send protectedEntries with record_candidate on a strong landing whose pre-flight context (task.id matched) declares a non-empty executionContract.requiredChecks.\n- What is sent: the candidate tree's blobs (100644/100755/120000) under the union of configs/scripts/assertionRoots, from `git --literal-pathspecs ls-tree -r -z --full-tree <FROZEN_TREE> -- <paths>`, sorted by UTF-8 bytes, each exactly {path,oid}. A path with no blob is omitted.\n- No paths: [] is sent and git is not called.\n- Fallbacks: a non-blob entry, an unsupported path, a git failure, unreadable requiredChecks or more than 2000 entries omit the field and print one fixed WARN (identical bytes in both wrappers).\n- Unchanged: legacy/observe, and strong tasks without requiredChecks, keep today's payload.\n- Helpers: sh protected_entries_json; ps1 Get-MoeProtectedEntries, with Send-MoeCandidate gaining $Git (3 callers).\n- Fake daemon: the FAKE_CTX_CONTRACT knob, and validation of protectedEntries as in candidateStore.readProtectedEntries.\n- Rows in both vm-route files:\n  - SG-legacy/SG-observe carry the contract and pin today's 8 keys and values.\n  - PE-pass: 8 entries incl. 'tests/a b.txt', B<a byte order, U+00E9, vm-job.txt from M; gone.sh omitted.\n  - PE-unmeasured: a gitlink gives the WARN.\n  - PE-empty: [].\n- RED: HEAD's wrappers fail PE-pass in sh and ps1.\n- Mutants, each red in both wrappers:\n  1. No strong gate → SG-legacy.\n  2. Base tree measured → PE-pass.\n  3. Case-insensitive sort → PE-pass (the fake refuses).\n  4. ls-tree with no pathspec → PE-empty.\n  5. Non-blob records skipped → PE-unmeasured.\n- Review fixes: ASCII chr() in place of literal U+FEFF/U+FFFD in the sh python (locale-safe), and stronger payload value pins.\n- Theoretical, not fixed: a PS 5.1 path containing a double quote would be omitted, and the daemon then fails closed.\n- Gate checkRefs[0] on the final bytes: exit 0 in 8 min 35 s.\n- Requires no rebuild.",
+  "commits": [
+    {
+      "sha": "b8e09f7e737a1c287d8a39d3a7fb6546dc1f144d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-57d48f38@2026-11-05T10:28:07Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-57d48f38",
+      "recordedAt": "2026-11-05T11:11:04.691Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
