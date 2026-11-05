@@ -113,6 +113,9 @@ const from = './ordinary-string.mjs';
     Assert-GuardCase 'ts-bridge' @{'a.ts'="import { value } from './b.js';"} @('a.ts') @{'b.ts'='export const value = 1;'}
     Assert-GuardCase 'module-bridges' @{'a.mts'="import './b.mjs'; import './c.cjs';"} @('a.mts') @{'b.mts'='export {}';'c.cts'='export {}'}
     Assert-GuardCase 'index-bridge' @{'a.ts'="import './nested';"} @('a.ts') @{'nested/index.ts'='export {}'}
+    # A dot inside the last segment is not a source extension ('[...path]' -> '.path]').
+    Assert-GuardCase 'dotted-extensionless' @{'a.ts'="import handler from './route.handler'; import config from './vite.config';"} @('a.ts') @{'route.handler.ts'='export default 1;';'vite.config.ts'='export default {};'}
+    Assert-GuardCase 'dotted-extensionless-missing' @{'a.ts'="import handler from './missing.handler';"} @() -ExpectedSkipCode 'MOE_ATTR_IMPORTEE_MISSING(./missing.handler)'
     Assert-GuardCase 'deleted-importee' @{'a.mjs'="import './b.mjs';"} @('b.mjs') @{'b.mjs'='export {}'} @('b.mjs')
     Assert-GuardCase 'head-fallback' @{'a.mjs'="import './b.mjs';";'b.mjs'="import './missing.mjs';"} @('a.mjs') @{'b.mjs'='export {}'}
     Assert-GuardCase 'unclosed-literal' @{'a.mjs'='const invalid = "unterminated'} @()

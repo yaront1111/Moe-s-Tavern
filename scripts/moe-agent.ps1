@@ -4571,7 +4571,10 @@ function Resolve-MoeRelativeSpecifier([string]$Dir, [string]$Spec) {
 # TypeScript/Node resolution of one relative target: the literal path, the
 # `.js -> .ts/.tsx/.mts/.cts` source behind an ESM bridge specifier, and the
 # extensionless/index forms. Present when HEAD has it or it lands beside the
-# importer in this same commit.
+# importer in this same commit. Extensionless means no SOURCE extension: a dot
+# inside the last segment ('[...path]' -> '.path]', 'vite.config') still gets
+# the appended forms (bash twin: importee_present; 2026-11-05, a test importing
+# '../pages/api/platform/[...path]' was held twice while HEAD had '[...path].ts').
 function Test-MoeImporteePresent([string]$Target, [hashtable]$Head, [hashtable]$Landing) {
     $ext = [System.IO.Path]::GetExtension($Target).ToLowerInvariant()
     $stem = if ($ext) { $Target.Substring(0, $Target.Length - $ext.Length) } else { $Target }
@@ -4580,7 +4583,7 @@ function Test-MoeImporteePresent([string]$Target, [hashtable]$Head, [hashtable]$
     elseif ($ext -eq '.mjs') { $cands += @("$stem.mts") }
     elseif ($ext -eq '.cjs') { $cands += @("$stem.cts") }
     elseif ($ext -eq '.jsx') { $cands += @("$stem.tsx") }
-    elseif ($ext -eq '') { $cands += @("$Target.ts", "$Target.tsx", "$Target.js", "$Target.mjs", "$Target.mts", "$Target/index.ts", "$Target/index.tsx", "$Target/index.js") }
+    elseif (@('.ts', '.tsx', '.mts', '.cts') -notcontains $ext) { $cands += @("$Target.ts", "$Target.tsx", "$Target.js", "$Target.mjs", "$Target.mts", "$Target/index.ts", "$Target/index.tsx", "$Target/index.js") }
     foreach ($c in $cands) {
         $k = Get-MoePathKey $c
         if ($Head.ContainsKey($k) -or $Landing.ContainsKey($k)) { return $true }
