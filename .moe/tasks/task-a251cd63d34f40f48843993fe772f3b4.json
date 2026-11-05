@@ -73,7 +73,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -86,16 +86,19 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T07:23:29.022Z",
-  "updatedAt": "2026-11-05T10:42:41.679Z",
+  "updatedAt": "2026-11-05T10:49:23.784Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T10:00:27.783Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 8,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-05T10:48:54.116Z",
+    "wallClockMs": 2906333
   },
   "contextFetchedBy": [
     "architect-2d0f1f37",
-    "worker-c2615068"
+    "worker-c2615068",
+    "qa-a22d53a1"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -194,10 +197,11 @@
   "planApprovedAt": "2026-11-05T10:31:03.754Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-c2615068@2026-11-05T10:31:22Z",
-    "at": "2026-11-05T10:42:41.679Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a22d53a1@2026-11-05T10:43:03Z",
+    "at": "2026-11-05T10:49:23.784Z"
   },
   "workStartedAt": "2026-11-05T10:32:51.201Z",
   "reviewStartedAt": "2026-11-05T10:41:25.324Z",
@@ -242,5 +246,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-05T10:48:54.116Z",
+  "reviewCompletedAt": "2026-11-05T10:48:54.116Z",
+  "reviewSummary": "Reviewed completion 25720e94 (on moe/work-2026-10-24 and origin, parent 7a48aa92). Diff: 8 files, +157/-10 (net 147).\n\nDoD1 scope+bytes: git diff C^ C names exactly the 8 listed moe-jetbrains paths, and each blob equals R=1f1913db's. moe-jetbrains tree at C equals R's. R's scripts/moe-agent.sh and the .md were not taken. No target commit touched moe-jetbrains since R^.\n\nGate re-run: task.verification extracted verbatim from the task record, run in a git clone --shared detached at C with MOE_LAND_TARGET=C^, jetbrains-gradle lease held. EXIT 0: SCOPE-BYTES-OK base=7a48aa92, BUILD SUCCESSFUL (13 tasks executed), moe-jetbrains-0.8.0.zip, GATE-OK. Snapshot results: 47 classes, 706 tests, 6 skipped, 0 failures, 0 errors. BoardDoneCapTest 4/4, MoeJsonTest 37/37 incl. the timestamps case, BoardApprovalTest 25/25, DoneColumnClearTest 5/5. qualityGate (parity-check + lint) rc 0 in the clone.\n\nDoD2: BoardDoneCap.visible keeps the cap newest (updatedAt > completedAt > createdAt, missing oldest, higher order on tie) in input order with the hidden count; <=cap returns (tasks,0). updateColumn caps only isDone at DONE_COLUMN_CAP=200, fingerprint carries |hidden=. TaskColumn header = tasks.size+hiddenCount, footer only when hiddenCount>0. Clear Done unaffected: archiveCount counts the full DONE list, and the capped list is non-empty whenever anything is hidden.\nDoD3: both parse sites read the 3 stamps via getStringOrNull. Independent QA mutant (parseTasks updatedAt=null, a site the worker did not mutate) is KILLED by the timestamps test.\nDoD4: test + buildPlugin green under the lease (above).\n\nNon-blocking notes (human's design): cap 200 pinned only by reference; Swing header/footer have no headless test; ISO stamps compare as strings; outer board fingerprint omits updatedAt. Scratch dirs removed, lease released.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
 }
