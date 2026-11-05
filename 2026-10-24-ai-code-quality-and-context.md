@@ -1,3 +1,4 @@
+
 # AI code quality and context efficiency
 
 ## Goal and status

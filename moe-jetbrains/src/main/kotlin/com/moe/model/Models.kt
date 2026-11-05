@@ -267,7 +267,11 @@ data class Task(
     // present but malformed field parses to null — unusable, and a reviewing UI
     // must refuse it rather than approve against an assumed 0.
     val planRevision: Long? = 0L,
-    val delivery: TaskDelivery? = null
+    val delivery: TaskDelivery? = null,
+    // Daemon ISO 8601 stamps (docs/SCHEMA.md Task): the Done column keeps its newest cards by them.
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val completedAt: String? = null
 )
 
 // Aggregates returned by the daemon's moe.list_metrics tool.

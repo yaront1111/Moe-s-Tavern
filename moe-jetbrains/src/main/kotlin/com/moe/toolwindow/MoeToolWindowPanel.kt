@@ -579,7 +579,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 status: String,
                 columnTasks: List<Task>,
                 isBacklog: Boolean = false,
-                isDone: Boolean = false
+                isDone: Boolean = false,
+                hiddenCount: Int = 0
             ): TaskColumn {
                 val wipLimit = columnLimits[status]
                 val column = TaskColumn(
@@ -669,7 +670,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     onNext = if (!isDone) { task -> handleNext(task) } else null,
                     onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null,
                     onReleaseAgent = { task -> handleReleaseAgent(task) },
-                    epicSortByDate = epicSortByDate
+                    epicSortByDate = epicSortByDate,
+                    hiddenCount = hiddenCount
                 )
                 val colPref = column.preferredSize
                 column.preferredSize = Dimension(BoardStyles.columnWidth, colPref.height)
@@ -715,9 +717,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             fun updateColumn(config: ColumnConfig, force: Boolean = false) {
                 val container = columnContainers[config.status] ?: return
-                val columnTasks = tasks.filter { displayStatus(it.status) == config.status }
+                val statusTasks = tasks.filter { displayStatus(it.status) == config.status }
+                // Done renders only its newest cards (after the search and epic filter): hundreds of
+                // DONE cards are a handful of Swing components each, rebuilt on every board change.
+                // A hidden task's own edits need no rebuild; a newly DONE task is the newest, so it shows.
+                val (columnTasks, hiddenCount) =
+                    if (config.isDone) BoardDoneCap.visible(statusTasks, BoardDoneCap.DONE_COLUMN_CAP) else statusTasks to 0
                 val taskFingerprint = boardTaskFingerprint(columnTasks)
-                val fingerprint = "$taskFingerprint|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
+                val fingerprint = "$taskFingerprint|hidden=$hiddenCount|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
 
                 if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
                     return
@@ -728,7 +735,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     status = config.status,
                     columnTasks = columnTasks,
                     isBacklog = config.isBacklog,
-                    isDone = config.isDone
+                    isDone = config.isDone,
+                    hiddenCount = hiddenCount
                 )
 
                 container.removeAll()
