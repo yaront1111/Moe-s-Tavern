@@ -3430,6 +3430,52 @@ EOF
     "wip(task-resume): Resume smoke [status=BLOCKED role=worker cli-exit=0] recovered") : ;;
     *) scope_fail M "expected the exact recovered BLOCKED wip subject; got [$scope_mb_subject]" "$TMP_DIR/scope-mb.out" ;;
   esac
+  # M-c: a FINISHED task's unlanded baseline is recovered, then dropped. A task
+  # can reach DONE or ARCHIVED while its last landing never reached a branch,
+  # and nothing pre-flights it again: dropping that baseline unrecovered would
+  # strand the bytes for good.
+  for scope_mc_status in DONE ARCHIVED; do
+    SCOPE_MC_DIR="$TMP_DIR/scope-mc-$scope_mc_status"
+    make_scope_project "$SCOPE_MC_DIR" '["ignored.txt"]'
+    write_task_record "$SCOPE_MC_DIR" '["owned-a.txt"]' "$scope_mc_status" '[]' task-resume
+    echo owned-a > "$SCOPE_MC_DIR/owned-a.txt"
+    mkdir -p "$SCOPE_MC_DIR/.git/moe/baseline"
+    printf '#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head= landed=0\n' > "$SCOPE_MC_DIR/.git/moe/baseline/task-resume.tsv"
+    set +e
+    FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_MC_DIR" "$TMP_DIR/scope-mc-$scope_mc_status.out" /bin/true worker worker-scope-mc
+    scope_mc_code=$?
+    set -e
+    [ "$scope_mc_code" -eq 0 ] || scope_fail M "$scope_mc_status-task wrapper exited with $scope_mc_code" "$TMP_DIR/scope-mc-$scope_mc_status.out"
+    if ! grep -Fq 'MOE_CHECKPOINT_RECOVERED task=task-resume' "$TMP_DIR/scope-mc-$scope_mc_status.out"; then
+      scope_fail M "a $scope_mc_status task's unlanded baseline must be recovered, not dropped" "$TMP_DIR/scope-mc-$scope_mc_status.out"
+    fi
+    scope_mc_subject="$(git -C "$SCOPE_MC_DIR" log --pretty=%s --fixed-strings --grep='Moe-Task: task-resume' | head -n1)"
+    [ "$scope_mc_subject" = "wip(task-resume): Resume smoke [status=$scope_mc_status role=worker cli-exit=0] recovered" ] \
+      || scope_fail M "expected the recovered $scope_mc_status wip subject; got [$scope_mc_subject]" "$TMP_DIR/scope-mc-$scope_mc_status.out"
+    scope_mc_sha="$(git -C "$SCOPE_MC_DIR" log --format=%H --fixed-strings --grep='Moe-Task: task-resume' | head -n1)"
+    git -C "$SCOPE_MC_DIR" show --pretty=format: --name-only "$scope_mc_sha" | grep -qx 'owned-a.txt' \
+      || scope_fail M "the recovered $scope_mc_status checkpoint must carry owned-a.txt" "$TMP_DIR/scope-mc-$scope_mc_status.out"
+    [ ! -e "$SCOPE_MC_DIR/.git/moe/baseline/task-resume.tsv" ] \
+      || scope_fail M "a $scope_mc_status task's baseline must go once its recovery landed" "$TMP_DIR/scope-mc-$scope_mc_status.out"
+  done
+  # M-d: a finished task whose baseline already reads landed is only dropped.
+  SCOPE_MD_DIR="$TMP_DIR/scope-md"
+  make_scope_project "$SCOPE_MD_DIR" '["ignored.txt"]'
+  write_task_record "$SCOPE_MD_DIR" '["owned-a.txt"]' DONE '[]' task-resume
+  echo owned-a > "$SCOPE_MD_DIR/owned-a.txt"
+  mkdir -p "$SCOPE_MD_DIR/.git/moe/baseline"
+  printf '#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head= landed=1\n' > "$SCOPE_MD_DIR/.git/moe/baseline/task-resume.tsv"
+  set +e
+  FAKE_CLAIM_MODE=blocked run_scope_wrapper "$SCOPE_MD_DIR" "$TMP_DIR/scope-md.out" /bin/true worker worker-scope-md
+  scope_md_code=$?
+  set -e
+  [ "$scope_md_code" -eq 0 ] || scope_fail M "landed-baseline wrapper exited with $scope_md_code" "$TMP_DIR/scope-md.out"
+  if grep -Fq 'MOE_CHECKPOINT_RECOVERED' "$TMP_DIR/scope-md.out" \
+    || [ -n "$(git -C "$SCOPE_MD_DIR" log --format=%H --fixed-strings --grep='Moe-Task: task-resume')" ]; then
+    scope_fail M "a finished task whose baseline reads landed must land nothing" "$TMP_DIR/scope-md.out"
+  fi
+  [ ! -e "$SCOPE_MD_DIR/.git/moe/baseline/task-resume.tsv" ] \
+    || scope_fail M "a finished task's landed baseline must be dropped" "$TMP_DIR/scope-md.out"
   SCOPE_SCENARIOS_RUN=$((SCOPE_SCENARIOS_RUN + 1))
   echo "[scenario M] ok"
 

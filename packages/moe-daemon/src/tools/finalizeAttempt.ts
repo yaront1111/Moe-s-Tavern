@@ -6,7 +6,7 @@ import { announceAttemptClosed, getAttempt, setAttemptPhase } from '../state/att
 import { REVISION_RE } from '../state/candidateStore.js';
 import { assertAttemptCurrent } from '../util/enforcement.js';
 import { PathSet } from '../util/attributionTiers.js';
-import { routeUnlandedLanding } from '../state/workerLifecycle.js';
+import { routeUnlandedLanding, sharedLandingRetry, unlandedReviewRow } from '../state/workerLifecycle.js';
 
 // =============================================================================
 // moe.finalize_attempt — the runner closes the artifact boundary
@@ -151,6 +151,17 @@ async function applyTaskOutcome(state: StateManager, attempt: ExecutionAttempt, 
   const task = state.getTask(params.taskId)!;
   const actor = params.workerId ?? attempt.workerId;
   if (params.unlanded) return routeUnlandedLanding(state, task, attempt, params.unlanded, actor);
+  // A shared checkout's completion that parked its bytes on a rescue ref (gate,
+  // peel, commit or CAS failure, teardown) reports rescued: nothing reached a
+  // branch. Approving the row now would make it DONE over those bytes, and no
+  // pre-flight runs for a DONE task, so they would stay off every branch. Route
+  // it back like an unlanded worktree landing; the next session's pre-flight
+  // lands the baseline the rescue kept. `failed` is not routed: it is also the
+  // report of a completion with nothing of its own to land.
+  if (params.outcome === 'rescued' && attempt.workspaceMode !== 'worktree' && unlandedReviewRow(task)) {
+    return routeUnlandedLanding(state, task, attempt, sharedLandingRetry(task), actor,
+      `The shared-checkout landing of attempt ${attempt.id} parked this task's bytes on a rescue ref, not a branch.`);
+  }
   if ((params.outcome === 'landed' || params.outcome === 'nothing-to-commit') && task.landingRetry != null) {
     return state.updateTask(task.id, { landingRetry: null }, undefined, actor);
   }
@@ -180,7 +191,7 @@ export function finalizeAttemptTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.finalize_attempt',
     description:
-      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing holds on the worker\'s next claim, on every other seat\'s claim of the task and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing. An unlanded worktree outcome routes the task back for a landing retry.',
+      'Close a task\'s execution attempt after the runner has reported its landing outcome, moving the attempt from `finalizing` to `closed`. This is what lifts the finalizing holds on the worker\'s next claim, on every other seat\'s claim of the task and on qa_approve — the runner declares the bytes final, not the CLI\'s exit, so an interactive seat that stays open can still finalize. Fenced by attempt id + generation, and idempotent: repeating a call after a lost response writes nothing. An unlanded worktree outcome, or a rescued shared-checkout completion whose REVIEW row has no completion recorded for its round, routes the task back for a landing retry.',
     inputSchema: {
       type: 'object',
       properties: {

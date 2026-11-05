@@ -8941,7 +8941,9 @@ worktree_sweep_remove() {
 
 # ---- pre-flight --------------------------------------------------------------
 # preflight_landing TASKID TITLE STATUS_HINT launch|idle
-#   1. scope (preflight)  2. DONE/ARCHIVED/notFound -> drop baseline  3. lingering
+#   1. scope (preflight)  2. notFound -> drop baseline; DONE/ARCHIVED -> drop it
+#   once landed (an unlanded one is recovered first, then dropped; a finished
+#   task stops after step 3)  3. lingering
 #   baseline -> recovery checkpoint NOW (MOE_CHECKPOINT_RECOVERED)  [idle stops
 #   here]  4. baseline merge  5. rescue-ref discovery  6. shared-checkout notice
 #   (both go into MOE_PREFLIGHT_NOTICE for the dynamic context).
@@ -9007,10 +9009,20 @@ PYEOF
         live_marker_clear "$tid"
         return 0
     fi
+    # A finished task's baseline goes too -- once its bytes are on a branch. One
+    # its last session never landed (a rescued or interrupted completion, a
+    # session killed before its post-flight) is the only record of which dirty
+    # paths are the task's, and nothing pre-flights a finished task again, so
+    # dropping it here would strand those bytes for good. It falls through to
+    # the recovery below instead, and goes once it reads landed.
+    local task_over=false
     if [ "$scope_status" = "DONE" ] || [ "$scope_status" = "ARCHIVED" ]; then
-        baseline_delete "$tid"
-        live_marker_clear "$tid"
-        return 0
+        if [ ! -f "$bp" ] || baseline_landed "$tid"; then
+            baseline_delete "$tid"
+            live_marker_clear "$tid"
+            return 0
+        fi
+        task_over=true
     fi
     local status="${scope_status:-$status_hint}"
     [ -n "$status" ] || status="UNKNOWN"
@@ -9066,6 +9078,16 @@ PYEOF
             echo -e "${YELLOW}[WARN]${NC} recovery landing for $tid did not complete (${LAND_CODE:-?}); baseline kept for the next attempt."
         fi
         MOE_SCOPE_FALLBACK=0
+    fi
+    if [ "$task_over" = true ]; then
+        # Nothing below applies to a finished task. Its baseline goes once the
+        # recovery left it landed; a live or foreign owner, or a recovery that
+        # did not complete, keeps it for the next pre-flight.
+        if baseline_landed "$tid"; then
+            baseline_delete "$tid"
+            live_marker_clear "$tid"
+        fi
+        return 0
     fi
     [ "$phase" = "idle" ] && return 0
 
