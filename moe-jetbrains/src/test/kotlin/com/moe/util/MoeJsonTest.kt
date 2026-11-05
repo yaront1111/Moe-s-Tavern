@@ -768,6 +768,21 @@ class MoeJsonTest {
     }
 
     /** A task payload with [members] spliced in verbatim as extra JSON object members. */
+    @Test
+    fun `task timestamps read verbatim through both parse paths and absent ones are null`() {
+        val stamps = "\"createdAt\": \"2026-11-01T00:00:00.000Z\", \"updatedAt\": \"2026-11-04T12:34:56.789Z\", \"completedAt\": \"2026-11-04T12:00:00.000Z\""
+        for ((path, task) in bothPaths(blockerTaskJson(stamps))) {
+            assertEquals(path, "2026-11-01T00:00:00.000Z", task.createdAt)
+            assertEquals(path, "2026-11-04T12:34:56.789Z", task.updatedAt)
+            assertEquals(path, "2026-11-04T12:00:00.000Z", task.completedAt)
+        }
+        for ((path, task) in bothPaths(blockerTaskJson(""))) {
+            assertNull(path, task.createdAt)
+            assertNull(path, task.updatedAt)
+            assertNull(path, task.completedAt)
+        }
+    }
+
     private fun blockerTaskJson(members: String, status: String = "BLOCKED", id: String = "task-blocked"): String {
         val extra = if (members.isBlank()) "" else "$members,"
         return """

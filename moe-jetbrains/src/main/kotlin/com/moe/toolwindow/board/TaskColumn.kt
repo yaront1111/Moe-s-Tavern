@@ -3,6 +3,7 @@ package com.moe.toolwindow.board
 import com.moe.model.Task
 import com.moe.model.Epic
 import com.moe.toolwindow.BoardMoves
+import com.moe.util.MoeBundle
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.ui.JBUI
@@ -40,7 +41,9 @@ class TaskColumn(
     private val onNext: ((Task) -> Unit)? = null,
     private val onPrevious: ((Task) -> Unit)? = null,
     private val onReleaseAgent: ((Task) -> Unit)? = null,
-    private val epicSortByDate: Boolean = false
+    private val epicSortByDate: Boolean = false,
+    /** Tasks of this column left unrendered (the Done cap): counted in the header, named in a footer. */
+    private val hiddenCount: Int = 0
 ) : JBPanel<TaskColumn>(BorderLayout()) {
 
     init {
@@ -101,7 +104,8 @@ class TaskColumn(
         }
         left.add(titleLabel)
 
-        val countText = if (wipLimit != null) "${tasks.size} / $wipLimit" else tasks.size.toString()
+        val total = tasks.size + hiddenCount
+        val countText = if (wipLimit != null) "$total / $wipLimit" else total.toString()
         val countLabel = JBLabel(countText).apply {
             isOpaque = true
             background = BoardStyles.statusTint(status)
@@ -175,6 +179,14 @@ class TaskColumn(
                     listPanel.add(TaskCard(task, epicTitle, status, onOpen, onDelete, onNext = onNext?.takeIf { BoardMoves.hasNext(task.status) }, onPrevious = onPrevious?.takeIf { BoardMoves.hasPrevious(task.status) }, onReleaseAgent = onReleaseAgent))
                 }
             }
+        }
+
+        if (hiddenCount > 0) {
+            listPanel.add(JBLabel(MoeBundle.message("moe.column.doneHidden", hiddenCount)).apply {
+                foreground = BoardStyles.textSecondary
+                font = JBUI.Fonts.smallFont()
+                border = JBUI.Borders.empty(4, 2)
+            })
         }
 
         val body = JPanel(BorderLayout())

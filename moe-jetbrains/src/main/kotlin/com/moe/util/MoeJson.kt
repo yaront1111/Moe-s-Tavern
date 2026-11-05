@@ -444,7 +444,10 @@ object MoeJson {
                 blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
                 blockedAt = obj.getStrictStringOrNull("blockedAt"),
                 planRevision = obj.getPlanRevisionOrNull("planRevision"),
-                delivery = parseDelivery(obj)
+                delivery = parseDelivery(obj),
+                createdAt = obj.getStringOrNull("createdAt"),
+                updatedAt = obj.getStringOrNull("updatedAt"),
+                completedAt = obj.getStringOrNull("completedAt")
             )
         }
     }
@@ -669,7 +672,10 @@ object MoeJson {
             blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
             blockedAt = obj.getStrictStringOrNull("blockedAt"),
             planRevision = obj.getPlanRevisionOrNull("planRevision"),
-            delivery = parseDelivery(obj)
+            delivery = parseDelivery(obj),
+            createdAt = obj.getStringOrNull("createdAt"),
+            updatedAt = obj.getStringOrNull("updatedAt"),
+            completedAt = obj.getStringOrNull("completedAt")
         )
     }
 
