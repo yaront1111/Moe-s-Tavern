@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -106,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:47:17.963Z",
-  "updatedAt": "2026-11-05T00:07:19.654Z",
+  "updatedAt": "2026-11-05T00:18:07.727Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:47:49.250Z",
@@ -120,11 +120,14 @@
     "firstClaimAt": "2026-11-04T20:48:16.098Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-05T00:18:07.725Z",
+    "wallClockMs": 12591627
   },
   "contextFetchedBy": [
     "architect-2a219562",
-    "worker-d2c84c0e"
+    "worker-d2c84c0e",
+    "qa-96811257"
   ],
   "tier": "standard",
   "effort": "high",
@@ -249,5 +252,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-05T00:18:07.725Z",
+  "reviewCompletedAt": "2026-11-05T00:18:07.725Z",
+  "reviewSummary": "Reviewed completion 2e9682f9 (on moe/work-2026-10-24, in control HEAD): `git diff 2e9682f9^ 2e9682f9`, +106 net, exactly the 4 declared harness files. No wrapper, fake-proxy or packages bytes. Removed lines are only comments, echo texts, the frozen modes list and the env map (each extended).\n\nRe-ran checkRefs[0] verbatim from the task worktree (tree identical to the completion): GATE_EXIT=0. All three legs (powershell 5.1, pwsh 7, bash) printed '@' and 'PASS frozen candidate scenarios: 2'. The bash leg ran vm-route.sh, postflight.sh, parity-check.sh, parity-check.ps1 and lint (qa.md 36/40).\n\nMutants (scratch git-archive snapshots on D:, each diffed to exactly one line):\n- M1 sh (restore [ -z $wt ]): fails at SR-T2-running, 'strong journal was not kept byte for byte'.\n- M2 pwsh7 (restore -not $wt): fails at SR-T2-running.\n- M3 sh (keep only worktree journals): fails frozen mode reconcile-strong-replay-running, journal false.\n- M4 pwsh7: fails with 'Frozen candidate scenarios failed'.\n- M5 sh (drop continue after the refused finalize): fails at SR-T2-refuse.\n- The unmutated sh slice passes all rows.\n\nInvariants: embedded frozen suites identical (diff empty); postflight.ps1 keeps its BOM and 90 non-ASCII lines (same as base); vm-route.ps1 has 0 non-ASCII lines. Rows sit between SR-T2-replay and SR-T3; pre-existing assertions are byte-unchanged.\n\nDoD: 1 = SR-T2-refuse plus SR-T2-running on both harnesses (a refused finalize continues before the CQ-V08b line, so two rows). 2 = M1, M2 (and M3, M4 for the shared mode). 3 = checkRefs[0]. The shared strong journal row (reconcile-strong-replay-running) goes beyond DoD, as the plan's step 3 scoped. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

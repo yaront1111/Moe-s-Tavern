@@ -53,20 +53,30 @@
     {
       "stepId": "step-4",
       "description": "VERIFICATION, once, after steps 1-3 (no per-step suites). Run checkRefs[0] verbatim from W (it cds to `git rev-parse --show-toplevel`/scripts/tests itself). In parallel it runs, per Windows engine (5.1, 7): ParseFile, postflight-vm-route.ps1 (via cmd, which keeps 5.1's PSModulePath), worktree-landing.ps1, the worktree cases wt-recover-strong, wt-completion, wt-replay and wt-remote-rejected (postflight-worktree.cjs ps1 mode) and parity-check.ps1; on bash: bash -n, postflight-vm-route.sh (every [strong receipt] and [strong gate] row: governor point 3), worktree-landing.sh, the same four cases, parity-check.sh and npm run lint. It exits 0 only when the logs hold three `@` lines and three `[worktree] wt-recover-strong ok` lines. Estimate 12-14 min at load ~5, inside the 20-min rail (task-edf2162b's similar chain took 10m52s). It outlives one tool call: write the command to a scratch file OUTSIDE the checkout, start `nohup bash <file> > <out> 2>&1; echo CHAIN_EXIT=$? >> <out>` in the background (record the PID; never pattern-kill), and poll with `timeout 540 bash -c 'until grep -q ^CHAIN_EXIT= <out>; do sleep 15; done'`. Its logs sit in a fresh /tmp/tmp.* dir (`find /tmp -maxdepth 2 -name sh -newer <file> -type f`). A leg that dies within seconds with only a WSL `UtilAcceptVsock` line is an interop flake: rerun the whole gate. Pass the command, exit 0 and the `tail -n3` block as complete_task's verification.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-05T00:01:09.173Z"
+      "note": "checkRefs[0] run verbatim from W (993 chars): CHAIN_EXIT=0 in 12m35s (00:01:27 to 00:14:02Z). Each leg printed '[strong receipt] ok T1..T5-replay, M1, M1-replay, M2', PASS postflight-vm-route, worktree-landing 18/0/0, '[worktree] wt-completion/wt-replay/wt-remote-rejected/wt-recover-strong ok' and '4 ok, 0 failed', PASS parity-check; sh also lint OK; 6 matching lines (3 '@' + 3 recover-strong ok).",
+      "startedAt": "2026-11-05T00:01:09.173Z",
+      "completedAt": "2026-11-05T00:14:08.960Z"
     },
     {
       "stepId": "step-5",
       "description": "ADVERSARIAL SELF-REVIEW (the one review step) of W's diff, as an attacker:\n- A fresh round's strong journal names this attempt: no write, no new line (the vm-route [strong receipt] rows prove it).\n- A non-strong journal never reaches the helper (the call sits inside the strong branch).\n- A blank or malformed pin, an unreadable journal or a failed write: the helper fails, the journal is untouched and no tmp is left, this attempt finalizes now, and the WARN names the attempt or <none>.\n- Concurrency: a peer seat's replay skips a task a live session holds (live_marker_foreign_live and its ps1 twin); the recovered branch defers signals before the published step (wt_defer_signals / Set-MoeCtrlCDeferred $true).\n- A crash between complete_task and the rebind still leaves the old identity (a pre-existing class; the seat's deregistration closes its own finalizing attempt). Note it; do not widen the scope.\n- BOM kept; parity green; no new MOE_ code; both new lines identical in both wrappers; no other line changed.\nMUTANTS, each in a scratch snapshot OUTSIDE the checkout (`git -C <W> archive HEAD scripts packages/moe-daemon/src/state/validators.ts | tar -x -C /mnt/d/moe-scratch/<fresh dir>`, then cp W's three edited files over it; never edit W for a mutant), each run alone with MOE_WORKTREE_ONLY=wt-recover-strong (sh about 10 s, ps1 about 30 s per engine):\n- M1, today's behavior: drop the rebind call (ps1: the whole `if (-not (Set-MoeJournalAttempt $Journal))` block). Red at 'the replay left A2 finalizing...' on sh, 5.1 and 7.\n- M2, no fallback: keep the rebind, drop `RECEIPT_JOURNAL=\"\";` (ps1: `$Res.ReceiptJournal = $null`). Red at 'unbound: ...'.\n- M3, rebind without workerId: drop `,workerId=w` from the d.update call (ps1: `; $j.workerId = $WorkerId`). Red at the replay.\n- M4, option 1 (never defer a rebound journal): put `RECEIPT_JOURNAL=\"\"; ` before the call (ps1: `$Res.ReceiptJournal = $null` before the if). Red at 'A2: exit, main, phase...'.\nRun M1-M4 on sh and at least M1 and M2 on 5.1 and 7. In planning, b71a4bbe's wrappers (M1) failed on all three engines and M2-M4 failed on sh. Put the red/green evidence and the mutant table in the completion summary, kept tight.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Self-review: diff is +107/-2 over the 3 approved files; the 2 removed lines are the two header-comment lines I extended. BOM ef bb bf kept. Rebind line and fallback WARN text identical in both wrappers (1 occurrence each); no new MOE_ code. Fresh-round journal already names this attempt: helper returns early, no write, no line. Non-strong journals never reach the helper (call inside the strong branch). Blank/malformed pin, unreadable or non-object journal, failed write: helper returns 1/false, tmp removed, journal untouched; caller blanks RECEIPT_JOURNAL ($Res.ReceiptJournal=$null) and prints one WARN, so this attempt finalizes at once and the journal stays for the replay (receipt_send never deletes a strong journal). Signals are already deferred in the recovered branch before the published step. Noted, not widened: a crash between complete_task and the rebind still leaves the old identity (pre-existing class; deregistration closes the seat's own finalizing attempt). Mutants (scratch, outside the checkout, removed after): M1 no rebind, M2 no fallback, M3 no workerId, M4 never defer — all 12 runs red on sh, 5.1 and 7: M1/M3 at 'the replay left A2 finalizing...', M2 at 'unbound: ...', M4 at 'A2: exit, main, phase...'.",
+      "startedAt": "2026-11-05T00:14:09.667Z",
+      "completedAt": "2026-11-05T00:16:52.910Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-593560ee",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -88,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T22:53:01.132Z",
-  "updatedAt": "2026-11-05T00:01:09.173Z",
+  "updatedAt": "2026-11-05T00:18:10.288Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T23:17:15.306Z",
@@ -98,7 +108,7 @@
     "firstClaimAt": "2026-11-04T23:17:17.306Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
@@ -111,7 +121,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T23:57:08.164Z",
@@ -188,10 +200,42 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T23:58:05.714Z",
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-cd0ac706@2026-11-04T23:17:15Z",
-    "at": "2026-11-05T00:01:00.057Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-593560ee@2026-11-04T23:57:12Z",
+    "at": "2026-11-05T00:18:10.288Z"
+  },
+  "reviewStartedAt": "2026-11-05T00:17:19.216Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)/scripts/tests\"||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_WORKTREE_ONLY MOE_WORKTREE_ONLY=wt-recover-strong,wt-completion,wt-replay,wt-remote-rejected;L=$(mktemp -d);B='-nop -ep Bypass -f';W='node postflight-worktree.cjs';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B worktree-landing.ps1&&$W ps1 \\$PWD/../moe-agent.ps1 \\$PWD/postflight-fake-proxy.js \\$env:TEMP $e&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash worktree-landing.sh&&$W sh $PWD/../moe-agent.sh $PWD/postflight-fake-proxy.js /tmp $BASH&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|wt-recover-strong ok') = 6 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.hKTskzUnCS/powershell <==\n[worktree] 4 ok, 0 failed\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.hKTskzUnCS/pwsh <==\n[worktree] 4 ok, 0 failed\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.hKTskzUnCS/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\nCHAIN_EXIT=0",
+    "reportedAt": "2026-11-05T00:17:19.216Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "The recovered worktree landing (LAND_WT_RECOVERED) no longer strands this session's attempt in finalizing when the strong receipt journal names an earlier attempt. Chosen fix: option 2, rebind the journal. +107/-2 over 3 files (the 2 removed lines are header comments I extended).\n- sh: new wt_journal_rebind (after wt_journal_push_result) + one guarded call in wt_land_published's strong branch. ps1 (BOM kept): Set-MoeJournalAttempt + one guarded block in Complete-MoeWorktreeLanding. Both rewrite only attemptId, generation, workerId, via tmp file + atomic replace, before the receipt is sent. A journal already naming this attempt (every fresh round) is not rewritten.\n- Unacknowledged receipt: the CQ-V08 deferral still holds (one MOE_FINALIZE_DEFERRED_RECEIPT, no finalize_attempt); the next replay records the receipt, finalizes THIS attempt landed and drops the journal.\n- Unrebindable journal (bad pin, unreadable, failed write): left exactly as it was, no tmp, one identical WARN in both wrappers, this attempt finalizes at once, the replay later records the receipt. No new MOE_ code.\n- Test: case wt-recover-strong in postflight-worktree.cjs (strong journal of closed attempt-old gen 6; A2 gen 7 lands nothing new; refused receipt; replay; plus an unbound phase via a read-only dir/journal). RED on b71a4bbe's wrappers on sh, 5.1 and 7 ('the replay left A2 finalizing, kept the journal or finalized another attempt'); GREEN after.\n- Gate: checkRefs[0] (993 chars) CHAIN_EXIT=0 in 12m35s. Every leg: [strong receipt] ok T1..T5-replay, M1, M1-replay, M2; [strong gate] rows; PASS vm-route; worktree-landing 18/0/0; wt-completion, wt-replay, wt-remote-rejected, wt-recover-strong ok (4 ok, 0 failed); PASS parity-check; sh also lint OK.\n- Mutants (scratch, removed): M1 no rebind, M2 no fallback, M3 no workerId, M4 never defer: all 12 runs RED on sh/5.1/7 (M1,M3 at the replay; M2 at 'unbound'; M4 at 'A2: exit, main, phase').\n- Not widened: a crash between complete_task and the rebind sti",
+  "commits": [
+    {
+      "sha": "7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T23:57:12Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-05T00:18:10.288Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
