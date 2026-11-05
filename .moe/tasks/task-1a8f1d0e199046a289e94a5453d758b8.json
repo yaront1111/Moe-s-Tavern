@@ -67,8 +67,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-c2615068",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -207,11 +207,17 @@
       "author": "governor-92dd95b0",
       "content": "Governor handoff (07:10Z, 2026-11-05): governor-e6142a94 is offline, and governor-92dd95b0 now governs. Step 2's runbook comment should @mention governor-92dd95b0 instead; @governors also reaches me. I'll run the Windows and Linux real-VM legs for DoD 8 when it arrives. Status: this row's last unmet dependency, task-eafb62c4, is back in REVIEW (control checkout fixed at 07:04Z). The row becomes claimable once eafb62c4 is DONE.",
       "timestamp": "2026-11-05T07:09:11.499Z"
+    },
+    {
+      "id": "comment-4b63ac0028b642058e25e26ea6d93514",
+      "author": "governor-92dd95b0",
+      "content": "Governor heads-up for whoever resumes step 2 (checked at 11:13Z). This row's worktree and its branch moe/task/task-1a8f1d0e… are at 49c5608b on 7a48aa92. They do NOT contain ee10405f's fix b8e09f7e: `git grep protectedEntries scripts/moe-agent.sh` finds 0 hits in W and 3 at the target. a251cd63's 25720e94 landed after the cut too. Step 2 snapshots W's files, so a plugin built from W as it stands would ship without the fix, and the real-VM QA leg would fail.\nBring the target into W before the step-2 snapshot. One way is the resume path's own merge in W, `git merge --no-commit --no-ff refs/heads/moe/work-2026-10-24`, which this row's completion L2 commits. Another is to build the snapshot from the target tip plus W's own diff.\nBefore building, check that the snapshot's scripts/moe-agent.sh contains protectedEntries. Then put the snapshot's base sha in the runbook.",
+      "timestamp": "2026-11-05T11:11:52.883Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-05T07:36:23.725Z",
+  "updatedAt": "2026-11-05T11:27:21.732Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z",
     "plannedStepCount": 5,
@@ -225,7 +231,8 @@
     "architect-cd0ac706",
     "architect-67c762f6",
     "governor-92dd95b0",
-    "worker-57d48f38"
+    "worker-57d48f38",
+    "worker-c2615068"
   ],
   "commits": [
     {
@@ -296,13 +303,11 @@
     "sessionId": "worker-57d48f38@2026-11-05T07:21:51Z",
     "at": "2026-11-05T07:36:23.725Z"
   },
-  "blockedReason": "Step 1 is done; step 2 is on hold for bug task-ee10405f (HIGH; it is in BACKLOG, and a human or governor has to move it to PLANNING). Neither wrapper sends protectedEntries with record_candidate (moe-agent.sh record_candidate_rpc:2724, moe-agent.ps1 Send-MoeCandidate:2168). check-dispatch.mjs, for its part, needs a requiredChecks definition: a bare qualityGate is RUNNER_DEPENDENCIES_UNDECLARED. As a result, every verified-local qa_approve the real wrappers land is refused DELIVERY_EVIDENCE_MISSING [protected-checks-unmeasured]; acceptance row L3(e) pins this. Step 2's plugin and real-VM runbook (DoD 8) would ship launcher bytes whose QA leg cannot pass, and step 3 forbids recording a promotion on a failed run. Resume at step 2 once task-ee10405f lands; the plugin must be built from a tree that contains the fix. Runbook @mentions go to governor-92dd95b0 (governor-e6142a94 is offline per comment-7238bd91).",
-  "blockedOnTaskIds": [
-    "task-ee10405f63834cd9a57118136ab3a4f5"
-  ],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-05T07:35:38.734Z",
+  "blockedFromStatus": null,
+  "blockedAt": null,
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",

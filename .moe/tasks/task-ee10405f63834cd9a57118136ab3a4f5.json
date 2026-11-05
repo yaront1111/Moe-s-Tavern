@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T07:29:12.529Z",
-  "updatedAt": "2026-11-05T11:11:04.691Z",
+  "updatedAt": "2026-11-05T11:28:40.107Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-05T07:36:23.692Z",
@@ -109,11 +109,14 @@
     "firstClaimAt": "2026-11-05T10:00:25.085Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-05T11:26:58.027Z",
+    "wallClockMs": 5192942
   },
   "contextFetchedBy": [
     "architect-26393a1d",
-    "worker-57d48f38"
+    "worker-57d48f38",
+    "qa-a22d53a1"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -201,10 +204,11 @@
   "planApprovedAt": "2026-11-05T10:27:47.082Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-57d48f38@2026-11-05T10:28:07Z",
-    "at": "2026-11-05T11:11:04.691Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a22d53a1@2026-11-05T11:11:24Z",
+    "at": "2026-11-05T11:28:40.107Z"
   },
   "workStartedAt": "2026-11-05T10:29:21.214Z",
   "reviewStartedAt": "2026-11-05T11:10:00.508Z",
@@ -243,5 +247,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-05T11:26:58.027Z",
+  "reviewCompletedAt": "2026-11-05T11:26:58.027Z",
+  "reviewSummary": "Reviewed completion b8e09f7e (on moe/work-2026-10-24 and origin). 5 files, +258/-14, 244 net, matching the approved scope.\nGate: re-ran checkRefs[0] verbatim (byte-equal to task.verification) in a --shared clone at b8e09f7e on /mnt/d. Exit 0 in 9m19s. Three '@' markers, 'PASS frozen candidate scenarios: 4' on 5.1 and 7, ParseFile clean, and every leg logs '[strong gate] ok ... PE-pass, PE-unmeasured, PE-empty'.\nDoD:\n1. PE-pass in both wrappers pins 8 exact {path,oid} entries in byte order (B < 'a b' < a, U+00E9), with vm-job.txt from M.\n2. Today's 8 keys and values, with no field, are pinned on SG-pass, the refused rows and SG-legacy/SG-observe (which carry the contract).\n3. gone.sh is omitted; PE-unmeasured (gitlink) prints the exact WARN and still lands.\n4. Gate green within budget.\nCode: both helpers gate on strong_landing_task first and read requiredChecks only from the daemon-served pre-flight context with a matching task.id. They run git --literal-pathspecs ls-tree on the frozen tree through an argv list, never with no pathspec, and any doubt omits the field (the daemon fails closed). The fake mirrors readProtectedEntries. The WARN is identical in both wrappers, the ps1 BOM is intact, and the added sh lines are ASCII.\nMutants (scratch snapshots; controls green on sh and pwsh 7):\n- no strong gate: SG-legacy red\n- base tree measured: PE-pass red\n- case-insensitive sort: PE-pass red, the fake refuses (sh, ps1)\n- no pathspec: PE-empty red\n- non-blob skipped: PE-unmeasured red\n- mine, {oid,path} key order: PE-pass red\n- mine, ps1 L6 caller without $Git: PE-pass red\nNotes: a legacy task that declares requiredChecks is still refused by policy.ts (pre-existing). A gitlink under a protected root never passes, matching the daemon's parseEntries.",
+  "requiredCheckAtDone": null
 }
