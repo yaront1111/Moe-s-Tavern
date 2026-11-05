@@ -26,11 +26,17 @@
     {
       "stepId": "step-1",
       "description": "Composed lifecycle acceptance test. This is the epic's only cross-slice daemon test: each M07 slice tested its own seam, and this one walks one verified-local task through the real MCP registry in the exact order the VM-route wrappers call it after CQ-M07r/s/t. Read scripts/moe-agent.sh's VM route for that order: seat-start, marked claim, seat-job, land_vm_candidate, then wt_land_rounds with the check-VM gate, the receipt and finalize.\n\nNew file packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts.\n\nSET-UP\n- ToolTestHarness plus createMcpCaller from __acceptance__/mcpCall.ts. `call` is /mcp. `runnerCall` carries authenticateRunner's identity from a temp host key. Copy the callers() set-up of deliveryBypass.acceptance.test.ts; never import from that test file.\n- Hold readiness READY without mocking: `refreshReadiness(inputs, async () => READY)`, as readinessHolder.test.ts:35 `hold` does, with clearReadiness() in afterEach. Never vi.spyOn executionProfile (deliveryBypass does): this test must exercise the real assertExecutionProfileReady and activationGaps.\n- Settings: deliveryPolicy 'local-branch', worktreeMode 'on', qualityGate GATE, checkEnvironments [ENV] (ENV = 'moe-local-vm-v1:' + 64 hex). Then activate executionProfile 'verified-local' through h.state.updateSettings, the recorded path, and assert the PROJECT_SETTINGS_UPDATED record (transition 'activate', accepted).\n- Error handling: assert each refusal by its exact codeName and that it wrote nothing (task bytes unchanged). A fixture or harness failure fails the test; it is never skipped or swallowed.\n\nROWS. Assert exact codeName and status with toBe/toStrictEqual, never truthiness. Read every code from source before asserting it (explore-before-assume).\n- L1, the happy path:\n  - submit_plan with executionContract.requiredChecks [{id:'gate', command: GATE, configs:['package-lock.json']}] (seed that file if the snapshot measure needs it); task.executionPolicySnapshot is verified-local;\n  - worker claim_next_task without executionRoute is NOT_ALLOWED EXECUTION_ROUTE_REQUIRED; with executionRoute 'vm' it is claimed;\n  - get_context with sessionId; start_step, complete_step, then complete_task with verification, which moves the task to REVIEW;\n  - the wrapper's record_candidate (tree M on base B) and its record_commit completion row;\n  - runnerCall record_check_dispatch, then record_check_observation (passed, exitCode 0, ENV) on that candidate;\n  - finalize_attempt landed, then record_delivery_receipt (target, targetBefore B, targetAfter C, landedRevision C);\n  - the QA claim of the REVIEW row is refused without the route and claimed with it;\n  - QA get_context with sessionId, then qa_approve with the stamped identity and candidateId: the task is DONE.\n- L2, the consumer: a second verified-local task with dependsOn [the first] is claimable (with the route) once the first is DONE. After archive_task of the first it stays claimable through the receipt. A twin with no receipt is withheld, naming delivery-receipt.\n- L3, one defect each, A0-style:\n  - (a) no observation: qa_approve is DELIVERY_EVIDENCE_MISSING, naming the required-check token;\n  - (b) only a /mcp record_check_run (what the old host L6 sent): still refused;\n  - (c) a dispatch in an environment checkEnvironments does not list: CHECK_ENVIRONMENT_NOT_APPROVED, and nothing is written;\n  - (d) after clearReadiness(), the next strict claim is EXECUTION_PROFILE_NOT_READY.\n\nMUTATION CHECK, on a scratch copy, reverted after: drop the readiness hold, and L1 must fail at the settings update; drop the receipt, and L2's archived case must fail. Record both in the step note.\n\nRun checkRefs[2] and quote its counts.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts"
-      ]
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts"
+      ],
+      "note": "New packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts (9 rows, ~250 lines). Readiness READY is held only through readinessHolder.refreshReadiness (cleared in afterEach), and there is no spy. Activation goes through h.state.updateSettings, with the PROJECT_SETTINGS_UPDATED record asserted (activate/applied). Settings: local-branch, worktreeMode on, qualityGate 'npm test' (scope everyTask), checkEnvironments [ENV]. Real temp git repo; submit_plan measures requiredChecks [{id:'gate', command:'npm test', configs:['package-lock.json']}].\n- L1: WORKING claim refused EXECUTION_ROUTE_REQUIRED without the marker, claimed with 'vm' (worktree workspace on moe/task/task-1), steps, complete_task with currentBranch -> REVIEW; then record_candidate (M on B, protectedEntries from git ls-tree) -> runner dispatch (checkId gate) + observation passed -> record_commit -> record_delivery_receipt -> finalize_attempt landed; QA claim refused without the route, claimed with it; qa_approve -> DONE.\n  - ORDER NOTE: the plan listed finalize before the receipt. I followed the wrapper's real order (wt_land_rounds: row, receipt, then finalize_postflight; CQ-V08 defers the finalize until the receipt), as the step says to read it from moe-agent.sh.\n- L2: consumer unmet until DONE, released at DONE; after archive_task it stays claimable through the receipt (real claim with route). The twin with no receipt is withheld: NOT_ALLOWED 'unmet dependencies: task-1 [ARCHIVED, missing delivery-receipt]'.\n- L3: (a) no observation DELIVERY_EVIDENCE_MISSING [required-check:npm test]; (b) the old host L6 /mcp record_check_run: recorded, still refused; (c) unlisted environment CHECK_ENVIRONMENT_NOT_APPROVED, no bytes moved; (d) clearReadiness() -> next strict claim EXECUTION_PROFILE_NOT_READY; (e) and (f) below. Every refusal asserts its exact codeName and that tasks/attempts/candidates/checks/reviews/receipts bytes did not move.\n- DEFECT FOUND, filed as task-ee10405f (HIGH, BACKLOG). Neither wrapper sends protectedEntries with record_candidate (moe-agent.sh record_candidate_rpc:2724, moe-agent.ps1 Send-MoeCandidate:2168), and check-dispatch.mjs requires a requiredChecks definition (a bare gate is RUNNER_DEPENDENCIES_UNDECLARED). So every verified-local qa_approve the real wrappers land is refused protected-checks-unmeasured. Row (e) pins the daemon's fail-closed refusal for today's wrapper candidate shape; (f) pins protected-check-changed for a changed lockfile.\n- Mutation checks on a scratch copy, all reverted (cmp SAME):\n  - M1, readiness hold dropped: every row fails, L1 at StateManager.updateSettings with EXECUTION_PROFILE_NOT_READY.\n  - M2, receipt dropped: L2's archived row fails (expected [task-1] to equal []).\n  - M3, production strictShortfall ignores the ARCHIVED receipt: the twin row fails.\n  - M4, production claim never needs the route: all 9 fail.\n- tsc on the file (temp tsconfig, since the project tsconfig excludes tests): exit 0.\n- checkRefs[2] verbatim (fresh /tmp/m07fa snapshot): 6 files, 141 tests passed, EXIT 0.",
+      "startedAt": "2026-11-05T07:25:09.536Z",
+      "completedAt": "2026-11-05T07:34:20.102Z"
     },
     {
       "stepId": "step-2",
@@ -61,8 +67,8 @@
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-57d48f38",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -205,11 +211,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-05T07:21:53.980Z",
+  "updatedAt": "2026-11-05T07:36:23.725Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-b742aab1",
@@ -217,7 +224,8 @@
     "architect-c33f294e",
     "architect-cd0ac706",
     "architect-67c762f6",
-    "governor-92dd95b0"
+    "governor-92dd95b0",
+    "worker-57d48f38"
   ],
   "commits": [
     {
@@ -255,6 +263,21 @@
       "treeId": "f8cde410ff5e372173242cf5170b5116880ea66b",
       "status": "PLANNING",
       "pushed": true
+    },
+    {
+      "sha": "49c5608bcdaf0c79db5667892e75ea2d8a486e14",
+      "ref": "refs/heads/moe/task/task-1a8f1d0e199046a289e94a5453d758b8",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-57d48f38@2026-11-05T07:21:51Z",
+      "paths": [
+        "packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts"
+      ],
+      "recordedBy": "worker-57d48f38",
+      "recordedAt": "2026-11-05T07:36:23.725Z",
+      "treeId": "6b69609dc400458cd2cc3bbba594e316b824d42a",
+      "status": "BLOCKED",
+      "pushed": true
     }
   ],
   "filesModified": [
@@ -263,27 +286,31 @@
     ".moe/tasks/task-7f82e200c224418896667560a49fe0ab.json",
     ".moe/tasks/task-81bb2dddbf944a4297c2a87734f3bb44.json",
     ".moe/tasks/task-f4811a729f9e436ba129a65c12d348c1.json",
-    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json"
+    ".moe/tasks/task-fd196d137c44497188d2639f149e259b.json",
+    "packages/moe-daemon/src/__acceptance__/verifiedLocalActivation.acceptance.test.ts"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-67c762f6@2026-11-04T18:09:11Z",
-    "at": "2026-11-04T18:35:24.350Z"
+    "sessionId": "worker-57d48f38@2026-11-05T07:21:51Z",
+    "at": "2026-11-05T07:36:23.725Z"
   },
-  "blockedReason": null,
-  "blockedOnTaskIds": null,
+  "blockedReason": "Step 1 is done; step 2 is on hold for bug task-ee10405f (HIGH; it is in BACKLOG, and a human or governor has to move it to PLANNING). Neither wrapper sends protectedEntries with record_candidate (moe-agent.sh record_candidate_rpc:2724, moe-agent.ps1 Send-MoeCandidate:2168). check-dispatch.mjs, for its part, needs a requiredChecks definition: a bare qualityGate is RUNNER_DEPENDENCIES_UNDECLARED. As a result, every verified-local qa_approve the real wrappers land is refused DELIVERY_EVIDENCE_MISSING [protected-checks-unmeasured]; acceptance row L3(e) pins this. Step 2's plugin and real-VM runbook (DoD 8) would ship launcher bytes whose QA leg cannot pass, and step 3 forbids recording a promotion on a failed run. Resume at step 2 once task-ee10405f lands; the plugin must be built from a tree that contains the fix. Runbook @mentions go to governor-92dd95b0 (governor-e6142a94 is offline per comment-7238bd91).",
+  "blockedOnTaskIds": [
+    "task-ee10405f63834cd9a57118136ab3a4f5"
+  ],
   "blockedResourceId": null,
-  "blockedFromStatus": null,
-  "blockedAt": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-05T07:35:38.734Z",
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T18:32:50.726Z",
   "executionContract": {
@@ -377,5 +404,6 @@
     "from": "WORKING",
     "at": "2026-11-04T18:08:33.991Z",
     "seq": 1
-  }
+  },
+  "workStartedAt": "2026-11-05T07:25:09.536Z"
 }
