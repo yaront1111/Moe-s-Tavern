@@ -104,6 +104,14 @@ describe('a finalizing close with no completion recorded routes a worktree landi
     expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: 'contention', count: 1 } });
   });
 
+  it('a completion recorded before a reopen (which records no rejection) does not count either', async () => {
+    await seed({ commits: [completion('2026-11-04T00:10:00.000Z')], reopenedAt: '2026-11-04T01:00:00.000Z' });
+
+    await CLOSERS['moe.deregister_worker']();
+
+    expect(task()).toMatchObject({ status: 'WORKING', landingRetry: { reason: 'contention', count: 1 } });
+  });
+
   const KEPT: Array<[string, Partial<Task>, ExecutionWorkspaceMode | 'legacy']> = [
     ['a REVIEW row with a completion recorded this round', { commits: [completion('2026-11-04T00:10:00.000Z')] }, 'worktree'],
     ['a shared-mode attempt', {}, 'shared'],

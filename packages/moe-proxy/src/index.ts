@@ -41,6 +41,10 @@ const MESSAGE_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_MESSAGE_TIMEOUT_M
 // 11 minutes: longer than the daemon's longest blocking long-poll timeout.
 const BLOCKING_TIMEOUT_MS = parsePositiveIntEnv(process.env.MOE_BLOCKING_TIMEOUT_MS, 11 * 60 * 1000);
 const TIMEOUT_CHECK_INTERVAL_MS = 5000;
+// An upgrade the daemon never answers (a frozen daemon still accepts TCP) is a
+// failed connect, retried like a refused one. A request queued behind it times
+// out at MESSAGE_TIMEOUT_MS, so the handshake never gets longer than that.
+const HANDSHAKE_TIMEOUT_MS = Math.min(MESSAGE_TIMEOUT_MS, 10000);
 
 let reconnectAttempts = 0;
 // Wall-clock start of the current disconnect's retry window; null when connected.
@@ -48,10 +52,13 @@ let reconnectStartedAt: number | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let isConnected = false;
 let currentWebSocket: WebSocket | null = null;
-let pendingMessages: string[] = [];
+// A message waiting for a live socket. A request (id) among them expires at its
+// own timeout, as a sent one does, and is then never sent.
+type QueuedMessage = { payload: string; id: string | number | null; queuedAt: number; timeoutMs: number };
+let pendingMessages: QueuedMessage[] = [];
 let pendingRequestIds = new Set<string | number>();
 // Track when each request was sent and its timeout for timeout detection
-type PendingRequest = { sentAt: number; timeoutMs: number; blocking: boolean };
+type PendingRequest = { sentAt: number; timeoutMs: number };
 let pendingRequestTimes = new Map<string | number, PendingRequest>();
 let timeoutCheckTimer: NodeJS.Timeout | null = null;
 let shuttingDown = false;
@@ -135,6 +142,8 @@ function extractRequestId(line: string): string | number | null {
   return null;
 }
 
+const BATCH_REFUSED_MESSAGE = 'JSON-RPC batches are not supported: send each request on its own line';
+
 const requestIdOf = (msg: unknown): string | number | null => {
   const id = (msg as { id?: unknown } | null)?.id;
   return typeof id === 'string' || typeof id === 'number' ? id : null;
@@ -169,13 +178,17 @@ function writeIdentityRefusal(parsed: unknown, element: unknown, refusal: Execut
     writeErrorWithId(requestIdOf(parsed), refusal.message, refusal.code, data);
     return;
   }
-  const message = `batch refused: ${refusal.message}`;
-  const ids = parsed.map(requestIdOf).filter((id) => id !== null);
+  writeBatchErrors(parsed, `batch refused: ${refusal.message}`, refusal.code, data);
+}
+
+/** Answer each request in a refused batch, in one array (one null-id error when it holds none). */
+function writeBatchErrors(batch: unknown[], message: string, code: number, data?: Record<string, unknown>): void {
+  const ids = batch.map(requestIdOf).filter((id) => id !== null);
   if (ids.length === 0) {
-    writeErrorWithId(null, message, refusal.code, data);
+    writeErrorWithId(null, message, code, data);
     return;
   }
-  safeStdoutWrite(JSON.stringify(ids.map((id) => ({ jsonrpc: '2.0', id, error: { code: refusal.code, message, data } }))) + '\n');
+  safeStdoutWrite(JSON.stringify(ids.map((id) => ({ jsonrpc: '2.0', id, error: { code, message, data } }))) + '\n');
 }
 
 // A reader that stopped reading gets this long before exitAfterStdoutDrain gives up.
@@ -286,7 +299,7 @@ function trackRequest(parsed: Record<string, unknown>, sentAt: number): void {
   if (parsed.id === undefined || parsed.id === null) return;
   const id = parsed.id as string | number;
   pendingRequestIds.add(id);
-  pendingRequestTimes.set(id, { sentAt, timeoutMs: getRequestTimeout(parsed), blocking: isBlockingLongPoll(parsed) });
+  pendingRequestTimes.set(id, { sentAt, timeoutMs: getRequestTimeout(parsed) });
 }
 
 /** Forget a request id before answering it, so a late daemon reply is dropped. */
@@ -343,6 +356,15 @@ function checkMessageTimeouts(): void {
     safeStdoutWrite(errorResponse + '\n');
     writeLog(`Request ${id} timed out`);
   }
+
+  const expired = pendingMessages.filter((msg) => msg.id !== null && now - msg.queuedAt >= msg.timeoutMs);
+  if (expired.length === 0) return;
+  pendingMessages = pendingMessages.filter((msg) => !expired.includes(msg));
+  for (const msg of expired) {
+    forgetRequest(msg.id!);
+    writeErrorWithId(msg.id, `Request timed out after ${msg.timeoutMs}ms waiting for a daemon connection`);
+    writeLog(`Queued request ${msg.id} timed out`);
+  }
 }
 
 function startTimeoutChecker(): void {
@@ -380,11 +402,13 @@ function closeWebSocket(): void {
 /**
  * Stop reading work and drain what is in flight, then exit 0 once stdout has
  * drained (exitAfterStdoutDrain). Every request
- * gets the flat 2s grace, except a blocking long-poll after stdin EOF in a
- * session that never sent `initialize` (a wrapper one-shot RPC): it drains to
- * its own recorded deadline, or fails at once when its socket is gone. A
- * signal caps any drain at 2s from that signal; a repeat call only tightens
- * that cap. MOE_PROXY_ONESHOT_DEADLINE_MS bounds the whole process separately.
+ * gets the flat 2s grace, except one already sent to the daemon when stdin hits
+ * EOF in a session that never sent `initialize` (a wrapper one-shot RPC): it
+ * drains to its own recorded per-message deadline, the one it would get without
+ * EOF, or fails at once when its socket is gone. A message still queued (no
+ * live socket: the daemon is unreachable) keeps the 2s grace. A signal caps any
+ * drain at 2s from that signal; a repeat call only tightens that cap.
+ * MOE_PROXY_ONESHOT_DEADLINE_MS bounds the whole process separately.
  */
 function gracefulShutdown(cause: ShutdownCause): void {
   if (cause === 'signal') signalCapAt = Math.min(signalCapAt, Date.now() + SHUTDOWN_GRACE_MS);
@@ -408,7 +432,7 @@ function gracefulShutdown(cause: ShutdownCause): void {
 
 /** When, and with which error, the drain answers one sent request. */
 function drainVerdict(entry: PendingRequest | undefined, graceAt: number): { at: number; message: string } {
-  if (!entry?.blocking || shutdownCause !== 'eof' || sawInitialize) {
+  if (!entry || shutdownCause !== 'eof' || sawInitialize) {
     return { at: graceAt, message: SHUTDOWN_PENDING_MESSAGE };
   }
   // ws 'close' leaves emission to the drain while shutting down, and nothing
@@ -436,10 +460,7 @@ function drainTick(): void {
     pendingMessages = [];
     writeLog(`Timeout waiting for ${queued.length} queued message(s)`);
     for (const msg of queued) {
-      try {
-        const parsed = JSON.parse(msg);
-        if (parsed.id !== undefined && parsed.id !== null) writeErrorWithId(parsed.id, SHUTDOWN_QUEUED_MESSAGE);
-      } catch { /* drop unparseable */ }
+      if (msg.id !== null) writeErrorWithId(msg.id, SHUTDOWN_QUEUED_MESSAGE);
     }
   }
   if (pendingRequestIds.size > 0 || pendingMessages.length > 0) return;
@@ -481,10 +502,7 @@ function expireDeadline(): void {
   stopTimeoutChecker();
   const ids: (string | number)[] = [...pendingRequestIds];
   for (const msg of pendingMessages) {
-    try {
-      const parsed = JSON.parse(msg);
-      if (parsed.id !== undefined && parsed.id !== null) ids.push(parsed.id);
-    } catch { /* drop unparseable */ }
+    if (msg.id !== null) ids.push(msg.id);
   }
   pendingMessages = [];
   ids.forEach(forgetRequest);
@@ -505,14 +523,15 @@ function connect(projectPath: string): void {
       process.exit(1);
       return;
     }
+    // A retryable error is a transient daemon.json read (daemon mid-restart).
     if (withinReconnectWindow()) {
       const delay = calculateReconnectDelay();
       reconnectAttempts++;
-      writeLog(`Daemon not running, retrying in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
+      writeLog(`${daemonInfo.error ?? 'Daemon not running'}, retrying in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
       reconnectTimer = setTimeout(() => connect(projectPath), delay);
       return;
     }
-    writeError('Moe daemon not running after retries. Start with: moe-daemon start');
+    writeError(`Moe daemon not running after retries${daemonInfo.error ? ` (${daemonInfo.error})` : ''}. Start with: moe-daemon start`);
     process.exit(1);
     return;
   }
@@ -549,7 +568,7 @@ function openDaemonSocket(projectPath: string, port: number): void {
   // Ensure any lingering socket and handlers are torn down before reconnecting.
   closeWebSocket();
 
-  const ws = new WebSocket(`ws://${getDaemonHost()}:${port}/mcp`);
+  const ws = new WebSocket(`ws://${getDaemonHost()}:${port}/mcp`, { handshakeTimeout: HANDSHAKE_TIMEOUT_MS });
   currentWebSocket = ws;
 
   ws.on('open', () => {
@@ -564,11 +583,11 @@ function openDaemonSocket(projectPath: string, port: number): void {
     // Send any pending messages that arrived during reconnect
     const now = Date.now();
     while (pendingMessages.length > 0) {
-      const msg = pendingMessages.shift()!;
+      const { payload } = pendingMessages.shift()!;
       try {
-        trackRequest(JSON.parse(msg), now);
+        trackRequest(JSON.parse(payload), now);
       } catch { /* already validated */ }
-      safeSend(ws, msg);
+      safeSend(ws, payload);
     }
   });
 
@@ -613,8 +632,9 @@ function openDaemonSocket(projectPath: string, port: number): void {
     currentWebSocket = null;
     writeLog(`Connection closed: ${code} ${reason}`);
 
-    // Stop timeout checker while disconnected
-    stopTimeoutChecker();
+    // Stop timeout checker while disconnected, unless queued requests still
+    // need it to reach their deadlines.
+    if (pendingMessages.length === 0) stopTimeoutChecker();
 
     // Clear any existing reconnect timer to prevent stacking
     if (reconnectTimer) {
@@ -653,17 +673,14 @@ function openDaemonSocket(projectPath: string, port: number): void {
     } else {
       // Also send errors for queued messages that never made it out
       for (const msg of pendingMessages) {
-        try {
-          const parsed = JSON.parse(msg);
-          if (parsed.id !== undefined && parsed.id !== null) {
-            const errorResponse = JSON.stringify({
-              jsonrpc: '2.0',
-              id: parsed.id,
-              error: { code: -32000, message: 'Lost connection to daemon after max retries' }
-            });
-            safeStdoutWrite(errorResponse + '\n');
-          }
-        } catch { /* ignore parse errors */ }
+        if (msg.id !== null) {
+          const errorResponse = JSON.stringify({
+            jsonrpc: '2.0',
+            id: msg.id,
+            error: { code: -32000, message: 'Lost connection to daemon after max retries' }
+          });
+          safeStdoutWrite(errorResponse + '\n');
+        }
       }
       pendingMessages = [];
 
@@ -735,6 +752,14 @@ function openDaemonSocket(projectPath: string, port: number): void {
           // Last, so it checks the daemon name and exactly what is forwarded.
           const identity = fenceExecutionIdentity(parsed);
           if (identity === null) continue;
+          // The steps above and the request tracking below read one message,
+          // so a batch would reach the daemon without its workerId, timeout or
+          // drain. Refuse it whole; each request in it gets an error.
+          if (Array.isArray(parsed)) {
+            writeLog(`Refused a JSON-RPC batch of ${parsed.length} message(s)`);
+            writeBatchErrors(parsed, BATCH_REFUSED_MESSAGE, -32600);
+            continue;
+          }
           const payload = (renamed || mutated || stamped || typed || identity) ? JSON.stringify(parsed) : line;
           if (TOOL_NAME_STYLE === 'underscore' && parsed.method === 'tools/list' &&
               parsed.id !== undefined && parsed.id !== null) {
@@ -759,7 +784,8 @@ function openDaemonSocket(projectPath: string, port: number): void {
               safeStdoutWrite(errorResponse + '\n');
               writeLog('Message queue overflow, dropped newest message');
             } else {
-              pendingMessages.push(payload);
+              pendingMessages.push({ payload, id: requestIdOf(parsed), queuedAt: Date.now(), timeoutMs: getRequestTimeout(parsed) });
+              startTimeoutChecker();
             }
           }
         } catch {

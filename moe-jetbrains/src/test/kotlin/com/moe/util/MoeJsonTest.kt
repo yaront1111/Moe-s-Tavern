@@ -208,6 +208,22 @@ class MoeJsonTest {
         assertEquals(4, settings.taskSizing.maxDistinctFiles)
     }
 
+    // J11: an unguarded asJsonObject threw on one bad element, dropping the snapshot and flipping a live socket to "disconnected".
+    @Test
+    fun `parseState skips null and non-object epic and task elements and keeps the rest`() {
+        val state = parseState(
+            """
+            {
+              "epics": [null, 7, "epic-x", [], {"id": "epic-1", "title": "Epic"}],
+              "tasks": [null, true, {"id": "task-1", "epicId": "epic-1", "title": "Task"}, ["task-2"]]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("epic-1"), state.epics.map { it.id })
+        assertEquals(listOf("task-1"), state.tasks.map { it.id })
+    }
+
     @Test
     fun `parseState falls back safely for malformed optional settings`() {
         val state = parseState(

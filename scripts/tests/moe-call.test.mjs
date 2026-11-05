@@ -184,7 +184,7 @@ function runtimeLayout(t) {
   return { dir, proxies, put, helper: put('install/scripts/moe-call.sh', readFileSync(helper)) };
 }
 
-function callHelper(layout, { marker, proxyPath, cwd, tool = 'get_context', args = '{}' } = {}) {
+function callHelper(layout, { marker, proxyPath, cwd, tool = 'get_context', args = '{}', searchPath } = {}) {
   const log = path.join(layout.dir, 'ran.log');
   rmSync(log, { force: true });
   // A seat's own env must not decide the row: set or drop every input explicitly.
@@ -194,6 +194,10 @@ function callHelper(layout, { marker, proxyPath, cwd, tool = 'get_context', args
   delete env.MOE_PROXY_PATH;
   if (marker !== undefined) env.MOE_RUNTIME_PROTECTED = marker;
   if (proxyPath !== undefined) env.MOE_PROXY_PATH = proxyPath;
+  if (searchPath !== undefined) {
+    for (const key of Object.keys(env)) if (key.toUpperCase() === 'PATH') delete env[key];
+    env.PATH = searchPath;
+  }
   const result = spawnSync(bash, [shellPath(layout.helper), tool, args,
     '--project', shellPath(path.join(layout.dir, 'scratch project'))], { cwd, env, timeout: 20_000 });
   assert.ifError(result.error);
@@ -251,6 +255,28 @@ test('without the marker the fallback order is unchanged', t => {
   assert.equal(none.status, 1);
   assert.deepEqual(none.ran, []);
   assert.match(none.stderr, /moe-proxy not found\. Set MOE_PROXY_PATH or install Moe\./);
+});
+
+// Only the global-install step reads its config with Python. With none on PATH
+// find_python fails, which under set -e ended every call silently.
+test('without Python on PATH the call still runs, and only the global-install step is skipped', t => {
+  const layout = runtimeLayout(t);
+  let searchPath = path.dirname(process.execPath); // Git Bash adds its own /usr/bin, which holds no Python.
+  if (!windows) {
+    searchPath = path.join(layout.dir, 'bin');
+    mkdirSync(searchPath);
+    symlinkSync(process.execPath, path.join(searchPath, 'node'));
+    for (const tool of ['dirname', 'find']) {
+      symlinkSync(['/usr/bin', '/bin'].map(dir => path.join(dir, tool)).find(file => existsSync(file)), path.join(searchPath, tool));
+    }
+  }
+  for (const label of ['named', 'repo', 'plugin']) {
+    const result = callHelper(layout, { proxyPath: nativePath(layout.proxies.named), searchPath });
+    assert.equal(result.status, 0, `${label}: ${result.stderr}`);
+    assert.deepEqual(result.ran, [label]);
+    assert.deepEqual(JSON.parse(result.stdout), { ran: label, tool: 'moe.get_context' });
+    rmSync(layout.proxies[label]);
+  }
 });
 
 test('without the marker a relative MOE_PROXY_PATH still resolves from the caller directory', t => {

@@ -12,6 +12,7 @@ import { MoeWebSocketServer } from './WebSocketServer.js';
 import { McpAdapter } from './McpAdapter.js';
 import { StateManager } from '../state/StateManager.js';
 import * as daemon from '../index.js';
+import { logger } from '../util/logger.js';
 import type { DaemonInfo } from '../types/schema.js';
 
 const cleanups: (() => unknown | Promise<unknown>)[] = [];
@@ -166,6 +167,18 @@ it('L-invalid: invalid arguments reject asynchronously without a wildcard listen
   await expect(listenOnHosts(primary, [], 0, () => {})).rejects.toThrow();
   await expect(listenOnHosts(primary, ['127.0.0.1'], -1, () => {})).rejects.toThrow('127.0.0.1');
   expect(primary.listening).toEqual(false);
+});
+
+it('L-error: a runtime error on an extra listener is logged, not thrown as an uncaught exception', async () => {
+  const primary = server();
+  const extra = server();
+  vi.spyOn(http, 'createServer').mockReturnValueOnce(extra);
+  vi.spyOn(extra, 'listen').mockImplementation(() => { setImmediate(() => extra.emit('listening')); return extra; });
+  const logged = vi.spyOn(logger, 'error');
+  const servers = await within(listenOnHosts(primary, ['127.0.0.1', '192.0.2.1'], 0, () => {}));
+  const error = Object.assign(new Error('accept EMFILE'), { code: 'EMFILE' });
+  expect(() => servers[1].emit('error', error)).not.toThrow();
+  expect(logged).toHaveBeenCalledWith({ error, host: '192.0.2.1' }, 'Extra bind listener error');
 });
 
 it.skipIf(!canBindAdapter)('L-port: selection skips a port held only on the extra address', async () => {

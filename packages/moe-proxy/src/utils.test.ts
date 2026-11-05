@@ -188,6 +188,31 @@ describe('utils', () => {
       expect(result).toBeNull();
     });
 
+    // A restarting daemon removes and rewrites daemon.json, so these reads are
+    // retried like a missing file instead of ending the proxy.
+    describe('transient reads', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it.each(['', '{"port":3000,"pid":12'])('retries a daemon.json that is not complete JSON (%j)', (text) => {
+        fs.mkdirSync(path.join(testDir, '.moe'));
+        fs.writeFileSync(path.join(testDir, '.moe', 'daemon.json'), text);
+        expect(readDaemonInfoResult(testDir)).toEqual({ info: null, retryable: true, error: 'daemon.json is not complete JSON' });
+      });
+
+      it.each(['ENOENT', 'EBUSY', 'EPERM', 'EACCES'])('retries a read that fails with %s', (code) => {
+        fs.mkdirSync(path.join(testDir, '.moe'));
+        fs.writeFileSync(path.join(testDir, '.moe', 'daemon.json'), JSON.stringify({
+          port: 3000, pid: 12345, startedAt: '2024-01-01T00:00:00Z', projectPath: testDir,
+        }));
+        vi.spyOn(fs, 'openSync').mockImplementationOnce(() => {
+          throw Object.assign(new Error(`${code}: transient`), { code });
+        });
+        expect(readDaemonInfoResult(testDir)).toEqual({ info: null, retryable: true, error: `daemon.json could not be read (${code})` });
+      });
+    });
+
     it('accepts a Windows-daemon daemon.json read from the WSL mount of the same project', () => {
       // WSL agent scenario: the Windows daemon recorded D:\... while the
       // WSL-side proxy resolves the same directory as /mnt/d/...

@@ -99,6 +99,7 @@ function openHost(tasks) {
     client['ws'] = { readyState: 1, send: frame => h.frames.push(JSON.parse(frame)), close() {} };
     client['_connectionState'] = 'connected';
     client['state'] = { tasks: plain(tasks), epics: plain(EPICS) };
+    h.client = client;
     const planReview = runModule('PlanReviewPanel.ts', SOURCES.planReview, { vscode });
     const taskDetail = runModule('TaskDetailPanel.ts', SOURCES.taskDetail, { vscode, './PlanReviewPanel': planReview });
     const { BoardViewProvider } = runModule('BoardViewProvider.ts', SOURCES.provider, {
@@ -276,6 +277,22 @@ test('board-confirm H6: a clear with no DONE task in scope asks nothing and send
         h.answer = 'Archive';
         await h.send({ type: 'archiveDoneTasks', epicId: 'epic-9' });
         assert.deepEqual({ warnings: h.warnings, frames: h.frames }, { warnings: [], frames: [] });
+    } finally { h.dispose(); }
+});
+
+test('board-confirm H7: a confirmed Delete or clear that cannot be sent says so (audit V1)', async () => {
+    const h = openHost(TASKS);
+    try {
+        h.client['_connectionState'] = 'disconnected'; // the daemon went away after the board rendered
+        h.answer = 'Delete';
+        await h.send({ type: 'deleteTask', taskId: 'task-1' });
+        h.answer = 'Archive';
+        await h.send({ type: 'archiveDoneTasks' });
+        assert.deepEqual(h.warnings.map(w => w.message), [
+            DELETE_TEXT, 'Not connected to Moe daemon — task was not deleted.',
+            archiveText(3), 'Not connected to Moe daemon — done tasks were not archived.'
+        ]);
+        assert.deepEqual(h.frames, []);
     } finally { h.dispose(); }
 });
 

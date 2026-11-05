@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '../util/errors.js';
+import { notFound, invalidState, invalidInput, missingRequired, MoeError, MoeErrorCode } from '../util/errors.js';
 import { MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from '../util/planSize.js';
 import { normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { assertContextFetched, assertWorkerHoldsTask } from '../util/enforcement.js';
@@ -30,7 +30,8 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as {
+      // A tools/call that omits `arguments` hands us undefined: refuse it coded.
+      const params = (args || {}) as {
         taskId: string;
         stepId: string;
         modifiedFiles?: string[];
@@ -40,6 +41,7 @@ export function completeStepTool(_state: StateManager): ToolDefinition {
         generation?: unknown;
         sessionId?: unknown;
       };
+      if (!params.taskId) throw missingRequired('taskId');
 
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);

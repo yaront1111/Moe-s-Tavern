@@ -59,10 +59,10 @@ export type { ImplementationStep as Step } from '../types/moe';
 
 type StateSnapshot = MoeStateSnapshot;
 
-// Output channel for logging
+// Output channel for logging; extension.ts writes to this same "Moe" channel rather than opening a second one.
 let outputChannel: vscode.OutputChannel | undefined;
 
-function getOutputChannel(): vscode.OutputChannel {
+export function getOutputChannel(): vscode.OutputChannel {
     if (!outputChannel) {
         outputChannel = vscode.window.createOutputChannel('Moe');
     }
@@ -627,6 +627,20 @@ export function parseExecutionReadiness(payload: unknown): ExecutionReadiness | 
     return { profile, ready, missingCapabilities: [...ids], evaluatedAt };
 }
 
+/**
+ * Daemon refusals that get their own message from the surface that sent them (plan approval, agent release, epic save),
+ * and reads, which change nothing and are retried by their views. Every other ERROR frame reaches the user, as in
+ * JetBrains, except an unknown message type: an older daemon's answer to a newer frame, which only the log needs.
+ */
+const OWN_ERROR_UI = new Set(['APPROVE_TASK', 'RELEASE_TASK', 'UPDATE_EPIC']);
+export function daemonErrorNotice(operation: unknown, message: string): string | undefined {
+    if (typeof operation === 'string' && operation.length > 0) {
+        if (OWN_ERROR_UI.has(operation) || operation.startsWith('GET_')) { return undefined; }
+        return `Moe: ${operation} failed: ${message}`;
+    }
+    return message.startsWith('Unknown message type') ? undefined : `Moe: ${message}`;
+}
+
 /** An ERROR about a readiness request: its operation names it, or (an older daemon, no operation) its message does. */
 function isReadinessError(message: Record<string, unknown>): boolean {
     const payload = isPlainObject(message.payload) ? message.payload : {};
@@ -835,6 +849,13 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly handshakeTimeoutMs = 15000;
     private reconnectAttempts = 0;
     private readonly maxReconnectAttempts = 10;
+    /** Reconnect backoff: the first retry waits reconnectDelayMs, each next one twice as long, up to maxReconnectDelayMs. */
+    private readonly reconnectDelayMs = 5000;
+    private readonly maxReconnectDelayMs = 30000;
+    /** Resolves when the connect attempt in flight (if any) has returned; reconnect() waits it out. */
+    private attemptSettled: Promise<void> = Promise.resolve();
+    /** GET_ACTIVITY_LOG replies come back in request order: one entry per request sent, with its caller's callback if any. */
+    private readonly activityLogRequests: Array<((events: ActivityEvent[] | undefined) => void) | undefined> = [];
     private stateReady = false;
     private stateReadyResolve: (() => void) | undefined;
     private stateReadyPromise: Promise<void>;
@@ -908,7 +929,12 @@ export class MoeDaemonClient implements vscode.Disposable {
     private readonly _onAccountAdded = new vscode.EventEmitter<string>();
     public readonly onAccountAdded = this._onAccountAdded.event;
 
-    private daemonShuttingDown = false;
+    /**
+     * Set by DAEMON_SHUTTING_DOWN (sent on every shutdown, crashes included) until a socket opens or the user connects.
+     * The daemon's supervisor may restart it, possibly on another port, so the reconnect loop only re-reads daemon.json:
+     * it never starts a daemon or removes a daemon's metadata.
+     */
+    private awaitingDaemonRestart = false;
     private manualDisconnect = false;
     private disposed = false;
 
@@ -952,7 +978,31 @@ export class MoeDaemonClient implements vscode.Disposable {
         ]);
     }
 
+    /**
+     * Connect on the user's or the extension's behalf: it may start this workspace's daemon, and it starts a fresh
+     * retry budget. The reconnect loop calls openConnection() instead.
+     */
     async connect(): Promise<void> {
+        if (this.disposed) {
+            return;
+        }
+        this.awaitingDaemonRestart = false;
+        this.reconnectAttempts = 0;
+        return this.openConnection();
+    }
+
+    /**
+     * moe.reconnect: disconnect, wait out an attempt still in flight (the disconnect cancels it, or closes the socket it
+     * was opening), then connect afresh. True when the client ends up connected.
+     */
+    async reconnect(): Promise<boolean> {
+        this.disconnect();
+        await this.attemptSettled;
+        await this.connect();
+        return this._connectionState === 'connected';
+    }
+
+    private async openConnection(): Promise<void> {
         if (this.disposed) {
             return;
         }
@@ -968,10 +1018,10 @@ export class MoeDaemonClient implements vscode.Disposable {
             return;
         }
         this.connectInProgress = true;
+        let attemptDone = (): void => { /* replaced below */ };
+        this.attemptSettled = new Promise<void>(resolve => { attemptDone = resolve; });
 
         try {
-            this.daemonShuttingDown = false;
-
             // A live daemon bound off loopback is out of reach, not stale: refuse before the startup work below can
             // spawn a second daemon or delete its daemon.json. JetBrains parity: no automatic retry; moe.connect asks again.
             const bindRefusal = this.daemonBindRefusal();
@@ -982,10 +1032,13 @@ export class MoeDaemonClient implements vscode.Disposable {
                 throw new Error(bindRefusal);
             }
 
-            await this.ensureDaemonRunning();
-            if (this.connectCancelled()) {
-                log('Connect cancelled during daemon startup');
-                return;
+            // Waiting out a daemon restart: the daemon's supervisor starts it again; this client only looks for it.
+            if (!this.awaitingDaemonRestart) {
+                await this.ensureDaemonRunning();
+                if (this.connectCancelled()) {
+                    log('Connect cancelled during daemon startup');
+                    return;
+                }
             }
             // The folder the identity check resolves against: one switched during the probe cannot skip the gate.
             const project = this.getWorkspacePath();
@@ -995,6 +1048,8 @@ export class MoeDaemonClient implements vscode.Disposable {
                 return;
             }
             if (!daemonInfo) {
+                // Retried like a dropped socket (moe.autoConnect gates it), the first connect included.
+                this.scheduleReconnect();
                 throw new Error('Daemon not running. Start daemon first.');
             }
             if (!project) { throw new Error('No workspace selected.'); }
@@ -1002,14 +1057,16 @@ export class MoeDaemonClient implements vscode.Disposable {
                 const refusal = await this.protectedAdmissionRefusal(daemonInfo, project);
                 if (this.connectCancelled()) { return; }
                 if (refusal) {
-                    daemonInfo = await this.replaceUnverifiedDaemon(daemonInfo, project, refusal);
+                    const replaced = await this.replaceUnverifiedDaemon(daemonInfo, project, refusal);
                     if (this.connectCancelled()) { return; }
-                    if (!daemonInfo) {
+                    if (!replaced || 'notice' in replaced) {
                         // JetBrains parity: a refused daemon gets no automatic retry; the refusal asks for a reconnect.
+                        const notice = replaced?.notice ?? refusal;
                         this.manualDisconnect = true;
-                        vscode.window.showErrorMessage(refusal);
-                        throw new Error(refusal);
+                        vscode.window.showErrorMessage(notice);
+                        throw new Error(notice);
                     }
+                    daemonInfo = replaced;
                 }
             }
 
@@ -1121,6 +1178,7 @@ export class MoeDaemonClient implements vscode.Disposable {
             });
         } finally {
             this.connectInProgress = false;
+            attemptDone();
         }
     }
 
@@ -1140,6 +1198,7 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
         log('Connected to Moe daemon');
         this.reconnectAttempts = 0;
+        this.awaitingDaemonRestart = false;
         this.setConnectionState('connected');
         this.startPingInterval();
         this.requestState();
@@ -1230,8 +1289,12 @@ export class MoeDaemonClient implements vscode.Disposable {
     // Outbound: Task operations
     // =========================================================================
 
-    updateTaskStatus(taskId: string, status: string): void {
-        this.sendMessage('UPDATE_TASK', { taskId, updates: { status } });
+    /**
+     * The outbound task and epic operations below return false when nothing was sent (not connected, or the
+     * send failed); a caller that reports success or closes its form must check it.
+     */
+    updateTaskStatus(taskId: string, status: string): boolean {
+        return this.sendMessage('UPDATE_TASK', { taskId, updates: { status } });
     }
 
     createTask(
@@ -1240,19 +1303,19 @@ export class MoeDaemonClient implements vscode.Disposable {
         description: string,
         definitionOfDone: string[],
         priority: TaskPriority
-    ): void {
-        this.sendMessage('CREATE_TASK', { epicId, title, description, definitionOfDone, priority });
+    ): boolean {
+        return this.sendMessage('CREATE_TASK', { epicId, title, description, definitionOfDone, priority });
     }
 
     updateTaskDetails(
         taskId: string,
         updates: { title?: string; description?: string; definitionOfDone?: string[]; priority?: TaskPriority }
-    ): void {
-        this.sendMessage('UPDATE_TASK', { taskId, updates });
+    ): boolean {
+        return this.sendMessage('UPDATE_TASK', { taskId, updates });
     }
 
-    deleteTask(taskId: string): void {
-        this.sendMessage('DELETE_TASK', { taskId });
+    deleteTask(taskId: string): boolean {
+        return this.sendMessage('DELETE_TASK', { taskId });
     }
 
     /**
@@ -1365,8 +1428,8 @@ export class MoeDaemonClient implements vscode.Disposable {
         return this.sendMessage('SET_ACCOUNT_SWITCH_PERCENT', { switchAtPercent: percent });
     }
 
-    addTaskComment(taskId: string, content: string): void {
-        this.sendMessage('ADD_TASK_COMMENT', { taskId, content });
+    addTaskComment(taskId: string, content: string): boolean {
+        return this.sendMessage('ADD_TASK_COMMENT', { taskId, content });
     }
 
     // =========================================================================
@@ -1378,8 +1441,8 @@ export class MoeDaemonClient implements vscode.Disposable {
         description: string,
         architectureNotes?: string,
         epicRails?: string[]
-    ): void {
-        this.sendMessage('CREATE_EPIC', { title, description, architectureNotes, epicRails });
+    ): boolean {
+        return this.sendMessage('CREATE_EPIC', { title, description, architectureNotes, epicRails });
     }
 
     /** Returns false when nothing was sent; a caller that gates UI on delivery must check it. */
@@ -1390,8 +1453,8 @@ export class MoeDaemonClient implements vscode.Disposable {
         return this.sendMessage('UPDATE_EPIC', { epicId, updates });
     }
 
-    deleteEpic(epicId: string): void {
-        this.sendMessage('DELETE_EPIC', { epicId });
+    deleteEpic(epicId: string): boolean {
+        return this.sendMessage('DELETE_EPIC', { epicId });
     }
 
     // =========================================================================
@@ -1402,12 +1465,18 @@ export class MoeDaemonClient implements vscode.Disposable {
         return this.sendMessage('UPDATE_SETTINGS', settings);
     }
 
-    archiveDoneTasks(epicId?: string): void {
-        this.sendMessage('ARCHIVE_DONE_TASKS', epicId ? { epicId } : {});
+    archiveDoneTasks(epicId?: string): boolean {
+        return this.sendMessage('ARCHIVE_DONE_TASKS', epicId ? { epicId } : {});
     }
 
-    requestActivityLog(limit?: number): void {
-        this.sendMessage('GET_ACTIVITY_LOG', limit ? { limit } : {});
+    /**
+     * GET_ACTIVITY_LOG. With `onReply`, the reply to this request goes to it alone (undefined when the daemon refused
+     * it) instead of onActivityLog, so a view's own request can never answer it. False when nothing was sent.
+     */
+    requestActivityLog(limit?: number, onReply?: (events: ActivityEvent[] | undefined) => void): boolean {
+        if (!this.sendMessage('GET_ACTIVITY_LOG', limit ? { limit } : {})) { return false; }
+        this.activityLogRequests.push(onReply);
+        return true;
     }
 
     /**
@@ -1516,7 +1585,11 @@ export class MoeDaemonClient implements vscode.Disposable {
         return refusal;
     }
 
-    private async replaceUnverifiedDaemon(info: DaemonEndpoint, project: string, refusal: string): Promise<DaemonEndpoint | undefined> {
+    /**
+     * The admitted replacement; a notice when the installed CLI's `stop` exited non-zero, which means it left the daemon
+     * running (it could not verify it, for one) and no replacement may start over it; undefined for every other refusal.
+     */
+    private async replaceUnverifiedDaemon(info: DaemonEndpoint, project: string, refusal: string): Promise<DaemonEndpoint | { notice: string } | undefined> {
         const pid = info.pid;
         if (info.fromConfig || !Number.isInteger(pid) || pid === undefined || pid <= 0) { return undefined; }
         try {
@@ -1527,8 +1600,14 @@ export class MoeDaemonClient implements vscode.Disposable {
             const choice = await vscode.window.showWarningMessage(refusal, { modal: true,
                 detail: 'Stop and Replace stops that daemon with the installed Moe CLI and starts the installed runtime.' }, 'Stop and Replace');
             if (this.connectCancelled() || choice !== 'Stop and Replace') { return undefined; }
-            const stopped = await this.stopProtectedDaemon(project, selection.ready);
-            if (this.connectCancelled() || !stopped) { return undefined; }
+            const stopCode = await this.stopProtectedDaemon(project, selection.ready);
+            if (this.connectCancelled() || stopCode === undefined) { return undefined; }
+            if (stopCode !== 0) {
+                const notice = `Protected execution profile: the installed Moe CLI did not stop the running Moe daemon (pid ${pid}; `
+                    + `stop exited ${stopCode}), so no replacement was started. Stop that process yourself, then reconnect.`;
+                log(notice);
+                return { notice };
+            }
             const cleared = await this.waitForReplacementExit(pid, project);
             if (this.connectCancelled() || !cleared) { return undefined; }
             await this.startProtectedDaemon(project);
@@ -1541,28 +1620,29 @@ export class MoeDaemonClient implements vscode.Disposable {
         return undefined;
     }
 
-    private async stopProtectedDaemon(project: string, command: { node: string; args: string[]; cwd: string }): Promise<boolean> {
+    /** The `stop` child's exit code; undefined when it could not run, timed out, or ended on a signal. */
+    private async stopProtectedDaemon(project: string, command: { node: string; args: string[]; cwd: string }): Promise<number | undefined> {
         try {
             const { node, args, cwd } = command, windows = process.platform === 'win32';
             const env = protectedDaemonEnvironment(process.env, project, node, windows, process.env.HOME || process.env.USERPROFILE);
             for (const name of Object.keys(env)) {
                 if ((windows ? name.toUpperCase() : name) === SPAWN_PROOF_ENV) { delete env[name]; }
             }
-            return await new Promise<boolean>(resolve => {
+            return await new Promise<number | undefined>(resolve => {
                 const child = spawn(node, [args[0], 'stop', '--project', project], { cwd, env, stdio: 'ignore', windowsHide: true });
                 let done = false;
                 const timer = setTimeout(() => {
                     try { child.kill(); } catch { /* Only this stop child may be killed; retain the refusal. */ }
-                    finish(false);
+                    finish(undefined);
                 }, this.replaceStopTimeoutMs);
-                function finish(success: boolean): void {
+                function finish(code: number | undefined): void {
                     if (done) { return; }
-                    done = true; clearTimeout(timer); resolve(success);
+                    done = true; clearTimeout(timer); resolve(code);
                 }
-                child.once('error', () => finish(false));
-                child.once('exit', code => finish(code === 0));
+                child.once('error', () => finish(undefined));
+                child.once('exit', code => finish(typeof code === 'number' ? code : undefined));
             });
-        } catch { return false; }
+        } catch { return undefined; }
     }
 
     private isPidAlive(pid: number): boolean {
@@ -1624,6 +1704,8 @@ export class MoeDaemonClient implements vscode.Disposable {
             vscode.window.showErrorMessage(message);
             throw new Error(message);
         }
+        // Waiting out a daemon restart: look again later rather than start a daemon or remove its metadata.
+        if (this.awaitingDaemonRestart) return undefined;
         vscode.window.showWarningMessage(`${message} Starting this project's daemon on the next free port.`);
         removeDaemonJsonIfUnchanged(path.join(project, '.moe', 'daemon.json'), info);
         await this.startDaemon('start', project);
@@ -1999,7 +2081,10 @@ export class MoeDaemonClient implements vscode.Disposable {
                     this._onEpicUpdated.fire(payload);
                     if (this.state) {
                         const idx = this.state.epics.findIndex(e => e.id === payload.id);
-                        if (idx >= 0) {
+                        if (payload?.status === 'ARCHIVED') {
+                            // STATE_SNAPSHOT leaves archived epics out; an archive echo must not keep one on the board.
+                            if (idx >= 0) { this.state.epics.splice(idx, 1); }
+                        } else if (idx >= 0) {
                             this.state.epics[idx] = payload;
                         } else {
                             this.state.epics.push(payload);
@@ -2104,9 +2189,12 @@ export class MoeDaemonClient implements vscode.Disposable {
                     }
                     break;
 
-                case 'ACTIVITY_LOG':
-                    this._onActivityLog.fire(payload);
+                case 'ACTIVITY_LOG': {
+                    // The daemon answers GET_ACTIVITY_LOG in request order: a caller's reply goes to that caller only.
+                    const reply = this.activityLogRequests.shift();
+                    if (reply) { reply(payload); } else { this._onActivityLog.fire(payload); }
                     break;
+                }
 
                 case 'METRICS':
                     // Daemon emits a MetricsAggregate-shaped payload. Tolerate
@@ -2242,19 +2330,25 @@ export class MoeDaemonClient implements vscode.Disposable {
                     const code = message.code ?? payload?.code;
                     const codeName = message.codeName ?? payload?.codeName;
                     const context = allowlistedErrorContext(message.context ?? payload?.context);
+                    const operation = message.operation ?? payload?.operation;
+                    const text = message.message ?? payload?.message ?? 'Unknown error';
+                    if (operation === 'GET_ACTIVITY_LOG') { this.activityLogRequests.shift()?.(undefined); }
                     this._onError.fire({
-                        operation: message.operation ?? payload?.operation,
-                        message: message.message ?? payload?.message ?? 'Unknown error',
+                        operation,
+                        message: text,
                         ...(typeof code === 'number' && Number.isFinite(code) && { code }),
                         ...(typeof codeName === 'string' && codeName.length > 0 && { codeName }),
                         ...(context && { context }),
                     });
+                    const notice = daemonErrorNotice(operation, String(text));
+                    if (notice) { vscode.window.showErrorMessage(notice); }
                     break;
                 }
 
                 case 'DAEMON_SHUTTING_DOWN':
-                    log('Daemon is shutting down');
-                    this.daemonShuttingDown = true;
+                    // Sent on every shutdown, crashes included: the supervisor may restart the daemon, on another port.
+                    log('Daemon is shutting down; waiting for it to come back');
+                    this.awaitingDaemonRestart = true;
                     this.disconnect({ manual: false });
                     break;
 
@@ -2285,8 +2379,11 @@ export class MoeDaemonClient implements vscode.Disposable {
 
     private setConnectionState(state: ConnectionState): void {
         this._connectionState = state;
-        // No readiness request outlives its socket: close, disconnect() and dispose() all land here.
-        if (state === 'disconnected') { this.settleReadiness({ failed: 'DISCONNECTED' }); }
+        // No readiness or activity-log request outlives its socket: close, disconnect() and dispose() all land here.
+        if (state === 'disconnected') {
+            this.settleReadiness({ failed: 'DISCONNECTED' });
+            this.activityLogRequests.length = 0;
+        }
         this._onConnectionChanged.fire(state);
     }
 
@@ -2306,9 +2403,6 @@ export class MoeDaemonClient implements vscode.Disposable {
     }
 
     private scheduleReconnect(): void {
-        if (this.daemonShuttingDown) {
-            return;
-        }
         if (this.manualDisconnect) {
             log('Reconnect suppressed after manual disconnect');
             return;
@@ -2325,12 +2419,18 @@ export class MoeDaemonClient implements vscode.Disposable {
 
         this.reconnectAttempts++;
         if (this.reconnectAttempts > this.maxReconnectAttempts) {
+            // Ask once per budget: a failed attempt can land here twice, from its own failure path and the timer's catch.
+            if (this.reconnectAttempts > this.maxReconnectAttempts + 1) {
+                return;
+            }
             log(`Max reconnect attempts (${this.maxReconnectAttempts}) exhausted`);
+            // Still waiting out DAEMON_SHUTTING_DOWN: a daemon that stays down was most likely stopped on purpose, so say
+            // that rather than report a failure (JetBrains parity). Reconnect, like moe.connect, may start a daemon.
+            const ask = this.awaitingDaemonRestart
+                ? vscode.window.showWarningMessage('The Moe daemon shut down and did not come back.', 'Reconnect')
+                : vscode.window.showErrorMessage(`Moe daemon connection failed after ${this.maxReconnectAttempts} retries.`, 'Reconnect');
             this.setConnectionState('disconnected');
-            vscode.window.showErrorMessage(
-                `Moe daemon connection failed after ${this.maxReconnectAttempts} retries.`,
-                'Reconnect'
-            ).then((action) => {
+            ask.then((action) => {
                 if (action === 'Reconnect') {
                     this.reconnectAttempts = 0;
                     this.connect().catch((err) => {
@@ -2343,14 +2443,16 @@ export class MoeDaemonClient implements vscode.Disposable {
         }
 
         const attempt = this.reconnectAttempts;
+        // Bounded backoff (5 s, 10 s, 20 s, then 30 s): a supervised daemon restart can take up to 30 s.
+        const delay = Math.min(this.reconnectDelayMs * 2 ** (attempt - 1), this.maxReconnectDelayMs);
         this.reconnectTimeout = setTimeout(() => {
             this.reconnectTimeout = undefined;
-            this.connect().catch((err) => {
+            this.openConnection().catch((err) => {
                 log(`Reconnect attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`);
                 this.setConnectionState('disconnected');
                 this.scheduleReconnect();
             });
-        }, 5000);
+        }, delay);
     }
 
     private cancelReconnect(): void {

@@ -20,3 +20,24 @@
     cancelBtn.addEventListener('click', function() {
         vscode.postMessage({ type: 'cancel' });
     });
+
+    // Settings changed elsewhere arrive while the form is open. A field the user has changed keeps the user's value;
+    // every other field follows, so Save never writes back a value the project no longer has.
+    var edited = {};
+    function markEdited(id) { return function() { edited[id] = true; }; }
+    approvalModeEl.addEventListener('change', markEdited('approvalMode'));
+    speedModeDelayMsEl.addEventListener('input', markEdited('speedModeDelayMs'));
+    agentCommandEl.addEventListener('input', markEdited('agentCommand'));
+    enableAgentTeamsEl.addEventListener('change', markEdited('enableAgentTeams'));
+
+    window.addEventListener('message', function(event) {
+        var msg = event.data;
+        if (!msg || msg.type !== 'settings' || !msg.settings) { return; }
+        var s = msg.settings;
+        if (!edited.approvalMode && ['CONTROL', 'SPEED', 'TURBO'].indexOf(s.approvalMode) >= 0) { approvalModeEl.value = s.approvalMode; }
+        if (!edited.speedModeDelayMs) { speedModeDelayMsEl.value = String(s.speedModeDelayMs); }
+        if (!edited.agentCommand) { agentCommandEl.value = String(s.agentCommand); }
+        if (!edited.enableAgentTeams) { enableAgentTeamsEl.checked = s.enableAgentTeams === true; }
+        var policy = document.getElementById('landingPolicy');
+        if (policy && typeof msg.policyHtml === 'string') { policy.innerHTML = msg.policyHtml; }
+    });

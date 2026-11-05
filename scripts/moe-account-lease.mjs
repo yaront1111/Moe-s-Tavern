@@ -53,6 +53,10 @@ const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <con
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const TRUST_LOCK_WAIT_MS = 2000;
 const TRUST_POLL_MS = 50;
+// proper-lockfile's default `stale`, which claude's .claude.json lock keeps: the
+// holder refreshes the lock folder's mtime every 5 s, and the library treats a
+// lock whose mtime is older than this as abandoned and removes it.
+const CLAUDE_LOCK_STALE_MS = 10_000;
 const GIT_TIMEOUT_MS = 10_000;
 const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const TRUST_REASON = {
@@ -282,11 +286,16 @@ export function statuslineSettingsJson(nodePath, scriptPath, platform = process.
   return JSON.stringify({ statusLine: { type: 'command', command } });
 }
 
-/** Atomic, so the wrapper never reads half a sample. */
+/** Atomic, so the wrapper never reads half a sample. A failed rename (the ps1 reader holds the file) leaves no temp file. */
 export function writeSample(file, sample) {
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(sample), { mode: 0o600 });
-  fs.renameSync(tmp, file);
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(sample), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  } catch (error) {
+    attempt((name) => fs.rmSync(name, { force: true }), tmp);
+    throw error;
+  }
 }
 
 // --- trust: claude stops an interactive launch at "Do you trust the files in
@@ -366,15 +375,35 @@ function isTrusted(config, keys) {
   return keys.every((key) => Object.hasOwn(projects, key) && isPlainObject(projects[key]) && projects[key].hasTrustDialogAccepted === true);
 }
 
-/** 'held' (this call created the lock), 'busy' (another holder for the whole wait) or 'error'. */
+/** True only for a lock folder claude's own lock library would take over: its mtime is CLAUDE_LOCK_STALE_MS old. */
+function isStaleLock(lockDir) {
+  try {
+    const stat = fs.lstatSync(lockDir);
+    return stat.isDirectory() && stat.mtimeMs < Date.now() - CLAUDE_LOCK_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 'held' (this call created the lock), 'busy' (another holder for the whole wait) or 'error'.
+ * A stale lock (a killed holder's) is removed once and retaken, as proper-lockfile does; a
+ * live holder refreshes its lock, so it is never stale.
+ */
 function takeLock(lockDir, waitMs) {
   const deadline = Date.now() + waitMs;
+  let reclaimed = false;
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
       return 'held';
     } catch (error) {
       if (error?.code !== 'EEXIST') return 'error';
+      if (!reclaimed && isStaleLock(lockDir)) {
+        reclaimed = true;
+        attempt((dir) => fs.rmdirSync(dir), lockDir);
+        continue;
+      }
       const left = deadline - Date.now();
       if (left <= 0) return 'busy';
       sleepMs(Math.min(TRUST_POLL_MS, left));
@@ -423,7 +452,7 @@ function grantLocked(file, keys, waitMs) {
     const after = readConfig(file);
     return !after.reason && isTrusted(after.config, keys) ? 'granted' : TRUST_REASON.readBack;
   } finally {
-    // Only ever this call's own lock; a lock left by a killed holder goes stale for claude after 10 s.
+    // Only ever this call's own lock here; takeLock removes a killed holder's once it is stale.
     attempt((dir) => fs.rmdirSync(dir), lockDir);
   }
 }

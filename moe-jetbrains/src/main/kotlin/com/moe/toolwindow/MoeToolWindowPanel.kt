@@ -61,6 +61,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private val epicFilter = ComboBox<EpicFilterItem>()
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
+    /** The epic filter's items as last put in its model. */
+    private var epicFilterItems: List<EpicFilterItem> = emptyList()
     private val workerPanel = WorkerPanel()
     /** The header's Claude account line; hidden until the daemon reports accounts. */
     private val accountsLabel = JBLabel()
@@ -763,7 +765,6 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     }
 
     private fun updateEpicFilter(epics: List<com.moe.model.Epic>) {
-        updatingEpicFilter = true
         val currentSelection = selectedEpicId
         val items = mutableListOf<EpicFilterItem>()
         items.add(EpicFilterItem(MoeBundle.message("moe.panel.allEpics"), null))
@@ -771,6 +772,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         for (epic in sorted) {
             items.add(EpicFilterItem(epic.title, epic.id))
         }
+        // The daemon republishes an unchanged board every 3 s. A new model would close an open dropdown and reset its
+        // scroll, so the same items keep the model, and with it the selection the user made from them.
+        if (items == epicFilterItems) return
+        epicFilterItems = items
+        updatingEpicFilter = true
         epicFilter.model = javax.swing.DefaultComboBoxModel(items.toTypedArray())
         // Restore selection if it still exists, otherwise reset to "All Epics"
         val foundIndex = if (currentSelection != null) {

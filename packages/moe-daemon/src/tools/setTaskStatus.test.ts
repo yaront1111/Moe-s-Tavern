@@ -263,5 +263,58 @@ describe('moe.set_task_status', () => {
     expect(h.state.getTask('task-1')!.needsHumanReview).toBeUndefined();
     expect(h.state.getTask('task-1')!.needsHumanReview).not.toBe(true);
   });
+
+  // Every move clears the latch, so only a human may make one: an architect or
+  // governor seat would otherwise un-park the row qa_approve, qa_reject and
+  // release_task all refuse it.
+  it('refuses an agent seat on a row parked for human review, before any write', async () => {
+    await h.state.updateTask('task-1', { status: 'REVIEW', needsHumanReview: true });
+    const before = h.state.getTask('task-1')!.updatedAt;
+    const tool = setTaskStatusTool(h.state);
+
+    for (const status of ['WORKING', 'REVIEW', 'BACKLOG']) {
+      await expect(tool.handler({ taskId: 'task-1', status, workerId: 'governor-1' }, h.state)).rejects.toMatchObject({
+        codeName: 'NOT_ALLOWED', message: expect.stringContaining('Task task-1 is parked for human review'),
+      });
+    }
+    expect(h.state.getTask('task-1')).toMatchObject({ status: 'REVIEW', needsHumanReview: true, updatedAt: before });
+  });
 });
 
+describe('moe.set_task_status out of BLOCKED drops the queue entry of the resource the task was blocked on', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  // task-h holds 'box'; task-b (the one unblocked by hand) and task-w wait on it, in that order.
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    const blocked = { status: 'BLOCKED' as const, blockedFromStatus: 'WORKING' as const, blockedReason: 'waiting on the box', blockedResourceId: 'box', blockedAt: '2026-11-05T00:00:00.000Z' };
+    h.createTask({ id: 'task-h', status: 'WORKING', assignedWorkerId: 'worker-h', order: 1 });
+    h.createTask({ id: 'task-b', ...blocked, assignedWorkerId: 'worker-b', order: 2 });
+    h.createTask({ id: 'task-w', ...blocked, assignedWorkerId: 'worker-w', order: 3 });
+    h.createWorker({ id: 'worker-h', status: 'CODING', currentTaskId: 'task-h' });
+    h.createWorker({ id: 'worker-b', status: 'BLOCKED', currentTaskId: 'task-b' });
+    h.createWorker({ id: 'worker-w', status: 'BLOCKED', currentTaskId: 'task-w' });
+    await h.state.load();
+    for (const n of ['h', 'b', 'w']) await h.state.acquireResource({ resourceId: 'box', taskId: `task-${n}`, workerId: `worker-${n}` });
+  });
+
+  const box = () => {
+    const resource = h.state.getResource('box')!;
+    return { holders: resource.holders.map((l) => l.taskId), queue: resource.queue.map((q) => q.taskId) };
+  };
+  const releaseHolder = () => h.state.releaseResource({ resourceId: 'box', workerId: 'worker-h', taskId: 'task-h', force: true });
+
+  it('drops only that entry, so the next grant reaches a task still waiting, not the unblocked one', async () => {
+    expect(box()).toEqual({ holders: ['task-h'], queue: ['task-b', 'task-w'] });
+
+    await setTaskStatusTool(h.state).handler({ taskId: 'task-b', status: 'WORKING', reason: 'box not needed' }, h.state);
+
+    expect(h.state.getTask('task-b')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-b', blockedResourceId: null });
+    expect(box()).toEqual({ holders: ['task-h'], queue: ['task-w'] });
+    await releaseHolder();
+    expect(box().holders).toEqual(['task-w']);
+  });
+});

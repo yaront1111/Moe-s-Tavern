@@ -168,12 +168,25 @@ function policyRowHtml(row: PolicyRow): string {
     return `<div class="policy-row"><span class="policy-label">${escapeHtml(row.label)}</span>: <span class="policy-value">${escapeHtml(row.value)}</span>${detail}</div>`;
 }
 
+/** The four editable fields as the form shows them, unset ones at the form's defaults. */
+function formSettings(settings: ProjectSettings | undefined) {
+    return {
+        approvalMode: settings?.approvalMode ?? 'CONTROL',
+        speedModeDelayMs: settings?.speedModeDelayMs ?? 2000,
+        agentCommand: settings?.agentCommand ?? 'claude',
+        enableAgentTeams: settings?.enableAgentTeams === true,
+    };
+}
+
 export class SettingsPanel {
     public static currentPanel: SettingsPanel | undefined;
     private readonly panel: vscode.WebviewPanel;
     private readonly extensionUri: vscode.Uri;
     private readonly daemonClient: MoeDaemonClient;
     private disposed = false;
+    private readonly subscriptions: vscode.Disposable[] = [];
+    /** The settings message the page last got (its HTML counts as the first), so an unchanged snapshot posts nothing. */
+    private shownSettings = '';
 
     public static createOrShow(
         extensionUri: vscode.Uri,
@@ -189,7 +202,8 @@ export class SettingsPanel {
             'moe.settings',
             'Moe Settings',
             vscode.ViewColumn.One,
-            { enableScripts: true, localResourceRoots: [extensionUri] }
+            // Retained: a form moved to a background tab keeps what was typed into it.
+            { enableScripts: true, localResourceRoots: [extensionUri], retainContextWhenHidden: true }
         );
 
         SettingsPanel.currentPanel = new SettingsPanel(panel, extensionUri, client, state);
@@ -208,6 +222,7 @@ export class SettingsPanel {
         const nonce = this.getNonce();
         const settings = state.project?.settings;
         this.panel.webview.html = this.getWebviewContent(nonce, settings);
+        this.shownSettings = JSON.stringify(this.settingsMessage(settings));
 
         this.panel.webview.onDidReceiveMessage(
             (message) => this.handleMessage(message),
@@ -215,6 +230,27 @@ export class SettingsPanel {
         );
 
         this.panel.onDidDispose(() => this.dispose());
+
+        // Settings changed elsewhere (JetBrains, an agent, another window) reach the open form. The page keeps every
+        // field the user edited, and Save sends all four, so an untouched field must never hold a stale value.
+        this.subscriptions.push(client.onStateChanged(next => this.postSettings(next.project?.settings)));
+    }
+
+    private settingsMessage(settings: ProjectSettings | undefined) {
+        return {
+            type: 'settings',
+            settings: formSettings(settings),
+            policyHtml: effectivePolicyRows(settings).map(policyRowHtml).join(''),
+        };
+    }
+
+    private postSettings(settings: ProjectSettings | undefined): void {
+        if (this.disposed) { return; }
+        const message = this.settingsMessage(settings);
+        const text = JSON.stringify(message);
+        if (text === this.shownSettings) { return; }
+        this.shownSettings = text;
+        void this.panel.webview.postMessage(message);
     }
 
     private handleMessage(message: { type: string; [key: string]: unknown }): void {
@@ -253,6 +289,8 @@ export class SettingsPanel {
         }
         this.disposed = true;
         SettingsPanel.currentPanel = undefined;
+        this.subscriptions.forEach(subscription => subscription.dispose());
+        this.subscriptions.length = 0;
         this.panel.dispose();
     }
 
@@ -268,10 +306,11 @@ export class SettingsPanel {
     private getWebviewContent(_nonce: string, settings: ProjectSettings | undefined): string {
         const webview = this.panel.webview;
         const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'settings.js'));
-        const approvalMode = escapeHtml(settings?.approvalMode ?? 'CONTROL');
-        const speedModeDelayMs = settings?.speedModeDelayMs ?? 2000;
-        const agentCommand = escapeHtml(settings?.agentCommand ?? 'claude');
-        const enableAgentTeams = settings?.enableAgentTeams === true;
+        const form = formSettings(settings);
+        const approvalMode = escapeHtml(form.approvalMode);
+        const speedModeDelayMs = form.speedModeDelayMs;
+        const agentCommand = escapeHtml(form.agentCommand);
+        const enableAgentTeams = form.enableAgentTeams;
         const text = SETTINGS_BUNDLE_TEXT;
         const policyRows = effectivePolicyRows(settings).map(policyRowHtml).join('\n        ');
 

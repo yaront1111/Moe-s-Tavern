@@ -110,7 +110,7 @@ describe('resourceStore', () => {
 
   it('orders the queue by task priority then FIFO', async () => {
     await loadState();
-    writeTask('t1');
+    writeTask('t1', { assignedWorkerId: 'w1' });
     writeTask('t-low', { priority: 'LOW' });
     writeTask('t-crit', { priority: 'CRITICAL' });
     await state.load();
@@ -139,7 +139,7 @@ describe('resourceStore', () => {
 
   it('release grants to the next waiter and auto-unblocks its BLOCKED task', async () => {
     await loadState();
-    writeTask('t1');
+    writeTask('t1', { assignedWorkerId: 'w1' });
     writeTask('t2', {
       status: 'BLOCKED',
       blockedReason: 'waiting for box',
@@ -164,7 +164,7 @@ describe('resourceStore', () => {
 
   it('grant restores blockedFromStatus (a blocked QA task returns to REVIEW)', async () => {
     await loadState();
-    writeTask('t1');
+    writeTask('t1', { assignedWorkerId: 'w1' });
     writeTask('t2', {
       status: 'BLOCKED',
       blockedResourceId: 'box',
@@ -189,6 +189,51 @@ describe('resourceStore', () => {
     const result = await state.releaseResource({ resourceId: 'box', workerId: 'w1-respawn', taskId: 't1' });
     expect(result.released.map((l) => l.taskId)).toEqual(['t1']);
     expect(state.getResource('box')!.holders).toHaveLength(0);
+  });
+
+  it('the acquirer cannot release its lease once the task passed to another seat; that seat can', async () => {
+    // A QA claim takes the REVIEW row from the worker that acquired the lease
+    // while WORKING: a late release from that worker must not drop QA's hold.
+    await loadState();
+    writeTask('t1', { assignedWorkerId: 'w1' });
+    await state.load();
+    await state.acquireResource({ resourceId: 'box', taskId: 't1', workerId: 'w1' });
+    // complete_task unassigns the row, then QA claims it.
+    await state.updateTask('t1', { assignedWorkerId: null });
+    await state.updateTask('t1', { assignedWorkerId: 'qa-1' });
+
+    expect((await state.releaseResource({ resourceId: 'box', workerId: 'w1' })).released).toEqual([]);
+    expect((await state.releaseResource({ resourceId: 'box', workerId: 'w1', taskId: 't1' })).released).toEqual([]);
+    expect(state.getResource('box')!.holders.map((l) => l.taskId)).toEqual(['t1']);
+    const byHolder = await state.releaseResource({ resourceId: 'box', workerId: 'qa-1', taskId: 't1' });
+    expect(byHolder.released.map((l) => l.taskId)).toEqual(['t1']);
+  });
+
+  it('the acquirer releases its lease on a row no seat holds', async () => {
+    await loadState();
+    writeTask('t1', { assignedWorkerId: null });
+    await state.load();
+    await state.acquireResource({ resourceId: 'box', taskId: 't1', workerId: 'w1' });
+    const result = await state.releaseResource({ resourceId: 'box', workerId: 'w1' });
+    expect(result.released.map((l) => l.taskId)).toEqual(['t1']);
+  });
+
+  it('the acquirer releases the exact lease it pinned (taskId + ifAcquiredAt) after the row passed on', async () => {
+    // The wrapper's land lease on the landed route is released after
+    // finalize_attempt, when QA may already hold the REVIEW row.
+    await loadState();
+    writeTask('t1', { assignedWorkerId: 'w1' });
+    await state.load();
+    await state.acquireResource({ resourceId: 'box', taskId: 't1', workerId: 'w1' });
+    const acquiredAt = state.getResource('box')!.holders[0].acquiredAt;
+    // complete_task unassigns the row, then QA claims it.
+    await state.updateTask('t1', { assignedWorkerId: null });
+    await state.updateTask('t1', { assignedWorkerId: 'qa-1' });
+
+    const stale = await state.releaseResource({ resourceId: 'box', workerId: 'w1', taskId: 't1', ifAcquiredAt: '2000-01-01T00:00:00.000Z' });
+    expect(stale.released).toEqual([]);
+    const pinned = await state.releaseResource({ resourceId: 'box', workerId: 'w1', taskId: 't1', ifAcquiredAt: acquiredAt });
+    expect(pinned.released.map((l) => l.taskId)).toEqual(['t1']);
   });
 
   it('release is idempotent: releasing nothing is a no-op, not an error', async () => {

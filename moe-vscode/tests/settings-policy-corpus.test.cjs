@@ -59,7 +59,8 @@ function renderHtml(settings) {
             })
         }
     };
-    loadPanel(vscode).SettingsPanel.createOrShow('ext', {}, { project: { settings } });
+    const client = { onStateChanged: () => ({ dispose() {} }) }; // the panel follows live settings; none arrive here
+    loadPanel(vscode).SettingsPanel.createOrShow('ext', client, { project: { settings } });
     return html;
 }
 

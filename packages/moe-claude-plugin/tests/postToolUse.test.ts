@@ -222,3 +222,88 @@ describe('runPostToolUseHook', () => {
     }
   });
 });
+
+// The hook checks the daemon serves this project before it sends, as moe-proxy does.
+describe('runPostToolUseHook daemon identity', () => {
+  let server: Server;
+  let wss: WebSocketServer;
+  let port: number;
+  let received: string[];
+  let served: string | undefined;
+  let prevProjectPath: string | undefined;
+
+  beforeEach(async () => {
+    prevProjectPath = process.env.MOE_PROJECT_PATH;
+    delete process.env.MOE_PROJECT_PATH;
+    vi.stubEnv('MOE_WORKER_ID', 'worker-test');
+    received = [];
+    served = undefined;
+    // Like the daemon: /health names the served project, any other GET is 426.
+    server = createServer((req, res) => {
+      if (req.url !== '/health') {
+        res.writeHead(426);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy', projectPath: served }));
+    });
+    wss = new WebSocketServer({ server });
+    wss.on('connection', (ws: WebSocket) => {
+      ws.on('message', (data) => {
+        received.push(data.toString());
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('no address');
+    port = addr.port;
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    if (prevProjectPath === undefined) delete process.env.MOE_PROJECT_PATH;
+    else process.env.MOE_PROJECT_PATH = prevProjectPath;
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  async function runHook(cwd: string): Promise<{ result: unknown; logged: string }> {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const result = await runPostToolUseHook({ tool_name: 'mcp__moe__moe_list_tasks', session_id: 's6', cwd });
+    // Give a frame that was sent anyway time to arrive.
+    await new Promise((r) => setTimeout(r, 100));
+    return { result, logged: stderr.mock.calls.map((c) => String(c[0])).join('') };
+  }
+
+  it('drops the event when daemon.json names another project', async () => {
+    const project = makeProjectWithDaemon(port);
+    const file = path.join(project, '.moe', 'daemon.json');
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf-8')), projectPath: path.join(os.tmpdir(), 'another-moe-project') }));
+    served = project;
+    const { result, logged } = await runHook(project);
+    expect(result).toEqual({ forwarded: false, reason: 'send-failed' });
+    expect(received).toHaveLength(0);
+    expect(logged).toContain('belongs to a different project');
+  });
+
+  it('drops the event when the daemon on the port serves another project', async () => {
+    const project = makeProjectWithDaemon(port);
+    served = path.join(os.tmpdir(), 'another-moe-project');
+    const { result, logged } = await runHook(project);
+    expect(result).toEqual({ forwarded: false, reason: 'send-failed' });
+    expect(received).toHaveLength(0);
+    expect(logged).toContain('serves another project');
+  });
+
+  it.each([
+    ['names this project', (project: string) => project],
+    ['names no project (an older daemon)', () => undefined],
+  ])('forwards the event when /health %s', async (_label, servedFor) => {
+    const project = makeProjectWithDaemon(port);
+    served = servedFor(project);
+    const { result } = await runHook(project);
+    expect(result).toEqual({ forwarded: true });
+    expect(received).toHaveLength(1);
+  });
+});

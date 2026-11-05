@@ -215,7 +215,7 @@ class PlanReviewDialog(
                     foreground = JBColor.GRAY
                     font = JBUI.Fonts.smallFont()
                 }
-                val body = JBLabel("<html>${comment.content.replace("\n", "<br>")}</html>")
+                val body = JBLabel(TaskDetailDialog.commentHtml(comment.content))
                 commentRow.add(commentHeader, BorderLayout.NORTH)
                 commentRow.add(body, BorderLayout.CENTER)
                 commentsPanel.add(commentRow)

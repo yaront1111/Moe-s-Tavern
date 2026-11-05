@@ -8,6 +8,9 @@
 // Error handling here is load-bearing and deliberately asymmetric:
 //   - loadEntities logs and SKIPS an unparseable entity file rather than
 //     aborting the whole load - one corrupt task must not brick the daemon.
+//     On a reload (reloadEntities) such a file keeps the record already in
+//     memory instead: a git checkout rewrites tracked files in place, so a
+//     reload can catch one empty, and dropping it would drop a live task.
 //   - tryLoadWorkerFromDisk swallows every throw and returns null by design.
 //   - verifyWritePermissions, by contrast, throws: an unwritable .moe is fatal
 //     and must surface at startup, not at the first failed write.
@@ -35,25 +38,129 @@ import {
   validateEntityId,
 } from '../util/sanitize.js';
 
-export function loadEntities<T>(dir: string): Map<string, T> {
+/** The size and mtime each record was read at (see loadEntities' `reuse`). */
+const readAt = new WeakMap<object, string>();
+
+function fileSignature(fullPath: string): string | null {
+  try {
+    const stat = fs.statSync(fullPath);
+    return `${stat.size}:${stat.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every `<id>.json` entity in `dir`. `previous` (the map a reload replaces) keeps
+ * a record whose file cannot be read or parsed right now; `skip` drops a file
+ * unread; `reuse` takes a record already in `previous` without reading its file
+ * when the file has the size and mtime that record was read at. The stat comes
+ * before the read, so a file changed in between is read again next time.
+ */
+export function loadEntities<T>(
+  dir: string,
+  previous?: ReadonlyMap<string, T>,
+  skip?: (fullPath: string) => boolean,
+  reuse = false
+): Map<string, T> {
   const map = new Map<string, T>();
   if (!fs.existsSync(dir)) return map;
 
   const entries = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
   for (const file of entries) {
     const fullPath = path.join(dir, file);
+    if (skip?.(fullPath)) continue;
+    const fileId = file.slice(0, -'.json'.length);
+    const known = previous?.get(fileId);
+    const signature = reuse ? fileSignature(fullPath) : null;
+    if (signature !== null && typeof known === 'object' && known !== null && readAt.get(known) === signature) {
+      map.set(fileId, known);
+      continue;
+    }
     try {
       const entity = readJson<T>(fullPath);
       const id = (entity as { id?: string }).id;
       if (id) {
         map.set(id, entity);
+        if (signature !== null) readAt.set(entity as object, signature);
       }
     } catch (error) {
-      logger.warn({ error, file: fullPath }, 'Failed to load entity file, skipping');
+      if (known === undefined) {
+        logger.warn({ error, file: fullPath }, 'Failed to load entity file, skipping');
+      } else {
+        map.set(fileId, known);
+        logger.warn({ error, file: fullPath }, 'Failed to reload entity file; keeping the record in memory');
+      }
     }
   }
 
   return map;
+}
+
+/**
+ * loadEntities for StateManager.load(): `previous` is the map being replaced and
+ * a tombstoned file is skipped. `reuse` is for the delivery records (attempts,
+ * candidates, checks, reviews, receipts), which only grow: a reload stats each
+ * file and reads only one that is new or changed since its record was read (a
+ * record the daemon wrote since is read once more), not the whole history.
+ */
+export function reloadEntities<T>(state: StateManager, kind: string, previous: ReadonlyMap<string, T>, reuse = false): Map<string, T> {
+  return loadEntities(path.join(state.moePath, kind), previous, (file) => tombstoned(state, file), reuse);
+}
+
+/**
+ * Entity files whose record is gone from memory but whose unlink failed
+ * (removeEntityFile). Every load skips them and retries the unlink, so a reload
+ * never resurrects the record; writeEntity clears its own path. Per process: a
+ * restart reads the file again, and the startup purge decides it afresh.
+ */
+const tombstones = new WeakMap<StateManager, Set<string>>();
+
+function tombstoned(state: StateManager, filePath: string): boolean {
+  if (!tombstones.get(state)?.has(filePath)) return false;
+  removeEntityFile(state, filePath);
+  return true;
+}
+
+const UNLINK_RETRIES = 5;
+const RETRYABLE_UNLINK_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
+
+/**
+ * fs.unlinkSync with atomicWrite's rename retry: Windows briefly refuses a file an
+ * AV scanner or watcher holds (EPERM/EBUSY/EACCES), so retry with a short blocking
+ * backoff. A missing file counts as removed. Throws the last error.
+ */
+export function unlinkWithRetry(filePath: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.unlinkSync(filePath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return;
+      if (attempt >= UNLINK_RETRIES - 1 || code === undefined || !RETRYABLE_UNLINK_CODES.has(code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10 * (attempt + 1));
+    }
+  }
+}
+
+/**
+ * Delete the file of a record the caller drops from memory, the watcher echo
+ * suppressed. False when it still will not go: the path is then tombstoned.
+ */
+export function removeEntityFile(state: StateManager, filePath: string): boolean {
+  state.fileWatcher?.ignorePath(filePath);
+  try {
+    unlinkWithRetry(filePath);
+    tombstones.get(state)?.delete(filePath);
+    return true;
+  } catch (error) {
+    let paths = tombstones.get(state);
+    if (!paths) tombstones.set(state, (paths = new Set()));
+    paths.add(filePath);
+    logger.warn({ error, file: filePath }, 'Failed to delete entity file; tombstoned so no reload restores its record');
+    return false;
+  }
 }
 
 /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -348,6 +455,7 @@ export async function writeEntity(state: StateManager, kind: string, id: string,
   // bridge and other I/O keep progressing while this entity persists. writeEntity
   // is the hot path for every task/epic/worker/team write under the state mutex.
   await atomicWriteJsonAsync(filePath, entity);
+  tombstones.get(state)?.delete(filePath);
   // After the bytes, never before: a poll that reads a bumped version with the old
   // record would keep the stale board until the next write.
   state.stateVersion++;
@@ -365,7 +473,7 @@ export function tryLoadWorkerFromDisk(state: StateManager, workerId: string): Wo
   try {
     validateEntityId(workerId);
     const filePath = path.join(state.moePath, 'workers', `${workerId}.json`);
-    if (fs.existsSync(filePath)) {
+    if (!tombstoned(state, filePath) && fs.existsSync(filePath)) {
       const worker = readJson<Worker>(filePath);
       if (worker && worker.id) {
         state.workers.set(worker.id, worker);

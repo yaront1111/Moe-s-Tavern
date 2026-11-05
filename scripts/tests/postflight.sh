@@ -6738,8 +6738,9 @@ OVF_B="$OVF/b"
 ovf_project "$OVF_B" gemini # the basename selects CLI_TYPE gemini
 OVF_OUT="$OVF_B/wrapper.out"
 set +e
+# Gemini mode runs agy: MOE_AGY_COMMAND points it at the fake, never the host's real Antigravity.
 env ${OVF_LOCALE:+LC_ALL="$OVF_LOCALE"} PATH="$TMP_DIR:$PATH" HOME="$HOME_DIR" MOE_PROXY_PATH="$FAKE_PROXY" \
-  FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=135000 MOE_DISABLE_HEARTBEAT=1 \
+  MOE_AGY_COMMAND="$OVF_B/gemini" FAKE_CLAIM_MODE=resume FAKE_CTX_PAD_BYTES=135000 MOE_DISABLE_HEARTBEAT=1 \
   timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" --project "$OVF_B/project" --worker-id qa-overflow --role qa --team Smoke \
   --no-start-daemon --command "$OVF_B/gemini" --gemini-exec --no-loop --poll-interval 0 >"$OVF_OUT" 2>&1
 set -e

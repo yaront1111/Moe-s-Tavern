@@ -225,7 +225,7 @@ function expectedCommand(env, wrapper, projectPath, interpreter) {
             `${interpreter ? `& ${psQuote(interpreter)}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role worker ` +
             `-Project ${psQuote(projectPath)} -WorkerId 'worker-ID' -Command 'claude']`;
     }
-    return entries.map(([key, value]) => `${key}=${shQuote(value)} `).join('') +
+    return 'env ' + entries.map(([key, value]) => `${shQuote(`${key}=${value}`)} `).join('') +
         `${interpreter ? shQuote(interpreter) : 'bash'} ${shQuote(wrapper)} --role worker --project ${shQuote(projectPath)} --worker-id 'worker-ID' --command 'claude'`;
 }
 

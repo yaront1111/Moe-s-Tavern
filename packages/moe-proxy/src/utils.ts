@@ -119,6 +119,13 @@ function readBounded(filePath: string): string | null {
   }
 }
 
+/**
+ * A restarting daemon removes and rewrites daemon.json, and on Windows a file
+ * another process holds open or is replacing refuses the open for a moment.
+ * Like a missing file, these reads fail only until the new daemon is up.
+ */
+const TRANSIENT_READ_CODES = new Set(['ENOENT', 'EBUSY', 'EPERM', 'EACCES']);
+
 export function readDaemonInfoResult(projectPath: string): DaemonInfoReadResult {
   const filePath = path.join(projectPath, '.moe', 'daemon.json');
   if (!fs.existsSync(filePath)) return { info: null, retryable: true };
@@ -143,7 +150,15 @@ export function readDaemonInfoResult(projectPath: string): DaemonInfoReadResult 
       };
     }
     return { info: parsed, retryable: false };
-  } catch {
+  } catch (err) {
+    // A half-written file fails to parse; retry it rather than end the session.
+    if (err instanceof SyntaxError) {
+      return { info: null, retryable: true, error: 'daemon.json is not complete JSON' };
+    }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== undefined && TRANSIENT_READ_CODES.has(code)) {
+      return { info: null, retryable: true, error: `daemon.json could not be read (${code})` };
+    }
     return {
       info: null,
       retryable: false,

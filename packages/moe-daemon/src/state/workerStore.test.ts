@@ -340,3 +340,40 @@ describe('purgeAllWorkers + startup attempt reconciliation', () => {
     expect(readAttemptFile('attempt-L-1').phase).toBe('running');
   });
 });
+
+describe('deleteWorker when the worker file will not unlink', () => {
+  const h = new ToolTestHarness();
+
+  beforeEach(() => {
+    h.init();
+    h.setupMoeFolder();
+    h.createEpic();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  it('no reload or disk lookup restores the record, and the next reload after the lock clears removes the file', async () => {
+    h.createWorker({ id: 'worker-gone', status: 'CODING', currentTaskId: 'task-1' });
+    await h.state.load();
+    const file = path.join(h.moePath, 'workers', 'worker-gone.json');
+    const realUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, 'unlinkSync').mockImplementation((target) => {
+      if (target === file) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+      return realUnlink(target);
+    });
+
+    await h.state.deleteWorker('worker-gone');
+    expect(fs.existsSync(file)).toBe(true);
+    await h.state.load();
+    expect(h.state.getWorker('worker-gone')).toBeNull();
+    expect(h.state.tryLoadWorkerFromDisk('worker-gone')).toBeNull();
+
+    unlink.mockRestore();
+    await h.state.load();
+    expect(fs.existsSync(file)).toBe(false);
+    expect(h.state.getWorker('worker-gone')).toBeNull();
+  });
+});

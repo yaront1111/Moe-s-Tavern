@@ -44,6 +44,8 @@ Send JSON-RPC 2.0 messages via stdin:
 {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"moe.list_tasks","arguments":{}}}
 ```
 
+Send one message per line. The proxy refuses a JSON-RPC batch (a JSON array) and forwards none of it: each request in the batch gets a `-32600` error, all in one array, or one null-id error when the batch holds no request. Its per-message steps (`workerId`, timeouts, the shutdown drain, execution identity) read single messages, so a batch would otherwise reach the daemon without them.
+
 ## Environment Variables
 
 - `MOE_PROJECT_PATH` - Project path, where the proxy reads `.moe/daemon.json` (default: the current directory)
@@ -54,15 +56,24 @@ Send JSON-RPC 2.0 messages via stdin:
 - `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION` - The execution attempt the proxy stamps onto the identity tools; set both or neither
 - `MOE_WORKER_TYPE` - The agent CLI the launcher started, added to the registration tools (see Worker type)
 - `MOE_BLOCKING_TIMEOUT_MS` - The per-request deadline of `moe.wait_for_task`, `moe.chat_wait` and `moe.wait_for_resource` (default: 660000)
-- `MOE_MESSAGE_TIMEOUT_MS` - The per-request deadline of every other request; when it passes, the proxy answers that request with a `Request timed out` error (default: 30000)
+- `MOE_MESSAGE_TIMEOUT_MS` - The per-request deadline of every other request; when it passes, the proxy answers that request with a `Request timed out` error (default: 30000). It also bounds the WebSocket handshake, to at most 10 seconds (see Reconnects)
 - `MOE_TOOL_NAME_STYLE` - Launcher-set for grok. `underscore` exposes each `moe.<name>` tool as `moe_<name>` in `tools/list` and maps the alias back on `tools/call`, for clients that drop dotted tool names. Any other value, or none, keeps the daemon's names
 - `MOE_PROXY_ONESHOT_DEADLINE_MS` - Wrapper-only. An absolute bound for one call, in Unix epoch milliseconds, covering connect, queue, send and the EOF drain (see One-shot calls). Blank means unset; any other value that is not plain decimal digits forming a safe integer fails closed (one null-id error, exit 1, no connection)
 
 The daemon port always comes from `.moe/daemon.json`; no environment variable overrides it.
 
+## Reconnects
+
+The proxy keeps retrying, for up to 5 minutes, while the daemon is down or restarting:
+
+- `.moe/daemon.json` is missing, cannot be read for a moment (`ENOENT`, `EBUSY`, `EPERM` or `EACCES`, as when a restart replaces it on Windows), or is not complete JSON yet. A file that names another project, is over 64 KiB, or holds invalid connection details still ends the proxy at once.
+- The daemon refuses the connection, or accepts it but does not answer the WebSocket handshake within `MOE_MESSAGE_TIMEOUT_MS` (at most 10 seconds), as a frozen daemon does.
+
+A message written while no connection is open waits in a queue (at most 100) and is sent once one opens. A request in the queue gets the same `Request timed out` error when its deadline (`MOE_MESSAGE_TIMEOUT_MS`, or `MOE_BLOCKING_TIMEOUT_MS` for the three blocking tools) passes, and is then never sent. Requests already sent when a connection drops get a `Connection to daemon lost` error at once.
+
 ## One-shot calls
 
-The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF lets a pending blocking call (the three tools above) finish up to its deadline instead of the usual drain. It fails at once if the daemon socket is lost. Initialized MCP sessions, ordinary calls and queued (unsent) messages keep the 2-second drain, and SIGINT/SIGTERM cap any drain at 2 seconds.
+The wrappers' RPC helpers pipe one bare `tools/call` into a fresh proxy and close stdin. In a session that never sent `initialize`, stdin EOF does not cut short a request the proxy has already sent to the daemon: it finishes up to its own deadline (`MOE_MESSAGE_TIMEOUT_MS`, or `MOE_BLOCKING_TIMEOUT_MS` for the three blocking tools), the same deadline it gets without EOF. It fails at once if the daemon socket is lost. A message still queued, because no daemon connection is open, keeps the 2-second drain, so a call to an unreachable daemon returns quickly. Initialized MCP sessions keep the 2-second drain for every request, and SIGINT/SIGTERM cap any drain at 2 seconds.
 
 The proxy exits 0 only after its stdout has drained, so a reader that starts late still gets all of a reply bigger than the OS pipe buffer (about 64 KiB on Linux). A reader that stops reading gets 2 seconds; then the proxy exits 1, because the reply may be incomplete. A reader that closes the pipe (EPIPE) gets exit 1, as before.
 
@@ -90,7 +101,7 @@ A presented field must equal the stamped env value exactly (`===`: `"7"` does no
 - `EXECUTION_IDENTITY_SUBSTITUTED` (JSON-RPC `-32003`): a presented `attemptId`, `generation` or `sessionId` differs from the session's value. Omit the field so the proxy supplies it.
 - `EXECUTION_IDENTITY_INVALID` (`-32602`): the env group a tool carries is malformed or partial, or the check hit an unexpected error (it fails closed). A broken attempt group refuses only the tools that carry it, so `moe.get_context` still gets its `sessionId`.
 
-The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame. With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId`, runner identity or worker type) already rewrote it.
+The error carries `error.data = { tool, codeName }`. A JSON-RPC batch is fenced per element, and one refusal drops the whole frame; a batch that passes the fence is still refused (see Usage). With no identity env the proxy is the legacy proxy: it adds nothing, the daemon decides, and the line is forwarded byte-for-byte unless another step (alias rename, `workerId`, runner identity or worker type) already rewrote it.
 
 ## Worker type
 

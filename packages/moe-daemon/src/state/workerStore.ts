@@ -29,6 +29,7 @@ import { logger } from '../util/logger.js';
 import { closeOwnFinalizingAttempts, nextStatusForRelease, isWorkerAlive, LIVENESS_TIMEOUT_MS } from './workerLifecycle.js';
 import { closeHandedBackAttempts, listAttempts } from './attemptStore.js';
 import { withEvictionTombstones } from '../util/teamMembershipHeal.js';
+import { removeEntityFile } from './persistence.js';
 
 // BLOCKED counts as an active hold: a worker parked on a resource queue still
 // owns its task (one-task-per-worker), so claim_next_task keeps returning
@@ -253,17 +254,9 @@ export async function deleteWorker(state: StateManager, workerId: string): Promi
     // Remove from memory
     state.workers.delete(workerId);
 
-    // Remove from disk
-    const filePath = path.join(state.moePath, 'workers', `${workerId}.json`);
-    try {
-      if (fs.existsSync(filePath)) {
-        // Suppress the watcher echo so our own delete doesn't re-trigger load().
-        state.fileWatcher?.ignorePath(filePath);
-        fs.unlinkSync(filePath);
-      }
-    } catch (error) {
-      logger.error({ error, workerId }, 'Failed to delete worker file');
-    }
+    // Remove from disk. A file that will not go is tombstoned, so no reload
+    // restores the record, its stale status and currentTaskId with it.
+    removeEntityFile(state, path.join(state.moePath, 'workers', `${workerId}.json`));
 
     // Clear assignedWorkerId on tasks referencing this worker, routing status
     // via nextStatusForRelease (same as purgeAllWorkers): WORKING stays
@@ -414,11 +407,9 @@ export async function purgeAllWorkers(state: StateManager): Promise<void> {
           }
           try {
             if (spared.has(path.basename(file, '.json'))) continue;
-            const workerFile = path.join(workersDir, file);
-            // Suppress the watcher echo so our own delete doesn't re-trigger load().
-            state.fileWatcher?.ignorePath(workerFile);
-            fs.unlinkSync(workerFile);
-            deletedCount++;
+            // The record leaves the map below either way: a file that will not
+            // go is tombstoned, so no reload restores it.
+            if (removeEntityFile(state, path.join(workersDir, file))) deletedCount++;
           } catch (error) {
             logger.error({ error, file }, 'Failed to delete worker file during purge');
           }

@@ -58,7 +58,7 @@ import { installAgents, installToolchain, materializeSnapshot, resetWorkspace } 
 import { exportGit, exportSourceSnapshot } from './source-export.mjs';
 import { validateImport } from './source-snapshot.mjs';
 import { fetchNodeToolchain } from './toolchain-cache.mjs';
-import { ownedLedgerDir, readDaemonInfo, runnerProbe } from './vm-control.mjs';
+import { imageCacheDir, ownedLedgerDir, readDaemonInfo, runnerProbe } from './vm-control.mjs';
 
 const CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
@@ -119,7 +119,7 @@ async function provisionSeat(o, run, steps) {
   const s = run.s = kit(steps);
   const { root, ledger } = seatAdmissionFor(o.project);
   run.ledger = ledger;
-  const cacheDir = path.join(path.dirname(ownedLedgerDir(o.project)), 'images'); // check-dispatch landedRunCheck's convention
+  const cacheDir = imageCacheDir(o.project); // check-dispatch landedRunCheck's cache
   await sweep(o, ledger, s);
   run.stage = 'SEAT_CAPACITY_UNKNOWN';
   const limit = s.cap();

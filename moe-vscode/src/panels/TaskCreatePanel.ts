@@ -33,7 +33,8 @@ export class TaskCreatePanel {
             'moe.createTask',
             'Create Task',
             vscode.ViewColumn.One,
-            { enableScripts: true, localResourceRoots: [extensionUri] }
+            // Retained: a form moved to a background tab keeps what was typed into it.
+            { enableScripts: true, localResourceRoots: [extensionUri], retainContextWhenHidden: true }
         );
 
         TaskCreatePanel.currentPanel = new TaskCreatePanel(panel, extensionUri, client, state);
@@ -94,7 +95,11 @@ export class TaskCreatePanel {
                 const definitionOfDone = (dodRaw || []).filter(item => item.trim().length > 0);
 
                 try {
-                    this.daemonClient.createTask(epicId, title, description, definitionOfDone, priority);
+                    if (!this.daemonClient.createTask(epicId, title, description, definitionOfDone, priority)) {
+                        // Nothing reached the socket: keep the form open so the typed task survives a retry.
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — task was not created.');
+                        return;
+                    }
                     vscode.window.showInformationMessage(`Task "${title}" created.`);
                     this.dispose();
                 } catch (err) {

@@ -10303,14 +10303,17 @@ do {
         }
 
         # -------- Wrapper-side task wait (bind the task BEFORE the launch) ----
-        # NOT moe.wait_for_task, and that is measured rather than preferred:
-        # Invoke-MoeRpc pipes ONE json line into a fresh moe-proxy and closes
-        # stdin, and the proxy treats stdin EOF as shutdown, erroring every
-        # still-open request after a flat 2s grace ("Proxy shutting down before
-        # response received" -- reproduced against a real daemon on
-        # 2026-09-12). A blocking long-poll therefore cannot survive this
-        # transport in either wrapper, so the wait is a bounded CLAIM poll over
-        # the same non-blocking RPC the pre-flight already uses.
+        # NOT moe.wait_for_task. Invoke-MoeRpc pipes ONE json line into a fresh
+        # moe-proxy and closes stdin. When this was measured against a real
+        # daemon (2026-09-12), the proxy errored every still-open request 2s
+        # after that EOF ("Proxy shutting down before response received"), so
+        # a blocking long-poll could not survive this transport in either
+        # wrapper. The proxy now lets a request it already sent in such a
+        # one-shot session run to its own deadline (MOE_MESSAGE_TIMEOUT_MS, or
+        # MOE_BLOCKING_TIMEOUT_MS for the long-polls); only a message still
+        # queued, with no daemon connection open, keeps the 2s drain (One-shot
+        # calls in packages/moe-proxy/README.md). The wait remains a bounded
+        # CLAIM poll over the same non-blocking RPC the pre-flight already uses.
         # The per-task baseline, the live-session marker and the post-flight
         # landing all key on $preflightTaskId. A CLI told to claim inside
         # itself therefore edits with no snapshot of what was already dirty

@@ -60,7 +60,7 @@ Swing tool window: epic-grouped 5-column board, task/epic/plan dialogs, chat / m
 Key behaviors:
 - Connects to daemon WebSocket at `/ws` (port from `.moe/daemon.json`).
 - Auto-initializes `.moe` on first connect if missing. On an existing `.moe` it only creates missing role docs/skills, and it upgrades stale marked copies only right before it starts the daemon itself (the daemon also rewrites them at every start), so a live daemon's newer docs are never downgraded.
-- Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills it on close if it is the last project using that PID.
+- Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills its process tree on close if it is the last project using that PID.
 - UI is Swing-based; no JCEF/webview.
 
 A VS Code / Antigravity extension (`moe-vscode/`) is a secondary client speaking the same `/ws` protocol.
@@ -283,6 +283,17 @@ clone that wrote it:
 - `receipts/`: crash recovery for this clone's ref move, paired with
   `<gitdir>/moe/receipt/<taskId>.json`, which never leaves the clone; the
   landing itself travels as the commit.
+
+A task's records live as long as the task: an archived task keeps them all, and
+`moe.delete_task` drops the deleted task's candidates, check runs, receipts and
+reviews (its closed attempts, and the runner's `dispatches/` and
+`observations/`, stay). A record file that will not unlink is skipped by every
+reload, which retries the unlink, so the record never comes back. The daemon
+reads the directories in full at start; a reload (any watched-file change)
+reads only a record file that is new or whose size or mtime changed since it
+was read. Per-task and per-candidate lookups go through an index
+(`state/recordIndex.ts`) that is rebuilt only after a write, so a board
+snapshot no longer scans every store once per task.
 
 ### Worktree mode
 
@@ -524,7 +535,9 @@ only the daemon's evaluation of a certified report counts.
   owner-only ledger record (`~/.moe/runner-state/<project hash>/vms`, or under `MOE_RUNNER_STATE_DIR`), written before
   launch under a random `moe-vm-<20 hex>` name. Reconcile and cleanup touch recorded names only, delete by exact name,
   and preserve a record whose attempt or job lease is not proven closed. `vm-control.mjs status|reconcile|cleanup
-  --project <path>` is the IDE contract.
+  --project <path>` is the IDE contract. The pinned image, toolchain and agent caches sit beside the ledger in
+  `<state root>/<project hash>/images`; on Linux with no `MOE_RUNNER_STATE_DIR` they are in
+  `~/moe-runner-cache/<project hash>/images`, since the Multipass snap reads only non-hidden paths under home.
 - **Pinned bootstrap and readiness** (`guest-bootstrap.mjs`, `provision.mjs`, `guest-readiness.mjs`). The image is
   verified against its sha256 pin and launched as the verified local file (on Windows as `release:<pin sha256>`, whose
   reported `image_hash` must equal the pin, else `IMAGE_PROVIDER_HASH_MISMATCH`). The cloud-init user-data travels
@@ -659,12 +672,16 @@ only the daemon's evaluation of a certified report counts.
 - **Restart Daemon on Windows** (`MoeDaemonSupervisor.stopWindowsRestart`, CQ-RF04). A pid that is absent, dead or
   0 is never signalled. Under the protected profile a daemon whose provenance does not verify is not stopped: "Restart
   Daemon did not stop pid N … this IDE did not start it from the installed Moe runtime." Otherwise the plugin runs
-  the installed `stop`. It then terminates the old process tree, roots first: the supervisor this IDE spawned and,
+  the installed `stop`. When that `stop` exits 1 (it could not verify the pid, so it signalled nothing) and the pid is
+  outside this IDE's spawn tree, the plugin signals and starts nothing: "the stop could not verify pid N, which
+  .moe/daemon.json names … so it left that process running". Otherwise it then terminates the old process tree, roots first: the supervisor this IDE spawned and,
   under protected, the daemon's genuine parent; under legacy a foreign parent is only watched. The descendants follow,
   within the same bounded wait. A process still running afterwards refuses the new start ("pid N is still running
   after the stop, and it could restart the old one"), and so does a tree a previous attempt could not resolve. A
-  second click while a stop is in flight is refused. On other hosts the protected restart destroys only a captured
-  handle whose provenance verifies.
+  second click while a stop is in flight is refused. On other hosts Restart Daemon sends SIGTERM to the daemon.json
+  pid (under protected, only to a captured handle whose provenance verifies) and waits up to 15 s for it to exit
+  before starting anything; a survivor in this IDE's own spawn tree is killed with that tree, and any other survivor
+  refuses ("pid N is still running after the stop…").
 - **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). Both flows above reach
   the old daemon through the installed CLI's `stop`. `stop`, `status` and the `start` gate find it through
   `.moe/daemon.json`, which is repository content, so the CLI dials its `bindHost` only when the literal it resolves to

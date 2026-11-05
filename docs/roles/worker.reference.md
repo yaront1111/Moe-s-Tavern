@@ -106,7 +106,7 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 
 1. **Acquire before you touch it**: `moe.acquire_resource { resourceId, taskId, workerId, note }`. Granted → do the work. Undeclared ids auto-create (capacity 1, 24h lease cap); leases are keyed by task, so a CLI respawn or daemon restart doesn't lose yours — re-acquiring just renews it.
 2. **Busy → park, never poll**: follow the returned `nextAction` — `moe.report_blocked` with the same `resourceId`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling `acquire_resource`. For a short wait inside a live session, `moe.wait_for_resource` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
-3. **Release when done**: `moe.release_resource { resourceId, workerId }` — the next waiter unparks immediately. The 24h `maxLeaseMs` auto-expiry is a crash bound, not a substitute for releasing.
+3. **Release when done**: `moe.release_resource { resourceId, workerId, taskId }`, while the task is still yours. The next waiter unparks immediately. Once the row has passed to another seat (QA claimed it), the lease is that seat's to release. The 24h `maxLeaseMs` auto-expiry is a crash bound, not a substitute for releasing.
 
 ## Claude account switch
 

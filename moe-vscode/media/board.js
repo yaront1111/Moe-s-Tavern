@@ -496,18 +496,26 @@
         var lastBoardFingerprint = '';
         var columnFingerprints = {};
 
+        // Every task field a card, its epic group or its order reads (renderTaskCard, blockCause, elapsedSuffix,
+        // renderGroupedTasks): a change to any of them must re-render, or the card keeps showing the old value.
+        function taskFingerprint(t) {
+            var metrics = t.metrics || {};
+            var critique = t.planCritiqueResult || {};
+            var steps = (t.implementationPlan || []).map(function(s) {
+                return (s.stepId || '') + ':' + (s.status || '');
+            });
+            return JSON.stringify([t.id, t.status, t.order, t.title, t.priority, t.epicId || '', t.description || '',
+                t.assignedWorkerId || '', (t.comments || []).length, t.hasPendingQuestion || false, steps,
+                t.needsHumanReview === true, t.blockedResourceId || '', t.blockedOnTaskIds || [],
+                t.reopenCount || 0, metrics.reopenCount, metrics.firstClaimAt || '', metrics.wallClockMs, metrics.doneAt || '',
+                (t.priorHandoffs || []).length, critique.verdict || '', critique.concerns || []]);
+        }
+
         function computeBoardFingerprint(state) {
             try {
                 var taskFp = (state.tasks || []).slice().sort(function(a, b) {
                     return (a.id || '').localeCompare(b.id || '');
-                }).map(function(t) {
-                    var stepsFp = (t.implementationPlan || []).map(function(s) {
-                        return (s.stepId || '') + ':' + (s.status || '');
-                    }).join(';');
-                    return [t.id, t.status, t.order, t.title, t.priority,
-                        t.assignedWorkerId || '', (t.comments || []).length,
-                        t.hasPendingQuestion || false, stepsFp].join(':');
-                }).join('|');
+                }).map(taskFingerprint).join('|');
 
                 var epicFp = (state.epics || []).slice().sort(function(a, b) {
                     return (a.id || '').localeCompare(b.id || '');
@@ -530,20 +538,13 @@
 
         function computeColumnFingerprint(columnTasks, epics, status) {
             try {
+                // taskFingerprint carries t.status: the WORKING column holds both
+                // WORKING and (display-mapped) BLOCKED tasks, so status is no longer
+                // implied by column membership and a WORKING<->BLOCKED flip must
+                // dirty the column.
                 var taskFp = columnTasks.slice().sort(function(a, b) {
                     return (a.id || '').localeCompare(b.id || '');
-                }).map(function(t) {
-                    var stepsFp = (t.implementationPlan || []).map(function(s) {
-                        return (s.stepId || '') + ':' + (s.status || '');
-                    }).join(';');
-                    // t.status is part of the fingerprint: the WORKING column
-                    // holds both WORKING and (display-mapped) BLOCKED tasks, so
-                    // status is no longer implied by column membership and a
-                    // WORKING<->BLOCKED flip must dirty the column.
-                    return [t.id, t.status, t.order, t.title, t.priority,
-                        t.assignedWorkerId || '', (t.comments || []).length,
-                        t.hasPendingQuestion || false, stepsFp].join(':');
-                }).join('|');
+                }).map(taskFingerprint).join('|');
 
                 var relevantEpicIds = {};
                 columnTasks.forEach(function(t) {

@@ -10581,14 +10581,17 @@ PYEOF
         # out of the whole claim/baseline/landing path), a pending unread
         # mention (answered by a chat-only session below instead of waited on),
         # and a launch outage (the seat claims no new task until a probe launches).
-        # NOT moe.wait_for_task, and that is measured rather than preferred:
-        # moe_rpc pipes ONE json line into a fresh moe-proxy and closes stdin,
-        # and the proxy treats stdin EOF as shutdown, erroring every still-open
-        # request after a flat 2s grace ("Proxy shutting down before response
-        # received" -- reproduced against a real daemon on 2026-09-12). A
-        # blocking long-poll therefore cannot survive this transport in either
-        # wrapper, so the wait is a bounded CLAIM poll over the same
-        # non-blocking RPC the pre-flight already uses.
+        # NOT moe.wait_for_task. moe_rpc pipes ONE json line into a fresh
+        # moe-proxy and closes stdin. When this was measured against a real
+        # daemon (2026-09-12), the proxy errored every still-open request 2s
+        # after that EOF ("Proxy shutting down before response received"), so
+        # a blocking long-poll could not survive this transport in either
+        # wrapper. The proxy now lets a request it already sent in such a
+        # one-shot session run to its own deadline (MOE_MESSAGE_TIMEOUT_MS, or
+        # MOE_BLOCKING_TIMEOUT_MS for the long-polls); only a message still
+        # queued, with no daemon connection open, keeps the 2s drain (One-shot
+        # calls in packages/moe-proxy/README.md). The wait remains a bounded
+        # CLAIM poll over the same non-blocking RPC the pre-flight already uses.
         if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$LAUNCH_OUTAGE" != true ] \
             && [ "$PREFLIGHT_HAS_UNREAD_MENTION" = false ] && [ -n "$CLAIM_RESULT" ] && [ -n "$PYTHON_CMD" ]; then
             CLAIM_WAIT_NEEDED=$($PYTHON_CMD -c "

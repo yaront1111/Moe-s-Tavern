@@ -212,7 +212,7 @@ function expectedCommand(role, ext, dir, marker, command = 'claude') {
             `${marker ? `& ${psQuote(interp())}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role ${role} ` +
             `-Project ${psQuote(dir)} -WorkerId '${role}-ID' -Command '${command}']`;
     }
-    return env.map(([key, value]) => `${key}=${shQuote(value)} `).join('') +
+    return 'env ' + env.map(([key, value]) => `${shQuote(`${key}=${value}`)} `).join('') +
         `${marker ? shQuote(interp()) : 'bash'} ${shQuote(wrapper)} --role ${role} --project ${shQuote(dir)} --worker-id '${role}-ID' --command '${command}'`;
 }
 

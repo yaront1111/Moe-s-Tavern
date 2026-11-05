@@ -1,7 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, invalidInput, invalidState, notAllowed } from '../util/errors.js';
-import { RESOURCE_ID_RE } from '../state/resourceStore.js';
+import { RESOURCE_ID_RE, releaseMatchesCaller } from '../state/resourceStore.js';
 import { workerHasRole } from '../util/workerRole.js';
 import type { ResourceLease } from '../types/schema.js';
 
@@ -19,7 +19,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       properties: {
         resourceId: { type: 'string', description: 'The shared resource whose lease to release' },
         workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); required unless force:true from a human, who omits it' },
-        taskId: { type: 'string', description: 'Limit the release to this task\'s lease/queue entry. Default: everything held by workerId. NOTE: taskId scopes a TASK, not a lease generation — the same task\'s lease may since have passed to a different worker. Use ifHolderWorkerId to pin the generation.' },
+        taskId: { type: 'string', description: 'Limit the release to this task\'s lease/queue entry; pass the task you hold. Default: every lease and queue entry of a task assigned to you, plus those you acquired on a row no other seat holds. NOTE: taskId scopes a TASK, not a lease generation — the same task\'s lease may since have passed to a different worker. Use ifHolderWorkerId to pin the generation.' },
         force: { type: 'boolean', description: 'Release regardless of ownership (governor/human intervention). With taskId: that lease; without: ALL leases and queue entries. A caller whose workerId resolves to no governor role (team role, else the id prefix) is refused NOT_ALLOWED.' },
         ifHolderWorkerId: { type: 'string', description: 'Precondition: proceed only if EVERY lease this call would release is still held by this worker — including, under force with no taskId, peer leases the call would also strip. Otherwise nothing is released and the error names the current holder. Guards leases, not queue entries. Use it whenever time passed between reading list_resources and calling this — a human-in-the-loop pause is the common case.' },
         ifAcquiredAt: { type: 'string', description: 'Precondition: proceed only if the targeted lease was acquired at exactly this ISO timestamp (as reported by list_resources). Pins the exact lease generation.' }
@@ -67,19 +67,14 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
       if (params.ifHolderWorkerId !== undefined || params.ifAcquiredAt !== undefined) {
         const resource = state.getResource(params.resourceId);
         const holders = resource?.holders ?? [];
-        // MUST mirror resourceStore.releaseResource's own `matchesCaller`, or
-        // the precondition silently under-covers what the release will strip.
-        // The dangerous case is force with NO taskId: the store releases EVERY
-        // holder, so filtering to the caller's own leases would validate lease
-        // A and let a peer's lease B be torn off unchecked.
-        const callerOwns = (l: ResourceLease): boolean =>
-          l.workerId === params.workerId ||
-          state.getTask(l.taskId)?.assignedWorkerId === params.workerId;
-        const targeted = force
-          ? (params.taskId ? holders.filter((l) => l.taskId === params.taskId) : holders)
-          : (params.taskId
-              ? holders.filter((l) => l.taskId === params.taskId && callerOwns(l))
-              : holders.filter(callerOwns));
+        // The store's own rule (releaseMatchesCaller), or the precondition
+        // silently under-covers what the release will strip. The dangerous case
+        // is force with NO taskId: the store releases EVERY holder, so filtering
+        // to the caller's own leases would validate lease A and let a peer's
+        // lease B be torn off unchecked.
+        const targeted = holders.filter((l) => releaseMatchesCaller(state, {
+          resourceId: params.resourceId!, workerId, taskId: params.taskId, force, ifAcquiredAt: params.ifAcquiredAt,
+        }, l));
 
         if (targeted.length === 0) {
           const held = holders.length === 0
@@ -117,6 +112,7 @@ export function releaseResourceTool(_state: StateManager): ToolDefinition {
         workerId,
         taskId: params.taskId,
         force,
+        ifAcquiredAt: params.ifAcquiredAt,
       });
 
       const releasedIds = result.released.map((l) => l.taskId);

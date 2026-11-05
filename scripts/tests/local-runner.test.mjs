@@ -1871,7 +1871,8 @@ process.exitCode = main();
 // CQ-R03 Windows VM provisioning
 import { Writable } from 'node:stream';
 import { MAX_IMAGE_BYTES } from '../local-runner/guest-bootstrap.mjs';
-import { DOWNLOAD_TIMEOUT_MS, ensurePinnedImage } from '../local-runner/image-cache.mjs';
+import { DOWNLOAD_TIMEOUT_MS, ensurePinnedImage, STALE_PART_MS } from '../local-runner/image-cache.mjs';
+import { utimesSync } from 'node:fs';
 import { probeHypervisor, windowsPlatform } from '../local-runner/platform-windows.mjs';
 import { fileImageUrl, launchInstance, provisionGuest, releaseImage } from '../local-runner/provision.mjs';
 
@@ -2192,6 +2193,45 @@ test('a cached pinned image is re-verified without a download; a corrupt one is 
   await assert.rejects(ensure(tampered), error => assertSanitized(error, 'IMAGE_CHECKSUM_MISMATCH'));
   assert.equal(tampered.calls.length, 1);
   assert.deepEqual(readdirSync(h.cacheDir), []);
+});
+
+// A concurrent download's verified pin, renamed over the corrupt entry while it was being
+// verified, was unlinked: the caller that had just been handed that file lost it.
+test('a corrupt entry replaced while it was verified is not removed', async t => {
+  const h = cacheHarness(t);
+  const file = path.join(h.cacheDir, IMAGE_FILE);
+  mkdirSync(h.cacheDir);
+  writeFileSync(file, 'corrupted cache entry');
+  const verified = path.join(path.dirname(h.cacheDir), 'verified.img');
+  writeFileSync(verified, IMAGE_BYTES);
+  const digest = async input => {
+    const result = await h.digest(input);
+    if (h.files.length === 1) renameSync(verified, file);
+    return result;
+  };
+  let present;
+  const download = fakeFetch();
+  const fetch = async (...args) => { present = existsSync(file) && readFileSync(file).equals(IMAGE_BYTES); return download.fetch(...args); };
+  assert.deepEqual(await ensurePinnedImage({ cacheDir: h.cacheDir, arch: 'x64' }, { fetch, digest }), { file, sourceImage: SOURCE });
+  assert.equal(present, true, "the other download's verified pin was still in place");
+  assert.deepEqual(readFileSync(file), IMAGE_BYTES);
+});
+
+test('a .part a killed download left is swept once no live download can own it', async t => {
+  const h = cacheHarness(t);
+  assert.equal(STALE_PART_MS, 2 * DOWNLOAD_TIMEOUT_MS);
+  mkdirSync(h.cacheDir);
+  writeFileSync(path.join(h.cacheDir, IMAGE_FILE), IMAGE_BYTES);
+  const parts = [`.${PINS.x64.sha256}.4242.0badc0de.part`, `.${'ab'.repeat(64)}.4243.0badc0df.part`, `.${PINS.x64.sha256}.4244.0badc0e0.part`];
+  for (const name of [...parts, 'notes.part']) writeFileSync(path.join(h.cacheDir, name), 'partial');
+  const old = new Date(Date.now() - STALE_PART_MS - 60_000);
+  for (const name of [parts[0], parts[1], 'notes.part']) utimesSync(path.join(h.cacheDir, name), old, old);
+  const idle = fakeFetch();
+  assert.deepEqual(await ensurePinnedImage({ cacheDir: h.cacheDir, arch: 'x64' }, { fetch: idle.fetch, digest: h.digest }),
+    { file: path.join(h.cacheDir, IMAGE_FILE), sourceImage: SOURCE });
+  assert.equal(idle.calls.length, 0);
+  // The stale image and agent-binary parts go; a recent one and a file of another shape stay.
+  assert.deepEqual(readdirSync(h.cacheDir).sort(), [parts[2], IMAGE_FILE, 'notes.part'].sort());
 });
 
 test('a non-regular cache entry is refused without a download', async t => {
@@ -4612,6 +4652,26 @@ os.mkdir = plant`;
   }
 });
 
+// A killed materialize never reaches the finally that removes its staging tree, a whole snapshot that a seat's reused VM
+// keeps job after job. Skipped, as TC7 is for a killed toolchain install, until the fix (each call first sweeps its own
+// prefix; another tree's staging is its own call's to sweep) lands with a move of CERTIFICATION_PINS.supervisorSha256,
+// the governed pin of guest-supervisor.py.
+const PINNED = 'deferred: certified supervisor pin';
+test('M5 a materialize first sweeps the staging trees a killed one left beside its target, a link as itself', { skip: PINNED || NOT_POSIX }, t => {
+  const [dir, outside] = [scratch(t), scratch(t)];
+  const paths = layoutIn(dir);
+  mkdirSync(path.join(paths.lib, '.workspace-k1lled00', 'src'), { recursive: true });
+  writeFileSync(path.join(paths.lib, '.workspace-k1lled00', 'src', 'a'), 'an earlier job');
+  writeFileSync(path.join(outside, 'kept'), 'outside');
+  symlinkSync(outside, path.join(paths.lib, '.workspace-l1nked00'));
+  for (const name of ['.dependencies-k1lled00', '.other-k1lled00']) mkdirSync(path.join(paths.lib, name));
+  const manifest = workspaceEntries(snapshotOf([fileOf('a', 'A')]));
+  const run = materializeIn(dir, framesOf([...hostFrames(manifest)]));
+  assert.equal(run.status, 0, String(run.stderr));
+  assert.deepEqual(readdirSync(paths.lib).sort(), ['.dependencies-k1lled00', '.other-k1lled00', 'workspace', 'workspace.manifest.json']);
+  assert.deepEqual(readdirSync(outside), ['kept']);
+});
+
 test('T7 end to end, materializeSnapshot copies the merged view through the real supervisor and refuses a second copy',
   { skip: NOT_POSIX, timeout: 60_000 }, async t => {
     const paths = layoutIn(scratch(t));
@@ -5017,6 +5077,16 @@ test('TC6 overflowing PAX mtimes fail closed during file extraction and director
       assert.equal(String(run.stderr), '');
     });
   }
+});
+
+test('TC7 an install first sweeps the staging a killed one left beside the toolchain', { skip: PINNED || TOOLCHAIN_SKIP }, t => {
+  const dir = scratch(t);
+  const stale = path.join(dir, 'opt', '.toolchain-k1lled00');
+  mkdirSync(path.join(stale, 'tree'), { recursive: true });
+  writeFileSync(path.join(stale, 'archive'), 'a partial archive');
+  const run = toolchainIn(dir, toolchainFrames(tarballOf(scratch(t), NODE_MEMBERS)));
+  assert.equal(run.status, 0, String(run.stderr));
+  assertToolchainTree(run.toolchain); // its parent holds the toolchain alone
 });
 
 function cachedToolchain(t, bytes) {
@@ -6256,6 +6326,58 @@ test('CJ5 the onReady hook gates the session; its error, a timeout or an abort s
     const h = checkHarness(at === 'provision' ? { provision: abortAfter(reserving(readyGuest())) } : { materialize: abortAfter(() => {}) });
     assert.deepEqual([await runCheckJob({ ...h.input, signal: controller.signal }, h.deps), h.log], [stopped('CHECK_ABORTED', { environment }), log], at);
   }
+});
+
+// No step before onReady takes the signal: a readiness wait or a download outlasted the wrapper's stop window, which then
+// killed the CLI before its delete, and the VM leaked.
+test('CJ5b an abort mid-step deletes the VM at once, waiting only for a launch in flight; the step left running reserves and launches nothing', { timeout: 20_000 }, async () => {
+  const forever = new Promise(() => {});
+  const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+  const logged = h => { h.ledger.update = async (record, changes) => { h.log.push(`update ${changes.phase}`); return { ...record, ...changes }; }; return h; };
+  const abortAt = (h, reached) => {
+    const controller = new AbortController();
+    const result = runCheckJob({ ...h.input, signal: controller.signal }, h.deps);
+    return reached.then(() => controller.abort()).then(() => result);
+  };
+  const owned = deferred();
+  const waiting = logged(checkHarness({ provision: async ({ ledger, owner: who }) => {
+    await ledger.update(await ledger.update(await ledger.reserve(who), { phase: 'launching' }), { phase: 'owned' });
+    owned.resolve();
+    return forever; // the readiness wait
+  } }));
+  assert.deepEqual([await abortAt(waiting, owned.promise), waiting.log],
+    [stopped('CHECK_ABORTED'), ['provision', 'reserve', 'update launching', 'update owned', 'remove', 'removed']]);
+  const [fetching, fetched, refused] = [deferred(), deferred(), []];
+  const downloading = logged(checkHarness({ provision: async ({ ledger, owner: who }) => {
+    fetching.resolve();
+    await fetched.promise; // the image download, then the reservation it would have made
+    await ledger.reserve(who).catch(error => { refused.push(error.code); });
+    return forever;
+  } }));
+  assert.deepEqual([await abortAt(downloading, fetching.promise), downloading.log], [stopped('CHECK_ABORTED', { instance: null, vm: 'none' }), ['provision']]);
+  fetched.resolve();
+  await wait(10);
+  assert.deepEqual([refused, downloading.log], [['CHECK_ABORTED'], ['provision']]);
+  // A delete racing a launch could miss the VM it creates, so the run waits for it; the retry after it never launches.
+  const [launching, launched, retrying] = [deferred(), deferred(), deferred()];
+  const inFlight = logged(checkHarness({ provision: async ({ ledger, owner: who }) => {
+    const started = await ledger.update(await ledger.reserve(who), { phase: 'launching' });
+    launching.resolve();
+    await launched.promise;
+    const absent = await ledger.update(started, { phase: 'absent' });
+    await retrying.promise;
+    await ledger.update(absent, { phase: 'launching' }).catch(error => { refused.push(error.code); });
+    return forever;
+  } }));
+  let settled = false;
+  const pending = abortAt(inFlight, launching.promise).then(result => { settled = true; return result; });
+  await wait(50);
+  assert.deepEqual([settled, inFlight.log], [false, ['provision', 'reserve', 'update launching']]);
+  launched.resolve();
+  assert.deepEqual([await pending, inFlight.log], [stopped('CHECK_ABORTED'), ['provision', 'reserve', 'update launching', 'update absent', 'remove', 'removed']]);
+  retrying.resolve();
+  await wait(10);
+  assert.deepEqual([refused, inFlight.log.length], [['CHECK_ABORTED', 'CHECK_ABORTED'], 6]);
 });
 
 test('CJ6 outcomes pass through after the delete, the approved protected list reaches the guest frame unchanged, and an undeleted pass is inconclusive', async () => {

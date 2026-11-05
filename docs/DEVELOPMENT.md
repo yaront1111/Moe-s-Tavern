@@ -91,6 +91,13 @@ node packages/moe-daemon/dist/index.js stop --project <path>
 
 The daemon writes `.moe/daemon.json` with `{ port, pid, startedAt, projectPath }`.
 
+`start`, `stop` and `status` judge an existing `daemon.json` by asking its port's `/health`:
+- **Confirmed**: the answer names this project and the recorded pid, at any HTTP status (a 503 is a live but unhealthy daemon). `start` does nothing, `stop` sends it SIGTERM, and `status` says `running`.
+- **Stale**: the pid is gone, the connection is refused, or something else answers. `start` and `stop` delete the file (`start` then starts a daemon). `status` says `stopped`, and deletes the file only when the pid is gone.
+- **Unverified**: the port takes the connection but never answers, even on a second try that waits `MOE_HEALTH_RETRY_TIMEOUT_MS` (default 3000). `stop` sends no signal, `start` starts nothing, and both keep the file and exit 1 with a line naming the pid. `status` says `unverified`. Check what that pid is and stop it yourself if it is a Moe daemon.
+
+On shutdown a daemon removes `daemon.json` and its lock only while they still name its own pid, so a daemon that was replaced while it ran leaves its successor's files alone. `start` and `_run` drop an agent seat's identity variables (`MOE_WORKER_ID`, `MOE_TASK_ID`, `MOE_SESSION_ID`, `MOE_ATTEMPT_ID`, `MOE_ATTEMPT_GENERATION`, `MOE_RUNNER_PROCESS_STARTED_AT`, `MOE_RUNNER_HOST`, `MOE_WORKER_TYPE`), so a daemon started from an agent's shell does not carry that seat's identity.
+
 ---
 
 ## Run the MCP Proxy
@@ -394,7 +401,7 @@ Both plugins communicate with the daemon via WebSocket at `ws://host:port/ws`:
 |---------|-------------------|---------------------|
 | Client class | `MoeProjectService` | `MoeDaemonClient` |
 | Connection mgmt | `connect()`, `disconnect()` | `connect()`, `disconnect()` |
-| Auto-reconnect | Yes (5s delay) | Yes (5s delay) |
+| Auto-reconnect | Yes (5s delay, 10 attempts); after `DAEMON_SHUTTING_DOWN` or a 1001 close it only follows daemon.json (1, 2, 4, then 8 s; 10 attempts) and never starts a daemon | Yes (5, 10, 20, then 30 s; 10 attempts; also when a first connect finds no daemon); after `DAEMON_SHUTTING_DOWN` it only follows daemon.json and never starts a daemon |
 | Heartbeat | PING/PONG | PING/PONG |
 
 ### Message Protocol

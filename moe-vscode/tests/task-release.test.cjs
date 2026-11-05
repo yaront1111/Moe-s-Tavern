@@ -512,9 +512,11 @@ test('RF6 refusal: only a RELEASE_TASK error correlated to this panel is shown o
         h.deliver({ ...frame, operation: 'UPDATE_TASK' });
         const { context, ...contextless } = frame;
         h.deliver(contextless);
-        assert.deepEqual([h.calls.errors, h.calls.warnings, h.calls.infos], [[], [], []]);
+        // The panel shows none of them; the UPDATE_TASK refusal gets the client's generic notice (JetBrains parity).
+        const notice = ['Moe: UPDATE_TASK failed: ' + frame.message];
+        assert.deepEqual([h.calls.errors, h.calls.warnings, h.calls.infos], [[notice], [], []]);
         h.deliver(frame);
-        assert.deepEqual(h.calls.errors, [['Agent was not released: ' + frame.message]]);
+        assert.deepEqual(h.calls.errors, [notice, ['Agent was not released: ' + frame.message]]);
         assert.deepEqual([h.calls.warnings, h.calls.infos, h.sent], [[], [], []]);
     } finally { h.dispose(); }
 });

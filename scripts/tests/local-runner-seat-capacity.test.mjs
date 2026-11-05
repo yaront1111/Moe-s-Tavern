@@ -137,6 +137,18 @@ test('SC4 a dead holder\'s lock is recovered within the bound; a live, unknown o
   assert.deepEqual((await ledger.list()).records.map(record => record.workerId).sort(), ['worker-1', 'worker-2']);
 });
 
+test('SC4b a dead holder\'s lock written without COMPUTERNAME is still recovered (its host used to be blank on win32)', async t => {
+  const saved = process.env.COMPUTERNAME;
+  t.after(() => { if (saved === undefined) delete process.env.COMPUTERNAME; else process.env.COMPUTERNAME = saved; });
+  delete process.env.COMPUTERNAME;
+  const root = scratch(t);
+  const { pid: dead } = spawnSync(process.execPath, ['-e', '']);
+  writeFileSync(LOCK(root), holder(dead));
+  assert.notEqual(JSON.parse(readFileSync(LOCK(root), 'utf8')).host, '');
+  await admitSeatVm({ root, ledger: ledgerIn(root), owner: seat('1'), cap: 9, waitMs: 2000, pollMs: 10 });
+  assert.deepEqual(debris(root), []);
+});
+
 test('SC5 every exit releases the lock, release and assertHeld touch only their own lock, and invalid input writes nothing', async t => {
   const root = scratch(t);
   const ledger = ledgerIn(root);

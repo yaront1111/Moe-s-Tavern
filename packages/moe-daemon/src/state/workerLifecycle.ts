@@ -13,6 +13,7 @@ import { generateId } from '../util/ids.js';
 import { completionCommitsForReview } from '../delivery/policy.js';
 import { announceAttemptClosed, closeOpenAttempts, listAttempts, setAttemptPhase } from './attemptStore.js';
 import { releaseDeregisteredClaims } from './resourceStore.js';
+import { forgetAccountLease } from './accountStore.js';
 
 export { isWorkerAlive, LIVENESS_TIMEOUT_MS } from '../util/workerLiveness.js';
 
@@ -41,6 +42,33 @@ export async function endReloadHold(state: StateManager, workerId?: string): Pro
 export function allStepsCompleted(task: Pick<Task, 'implementationPlan'>): boolean {
   const plan = Array.isArray(task.implementationPlan) ? task.implementationPlan : [];
   return plan.length > 0 && plan.every((s) => s.status === 'COMPLETED');
+}
+
+/**
+ * A manual unblock (unblock_worker resolveBlocks, set_task_status out of BLOCKED)
+ * declares the blocker gone, so the task's place in the queue of the resource it
+ * was blocked on goes too. Left behind, the entry is later granted a lease the
+ * task no longer waits for, holding the slot from the next waiter. Drops only a
+ * queue entry, never a lease (force + taskId on that one resource), and the
+ * release grants the freed position onward. Pass the task as it was BEFORE the
+ * unblock write (that write nulls blockedResourceId). Never throws: the unblock
+ * has already landed, so a failure is logged and leaves the entry as it was.
+ * Caller holds state.mutex.
+ */
+export async function dropBlockedResourceQueueEntry(
+  state: StateManager,
+  task: Pick<Task, 'id' | 'blockedResourceId'>,
+  workerId: string,
+): Promise<void> {
+  const resourceId = task.blockedResourceId;
+  if (!resourceId) return;
+  try {
+    const resource = state.getResource(resourceId);
+    if (!resource?.queue.some((q) => q.taskId === task.id) || resource.holders.some((l) => l.taskId === task.id)) return;
+    await state.releaseResource({ resourceId, workerId, taskId: task.id, force: true });
+  } catch (error) {
+    logger.warn({ taskId: task.id, resourceId, error }, 'manual unblock: failed to drop the task\'s resource queue entry');
+  }
 }
 
 /**
@@ -403,6 +431,10 @@ export async function deregisterWorker(
   } catch (err) {
     logger.warn({ workerId, error: err }, 'deregisterWorker: updateWorker failed');
   }
+
+  // The seat's claude session is over: its account lease ends with it on every
+  // DEAD path (the tool, a reload hold's expiry). A relaunch leases again.
+  forgetAccountLease(state, workerId);
 
   // Leases stay task-keyed for the next claimant, except on resources declared
   // releaseOnDeregister: those claims leave with the seat, and a task BLOCKED

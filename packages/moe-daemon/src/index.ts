@@ -79,6 +79,28 @@ const BIND_HOST_NOT_LOCAL = 'bindHost not local';
 /** validateDaemonInfoForProject's reason when a daemon.json from another pid namespace gets no confirming /health answer. */
 const PID_NAMESPACE_UNREACHABLE = 'pid namespace daemon unreachable';
 
+/** validateDaemonInfoForProject's reason when /health took no refusal and gave no answer, even on the retry (unverified). */
+const HEALTH_UNANSWERED = 'health check unanswered';
+
+/** The second, longer /health wait before a silent daemon is called unverified instead of stale. Read per call. */
+function healthRetryTimeoutMs(): number {
+  const ms = parseInt(process.env.MOE_HEALTH_RETRY_TIMEOUT_MS || '3000', 10);
+  return Number.isInteger(ms) && ms > 0 ? ms : 3000;
+}
+
+/**
+ * A seat's execution identity, which an agent wrapper exports for its own CLI and proxy. A daemon that a wrapper
+ * started (its pre-flight autostart) inherits them; the daemon serves every seat, so it drops them at start.
+ */
+const SEAT_IDENTITY_ENV = [
+  'MOE_WORKER_ID', 'MOE_TASK_ID', 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION',
+  'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_WORKER_TYPE',
+] as const;
+
+function scrubSeatIdentityEnv(env: NodeJS.ProcessEnv = process.env): void {
+  for (const name of SEAT_IDENTITY_ENV) delete env[name];
+}
+
 function daemonInfoPath(projectPath: string): string {
   return path.join(projectPath, '.moe', 'daemon.json');
 }
@@ -123,6 +145,11 @@ type DaemonValidationResult = {
   foreign?: boolean;
   /** The record's pidNamespace is not this reader's (isOtherPidNamespace); /health alone judged it. */
   namespaced?: boolean;
+  /**
+   * Neither confirmed nor stale: the pid may be alive and its port did not refuse the connection, but /health gave no
+   * answer, even on the retry. Nothing may signal it, remove its daemon.json or start a second daemon beside it.
+   */
+  unverified?: boolean;
 };
 
 type LockInfo = {
@@ -231,6 +258,14 @@ function releaseLock(projectPath: string): void {
   }
 }
 
+/**
+ * releaseLock for the shutdown paths: a running daemon released its lock once daemon.json was written, so a lock
+ * there by then is a newer starter's, and only a lock that still names this process is removed.
+ */
+function releaseOwnLock(projectPath: string): void {
+  if (readLockInfo(projectPath)?.pid === process.pid) releaseLock(projectPath);
+}
+
 function waitForPortListening(port: number, timeoutMs: number = PORT_READY_TIMEOUT_MS, host: string = DEFAULT_BIND_HOST): Promise<boolean> {
   return new Promise((resolve) => {
     const startTime = Date.now();
@@ -279,6 +314,19 @@ async function probeDaemonHealth(
   // An explicit host is the caller's; daemon.json's own bindHost is dialed only when it names this machine.
   if (address === null || (host === undefined && !isLocalAddress(address))) return false;
 
+  return await probeHealthAnswer(info, own, timeoutMs, address) === 'confirmed';
+}
+
+/** What one GET /health showed about the daemon a daemon.json names. */
+type HealthAnswer = 'confirmed' | 'refuted' | 'unanswered';
+
+/**
+ * One GET /health at `address`. 'confirmed': the answer names this project and info.pid, whatever its status (a live
+ * daemon answers 503 while it shuts down). 'refuted': the connection was refused, or the answer is anything else
+ * (another project or pid, not JSON, oversize). 'unanswered': the connection was not refused but no whole answer came
+ * (the connect or the read timed out, or the peer reset or closed it), so it proves neither.
+ */
+function probeHealthAnswer(info: DaemonInfo, own: string, timeoutMs: number, address: string): Promise<HealthAnswer> {
   return new Promise((resolve) => {
     const req = http.request({
       hostname: address,
@@ -292,34 +340,42 @@ async function probeDaemonHealth(
       res.on('data', (chunk) => {
         body += chunk;
         if (body.length > 64 * 1024) {
+          resolve('refuted');
           req.destroy();
-          resolve(false);
         }
       });
       res.on('end', () => {
         try {
-          const parsed = JSON.parse(body) as { status?: string; projectPath?: string; pid?: unknown };
+          const parsed = JSON.parse(body) as { projectPath?: string; pid?: unknown };
           resolve(
-            res.statusCode === 200
-            && parsed.status === 'healthy'
-            && typeof parsed.projectPath === 'string'
+            typeof parsed.projectPath === 'string'
             && namesOwnProject(parsed.projectPath, own)
             && isValidPid(parsed.pid)
             && parsed.pid === info.pid
+              ? 'confirmed'
+              : 'refuted'
           );
         } catch {
-          resolve(false);
+          resolve('refuted');
         }
       });
+      // An answer cut off before 'end' (a no-op once 'end' has settled it).
+      res.on('close', () => resolve('unanswered'));
     });
 
     req.on('timeout', () => {
       req.destroy();
-      resolve(false);
+      resolve('unanswered');
     });
-    req.on('error', () => resolve(false));
+    req.on('error', (error: NodeJS.ErrnoException) => resolve(error.code === 'ECONNREFUSED' ? 'refuted' : 'unanswered'));
     req.end();
   });
+}
+
+/** probeHealthAnswer, asked once more with the longer healthRetryTimeoutMs() when the first got no answer. */
+async function healthAnswerWithRetry(info: DaemonInfo, own: string, address: string): Promise<HealthAnswer> {
+  const first = await probeHealthAnswer(info, own, SOCKET_TIMEOUT_MS, address);
+  return first === 'unanswered' ? probeHealthAnswer(info, own, healthRetryTimeoutMs(), address) : first;
 }
 
 async function validateDaemonInfoForProject(
@@ -347,18 +403,21 @@ async function validateDaemonInfoForProject(
     // A container's (or another distro's) pid means nothing here: never signal it; /health at the local address decides.
     const address = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
     if (address === null || !isLocalAddress(address)) return { valid: false, reason: BIND_HOST_NOT_LOCAL, namespaced: true };
-    return await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)
-      ? { valid: true, info, namespaced: true }
+    const answer = await healthAnswerWithRetry(info, own, address);
+    if (answer === 'confirmed') return { valid: true, info, namespaced: true };
+    return answer === 'unanswered'
+      ? { valid: false, reason: HEALTH_UNANSWERED, namespaced: true, unverified: true }
       : { valid: false, reason: PID_NAMESPACE_UNREACHABLE, namespaced: true };
   }
   if (!isProcessAlive(info.pid)) return { valid: false, reason: 'pid not alive' };
   // Resolved once, so the literal judged here is the one dialed.
   const address = await healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS);
   if (address !== null && !isLocalAddress(address)) return { valid: false, reason: BIND_HOST_NOT_LOCAL };
-  if (address === null || !await probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)) {
-    return { valid: false, reason: 'health check failed' };
-  }
-  return { valid: true, info };
+  if (address === null) return { valid: false, reason: 'health check failed' };
+  // A refusal or another daemon's answer proves the record stale; silence from a live pid proves nothing.
+  const answer = await healthAnswerWithRetry(info, own, address);
+  if (answer === 'unanswered') return { valid: false, reason: HEALTH_UNANSWERED, unverified: true };
+  return answer === 'confirmed' ? { valid: true, info } : { valid: false, reason: 'health check failed' };
 }
 
 async function closeHttpServer(server: http.Server, timeoutMs: number = HTTP_CLOSE_TIMEOUT_MS): Promise<void> {
@@ -498,6 +557,11 @@ function removeDaemonInfo(projectPath: string): void {
   }
 }
 
+/** removeDaemonInfo for a daemon's own shutdown: a daemon.json naming another pid is a newer daemon's, and stays. */
+function removeOwnDaemonInfo(projectPath: string): void {
+  if (readDaemonInfo(projectPath)?.pid === process.pid) removeDaemonInfo(projectPath);
+}
+
 function cleanupStaleDaemonFiles(projectPath: string, reason: string): void {
   logger.warn({ reason }, 'Cleaning up stale daemon lifecycle files');
   removeDaemonInfo(projectPath);
@@ -584,16 +648,22 @@ function missingMoeDirBlocksStart(projectPath: string): boolean {
  * Shared first gate of `start`/`init` (supervisor) and `_run`: true when an
  * existing daemon.json must stop this start. A live daemon, native or on the
  * other side of the WSL boundary, blocks it; so does a foreign daemon.json that
- * does not answer /health, which is reported (exit 1) and never removed. A
- * native stale daemon.json is cleaned up and the start proceeds, and so is one
- * from another pid namespace that /health no longer confirms (a restarted
- * container reads its predecessor's record from a new namespace).
+ * does not answer /health, which is reported (exit 1) and never removed, and an
+ * unverified one (its /health took the connection but never answered), also
+ * exit 1 and kept. A native stale daemon.json is cleaned up and the start
+ * proceeds, and so is one from another pid namespace that /health no longer
+ * confirms (a restarted container reads its predecessor's record from a new
+ * namespace).
  */
 async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> {
   const existing = readDaemonInfo(projectPath);
   const validation = await validateDaemonInfoForProject(projectPath, existing);
   if (validation.valid && validation.info) {
     logger.info({ port: validation.info.port, pid: validation.info.pid, foreign: validation.foreign }, 'Moe daemon already running');
+    return true;
+  }
+  if (validation.unverified && existing) {
+    reportUnverifiedDaemon(existing, 'not removing daemon.json and not starting a second daemon over the same .moe/');
     return true;
   }
   if (validation.foreign) {
@@ -616,6 +686,15 @@ async function existingDaemonBlocksStart(projectPath: string): Promise<boolean> 
   return false;
 }
 
+/** The one report for an unverified daemon.json (validation.unverified), naming its pid: `outcome` says what was not done. Exit 1. */
+function reportUnverifiedDaemon(info: DaemonInfo, outcome: string): void {
+  logger.error({ pid: info.pid, port: info.port, reason: HEALTH_UNANSWERED },
+    `daemon.json names pid ${info.pid}, but /health on port ${info.port} did not answer, even on a `
+    + `${healthRetryTimeoutMs()}ms retry, so that daemon could not be verified: ${outcome}. `
+    + 'Check what that process is and stop it yourself if it is a Moe daemon');
+  process.exitCode = 1;
+}
+
 /**
  * The record this daemon writes to .moe/daemon.json. bindHost only when it is not the loopback default; pidNamespace
  * only where this process has one (Linux), so a reader in another pid namespace (the host, for a daemon in a
@@ -634,6 +713,8 @@ function buildDaemonInfo(port: number, projectPath: string, host: string): Daemo
 }
 
 async function startDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  // Also run by `_run` alone (not only under a supervisor, which already did).
+  scrubSeatIdentityEnv();
   const { key: spawnProofKey, problem } = takeSpawnProofKey(process.env);
   if (problem) logger.warn({ problem }, 'Ignoring invalid spawn proof key');
   const host = bindHost || DEFAULT_BIND_HOST;
@@ -665,6 +746,10 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     const validation = await validateDaemonInfoForProject(projectPath, info);
     if (validation.valid && validation.info) {
       logger.info({ port: validation.info.port, pid: validation.info.pid }, 'Daemon started by another process');
+      return;
+    }
+    if (validation.unverified && info) {
+      reportUnverifiedDaemon(info, 'not removing daemon.json and not starting a second daemon over the same .moe/');
       return;
     }
     if (info && !validation.foreign) cleanupStaleDaemonFiles(projectPath, validation.reason || 'invalid daemon info after lock wait');
@@ -856,18 +941,17 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
 
     logger.info('Shutting down daemon...');
 
-    // Set a hard timeout in case cleanup hangs
+    // Set a hard timeout in case cleanup hangs. By then a newer daemon may own the lock and daemon.json:
+    // remove only what still names this process.
     const forceExitTimeout = setTimeout(() => {
       logger.error('Shutdown timed out, forcing exit');
       try {
-        releaseLock(projectPath);
+        releaseOwnLock(projectPath);
       } catch (error) {
         logger.error({ error }, 'Error releasing lock during forced shutdown exit');
-        // Last-resort: directly remove lock file
-        try { fs.rmSync(lockFilePath(projectPath), { force: true }); } catch { /* ignore */ }
       }
       try {
-        removeDaemonInfo(projectPath);
+        removeOwnDaemonInfo(projectPath);
       } catch (error) {
         logger.error({ error }, 'Error removing daemon info during forced shutdown exit');
       }
@@ -888,19 +972,12 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
       logger.error({ error }, 'Error closing WebSocket server');
     }
 
-    await Promise.all(servers.map(async (server) => {
-      try {
-        await closeHttpServer(server);
-      } catch (error) {
-        logger.error({ error }, 'Error closing HTTP server');
-      }
-    }));
-
     // Cancel any pending SPEED mode auto-approval timeouts
     clearAllSpeedModeTimeouts();
     stopAccountWatch();
 
-    // Flush any pending activity log writes
+    // Flush any pending activity log writes. Before the HTTP close, which may take HTTP_CLOSE_TIMEOUT_MS,
+    // so the forced exit at SHUTDOWN_TIMEOUT_MS cannot cut it off.
     try {
       await state.flushActivityLog();
     } catch (error) {
@@ -910,8 +987,16 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     // Clear emitter to prevent any more broadcasts
     state.clearEmitter();
 
+    await Promise.all(servers.map(async (server) => {
+      try {
+        await closeHttpServer(server);
+      } catch (error) {
+        logger.error({ error }, 'Error closing HTTP server');
+      }
+    }));
+
     try {
-      removeDaemonInfo(projectPath);
+      removeOwnDaemonInfo(projectPath);
     } catch (error) {
       logger.error({ error }, 'Error removing daemon info');
     }
@@ -930,7 +1015,7 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
     shutdownExitCode = 1;
     // Safety timeout in case shutdown() hangs
     const safetyTimeout = setTimeout(() => {
-      try { releaseLock(projectPath); } catch { /* best effort */ }
+      try { releaseOwnLock(projectPath); } catch { /* best effort */ }
       process.exit(1);
     }, 5000);
     safetyTimeout.unref();
@@ -947,7 +1032,28 @@ async function startDaemon(projectPath: string, preferredPort?: number, bindHost
   logger.info({ endpoint: `ws://localhost:${port}/mcp` }, 'MCP bridge');
 }
 
+/**
+ * Calls onEnd once, when the supervisor's child is gone: at 'exit', or at an 'error' that left no process (a spawn
+ * failure such as EAGAIN or ENOENT emits 'error' and never 'exit'). An 'error' while the child has a pid (a failed
+ * kill) leaves it running, so only its later 'exit' ends it.
+ */
+function superviseChildEnd(child: ChildProcess, onEnd: (code: number | null, signal: NodeJS.Signals | null) => void): void {
+  let ended = false;
+  const end = (code: number | null, signal: NodeJS.Signals | null) => {
+    if (ended) return;
+    ended = true;
+    onEnd(code, signal);
+  };
+  child.on('exit', end);
+  child.on('error', (error) => {
+    logger.error({ error, childPid: child.pid }, 'Supervisor child process error');
+    if (child.pid === undefined) end(null, null);
+  });
+}
+
 async function superviseDaemon(projectPath: string, preferredPort?: number, bindHost?: string): Promise<void> {
+  // Before the spawn below, so the _run child never inherits a seat's identity either.
+  scrubSeatIdentityEnv();
   if (missingMoeDirBlocksStart(projectPath)) return;
   if (await existingDaemonBlocksStart(projectPath)) return;
 
@@ -969,72 +1075,83 @@ async function superviseDaemon(projectPath: string, preferredPort?: number, bind
 
   function spawnChild(): void {
     // Preserve the IDE spawn key for every _run, including crash restarts; only _run consumes it.
-    child = spawn(process.execPath, [scriptPath, ...childArgs], {
-      stdio: 'inherit',
-      env: process.env,
-    });
+    let spawned: ChildProcess;
+    try {
+      spawned = spawn(process.execPath, [scriptPath, ...childArgs], {
+        stdio: 'inherit',
+        env: process.env,
+      });
+    } catch (error) {
+      // Some spawn failures (ENOMEM, for one) throw here instead of emitting 'error': restart like a crash.
+      logger.error({ error }, 'Supervisor could not spawn the daemon process');
+      onChildEnd(null, null);
+      return;
+    }
+    child = spawned;
 
-    const childPid = child.pid;
+    const childPid = spawned.pid;
     logger.info({ childPid }, 'Supervisor spawned daemon process');
 
-    child.on('exit', (code, signal) => {
-      child = null;
+    superviseChildEnd(spawned, onChildEnd);
+  }
 
-      if (shuttingDown) {
-        process.exit(0);
-        return;
-      }
+  function onChildEnd(code: number | null, signal: NodeJS.Signals | null): void {
+    child = null;
 
-      // Check if stop was requested via sentinel file
-      if (consumeStopSentinel(projectPath)) {
-        logger.info('Daemon stopped by stop command');
-        process.exit(0);
-        return;
-      }
+    if (shuttingDown) {
+      process.exit(0);
+      return;
+    }
 
-      if (code === 0) {
-        logger.info('Daemon exited cleanly');
-        process.exit(0);
-        return;
-      }
+    // Check if stop was requested via sentinel file
+    if (consumeStopSentinel(projectPath)) {
+      logger.info('Daemon stopped by stop command');
+      process.exit(0);
+      return;
+    }
 
-      logger.warn({ code, signal }, 'Daemon crashed');
+    if (code === 0) {
+      logger.info('Daemon exited cleanly');
+      process.exit(0);
+      return;
+    }
 
-      // Track restart timestamps within the window
-      const now = Date.now();
-      restartTimestamps.push(now);
-      restartTimestamps = restartTimestamps.filter(t => now - t < SUPERVISOR_RESTART_WINDOW_MS);
+    logger.warn({ code, signal }, 'Daemon crashed');
 
-      if (restartTimestamps.length >= SUPERVISOR_MAX_RESTARTS) {
-        logger.error(
-          { restarts: restartTimestamps.length, windowMs: SUPERVISOR_RESTART_WINDOW_MS },
-          'Too many restarts, supervisor giving up'
-        );
-        process.exit(1);
-        return;
-      }
+    // Track restart timestamps within the window
+    const now = Date.now();
+    restartTimestamps.push(now);
+    restartTimestamps = restartTimestamps.filter(t => now - t < SUPERVISOR_RESTART_WINDOW_MS);
 
-      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
-      const backoffMs = Math.min(
-        SUPERVISOR_MAX_BACKOFF_MS,
-        1000 * Math.pow(2, restartTimestamps.length - 1)
+    if (restartTimestamps.length >= SUPERVISOR_MAX_RESTARTS) {
+      logger.error(
+        { restarts: restartTimestamps.length, windowMs: SUPERVISOR_RESTART_WINDOW_MS },
+        'Too many restarts, supervisor giving up'
       );
-      logger.info(
-        { backoffMs, attempt: restartTimestamps.length, maxRestarts: SUPERVISOR_MAX_RESTARTS },
-        'Restarting daemon after backoff'
-      );
-      // A `stop` issued during the backoff window has no live child to signal,
-      // so it only drops a stop sentinel. Re-check before respawning so we
-      // honour the stop instead of resurrecting the daemon.
-      setTimeout(() => {
-        if (shuttingDown || consumeStopSentinel(projectPath)) {
-          logger.info('Stop requested during backoff; supervisor exiting');
-          process.exit(0);
-          return;
-        }
-        spawnChild();
-      }, backoffMs);
-    });
+      process.exit(1);
+      return;
+    }
+
+    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, capped at 30s
+    const backoffMs = Math.min(
+      SUPERVISOR_MAX_BACKOFF_MS,
+      1000 * Math.pow(2, restartTimestamps.length - 1)
+    );
+    logger.info(
+      { backoffMs, attempt: restartTimestamps.length, maxRestarts: SUPERVISOR_MAX_RESTARTS },
+      'Restarting daemon after backoff'
+    );
+    // A `stop` issued during the backoff window has no live child to signal,
+    // so it only drops a stop sentinel. Re-check before respawning so we
+    // honour the stop instead of resurrecting the daemon.
+    setTimeout(() => {
+      if (shuttingDown || consumeStopSentinel(projectPath)) {
+        logger.info('Stop requested during backoff; supervisor exiting');
+        process.exit(0);
+        return;
+      }
+      spawnChild();
+    }, backoffMs);
   }
 
   // Forward signals to child for graceful shutdown
@@ -1090,6 +1207,11 @@ async function stopDaemon(projectPath: string): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (validation.unverified) {
+    // Neither this project's daemon nor stale: never signal it, and keep daemon.json (no sentinel either).
+    reportUnverifiedDaemon(info, 'no signal sent and daemon.json kept');
+    return;
+  }
   if (!validation.valid || !validation.info) {
     if (validation.reason === BIND_HOST_NOT_LOCAL) {
       // Its pid is alive (checked before the bindHost) or another pid namespace's, and nothing here can verify it.
@@ -1141,7 +1263,7 @@ async function statusDaemon(projectPath: string): Promise<void> {
     return;
   }
   logger.info({
-    status: validation.valid ? 'running' : validation.foreign ? 'unknown' : 'stopped',
+    status: validation.valid ? 'running' : validation.unverified ? 'unverified' : validation.foreign ? 'unknown' : 'stopped',
     owner: validation.foreign ? 'other side of the WSL boundary' : validation.namespaced ? 'another pid namespace' : 'local',
     reason: validation.reason,
     port: shaped ? info.port : undefined,
@@ -1324,6 +1446,7 @@ export {
   validateDaemonInfoForProject,
   readDaemonInfo,
   removeDaemonInfo,
+  removeOwnDaemonInfo,
   cleanupStaleDaemonFiles,
   writeDaemonInfo,
   readLockInfo,
@@ -1331,6 +1454,9 @@ export {
   removeStaleLock,
   acquireLock,
   releaseLock,
+  releaseOwnLock,
+  scrubSeatIdentityEnv,
+  superviseChildEnd,
   initProject,
   stopDaemon,
   statusDaemon,

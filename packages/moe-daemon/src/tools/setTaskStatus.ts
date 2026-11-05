@@ -4,6 +4,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { ActivityEventType, TaskStatus } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
 import { buildReopenClearingUpdates } from '../util/reopen.js';
+import { dropBlockedResourceQueueEntry } from '../state/workerLifecycle.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
 import { workerHasRole } from '../util/workerRole.js';
 
@@ -68,7 +69,7 @@ function isValidTransition(from: TaskStatus, to: TaskStatus): boolean {
 export function setTaskStatusTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.set_task_status',
-    description: 'Architect/governor/human: set task status (optionally with a reopen reason). A caller whose workerId resolves to neither role (a worker or QA seat) is refused with NOT_ALLOWED and should ask a governor in #governors to move the row.',
+    description: 'Architect/governor/human: set task status (optionally with a reopen reason). A caller whose workerId resolves to neither role (a worker or QA seat) is refused with NOT_ALLOWED and should ask a governor in #governors to move the row. A row the qa_reject hard cap parked for human review (needsHumanReview) refuses any supplied workerId with NOT_ALLOWED; only the human path (no workerId) moves it, which clears the flag.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -115,6 +116,15 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       const task = state.getTask(params.taskId);
       if (!task) {
         throw notFound('Task', params.taskId);
+      }
+
+      // A row the qa_reject hard cap parked for human review (needsHumanReview)
+      // is a human's call, as qa_approve, qa_reject and release_task hold: every
+      // move below clears the flag, so an architect or governor seat moving the
+      // row would un-park it with no human. Refused before any write; the human
+      // path (no workerId key) still moves and un-parks it.
+      if (params.workerId !== undefined && task.needsHumanReview === true) {
+        throw notAllowed('set_task_status', `Task ${task.id} is parked for human review: its reopen budget and the architect re-plan are exhausted. A human must reopen or approve it; an agent seat cannot.`);
       }
 
       // Validate status transition
@@ -275,6 +285,9 @@ export function setTaskStatusTool(_state: StateManager): ToolDefinition {
       }
 
       const updated = await state.updateTask(params.taskId, updates, event, params.workerId);
+      if (task.status === 'BLOCKED' && newStatus !== 'BLOCKED') {
+        await dropBlockedResourceQueueEntry(state, task, typeof params.workerId === 'string' ? params.workerId : '');
+      }
 
       // Hand the acting agent a next step. The reopen path (governor REVIEW→
       // PLANNING flip, human un-park) is the one most likely to strand a task

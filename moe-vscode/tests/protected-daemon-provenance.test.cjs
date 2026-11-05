@@ -15,6 +15,7 @@ const ENV = 'MOE_SPAWN_PROOF_KEY', HEX = /^[0-9a-f]{64}$/;
 const key = '000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';
 const proof = (k, challenge) => crypto.createHmac('sha256', Buffer.from(k, 'hex')).update(challenge, 'ascii').digest('hex');
 const refusal = pid => `Protected execution profile: the running Moe daemon${pid ? ` (pid ${pid})` : ''} was not started by this VS Code from the installed Moe runtime. Stop it, then reconnect.`;
+const stopRefused = (pid, code) => `Protected execution profile: the installed Moe CLI did not stop the running Moe daemon (pid ${pid}; stop exited ${code}), so no replacement was started. Stop that process yourself, then reconnect.`;
 const plain = value => JSON.parse(JSON.stringify(value));
 const write = (file, text = '') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); return file; };
 
@@ -81,9 +82,9 @@ async function admit(f) {
     assert.equal(typeof f.client.protectedAdmissionRefusal, 'function');
     return f.client.protectedAdmissionRefusal(await f.client.getDaemonInfo(false), f.project);
 }
-async function refusedConnect(f, pid = 4242) {
-    await assert.rejects(f.client.connect(), { message: refusal(pid) });
-    assert.deepEqual(f.errors, [refusal(pid)]); assert.deepEqual(f.sockets, []);
+async function refusedConnect(f, pid = 4242, message = refusal(pid)) {
+    await assert.rejects(f.client.connect(), { message });
+    assert.deepEqual(f.errors, [message]); assert.deepEqual(f.sockets, []);
 }
 
 test('(1) verified in session: fresh key, exact owner-only record and no secret logging', async t => {
@@ -161,7 +162,9 @@ for (const mode of ['nonzero', 'hang', 'ENOENT', 'alive', 'new pid', 'unreadable
             if (mode === 'unreadable') fs.mkdirSync(f.metadata);
             if (mode === 'oversize') write(f.metadata, 'x'.repeat(65537));
         };
-        await refusedConnect(f); assert.equal(f.spawns.length, 1); assert.equal(f.spawns[0][1][1], 'stop');
+        // A stop that exits non-zero left the daemon running (one it could not verify, say): say so, start nothing.
+        await refusedConnect(f, 4242, mode === 'nonzero' ? stopRefused(4242, 1) : refusal(4242));
+        assert.equal(f.spawns.length, 1); assert.equal(f.spawns[0][1][1], 'stop');
         assert.equal(!!f.killed, mode === 'hang');
     });
 }

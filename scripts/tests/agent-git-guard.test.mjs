@@ -89,6 +89,7 @@ function fixture(t, cli, hooks, status = 'REVIEW', mode = '') {
     GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: f.original,
     GIT_CONFIG_KEY_1: 'guard.caller', GIT_CONFIG_VALUE_1: 'preserved', GIT_CONFIG_KEY_2: 'unused.key', GIT_CONFIG_VALUE_2: 'unused'  };
   f.env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // `clean` drops MOE_*: WT-13's guard refuses scripts/moe-agent.* when this suite runs from a task worktree (task-86431c31)
+  if (cli === 'gemini') f.env.MOE_AGY_COMMAND = f.cli; // gemini mode runs agy: point it at the fake, never the machine's real Antigravity
   return f;
 }
 function launch(f, cli, interactive, concurrent = false) {

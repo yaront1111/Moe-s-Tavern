@@ -16,8 +16,8 @@ import com.moe.util.MoeDaemonRegistrationTracker
 import com.moe.util.MoeProjectRegistry
 import com.moe.util.TerminalAgentLauncher
 import org.java_websocket.client.WebSocketClient
+import org.java_websocket.framing.CloseFrame
 import org.java_websocket.handshake.ServerHandshake
-import java.io.File
 import java.net.URI
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -76,7 +76,9 @@ class MoeProjectService @JvmOverloads constructor(
             scheduleReconnect()
         },
         onDaemonShuttingDown = {
-            isManualDisconnect = true
+            // Sent on every shutdown, crashes included, and the daemon's supervisor restarts a crash, possibly on
+            // another port. Not a manual disconnect: the reconnect follows daemon.json to that daemon and starts none.
+            followingDaemonRestart = true
             stopAutoRefresh()
         },
         onWorkerDeregistered = { workerId -> agentSeats.acked(workerId) },
@@ -112,6 +114,8 @@ class MoeProjectService @JvmOverloads constructor(
         )
     }
     @Volatile private var isManualDisconnect = false
+    /** Set by DAEMON_SHUTTING_DOWN until a socket opens or connect() runs: reconnects then only rejoin a restarted daemon. */
+    @Volatile private var followingDaemonRestart = false
     @Volatile private var reconnectAttempts = 0
     private val daemonRegistration = MoeDaemonRegistrationTracker(
         register = { pid -> MoeProjectRegistry.registerDaemon(pid) },
@@ -155,12 +159,19 @@ class MoeProjectService @JvmOverloads constructor(
             connecting = true
         }
         isManualDisconnect = false
+        followingDaemonRestart = false
         if (!daemonSupervisor.ensureMoeInitialized()) {
             connecting = false
             publishStatus(false, "Project not initialized")
             return
         }
         val startAttempted = ensureDaemonRunning()
+        // dispose() may have run during the spawn and found no daemon to kill: kill the one spawned for a disposed service.
+        if (disposed.get()) {
+            if (startAttempted) daemonSupervisor.killSpawnedDaemon()
+            connecting = false
+            return
+        }
 
         // If daemon was just started, poll for readiness with backoff
         if (startAttempted) {
@@ -362,6 +373,7 @@ class MoeProjectService @JvmOverloads constructor(
                         reconnectAttempts = 0
                         daemonSupervisor.resetSpawnAttempts()
                         isManualDisconnect = false
+                        followingDaemonRestart = false
                         daemonRegistration.register(daemonInfo.pid)
                         // Keep status dispatch and refresh setup in the same transition:
                         // disconnect must not finish before these open effects run.
@@ -391,13 +403,16 @@ class MoeProjectService @JvmOverloads constructor(
                     try {
                         handleMessage(message)
                     } catch (ex: Exception) {
-                        publishStatus(false, ex.message ?: "Failed to parse state")
+                        // One unreadable frame leaves the socket open: reporting it as a disconnect would show a live board as offline.
+                        log.warn("Failed to handle a daemon message", ex)
                     }
                 }
 
                 override fun onClose(code: Int, reason: String?, remote: Boolean) {
                     wsLock.withLock {
                         if (wsClient === this) {
+                            // A daemon that is shutting down refuses a new socket with 1001 and no DAEMON_SHUTTING_DOWN.
+                            if (code == CloseFrame.GOING_AWAY) followingDaemonRestart = true
                             connecting = false
                             connected = false
                             wsClient = null
@@ -728,8 +743,10 @@ class MoeProjectService @JvmOverloads constructor(
     private fun scheduleReconnect() {
         if (disposed.get() || connected || connecting) return
         if (isManualDisconnect) return
+        val following = followingDaemonRestart
         if (reconnectAttempts >= maxReconnectAttempts) {
-            publishStatus(false, "Reconnect failed after $maxReconnectAttempts attempts")
+            publishStatus(false, if (following) "The daemon shut down and did not come back. Use Restart Daemon to start it."
+                else "Reconnect failed after $maxReconnectAttempts attempts")
             return
         }
         try {
@@ -741,10 +758,22 @@ class MoeProjectService @JvmOverloads constructor(
         }
         reconnectAttempts++
         publishStatus(false, "Reconnecting... (${reconnectAttempts}/${maxReconnectAttempts})")
-        reconnectFuture = scheduler.schedule({
-            if (disposed.get() || connected || connecting || isManualDisconnect) return@schedule
-            connect()
-        }, reconnectDelayMs, TimeUnit.MILLISECONDS)
+        val delayMs = if (following) followDelayMs(reconnectAttempts) else reconnectDelayMs
+        try {
+            reconnectFuture = scheduler.schedule({
+                if (disposed.get() || connected || connecting || isManualDisconnect) return@schedule
+                if (followingDaemonRestart) rejoinRestartedDaemon() else connect()
+            }, delayMs, TimeUnit.MILLISECONDS)
+        } catch (ex: RejectedExecutionException) {
+            // dispose() shut the scheduler down after the check above.
+            log.debug("Reconnect not scheduled: ${ex.message}")
+        }
+    }
+
+    /** After DAEMON_SHUTTING_DOWN: connect to the daemon daemon.json names now, else wait for one. Never starts a daemon. */
+    private fun rejoinRestartedDaemon() {
+        val info = daemonSupervisor.readDaemonInfo()
+        if (info != null && daemonSupervisor.isReachable(info)) doConnect(info) else scheduleReconnect()
     }
 
     fun ensureDaemonRunning(): Boolean = daemonSupervisor.ensureDaemonRunning()
@@ -793,11 +822,8 @@ class MoeProjectService @JvmOverloads constructor(
                 publishStatus(false, it)
                 return
             }
-            if (info != null) {
-                try {
-                    File(base, ".moe/daemon.json").delete()
-                } catch (_: Exception) {}
-            }
+            // Only the record that was read: a daemon.json rewritten since then names a newer daemon.
+            if (info != null) daemonSupervisor.deleteDaemonInfoIfUnchanged(info)
         }
         daemonSupervisor.resetSpawnBackoff()
         reconnectAttempts = 0
@@ -808,6 +834,13 @@ class MoeProjectService @JvmOverloads constructor(
         private const val AGENT_SEATS_KEY = "moe.launchedAgentSeats"
         /** Covers the daemon evaluator's 11 s provider-probe guard. */
         const val READINESS_TIMEOUT_MS = 20_000L
+
+        /**
+         * The wait before reconnect [attempt] to a daemon that announced its shutdown: 1, 2 and 4 s, then 8 s. Its
+         * supervisor restarts a crash after 1, 2, 4 and 8 s and gives up at the fifth crash in 60 s, so ten attempts
+         * cover that minute.
+         */
+        internal fun followDelayMs(attempt: Int): Long = 1_000L shl (attempt - 1).coerceIn(0, 3)
 
         fun getInstance(project: IdeaProject): MoeProjectService {
             return project.getService(MoeProjectService::class.java)

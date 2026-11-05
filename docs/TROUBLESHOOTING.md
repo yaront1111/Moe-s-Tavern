@@ -144,7 +144,7 @@ and the plugin reuses any daemon whose `.moe/daemon.json` pid and port are still
 machine, so its pid cannot be verified here: no signal sent and nothing removed. Check what that process is
 and stop it yourself if it is a Moe daemon". `moe-daemon status` shows `stopped` with reason
 `bindHost not local`. In JetBrains, **Stop and Replace** starts nothing, or **Restart Daemon** reports "the
-stop request failed".
+stop request failed" (protected profile) or, on Windows, that "the stop could not verify pid N".
 
 **Cause:** `.moe/daemon.json` is repository content, and the CLI probes its `bindHost` for `/health` before
 it signals the recorded pid. It dials that `bindHost` only when the address it resolves to is loopback or
@@ -157,6 +157,28 @@ change for a daemon started with `--host <name>` can point it elsewhere.
 is this project's Moe daemon, stop it yourself. Otherwise leave that process alone and remove
 `.moe/daemon.json` as in [daemon.json is stale](#daemonjson-is-stale). Then start the daemon again (in
 JetBrains, **Restart Daemon**). A `--host` value should name this machine, with no `%zone`.
+
+### `moe-daemon stop` or `start` exits 1: `health check unanswered`
+
+**Symptom:** `moe-daemon stop` or `start` exits 1 with "daemon.json names pid N, but /health on port P did
+not answer, even on a 3000ms retry, so that daemon could not be verified". `stop` sent no signal, `start`
+started nothing, and `.moe/daemon.json` is still there. `moe-daemon status` shows `unverified` with reason
+`health check unanswered`. In JetBrains on Windows, **Restart Daemon** reports that "the stop could not
+verify pid N … so it left that process running" ("the stop request failed" under the protected profile). Off
+Windows, Restart Daemon does not run `stop`: it sends SIGTERM itself and waits for the exit.
+
+**Cause:** The recorded pid is alive and its port took the `/health` connection, but no whole answer came
+back, neither within `MOE_SOCKET_TIMEOUT_MS` (default 200) nor on a retry that waits `MOE_HEALTH_RETRY_TIMEOUT_MS` (default 3000). A daemon
+stalled by an overloaded machine answers like that, and so can an unrelated process that reused the pid and
+holds the port. On that evidence neither signalling the pid nor deleting a file a live daemon may still need
+is safe, so the CLI does neither. (A refused connection, or an answer naming another project or pid, still
+counts as stale, and the file is cleaned up as before.)
+
+**Solution:** Run the command again when the machine is less busy, or with a larger
+`MOE_HEALTH_RETRY_TIMEOUT_MS`. If it keeps failing, check what the pid is (`ps -p <pid> -o pid,lstart,args`,
+or Task Manager's Details tab) and what holds the port. If it is this project's Moe daemon, stop it
+yourself. Otherwise leave that process alone and remove `.moe/daemon.json` as in [daemon.json is
+stale](#daemonjson-is-stale). Then start the daemon again.
 
 ---
 
@@ -274,12 +296,13 @@ cat .moe/daemon.json
 
 **Symptom (JetBrains):** **Restart Daemon** leaves the plugin disconnected with one of these:
 - "Restart Daemon is already stopping the old Moe daemon. Wait for it to finish." (Windows)
-- "Restart Daemon did not start a new Moe daemon: pid N is still running after the stop, and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon." (Windows)
+- "Restart Daemon did not start a new Moe daemon: pid N is still running after the stop, and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon." (any host)
+- "Restart Daemon did not start a new Moe daemon: the stop could not verify pid N, which .moe/daemon.json names (usually: alive, but its /health check never answered), so it left that process running. Check what that process is and stop it yourself, then use Restart Daemon." (Windows; see [`moe-daemon stop` or `start` exits 1](#moe-daemon-stop-or-start-exits-1-health-check-unanswered))
 - "Restart Daemon did not start a new Moe daemon: it could not confirm that the old one stopped. Use Restart Daemon again." (Windows)
 - "Protected execution profile: Restart Daemon did not stop pid N, which .moe/daemon.json names: this IDE did not start it from the installed Moe runtime." (or "the stop request failed"), followed by "Check what that process is and stop it yourself if it is a Moe daemon, then use Restart Daemon."
 - "Restart Daemon did not stop pid N, which .moe/daemon.json names on the other side of the Windows/WSL boundary: …"
 
-**Cause:** On Windows, ending a process is `TerminateProcess`, which the old supervisor takes for a crash of its `_run` child and restarts. So Restart Daemon first runs the installed CLI's `stop`. It then ends the old process tree within one 15 s wait, the roots before their children: the supervisor this IDE spawned and, under the protected profile, the daemon's verified parent. It starts nothing while one of those processes still runs, or while an earlier attempt left a tree unresolved, and the plugin's automatic start waits too. On any host the protected profile never signals a `.moe/daemon.json` pid it cannot verify. A pid that is absent, dead or 0 is never signalled, so a stale `.moe/daemon.json` alone does not block a restart. The IDE cannot see processes on the other side of the WSL boundary. The installed `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine (see [`moe-daemon stop` sends no signal](#moe-daemon-stop-sends-no-signal-bindhost-not-local)).
+**Cause:** On Windows, ending a process is `TerminateProcess`, which the old supervisor takes for a crash of its `_run` child and restarts. So Restart Daemon first runs the installed CLI's `stop`. It then ends the old process tree within one 15 s wait, the roots before their children: the supervisor this IDE spawned and, under the protected profile, the daemon's verified parent. It starts nothing while one of those processes still runs, or while an earlier attempt left a tree unresolved, and the plugin's automatic start waits too. On any host the protected profile never signals a `.moe/daemon.json` pid it cannot verify. A pid that is absent, dead or 0 is never signalled, so a stale `.moe/daemon.json` alone does not block a restart. The IDE cannot see processes on the other side of the WSL boundary. The installed `stop` signals nothing when daemon.json's `bindHost` is not an address of this machine (see [`moe-daemon stop` sends no signal](#moe-daemon-stop-sends-no-signal-bindhost-not-local)) or its `/health` never answers, and then the plugin starts nothing unless that pid is in its own spawn tree. Off Windows, Restart Daemon sends SIGTERM and waits up to 15 s for the exit; past that only this IDE's own spawn tree is killed, and any other survivor refuses the start.
 
 **Solution:** Wait for a running stop to finish. Otherwise look up the pid (Task Manager's Details tab, or `tasklist /fi "PID eq N"`), end it if it is a Moe `node` process, then use Restart Daemon again. For the WSL case, stop the process on that side.
 
@@ -305,7 +328,7 @@ cat .moe/daemon.json
 - A project once read as `verified-local` stays protected until a downgrade is allowed, so a repository change never turns the profile off silently.
 
 **Solution:**
-- When `.moe/daemon.json` names the refused daemon, VS Code asks first. **Stop and Replace** runs the installed CLI's `stop` (at most 20 s), waits up to 15 s until the process has exited and `.moe/daemon.json` is cleared, then starts the installed daemon. Closing the dialog keeps the refusal. If the stop or the wait fails, the refusal stays too. Otherwise, stop that daemon yourself, then reconnect: a refusal is not retried by itself.
+- When `.moe/daemon.json` names the refused daemon, VS Code asks first. **Stop and Replace** runs the installed CLI's `stop` (at most 20 s), waits up to 15 s until the process has exited and `.moe/daemon.json` is cleared, then starts the installed daemon. Closing the dialog keeps the refusal. If the stop or the wait fails, the refusal stays too. When `stop` exits non-zero, VS Code says "Protected execution profile: the installed Moe CLI did not stop the running Moe daemon (pid N; stop exited 1), so no replacement was started. Stop that process yourself, then reconnect." Exit 1 most often means the daemon is alive but its `/health` never answered (see [`moe-daemon stop` or `start` exits 1](#moe-daemon-stop-or-start-exits-1-health-check-unanswered)). Otherwise, stop that daemon yourself, then reconnect: a refusal is not retried by itself.
 - For the downgrade question, choose **Allow Downgrade**, then restart VS Code. **Keep Protected**, or closing the dialog, changes nothing and writes nothing, and the question comes back next window session.
 - A pin VS Code would not have written also reads as protected. As a last resort, a human may delete that one record: the `.json` file named by 16 hex digits in `protected-state`, under the extension's global storage, whose "project" field names this project and which has a "profile" field. Never edit it.
 - Reinstall the extension if a bundled file is missing, and install node outside the project. For a Windows path reason, see [Protected profile: path is not a plain local Windows path](#protected-profile-path-is-not-a-plain-local-windows-path).
@@ -868,9 +891,10 @@ wrapper lands it seconds after REVIEW) — verify task.commits / git log before 
 to `#governors`. The approval still landed (DONE).
 
 The warning is advisory. It fires when `settings.autoCommit` is on and no `task.commits` entry of kind
-`completion` was recorded in the current work round: at or after the latest rejection, else the first
-step start (`task.workStartedAt`), else `task.reviewStartedAt` (`completionCommitsForReview` in
-`delivery/policy.ts`). Causes, in order of likelihood:
+`completion` was recorded in the current work round: at or after the later of the latest rejection and
+the latest reopen (`task.reopenedAt`), else the first step start (`task.workStartedAt`), else
+`task.reviewStartedAt` (`completionCommitsForReview` in `delivery/policy.ts`). A reopen opens a new
+round, so the commit from the round before it no longer counts. Causes, in order of likelihood:
 
 1. **The race**: QA approved within seconds of REVIEW, before the worker's CLI exited and the wrapper
    ran `record_commit`. Re-check `task.commits` a minute later — the wrapper lands the completion
@@ -1040,7 +1064,8 @@ it could not, and `<reason>` is one of these:
 - `the account's .claude.json is not a regular file`
 - `the account's .claude.json is over 16 MiB`
 - `the account's .claude.json is not a JSON object`
-- `the account's .claude.json is locked by another claude`
+- `the account's .claude.json is locked by another claude` (a live holder kept it past 2 s; a lock not refreshed for
+  10 s, stale by claude's own rule, is taken over once instead)
 - `the account's .claude.json could not be rewritten`
 - `the trust entry did not read back`
 - `the launch directory is outside the project`

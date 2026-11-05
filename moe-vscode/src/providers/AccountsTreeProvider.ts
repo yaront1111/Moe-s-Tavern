@@ -66,15 +66,17 @@ function shQuote(value: string): string {
 }
 
 /**
- * JetBrains TerminalAgentLauncher.buildAccountsCommand: `<node> <cli.js> --accounts-file <file> <args>`, every word quoted.
- * Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form, started as `& '<interpreter>'`
- * when one is given (the protected profile) and as a bare `powershell` otherwise. Throws on a C0 control or DEL in any word.
+ * JetBrains TerminalAgentLauncher.buildAccountsCommand: `<node> <cli.js> --accounts-file <file> <args>`, every word quoted,
+ * typed after `env` on POSIX. Windows gets it through PowerShell -EncodedCommand, AgentLauncher's injection-safe form,
+ * started as `& '<interpreter>'` when one is given (the protected profile) and as a bare `powershell` otherwise. Throws on
+ * a C0 control or DEL in any word.
  */
 export function accountsCommandLine(cli: { node: string; script: string }, registryFile: string, args: string[], windows: boolean, interpreter?: string): string {
     const words = [cli.node, cli.script, '--accounts-file', registryFile, ...args];
     words.forEach(word => assertSafeArg('accounts command word', word));
     if (interpreter !== undefined) { assertSafeArg('interpreter', interpreter); }
-    if (!windows) { return words.map(shQuote).join(' '); }
+    // `env` first: the POSIX terminal runs the user's own shell, and pwsh would read a leading quoted word as a string.
+    if (!windows) { return `env ${words.map(shQuote).join(' ')}`; }
     const shell = interpreter === undefined ? 'powershell' : `& ${psQuote(interpreter)}`;
     return `${shell} -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(`& ${words.map(psQuote).join(' ')}`, 'utf16le').toString('base64')}`;
 }

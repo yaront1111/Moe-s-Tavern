@@ -2,7 +2,7 @@
 
 ## Overview
 
-The plugin is a Swing-based tool window showing a 5-column task board (AWAITING_APPROVAL tasks display in the Planning column) connected to the Moe daemon over `ws://127.0.0.1:<port>/ws`. It bundles the daemon, proxy, launcher scripts, role docs, and skills; it auto-spawns the daemon on project open and kills it on close if it is the last project using that PID.
+The plugin is a Swing-based tool window showing a 5-column task board (AWAITING_APPROVAL tasks display in the Planning column) connected to the Moe daemon over `ws://127.0.0.1:<port>/ws`. It bundles the daemon, proxy, launcher scripts, role docs, and skills; it auto-spawns the daemon on project open and kills its process tree on close if it is the last project using that PID.
 
 JetBrains is the **primary** IDE surface — implement and test here first; the VS Code extension lags behind.
 

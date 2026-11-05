@@ -493,6 +493,27 @@ test('CD5 a dispatch answered after the readiness timeout resumes nothing, and t
     [0, undefined, [...RAN, ...RAN.slice(1)], [['passed', 'deleted'], ['passed', 'deleted']]]);
 });
 
+test('CD7 a dispatch answered after the CLI closed its /runner channel opens no other one: every channel opened is closed', async () => {
+  let release;
+  const [log, late, channels, lines] = [[], new Promise(resolve => { release = resolve; }), [], []];
+  const open = async () => { // a real channel's shape: once closed, its calls reject RUNNER_DISCONNECTED
+    const channel = { closed: false, close() { channel.closed = true; }, async call(tool) {
+      if (tool === 'moe.record_check_dispatch' && channels.length === 1) await late;
+      if (channel.closed) throw fail('RUNNER_DISCONNECTED');
+      return tool === 'moe.get_context' ? context({ envs: [JOB_ENV] }) : { success: true };
+    } };
+    channels.push(channel);
+    return channel;
+  };
+  const short = input => runCheckJob({ ...jobInput(log), ...input, timeoutMs: 30 }, jobSteps(log));
+  const exit = await runDispatchCli(['--project', '/srv/project', '--task', TASK, '--commit', TREE],
+    { open, exportSnapshot: async () => JOB_SNAP, loadRunCheck: async () => short, write: text => lines.push(text) });
+  release();
+  await new Promise(resolve => setTimeout(resolve, 50)); // the late answer's same-id retries run now
+  assert.deepEqual([exit, JSON.parse(lines[0]).stopped?.code], [2, 'RUNNER_CHECK_FAILED']);
+  assert.deepEqual(channels.map(channel => channel.closed), [true]);
+});
+
 test('CD6 hostile or conflicting cleanup metadata fails closed with fixed codes; a huge multibyte tail keeps the diagnostic within the cap', async t => {
   const [intact, throwing] = [{ ...PASS, workspace: 'intact' }, new Proxy({}, { get: (_, key) => { if (key !== 'then') throw new Error(SECRET); } })];
   const seam = (cleanup, result) => async ({ onReady, onCleanup }) => {

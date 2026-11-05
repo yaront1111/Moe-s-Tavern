@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { once } from 'node:events';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
@@ -150,4 +151,26 @@ describe('WebSocket lifecycle boundaries', () => {
     expect(handle).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(codes).toEqual([1001]));
   });
+
+  // ws waits 30 s for a peer to answer its close frame, and the daemon's shutdown is forced out at 10 s.
+  it('ends a client that never answers the close frame after a short grace', async () => {
+    const peer = net.connect(port, '127.0.0.1');
+    peer.on('error', () => {});
+    try {
+      await once(peer, 'connect');
+      peer.write([
+        'GET /mcp HTTP/1.1', `Host: 127.0.0.1:${port}`, 'Upgrade: websocket', 'Connection: Upgrade',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version: 13', '', '',
+      ].join('\r\n'));
+      const [reply] = await once(peer, 'data');
+      expect(String(reply)).toMatch(/^HTTP\/1\.1 101 /);
+      peer.pause(); // silent from here on: it never reads the close frame, so never answers it
+
+      const started = Date.now();
+      await server.close();
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      peer.destroy();
+    }
+  }, 15_000);
 });

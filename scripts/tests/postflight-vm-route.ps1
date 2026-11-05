@@ -74,6 +74,8 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     [IO.File]::WriteAllText((Join-Path $project '.moe\daemon.json'), ('{"port":9876,"projectPath":' + (ConvertTo-Json $project) + '}'))
     $env:FAKE_READINESS = $Readiness; $env:FAKE_CALL_LOG = $calls; $env:MOE_PROXY_PATH = $fakeProxy
     $env:MOE_DISABLE_HEARTBEAT = '1'; $env:MOE_TASKLESS_WAIT_SEC = '5'
+    # A gemini seat would run agy: MOE_AGY_COMMAND points it at the fake, never the machine's real Antigravity.
+    $env:MOE_AGY_COMMAND = Join-Path $tempRoot 'gemini.cmd'
     $env:USERPROFILE = $homeDir; $env:TEMP = $runTmp; $env:TMP = $runTmp
     if ($script:VmrSetup) { & $script:VmrSetup }
     Push-Location $project

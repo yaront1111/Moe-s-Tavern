@@ -293,9 +293,11 @@ async function launch(p,run,knobs={},opts={}){
   args.push(...(opts.args||[]));
   // The suite's own wrapper gets WT-13's harness seam (a worker may run this suite from its task worktree, and
   // `inherited` scrubs MOE_*); an opts.wrapper copy never does, so wt-guard's refusals stay real (task-3c4be125).
+  // Gemini mode runs agy: MOE_AGY_COMMAND points it at the shim, never the machine's real Antigravity.
   const env={...inherited,MOE_PROXY_PATH:proxy,MOE_NODE_COMMAND:process.execPath,MOE_DISABLE_HEARTBEAT:'1',
     HOME:path.join(root,'home'),USERPROFILE:path.join(root,'home'),TMPDIR:wrapperTmp,TMP:wrapperTmp,TEMP:wrapperTmp,
-    FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1',...knobs};
+    FAKE_TASK_STATUS:'WORKING',FAKE_CLAIM_WORKSPACE:p.ws(),MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:opts.wrapper?null:'1',
+    MOE_AGY_COMMAND:opts.type==='gemini'?cli:null,...knobs};
   for(const k of Object.keys(env))if(env[k]==null)delete env[k];
   if(env.WT_GIT_VERSION||env.WT_GIT_FAIL||env.WT_GIT_SWAP||env.WT_GIT_HOLD||env.WT_GIT_CONFIG_LOCK||env.WT_GIT_PUSH_REMOTE_REJECTED){
     env[pathKey]=stub()+path.delimiter+(inherited[pathKey]||'');

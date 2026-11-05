@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
-import { PlanReviewPanel, seedRevisionAttribute, showApprovalRefusal, stepTextHtml } from './PlanReviewPanel';
+import { PlanReviewPanel, STALE_REJECT, seedRevisionAttribute, showApprovalRefusal, stepTextHtml } from './PlanReviewPanel';
 import type {
     HandoffNote,
     ImplementationStep,
@@ -398,6 +398,13 @@ export class TaskDetailPanel implements vscode.Disposable {
         return this.client.currentState?.tasks.find(t => t.id === this.taskId);
     }
 
+    /** True while the task still awaits plan approval; otherwise says nothing was rejected. */
+    private awaitingApproval(): boolean {
+        if (this.findTask()?.status === 'AWAITING_APPROVAL') { return true; }
+        vscode.window.showWarningMessage(STALE_REJECT);
+        return false;
+    }
+
     /**
      * Approve with the revision the webview rendered. The token comes from the
      * page's message and is never read from the client's cached state: the
@@ -467,7 +474,10 @@ export class TaskDetailPanel implements vscode.Disposable {
                     if (typeof msg.description === 'string') { updates.description = msg.description; }
                     if (Array.isArray(msg.definitionOfDone)) { updates.definitionOfDone = msg.definitionOfDone as string[]; }
                     if (typeof msg.priority === 'string') { updates.priority = msg.priority as TaskPriority; }
-                    this.client.updateTaskDetails(this.taskId, updates);
+                    if (!this.client.updateTaskDetails(this.taskId, updates)) {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — task was not saved.');
+                        break;
+                    }
                     vscode.window.showInformationMessage('Task saved');
                     break;
                 }
@@ -477,11 +487,15 @@ export class TaskDetailPanel implements vscode.Disposable {
                     break;
 
                 case 'promptReject': {
+                    // The Reject button stays on the page after the task moves on: judge the task as it is now,
+                    // before the prompt and again after it, since the plan can move while the reason is typed.
+                    if (!this.awaitingApproval()) { break; }
                     const reason = await vscode.window.showInputBox({
                         prompt: 'Rejection reason',
                         placeHolder: 'Why is this plan being rejected?',
                     });
                     if (reason) {
+                        if (!this.awaitingApproval()) { break; }
                         if (this.client.rejectTask(this.taskId, reason)) {
                             vscode.window.showInformationMessage('Task rejected');
                         } else {
@@ -564,7 +578,10 @@ export class TaskDetailPanel implements vscode.Disposable {
                         'Delete'
                     );
                     if (confirmed === 'Delete') {
-                        this.client.deleteTask(this.taskId);
+                        if (!this.client.deleteTask(this.taskId)) {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — task was not deleted.');
+                            break;
+                        }
                         vscode.window.showInformationMessage('Task deleted');
                         this.dispose();
                     }
@@ -573,8 +590,10 @@ export class TaskDetailPanel implements vscode.Disposable {
 
                 case 'addComment': {
                     const content = typeof msg.content === 'string' ? msg.content.trim() : '';
-                    if (content) {
-                        this.client.addTaskComment(this.taskId, content);
+                    if (content && !this.client.addTaskComment(this.taskId, content)) {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — comment was not added.');
+                        // The page cleared its input on send: hand the text back so it is not lost.
+                        void this.panel.webview.postMessage({ type: 'commentNotSent', content });
                     }
                     break;
                 }

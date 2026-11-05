@@ -49,6 +49,16 @@ class MoeProjectOpenListenerTest {
         }
     }
 
+    @Test
+    fun `projectOpened connects on a pooled thread, not inline`() {
+        // connect() blocks on IO (the .moe/ scaffold, daemon.json, a port probe, a spawn), and projectOpened can run on the EDT.
+        val path = "src/main/kotlin/com/moe/listeners/MoeProjectOpenListener.kt"
+        val file = listOf(File(path), File("moe-jetbrains/$path")).first { it.isFile }
+        val body = file.readText().replace("\r\n", "\n").substringAfter("override fun projectOpened(project: Project)")
+        assertTrue(body.contains("app.executeOnPooledThread { service.connect() }"))
+        assertFalse("connect() runs inline", Regex("(?m)^\\s*service\\.connect\\(\\)\\s*$").containsMatchIn(body))
+    }
+
     private fun withTempHome(block: (home: File, base: File) -> Unit) {
         val previousHome = System.getProperty("user.home")
         val home = Files.createTempDirectory("moe-home").toFile()

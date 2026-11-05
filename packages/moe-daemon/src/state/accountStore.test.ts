@@ -24,6 +24,7 @@ import {
   vmTokenFile,
 } from '../accounts/registry.js';
 import { parseUsageWindows } from '../accounts/usageWindows.js';
+import { deregisterWorker, RELOAD_HOLD_EXPIRED_REASON } from './workerLifecycle.js';
 import { removeVmToken, writeVmToken } from '../accounts/vmTokens.js';
 import type { Project, Worker } from '../types/schema.js';
 
@@ -300,6 +301,37 @@ describe('accountSwitchFor', () => {
     expect(state.getWorker('w1')?.accountId).toBe('acct-2');
     await report('acct-2', usage(92, T0), T0);
     expect(accountSwitchFor(state, 'w1', T0)).toMatchObject({ from: 'acct-2', to: 'acct-3', reason: 'usage' });
+  });
+
+  it('is not due for a seat whose record is DEAD or gone, whatever it leased', async () => {
+    threeAccounts();
+    await leaseAccount(state, 'w2', T0);
+    await leaseAccount(state, 'gone', T0); // no worker record: a pruned seat
+    await report('acct-2', usage(95, T0), T0, { workerId: 'w3' });
+    expect(accountSwitchFor(state, 'w2', T0)).toMatchObject({ from: 'acct-2', to: 'acct-3' });
+    await state.updateWorker('w2', { status: 'DEAD' });
+    expect([accountSwitchFor(state, 'w2', T0), accountSwitchFor(state, 'gone', T0)]).toEqual([null, null]);
+  });
+
+  it('forgets the lease on every deregister path, so a revived seat id is not switched off a stale one', async () => {
+    threeAccounts();
+    await leaseAccount(state, 'w2', T0); // acct-2
+    await report('acct-2', usage(95, T0), T0, { workerId: 'w3' });
+    expect(accountSwitchFor(state, 'w2', T0)).toMatchObject({ from: 'acct-2', to: 'acct-3' });
+    await deregisterWorker(state, 'w2', RELOAD_HOLD_EXPIRED_REASON); // the reload-hold expiry sweep, not the tool
+    expect(state.getWorker('w2')?.status).toBe('DEAD');
+    await state.updateWorker('w2', { status: 'IDLE' }); // the same seat id is back before it leases again
+    expect(accountSwitchFor(state, 'w2', T0)).toBeNull();
+  });
+
+  it('lets a DEAD seat\'s own report replace the lease it no longer holds', async () => {
+    threeAccounts();
+    await leaseAccount(state, 'w2', T0); // acct-2
+    await state.updateWorker('w2', { status: 'DEAD' });
+    await report('acct-3', usage(40, T0), T0, { workerId: 'w2' }); // the account its claude actually runs on
+    await state.updateWorker('w2', { status: 'IDLE' });
+    await report('acct-3', usage(92, T0), T0, { workerId: 'w3' });
+    expect(accountSwitchFor(state, 'w2', T0)).toMatchObject({ from: 'acct-3', to: 'acct-2', reason: 'usage' });
   });
 });
 

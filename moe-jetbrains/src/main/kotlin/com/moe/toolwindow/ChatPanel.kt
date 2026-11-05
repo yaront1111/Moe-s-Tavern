@@ -552,10 +552,7 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
             }
 
             // File path linkification (2+ segments, optional :line) — exclude URLs
-            processed = Regex("(?<!://)(?<![\">/])\\b([\\w.-]+/(?:[\\w.-]+/)*[\\w.-]+(?::(\\d+))?)").replace(processed) { match ->
-                val fullPath = match.groupValues[1]
-                "<a href=\"file://$fullPath\">$fullPath</a>"
-            }
+            processed = linkifyPaths(processed)
 
             // Newlines to <br>
             processed = processed.replace("\n", "<br>")
@@ -877,5 +874,22 @@ class ChatPanel(private val project: Project) : JBPanel<ChatPanel>(BorderLayout(
         disposed = true
         stateListener?.let { service.removeListener(it) }
         stateListener = null
+    }
+
+    companion object {
+        /**
+         * A markdown link's anchor, a scheme://... URL, or a bare file path (2+ segments, optional :line). The first two
+         * are matched only to be kept whole: a path match inside one cut it into a file:// link.
+         */
+        private val PATH_OR_LINK = Regex(
+            "<a\\b[^>]*>[\\s\\S]*?</a>|[a-zA-Z][\\w+.-]*://[^\\s<]*|" +
+                "(?<!://)(?<![\">/])\\b([\\w.-]+/(?:[\\w.-]+/)*[\\w.-]+(?::(\\d+))?)"
+        )
+
+        /** Links each bare file path in [html], which is already escaped, to file://, and leaves anchors and URLs as they are. */
+        internal fun linkifyPaths(html: String): String = PATH_OR_LINK.replace(html) { match ->
+            val fullPath = match.groups[1]?.value ?: return@replace match.value
+            "<a href=\"file://$fullPath\">$fullPath</a>"
+        }
     }
 }

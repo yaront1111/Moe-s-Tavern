@@ -2136,14 +2136,16 @@ class RuntimeSelectionPolicyTest {
 
         fun handle(pid: Long): ProcessHandle {
             lookedUp += pid
+            // A delivered signal ends the process: the restart waits for that before it starts a daemon.
+            var signalled = false
             return Proxy.newProxyInstance(SignalSpy::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { proxy, method, args ->
                 when (method.name) {
                     "destroy" -> {
                         destroyed += pid
-                        destroy()
+                        destroy().also { if (it) signalled = true }
                     }
                     "pid" -> pid
-                    "isAlive" -> true
+                    "isAlive" -> !signalled
                     "hashCode" -> System.identityHashCode(proxy)
                     "equals" -> proxy === args?.firstOrNull()
                     "toString" -> "SignalSpy($pid)"

@@ -341,10 +341,12 @@ function buildBashCommand(
 ): string {
     assertSafeLaunchArgs(scriptPath, workspacePath, workerId, command, envOverrides, teamName, interpreter);
 
-    let prefix = '';
+    // The terminal runs the user's own shell (no shellPath on POSIX), so the line starts with `env` and quotes every
+    // word: fish, tcsh and pwsh reject a leading `KEY=value` assignment, and pwsh reads a leading quoted word as a string.
+    let prefix = 'env ';
     if (envOverrides) {
         for (const [key, value] of Object.entries(envOverrides)) {
-            prefix += `${key}=${shQuote(value)} `;
+            prefix += `${shQuote(`${key}=${value}`)} `;
         }
     }
 

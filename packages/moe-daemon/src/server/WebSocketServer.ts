@@ -21,6 +21,7 @@ import { readExecutionReadiness, type ExecutionReadinessPayload } from '../tools
 import { releaseTaskTool } from '../tools/releaseTask.js';
 import { applyEpicUpdate } from '../tools/updateEpic.js';
 import { deregisterWorkerTool } from '../tools/deregisterWorker.js';
+import { dropBlockedResourceQueueEntry } from '../state/workerLifecycle.js';
 import {
   ACTIVITY_LOG_DEFAULT_MAX_PAYLOAD_CHARS,
   normalizeActivityLogParams,
@@ -73,6 +74,7 @@ const UPDATE_TASK_DENYLIST: ReadonlySet<string> = new Set([
   'workStartedAt',
   'metrics',
   'reopenCount',
+  'reopenedAt',
   'stepsCompleted',
   'contextFetchedBy',
   'priorHandoffs',
@@ -218,6 +220,8 @@ const ORIGIN_HEADERS = ['origin', 'sec-websocket-origin'] as const;
 const LOGGED_ORIGIN_MAX_CHARS = 120;
 /** Bytes a client may leave unread in this process before it is cut off (a few full board snapshots). */
 const WS_SEND_BACKLOG_LIMIT_BYTES = 64 * 1024 * 1024;
+/** How long close() waits for clients to answer its close frame before it terminates them. */
+const CLIENT_CLOSE_GRACE_MS = 1000;
 
 /** True for an absent Origin (undefined) or an allowed one. A present 'null' or '' is refused. */
 export function isAllowedUpgradeOrigin(origin: string | undefined): boolean {
@@ -525,6 +529,9 @@ export class MoeWebSocketServer {
           // names neither the transition nor an actor. Declared at the mutex
           // callback's scope because the update call that consumes it is here.
           let unblockedFromBoard = false;
+          // The task as it was before that edit (the write nulls blockedResourceId): an unblock drops
+          // the task's queue entry on the resource it was blocked on, as set_task_status does.
+          let blockedBefore: Task | undefined;
           const task = await this.withMutex(async () => {
             if ('status' in safeUpdates) {
               const existing = this.state.getTask(taskId);
@@ -582,6 +589,7 @@ export class MoeWebSocketServer {
                       ...(newStatus === effectiveFrom ? { assignedWorkerId: parkedHoldOwner(this.state, existing) } : {}),
                     };
                     unblockedFromBoard = true;
+                    blockedBefore = existing;
                   }
                   // Mirrors set_task_status: a human putting a row parked for
                   // human review back into REVIEW IS that review. Left set, the
@@ -660,16 +668,20 @@ export class MoeWebSocketServer {
                           ? providedReason
                           : 'Reopened from board',
                     };
-                    return this.state.updateTask(taskId, safeUpdates, 'TASK_REOPENED');
+                    const reopened = await this.state.updateTask(taskId, safeUpdates, 'TASK_REOPENED');
+                    if (blockedBefore) await dropBlockedResourceQueueEntry(this.state, blockedBefore, '');
+                    return reopened;
                   }
                 }
               }
             }
-            return this.state.updateTask(
+            const updated = await this.state.updateTask(
               taskId,
               safeUpdates,
               unblockedFromBoard ? 'TASK_UNBLOCKED' : undefined
             );
+            if (blockedBefore) await dropBlockedResourceQueueEntry(this.state, blockedBefore, '');
+            return updated;
           });
           this.safeSend(ws, JSON.stringify({ type: 'TASK_UPDATED', payload: this.servedTask(task) }));
           return;
@@ -1518,15 +1530,28 @@ export class MoeWebSocketServer {
       this.chatWaiterOwners.clear();
       this.resourceWaiterOwners.clear();
 
-      await new Promise<void>((resolve, reject) => {
-        this.wss.close((err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
+      // wss.close() calls back only once every client socket is gone, and ws gives a peer that never answers
+      // the close frame 30 s: end whatever is still open after a short grace, well inside the daemon's 10 s
+      // shutdown bound (SHUTDOWN_TIMEOUT_MS).
+      const terminateLate = setTimeout(() => {
+        for (const client of this.wss.clients) client.terminate();
+      }, CLIENT_CLOSE_GRACE_MS);
+      if (terminateLate.unref) {
+        terminateLate.unref();
+      }
+      try {
+        await new Promise<void>((resolve, reject) => {
+          this.wss.close((err) => {
+            if (err) {
+              reject(err);
+            } else {
+              resolve();
+            }
+          });
         });
-      });
+      } finally {
+        clearTimeout(terminateLate);
+      }
     })().finally(() => {
       this.closePromise = null;
     });

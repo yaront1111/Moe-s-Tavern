@@ -194,11 +194,11 @@ import {
 } from './activityLog.js';
 import {
   ensureChatInfrastructure,
-  loadEntities,
   migrateToV5FileSystem,
   migrateToV6FileSystem,
   normalizeProject,
   readJson,
+  reloadEntities,
   tryLoadWorkerFromDisk,
   verifyWritePermissions,
   writeEntity,
@@ -394,13 +394,13 @@ export class StateManager {
   resources = new Map<string, ResourceState>();
   /** Execution attempts, keyed by attempt id. Mutated only via state/attemptStore.ts. */
   attempts = new Map<string, ExecutionAttempt>();
-  /** Candidates, keyed by candidate id. Written only via state/candidateStore.ts, which has no update path. */
+  /** Candidates, keyed by candidate id. Written only via state/candidateStore.ts, which has no update path; deleteTask drops a deleted task's. */
   candidates = new Map<string, Candidate>();
-  /** Reviews, keyed by review id. Written only via state/reviewStore.ts, which is append-only. */
+  /** Reviews, keyed by review id. Written only via state/reviewStore.ts, which is append-only; deleteTask drops a deleted task's. */
   reviews = new Map<string, Review>();
-  /** Check runs, keyed by check-run id. Written only via state/checkRunStore.ts, which has no update or delete path. */
+  /** Check runs, keyed by check-run id. Written only via state/checkRunStore.ts, which has no update or delete path; deleteTask drops a deleted task's. */
   checkRuns = new Map<string, CheckRun>();
-  /** Delivery receipts, keyed by receipt id. Written only via state/receiptStore.ts: at most one per candidate, never rewritten. */
+  /** Delivery receipts, keyed by receipt id. Written only via state/receiptStore.ts: at most one per candidate, never rewritten; deleteTask drops a deleted task's. */
   receipts = new Map<string, DeliveryReceipt>();
 
   /** @internal — reached by the extracted state/* modules; not part of the supported API. */
@@ -1066,14 +1066,15 @@ export class StateManager {
       this.applySettingsTimeouts(normalized);
       if (JSON.stringify(rawProject) !== JSON.stringify(normalized)) {
         try {
+          this.fileWatcher?.ignorePath(projectFile);
           atomicWriteJson(projectFile, normalized);
         } catch (error) {
           logger.error({ error, projectFile }, 'Failed to write normalized project.json');
         }
       }
 
-      this.epics = loadEntities<Epic>(path.join(this.moePath, 'epics'));
-      this.tasks = loadEntities<Task>(path.join(this.moePath, 'tasks'));
+      this.epics = reloadEntities<Epic>(this, 'epics', this.epics);
+      this.tasks = reloadEntities<Task>(this, 'tasks', this.tasks);
       // Backfill priority, comments and reopenCount for existing tasks
       for (const [id, task] of this.tasks) {
         const updates: Partial<Task> = {};
@@ -1092,7 +1093,7 @@ export class StateManager {
           this.tasks.set(id, { ...task, ...updates });
         }
       }
-      this.workers = loadEntities<Worker>(path.join(this.moePath, 'workers'));
+      this.workers = reloadEntities<Worker>(this, 'workers', this.workers);
       // Backfill teamId for workers that predate the teams feature
       for (const [id, worker] of this.workers) {
         if (worker.teamId === undefined) {
@@ -1109,29 +1110,28 @@ export class StateManager {
           'Found task assignments for missing workers; treating them as claimable'
         );
       }
-      this.teams = loadEntities<Team>(path.join(this.moePath, 'teams'));
-      this.channels = loadEntities<ChatChannel>(path.join(this.moePath, 'channels'));
+      this.teams = reloadEntities<Team>(this, 'teams', this.teams);
+      this.channels = reloadEntities<ChatChannel>(this, 'channels', this.channels);
       // Self-heal chat infrastructure on EVERY load (not just on a schemaVersion
       // bump). A masked v5/v6 FS migration could persist the new schemaVersion
       // while leaving the channels/ dir or role channels missing — then chat is
       // permanently broken with the version already bumped so the migration never
       // reruns. This idempotently recreates missing dirs / canonical channels.
       ensureChatInfrastructure(this);
-      this.decisions = loadEntities<Decision>(path.join(this.moePath, 'decisions'));
-      this.proposals = loadEntities<RailProposal>(path.join(this.moePath, 'proposals'));
-      this.resources = loadEntities<ResourceState>(path.join(this.moePath, 'resources'));
-      // loadEntities tolerates a missing directory, so a project that has never
-      // opened an attempt simply loads an empty map — no scaffolding needed.
-      this.attempts = loadEntities<ExecutionAttempt>(path.join(this.moePath, 'attempts'));
+      this.decisions = reloadEntities<Decision>(this, 'decisions', this.decisions);
+      this.proposals = reloadEntities<RailProposal>(this, 'proposals', this.proposals);
+      this.resources = reloadEntities<ResourceState>(this, 'resources', this.resources);
+      // No directory yet loads empty; a reload reads only files not yet in memory.
+      this.attempts = reloadEntities<ExecutionAttempt>(this, 'attempts', this.attempts, true);
       // Same tolerance: a project that has never recorded a candidate loads empty.
-      this.candidates = loadEntities<Candidate>(path.join(this.moePath, 'candidates'));
+      this.candidates = reloadEntities<Candidate>(this, 'candidates', this.candidates, true);
       // Same tolerance again: a project whose QA has never bound a decision to a
       // candidate loads empty, which is exactly the incremental-adoption case.
-      this.reviews = loadEntities<Review>(path.join(this.moePath, 'reviews'));
+      this.reviews = reloadEntities<Review>(this, 'reviews', this.reviews, true);
       // And again: a project that has never recorded a check run loads empty.
-      this.checkRuns = loadEntities<CheckRun>(path.join(this.moePath, 'checks'));
+      this.checkRuns = reloadEntities<CheckRun>(this, 'checks', this.checkRuns, true);
       // And for receipts: a project where nothing has landed loads empty.
-      this.receipts = loadEntities<DeliveryReceipt>(path.join(this.moePath, 'receipts'));
+      this.receipts = reloadEntities<DeliveryReceipt>(this, 'receipts', this.receipts, true);
       try {
         await this.purgeResolvedProposals();
       } catch (error) {
@@ -1417,6 +1417,7 @@ export class StateManager {
         updatedAt: new Date().toISOString()
       };
       // Written before it is adopted: a failed write leaves memory and the proposal unchanged.
+      this.fileWatcher?.ignorePath(path.join(this.moePath, 'project.json'));
       await atomicWriteJsonAsync(path.join(this.moePath, 'project.json'), project);
       this.project = project;
     } else if (targetScope === 'EPIC') {

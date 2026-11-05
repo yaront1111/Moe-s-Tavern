@@ -212,7 +212,9 @@ test('EA7 one-save: one save is in flight, and unrelated errors and echoes are i
         assert.deepEqual([h.sent, h.ui.infos, h.ui.warnings.length], [[FIELDS_FRAME], [WAITING], 1], 'no second frame and no second modal');
         for (const frame of [{ ...REFUSAL, context: { epicId: 'epic-2' } }, { ...REFUSAL, operation: 'UPDATE_TASK' }, { type: 'ERROR', message: 'boom' }]) { h.deliver(frame); }
         h.deliver({ type: 'EPIC_UPDATED', payload: { ...EPIC, id: 'epic-2' } });
-        assert.deepEqual([h.sent, h.ui.errors, h.ui.infos, h.ui.disposed], [[FIELDS_FRAME], [], [WAITING], 0]);
+        // The panel ignores them all; the two that are not epic saves get the client's generic notice (JetBrains parity).
+        const notices = [[`Moe: UPDATE_TASK failed: ${REFUSAL.message}`], ['Moe: boom']];
+        assert.deepEqual([h.sent, h.ui.errors, h.ui.infos, h.ui.disposed], [[FIELDS_FRAME], notices, [WAITING], 0]);
     });
     let release;
     await withPanel({ tasks: [task('b1', 'BACKLOG')], answers: [new Promise(resolve => { release = resolve; })] }, async h => {

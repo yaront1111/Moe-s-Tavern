@@ -10,6 +10,8 @@ import { startStepTool } from './startStep.js';
 import { submitPlanTool } from './submitPlan.js';
 import { chatWaitTool } from './chatWait.js';
 import { claimNextTaskTool } from './claimNextTask.js';
+import { deregisterWorkerTool } from './deregisterWorker.js';
+import { accountSwitchFor } from '../state/accountStore.js';
 import { listAttempts } from '../state/attemptStore.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { addAccount, recordSignIn } from '../accounts/registry.js';
@@ -249,6 +251,18 @@ describe('switching accounts at a step boundary', () => {
     expect(state.getWorker('worker-a')?.accountId).toBe('acct-2');
     const kept = await completeStepTool(state).handler({ taskId: 'task-1', stepId: 'step-1', workerId: 'worker-a' }, state) as Record<string, unknown>;
     expect(kept).not.toHaveProperty('accountSwitch');
+  });
+
+  it('deregister forgets the seat\'s lease: a reload-held seat is told nothing until its relaunch leases again', async () => {
+    await load();
+    twoAccounts();
+    await lease(); // acct-1
+    const result = await deregisterWorkerTool(state).handler({ workerId: 'worker-a', reason: 'wrapper_restart' }, state);
+    expect(result).toMatchObject({ heldTaskIds: ['task-1'], alreadyDead: false });
+    expect(state.getWorker('worker-a')?.status).not.toBe('DEAD');
+    await reportUsage('acct-1', 0.97, null); // acct-1 is now spent
+    expect(accountSwitchFor(state, 'worker-a')).toBeNull();
+    expect(await lease()).toMatchObject({ accountId: 'acct-2' });
   });
 });
 

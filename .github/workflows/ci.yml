@@ -328,10 +328,10 @@ jobs:
         run: node --test scripts/tests/daemon-autostart-argv.test.mjs
 
       - name: Test launcher helper suites
-        # Folder-trust docs, the Serena ignore override and the fake proxy's get_commit_scope knobs.
-        # Not macOS: these suites have not been run there.
+        # Folder-trust docs, the Serena ignore override, the fake proxy's get_commit_scope knobs and
+        # moe-team.sh's background launch. Not macOS: these suites have not been run there.
         if: runner.os != 'macOS'
-        run: node --test scripts/tests/account-trust-docs.test.mjs scripts/tests/postflight-owner-scope.test.mjs scripts/tests/serena-ignore.test.mjs
+        run: node --test scripts/tests/account-trust-docs.test.mjs scripts/tests/postflight-owner-scope.test.mjs scripts/tests/serena-ignore.test.mjs scripts/tests/team-launch-sh.test.mjs
 
       - name: Test PowerShell doctor and team launch arguments
         # doctor.ps1's Run-Native and moe-team.ps1's Start-Process build native command lines (PowerShell 5.1 and 7).

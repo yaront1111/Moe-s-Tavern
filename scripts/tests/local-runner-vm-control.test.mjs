@@ -8,8 +8,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { cleanupOwned, createLedger, deleteOwned, lifecycleError, provisionOwned, reconcileOwned } from '../local-runner/lifecycle.mjs';
+import { linuxPlatform } from '../local-runner/platform-linux.mjs';
 import {
-  canonicalProjectPath, cleanupReport, localRunnerHost, mcpCaller, ownedLedgerDir, readDaemonInfo, reconcileReport, runnerProbe, runVmControl, statusReport,
+  canonicalProjectPath, cleanupReport, imageCacheDir, localRunnerHost, mcpCaller, ownedLedgerDir, readDaemonInfo, reconcileReport, runnerProbe, runVmControl,
+  statusReport,
 } from '../local-runner/vm-control.mjs';
 
 const CLI = fileURLToPath(new URL('../local-runner/vm-control.mjs', import.meta.url));
@@ -98,6 +100,36 @@ test('VC-S1 status lists exactly the ledger records, queries only their names an
   assert.deepEqual((await statusReport({ ledger, provider, prerequisites: async () => ({ ready: 'yes', code: '/x/KEY', platform: '../x' }) })).provider, { ready: false });
   assert.deepEqual(await statusReport({ ledger: UNREADABLE, provider, prerequisites }),
     { schema: 'moe-vm-status-v1', code: 'LEDGER_UNREADABLE', instances: [], seatInstances: [], executionReady: false, verified: false });
+});
+
+test('VC-S3 status asks the host prerequisites about the image cache the jobs use: without it Linux is never ready', async t => {
+  const [project, state] = [scratch(t), scratch(t)];
+  const saved = process.env.MOE_RUNNER_STATE_DIR;
+  t.after(() => { if (saved === undefined) delete process.env.MOE_RUNNER_STATE_DIR; else process.env.MOE_RUNNER_STATE_DIR = saved; });
+  process.env.MOE_RUNNER_STATE_DIR = state;
+  const seen = [];
+  const prerequisites = async input => { seen.push(input); return { platform: 'linux', ready: true }; };
+  const { code, stdout } = await captured(['status', '--project', project], { ledger: { list: async () => ({ records: [], invalid: [] }) }, prerequisites });
+  assert.deepEqual([code, JSON.parse(stdout).provider, seen], [0, { ready: true, platform: 'linux' }, [{ cacheDir: imageCacheDir(project) }]]);
+});
+
+test('VC-L5 the jobs\' image cache sits beside the ledger, but on Linux by default outside every hidden folder, where the snap reads', async t => {
+  const [state, home] = [scratch(t), scratch(t)];
+  const saved = ['MOE_RUNNER_STATE_DIR', 'HOME', 'USERPROFILE'].map(key => [key, process.env[key]]);
+  t.after(() => { for (const [key, value] of saved) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  Object.assign(process.env, { MOE_RUNNER_STATE_DIR: state, HOME: home, USERPROFILE: home });
+  const key = hash('d:/p/x');
+  for (const platform of ['linux', 'win32', 'darwin']) assert.equal(imageCacheDir('D:/p/x', { platform }), path.join(state, key, 'images'), platform);
+  delete process.env.MOE_RUNNER_STATE_DIR;
+  assert.equal(imageCacheDir('D:/p/x', { platform: 'darwin' }), path.join(home, '.moe', 'runner-state', key, 'images'));
+  const linux = imageCacheDir('/mnt/d/p/x', { platform: 'linux', homedir: () => '/home/u' });
+  assert.equal(linux, `/home/u/moe-runner-cache/${key}/images`);
+  assert.deepEqual([readdirSync(state), readdirSync(home)], [[], []], 'nothing is created');
+  const absent = async () => { throw Object.assign(new Error('absent'), { code: 'ENOENT' }); };
+  const cacheItem = async cacheDir => (await linuxPlatform.prerequisites({ cacheDir, homedir: () => '/home/u', provider: { run: absent },
+    doctor: async () => ({}), statDevice: absent, statfs: async () => ({ bavail: 0, bsize: 0 }), cpus: () => 0, freemem: () => 0 }))
+    .prerequisites.find(item => item.id === 'image-cache-location').satisfied;
+  assert.deepEqual([await cacheItem(linux), await cacheItem(`/home/u/.moe/runner-state/${key}/images`)], [true, false]); // the old default
 });
 
 test('VC-R1 reconcile is R06 reconcileOwned over the ledger only, with its schema and an invalid count', async t => {
@@ -429,8 +461,8 @@ test('VC-P1 the runner probe sends signal 0 only, to a pid parsed from a record 
   assert.deepEqual([undefined, 'EPERM', 'ESRCH', 'EINVAL'].map(code => runnerProbe(mine, { ...here, kill: kill(code) })), [true, true, false, undefined]);
   assert.deepEqual(kills, Array(4).fill([4242, 0]));
   assert.equal(runnerProbe({ runner: `${process.pid}@x`, host: localRunnerHost(), platform: process.platform }), true); // this process only
-  assert.deepEqual([localRunnerHost({ platform: 'win32', env: { COMPUTERNAME: 'DESK-1' } }), localRunnerHost({ platform: 'linux', hostname: () => ' My Host ' })],
-    ['desk-1', 'myhost']);
+  assert.deepEqual([localRunnerHost({ platform: 'win32', env: { COMPUTERNAME: 'DESK-1' } }), localRunnerHost({ platform: 'linux', hostname: () => ' My Host ' }),
+    localRunnerHost({ platform: 'win32', env: {}, hostname: () => 'Desk-2' })], ['desk-1', 'myhost', 'desk-2']); // never blank without COMPUTERNAME
 });
 
 test('VC-P2 with no probe injected, a runner alive on this host holds its seat VM through cleanupReport, reconcileReport and runVmControl', async t => {

@@ -77,6 +77,10 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         throw missingRequired('taskId');
       }
 
+      // A non-string reason used to crash the trim below with an uncoded TypeError.
+      if (params.reason !== undefined && params.reason !== null && typeof params.reason !== 'string') {
+        throw invalidInput('reason', 'must be a string');
+      }
       if (!params.reason || params.reason.trim().length === 0) {
         throw missingRequired('reason');
       }
@@ -108,12 +112,22 @@ export function qaRejectTool(_state: StateManager): ToolDefinition {
         });
       }
 
-      // Validate issues
+      // Validate issues. A non-array, a non-object entry or a non-string
+      // description used to crash below with an uncoded TypeError.
       if (params.issues) {
+        if (!Array.isArray(params.issues)) {
+          throw invalidInput('issues', 'must be an array of { type, description } objects');
+        }
         if (params.issues.length > 20) {
           throw invalidInput('issues', 'too many items (max 20)');
         }
         for (const issue of params.issues) {
+          if (!issue || typeof issue !== 'object') {
+            throw invalidInput('issues', 'each entry must be a { type, description } object');
+          }
+          if (issue.description !== undefined && issue.description !== null && typeof issue.description !== 'string') {
+            throw invalidInput('issues.description', 'must be a string');
+          }
           if (!VALID_ISSUE_TYPES.includes(issue.type)) {
             throw invalidInput('issues.type', `invalid type '${issue.type}'. Valid types: ${VALID_ISSUE_TYPES.join(', ')}`);
           }

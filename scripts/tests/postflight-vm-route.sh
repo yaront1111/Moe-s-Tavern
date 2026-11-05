@@ -62,8 +62,9 @@ vmr_run() {
     cd "$PROJECT" || exit 97
     [ "$readiness" = - ] || export FAKE_READINESS="$readiness"
     [ "$seam" = - ] || export MOE_POSTFLIGHT_WSL="$seam"
+    # A gemini seat would run agy: MOE_AGY_COMMAND points it at the fake, never the host's real Antigravity.
     env PATH="$BIN:$SHIM:$PATH" HOME="$TMP_DIR/home" TMPDIR="$RUN_TMP" MOE_PROXY_PATH="$FAKE_PROXY" FAKE_CALL_LOG="$CALLS" \
-      MOE_DISABLE_HEARTBEAT=1 MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" \
+      MOE_AGY_COMMAND="$BIN/gemini" MOE_DISABLE_HEARTBEAT=1 MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" \
       --project "$PROJECT" --worker-id "$role-vmr" --role "$role" --team Smoke --no-start-daemon \
       --command "${VMR_CMD:-$BIN/$cli}" "${VMR_ARGS[@]}"
   ) >"$OUT" 2>&1

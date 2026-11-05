@@ -88,7 +88,8 @@ export class EpicDetailPanel implements vscode.Disposable {
             EpicDetailPanel.viewType,
             title,
             vscode.ViewColumn.One,
-            { enableScripts: true, retainContextWhenHidden: false }
+            // Retained: a form moved to a background tab keeps what was typed into it.
+            { enableScripts: true, retainContextWhenHidden: true }
         );
 
         const instance = new EpicDetailPanel(panel, extensionUri, client, epicId, state);
@@ -118,7 +119,11 @@ export class EpicDetailPanel implements vscode.Disposable {
                     const description = String(message.description ?? '').trim();
                     const architectureNotes = String(message.architectureNotes ?? '').trim();
                     const epicRails = Array.isArray(message.epicRails) ? message.epicRails as string[] : [];
-                    this.client.createEpic(title, description, architectureNotes, epicRails);
+                    if (!this.client.createEpic(title, description, architectureNotes, epicRails)) {
+                        // Nothing reached the socket: keep the form open so the typed epic survives a retry.
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — epic was not created.');
+                        return;
+                    }
                     vscode.window.showInformationMessage(`Epic "${title}" created.`);
                     this.dispose();
                     break;
@@ -134,7 +139,10 @@ export class EpicDetailPanel implements vscode.Disposable {
                         'Delete'
                     );
                     if (confirmed === 'Delete') {
-                        this.client.deleteEpic(epicId);
+                        if (!this.client.deleteEpic(epicId)) {
+                            vscode.window.showWarningMessage('Not connected to Moe daemon — epic was not deleted.');
+                            return;
+                        }
                         vscode.window.showInformationMessage('Epic deleted.');
                         this.dispose();
                     }

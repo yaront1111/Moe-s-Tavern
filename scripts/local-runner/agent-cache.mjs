@@ -268,7 +268,11 @@ async function download(pin, target, fetch, archive, member) {
       length = await holdsPin(verified, member);
       if (length === false) throw pinned('PINNED_CHECKSUM_MISMATCH');
     }
-    await renameOver(verified, target);
+    try { await renameOver(verified, target); } catch (error) {
+      // Windows refuses to replace a file another process holds open, as a multipass transfer of the pin a concurrent
+      // call kept there does: a target that holds the pin is as good as this copy, which the finally removes.
+      if ((await holdsPin(target, archive ? member : pin).catch(() => false)) === false) throw error;
+    }
     return length;
   } catch (error) {
     await drop(response); // a body already read is released, and cancelling it again is a no-op
@@ -303,7 +307,8 @@ export async function fetchPinnedFile(options, { fetch = globalThis.fetch } = {}
 
 /**
  * The verified pinned binary (the member, for an archive) as a frozen { file, sha256, size } at <cacheDir>/<sha256>.bin,
- * from the cache or downloaded into it. Concurrent callers each write their own .part and rename atomically. manifest
+ * from the cache or downloaded into it. Concurrent callers each write their own .part and rename atomically; a rename
+ * refused over a target that already holds the pin (Windows, while another process reads it) keeps that target. manifest
  * is a test seam only, validated like the installed one.
  */
 export async function fetchAgentBinary(input, { fetch = globalThis.fetch, manifest } = {}) {

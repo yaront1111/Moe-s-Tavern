@@ -217,25 +217,35 @@ function stopWatch(file, pollMs) {
 export async function landedRunCheck(projectPath, steps = {}) {
   const [{ runCheckJob }, { verifyWorkspace }] = await Promise.all([import('./check-lifecycle.mjs'), import('./snapshot-transfer.mjs')]);
   if (typeof runCheckJob !== 'function' || typeof verifyWorkspace !== 'function') return null;
-  const [{ platformFor }, { createLedger }, { ownedLedgerDir }] = await Promise.all([import('./cli.mjs'), import('./lifecycle.mjs'), import('./vm-control.mjs')]);
-  const stateDir = ownedLedgerDir(projectPath);
+  const [{ platformFor }, { createLedger }, { imageCacheDir, ownedLedgerDir }] = await Promise.all([import('./cli.mjs'), import('./lifecycle.mjs'), import('./vm-control.mjs')]);
+  const [stateDir, cacheDir] = [ownedLedgerDir(projectPath), imageCacheDir(projectPath)];
   const [platform, ledger, supervisor] = [platformFor(process.platform), createLedger(stateDir), await readFile(new URL('./guest-supervisor.py', import.meta.url))];
-  return ({ snapshot, check, dependencies, owner, onReady, onCleanup, signal }) => runCheckJob({ platform, ledger, owner, cacheDir: path.join(path.dirname(stateDir), 'images'),
+  return ({ snapshot, check, dependencies, owner, onReady, onCleanup, signal }) => runCheckJob({ platform, ledger, owner, cacheDir,
     supervisor, credential: randomBytes(32), snapshot, check, dependencies, budgetMs: CHECK_BUDGET_MS, onReady, onCleanup, signal, timeoutMs: 60_000 }, steps);
 }
 
-// The /runner channel, reopened for the next call once it drops, so a same-id retry after RUNNER_DISCONNECTED can land.
+// The /runner channel, reopened for the next call once it drops, so a same-id retry after RUNNER_DISCONNECTED can land. Closed
+// is final: a late call (a dispatch answered after runCheckJob's readiness bound) is refused, never reopened, as nothing would
+// close that socket.
 async function connect(open, projectPath) {
   let live = await open({ projectPath, timeoutMs: CALL_TIMEOUT_MS });
+  let closed = false;
+  const refused = () => Object.assign(new Error('The runner channel is closed.'), { code: 'RUNNER_DISCONNECTED' });
   return {
     async call(tool, args) {
-      const channel = live ?? (live = await open({ projectPath, timeoutMs: CALL_TIMEOUT_MS }));
+      if (closed) throw refused();
+      let channel = live;
+      if (channel === null) {
+        channel = await open({ projectPath, timeoutMs: CALL_TIMEOUT_MS });
+        if (closed) { channel.close(); throw refused(); } // closed while it opened
+        live = channel;
+      }
       try { return await channel.call(tool, args); } catch (error) {
         if (error?.code === 'RUNNER_DISCONNECTED' && live === channel) { live = null; channel.close(); }
         throw error;
       }
     },
-    close: () => live?.close(),
+    close: () => { closed = true; live?.close(); },
   };
 }
 

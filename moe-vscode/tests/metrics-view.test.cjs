@@ -104,3 +104,22 @@ test('a null first-pass rate stays the em dash placeholder', () => {
 test('a non-numeric first-pass rate stays the em dash placeholder', () => {
     assert.equal(renderFirstPass({ firstPassApprovalPct: '50' }), EM_DASH);
 });
+
+test('a rebuilt view marks the range chip the provider still queries', () => {
+    for (const [days, label] of [[7, '7d'], [30, '30d'], [null, 'All']]) {
+        const provider = loadProvider();
+        try {
+            const resolve = () => {
+                const view = { visible: false, onDidDispose() {}, onDidChangeVisibility() {},
+                    webview: { html: '', onDidReceiveMessage: handler => { view.handler = handler; } } };
+                provider.resolveWebviewView(view);
+                return view;
+            };
+            resolve().handler({ type: 'setRange', days });
+            const active = [...resolve().webview.html.matchAll(/<button class="range-chip active" data-days="[^"]*">([^<]*)<\/button>/g)].map(m => m[1]);
+            assert.deepEqual(active, [label], `after choosing ${label}`);
+        } finally {
+            provider.dispose();
+        }
+    }
+});

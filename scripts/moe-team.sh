@@ -153,8 +153,13 @@ PY
     echo "$team"
 }
 
-# Build project argument for moe-agent.sh (shell-escaped to handle special chars)
+# Build project argument for moe-agent.sh (shell-escaped to handle special chars).
+# A relative --project is made absolute first: iTerm and Terminal.app start the
+# agents in the scripts dir, not here. A path that does not exist goes as given.
 if [ -n "$PROJECT" ]; then
+    if PROJECT_ABS=$(CDPATH='' cd -- "$PROJECT" 2>/dev/null && pwd); then
+        PROJECT="$PROJECT_ABS"
+    fi
     PROJECT_ARG="--project $(printf '%q' "$PROJECT")"
 else
     PROJECT_ARG="--project-name $(printf '%q' "$PROJECT_NAME")"
@@ -259,10 +264,26 @@ EOF
             ;;
         background)
             echo -e "${YELLOW}No terminal found, running in background${NC}"
-            nohup bash -c "$cmd" > "/tmp/moe-$role.log" 2>&1 &
-            echo "  PID: $!, Log: /tmp/moe-$role.log"
+            # A fresh log per agent: a fixed /tmp name was shared by every team
+            # on the host, and another user's file there stopped the agent.
+            local tmp="${TMPDIR:-/tmp}"
+            local log
+            log=$(mktemp "${tmp%/}/moe-$role.XXXXXX") || return 1
+            nohup bash -c "$cmd" > "$log" 2>&1 &
+            echo "  PID: $!, Log: $log"
             ;;
     esac
+}
+
+# Counts each role. Run as an if condition, so a failed launch is reported
+# instead of ending the script under set -e.
+start_agent() {
+    if launch_agent "$1" "$2"; then
+        LAUNCHED=$((LAUNCHED + 1))
+    else
+        echo -e "${RED}Failed to start the $1 agent.${NC}"
+        FAILED=$((FAILED + 1))
+    fi
 }
 
 echo -e "${CYAN}=== Moe Agent Team Launcher ===${NC}"
@@ -271,11 +292,11 @@ echo "Terminal: $(detect_terminal)"
 echo ""
 
 LAUNCHED=0
+FAILED=0
 
 # Launch Worker
 if [ "$NO_WORKER" = false ]; then
-    launch_agent "worker" "$GREEN"
-    LAUNCHED=$((LAUNCHED + 1))
+    start_agent "worker" "$GREEN"
 
     if [ "$NO_QA" = false ] || [ "$NO_ARCHITECT" = false ]; then
         echo -e "${BLUE}Waiting ${DELAY_BETWEEN}s before next agent...${NC}"
@@ -285,8 +306,7 @@ fi
 
 # Launch QA
 if [ "$NO_QA" = false ]; then
-    launch_agent "qa" "$YELLOW"
-    LAUNCHED=$((LAUNCHED + 1))
+    start_agent "qa" "$YELLOW"
 
     if [ "$NO_ARCHITECT" = false ]; then
         echo -e "${BLUE}Waiting ${DELAY_BETWEEN}s before next agent...${NC}"
@@ -296,9 +316,12 @@ fi
 
 # Launch Architect
 if [ "$NO_ARCHITECT" = false ]; then
-    launch_agent "architect" "$MAGENTA"
-    LAUNCHED=$((LAUNCHED + 1))
+    start_agent "architect" "$MAGENTA"
 fi
 
 echo ""
 echo -e "${CYAN}Launched $LAUNCHED agent(s)${NC}"
+if [ "$FAILED" -gt 0 ]; then
+    echo -e "${RED}$FAILED agent(s) failed to start.${NC}"
+    exit 1
+fi

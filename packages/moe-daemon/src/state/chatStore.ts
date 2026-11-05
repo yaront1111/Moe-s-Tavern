@@ -577,7 +577,10 @@ export function writePins(state: StateManager, channelId: string, pins: PinEntry
   if (!fs.existsSync(pinsDir)) {
     fs.mkdirSync(pinsDir, { recursive: true });
   }
-  atomicWriteJson(getPinsFilePath(state, channelId), pins);
+  // pins/ is watched: suppress the echo, or every pin reloads the whole state.
+  const pinsFile = getPinsFilePath(state, channelId);
+  state.fileWatcher?.ignorePath(pinsFile);
+  atomicWriteJson(pinsFile, pins);
 }
 
 export function getPins(state: StateManager, channelId: string): PinEntry[] {
@@ -693,6 +696,7 @@ export async function createDecision(state: StateManager, opts: {
     const decisionsDir = path.join(state.moePath, 'decisions');
     fs.mkdirSync(decisionsDir, { recursive: true });
     const decisionFile = path.join(decisionsDir, `${decision.id}.json`);
+    state.fileWatcher?.ignorePath(decisionFile);
     atomicWriteJson(decisionFile, decision);
     state.decisions.set(decision.id, decision);
 
@@ -706,6 +710,7 @@ export async function createDecision(state: StateManager, opts: {
       });
       decision.messageId = msg.id;
       // Re-write with messageId linked
+      state.fileWatcher?.ignorePath(decisionFile);
       atomicWriteJson(decisionFile, decision);
       state.decisions.set(decision.id, decision);
     }
@@ -734,6 +739,7 @@ export async function approveDecision(state: StateManager, id: string, approvedB
   };
 
   const decisionFile = path.join(state.moePath, 'decisions', `${id}.json`);
+  state.fileWatcher?.ignorePath(decisionFile);
   atomicWriteJson(decisionFile, updated);
   state.decisions.set(id, updated);
 
@@ -758,6 +764,7 @@ export async function rejectDecision(state: StateManager, id: string): Promise<D
   };
 
   const decisionFile = path.join(state.moePath, 'decisions', `${id}.json`);
+  state.fileWatcher?.ignorePath(decisionFile);
   atomicWriteJson(decisionFile, updated);
   state.decisions.set(id, updated);
 

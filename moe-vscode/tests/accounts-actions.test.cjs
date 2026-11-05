@@ -327,7 +327,7 @@ test('Q1: the CLI line quotes every word for bash and PowerShell, and a control 
     const file = 'C:\\Users\\A B\\claude accounts.json';
     const id = 'acct-"q" 1';
     assert.equal(mod.accountsCommandLine(cli, file, ['login', id], false),
-        `'/opt/my node/node' '/opt/moe'\\''s/cli.js' '--accounts-file' 'C:\\Users\\A B\\claude accounts.json' 'login' 'acct-"q" 1'`);
+        `env '/opt/my node/node' '/opt/moe'\\''s/cli.js' '--accounts-file' 'C:\\Users\\A B\\claude accounts.json' 'login' 'acct-"q" 1'`);
     const encoded = /^powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ([A-Za-z0-9+/]+=*)$/.exec(mod.accountsCommandLine(cli, file, ['login', id], true));
     assert.ok(encoded, 'PowerShell gets one -EncodedCommand word');
     assert.equal(Buffer.from(encoded[1], 'base64').toString('utf16le'),

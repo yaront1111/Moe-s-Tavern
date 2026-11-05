@@ -27,6 +27,7 @@ class ProposalPanel(private val project: Project) : JBPanel<ProposalPanel>(Borde
     private val service = project.service<MoeProjectService>()
     private val listPanel = JPanel(VerticalLayout(8))
     private var proposals: List<RailProposal> = emptyList()
+    private var listRendered = false
     private var stateListener: MoeStateListener? = null
 
     init {
@@ -50,7 +51,11 @@ class ProposalPanel(private val project: Project) : JBPanel<ProposalPanel>(Borde
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
-                proposals = state.proposals.filter { it.status == "PENDING" }
+                val pending = state.proposals.filter { it.status == "PENDING" }
+                // The daemon republishes an unchanged board every 3 s: rebuilding every card would reset the list's scroll.
+                if (listRendered && pending == proposals) return
+                listRendered = true
+                proposals = pending
                 updateList()
             }
 
