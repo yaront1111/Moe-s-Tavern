@@ -7233,6 +7233,27 @@ function Set-MoeJournalPushResult([string]$Path, [string]$Result) {
     } catch {}
 }
 
+# task-eafb62c4: only the recovered path (§2.9: the target already holds the
+# journaled C and the task branch adds nothing) hands Complete-MoeWorktreeLanding a
+# journal of another attempt; a fresh round journals this one. Adopting that C
+# rebinds the journal to this session's pinned attempt (attemptId, generation,
+# workerId; every other field kept) before any receipt or finalize, so a deferred
+# finalize (CQ-V08) is this attempt's and the next replay closes it. $true once the
+# journal names this attempt (no write when it already does); $false when it cannot
+# be rebound: no valid pinned identity, or the write failed (Write-MoeIntentJournal
+# leaves the journal as it was). Never throws. Twin: wt_journal_rebind.
+function Set-MoeJournalAttempt([string]$Path) {
+    try {
+        if ($script:MoeAttemptId -cnotmatch '^[A-Za-z0-9_-]{1,128}$' -or -not (Test-MoeGeneration $script:MoeAttemptGeneration)) { return $false }
+        $j = [IO.File]::ReadAllText($Path) | ConvertFrom-Json -ErrorAction Stop
+        if ($j.attemptId -ceq $script:MoeAttemptId -and $j.generation -eq $script:MoeAttemptGeneration -and $j.workerId -ceq $WorkerId) { return $true }
+        $j.attemptId = $script:MoeAttemptId; $j.generation = $script:MoeAttemptGeneration; $j.workerId = $WorkerId
+        if (-not (Write-MoeIntentJournal $Path $j)) { return $false }
+        Write-Host "[receipt] receipt journal $Path now names attempt $($script:MoeAttemptId) (generation $($script:MoeAttemptGeneration)), which adopted its landing." -ForegroundColor Cyan
+        return $true
+    } catch { return $false }
+}
+
 # Does a journal's pushResult say a [remote rejected] push no re-check could verify
 # (Publish-MoeWorktreeLanding)? Twin: wt_journal_unverified.
 function Test-MoeJournalUnverified($J) { return [bool]($null -ne $J -and "$($J.pushResult)" -clike 'push remote-rejected-unverified: *') }
@@ -7560,7 +7581,9 @@ function Invoke-MoeMigrationLanding([string]$Br) {
 # landed; the journal goes once both answered. A strong journal (its own
 # profile verified-local, CQ-M07t) also sends its delivery receipt between the
 # two, and sets ReceiptStrong so Complete-MoePostflight treats it as a strong
-# landing whatever this session's pin (task-edf2162b). Twin: wt_land_published.
+# landing whatever this session's pin (task-edf2162b). A journal of another attempt
+# (only the recovered path, §2.9, hands one over) is first rebound to this
+# session's attempt (task-eafb62c4). Twin: wt_land_published.
 function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
     $ok = $false; $strong = $false
     try {
@@ -7576,6 +7599,12 @@ function Complete-MoeWorktreeLanding([hashtable]$Res, [string]$Journal) {
             # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
             # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
             $Res.ReceiptJournal = $Journal; $Res.ReceiptAcked = $false; $Res.ReceiptStrong = $true
+            # A journal of another attempt (the recovered path) is this attempt's once rebound (task-eafb62c4); one that
+            # cannot be rebound defers nothing, so this attempt finalizes and the next pre-flight replays the journal.
+            if (-not (Set-MoeJournalAttempt $Journal)) {
+                $Res.ReceiptJournal = $null
+                Write-Host "[WARN] receipt journal $Journal names another attempt and could not be rebound to attempt $(if ($script:MoeAttemptId) { $script:MoeAttemptId } else { '<none>' }); the finalize does not wait on its delivery receipt, and the next pre-flight replays it." -ForegroundColor Yellow
+            }
             if ($ok) { $Res.ReceiptAcked = Send-MoeReceipt $Journal $j }
         }
         $ok = (Complete-MoePostflight) -and $ok

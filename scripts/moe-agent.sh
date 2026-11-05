@@ -7634,6 +7634,37 @@ wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
 }
 
+# wt_journal_rebind JOURNAL -- task-eafb62c4: only the recovered path (§2.9: the
+# target already holds the journaled C and T adds nothing) hands wt_land_published
+# a journal of another attempt; a fresh round journals this one. Adopting that C
+# rebinds the journal to this session's pinned attempt (attemptId, generation,
+# workerId; every other field kept) before any receipt or finalize, so a deferred
+# finalize (CQ-V08) is this attempt's and the next replay closes it. 0 once the
+# journal names this attempt (no write when it already does); 1 when it cannot be
+# rebound: no valid pinned identity, or the write failed, which removes its tmp
+# file and leaves the journal as it was. Twin: Set-MoeJournalAttempt.
+wt_journal_rebind() {
+    local out
+    out=$($PYTHON_CMD - "$1" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" "$WORKER_ID" <<'PY' 2>/dev/null
+import json,os,re,sys
+f,a,g,w=sys.argv[1:]
+if not (re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a) and re.fullmatch(r'[1-9][0-9]{0,15}',g)): sys.exit(1)
+with open(f,encoding='utf-8') as i: d=json.load(i)
+if [d.get('attemptId'),d.get('generation'),d.get('workerId')]==[a,int(g),w]: sys.exit(0)
+d.update(attemptId=a,generation=int(g),workerId=w); tmp=f+'.tmp.'+str(os.getpid())
+try:
+    with open(tmp,'w',encoding='utf-8',newline='') as o: o.write(json.dumps(d)); o.flush(); os.fsync(o.fileno())
+    os.replace(tmp,f)
+except Exception:
+    try: os.unlink(tmp)
+    except OSError: pass
+    sys.exit(1)
+print('rebound')
+PY
+    ) || return 1
+    [ "$out" != rebound ] || echo -e "${BLUE}[receipt]${NC} receipt journal $1 now names attempt $MOE_ATTEMPT_ID (generation $MOE_ATTEMPT_GENERATION), which adopted its landing."
+}
+
 # wt_journal_unverified JOURNAL -- 0 when the journal's pushResult says a [remote
 # rejected] push no re-check could verify (wt_publish); 1 otherwise or unreadable.
 wt_journal_unverified() {
@@ -7909,7 +7940,9 @@ if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 # and finalize_attempt landed; the journal goes once both answered. A strong
 # journal (its own profile verified-local, CQ-M07t) also sends its delivery
 # receipt between the two, and sets RECEIPT_STRONG so finalize_postflight treats
-# it as a strong landing whatever this session's pin (task-edf2162b).
+# it as a strong landing whatever this session's pin (task-edf2162b). A journal of
+# another attempt (only the recovered path, §2.9, hands one over) is first rebound
+# to this session's attempt (task-eafb62c4).
 wt_land_published() {
     local ok=true
     MOE_WT_COMPLETION=false
@@ -7921,6 +7954,9 @@ wt_land_published() {
         # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
         # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
         RECEIPT_JOURNAL="$3"; RECEIPT_ACKED=""; RECEIPT_STRONG=true
+        # A journal of another attempt (the recovered path) is this attempt's once rebound (task-eafb62c4); one that
+        # cannot be rebound defers nothing, so this attempt finalizes and the next pre-flight replays the journal.
+        wt_journal_rebind "$3" || { RECEIPT_JOURNAL=""; echo -e "${YELLOW}[WARN]${NC} receipt journal $3 names another attempt and could not be rebound to attempt ${MOE_ATTEMPT_ID:-<none>}; the finalize does not wait on its delivery receipt, and the next pre-flight replays it."; }
         [ "$ok" != true ] || receipt_send "$(cat "$3")" "$3" || true
         finalize_postflight || true
         [ ! -e "$3" ] || echo -e "${YELLOW}[WARN]${NC} receipt journal $3 kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it."

@@ -1305,6 +1305,45 @@ async function wtRemoteRejected(){
   assert.deepEqual([parents(b,c2),git(b,'show',c2+':src/a.txt'),present(journal(p)),finals(p),done(p).map(x=>[x.outcome,x.code||null,x.sha,x.pushed]),retryOf(p)],
     [[main],'done\n',false,[['landed',c2]],[['committed',null,c2,true]],null],'absent retry: C2, the journal, the finalize, the row or landingRetry'+tail(r.log));
 }
+// task-eafb62c4: the recovered path (§2.9) can adopt a leftover strong journal of an earlier, closed attempt A1 whose
+// receipt was never recorded. A2 lands nothing new under a legacy pin (task-edf2162b: a strong journal defers under any
+// pin): the journal is rebound to A2 before any receipt or finalize, so the deferred finalize (CQ-V08) is A2's and the
+// next replay closes A2. A journal that cannot be rebound defers nothing: A2 finalizes at once, the journal stays as it was.
+async function wtRecoverStrong(){
+  const p=repo('wt-recover-strong',{settings:LANDS}),main=mainOf(p),moe=f=>path.join(p.dir,'.moe',f);
+  const rpc=t=>rpcs(p).filter(x=>x.tool===t).map(x=>x.args),said=(r,s)=>r.log.split(/\r?\n/).filter(l=>l.includes(s)).length;
+  const fin=()=>rpc('finalize_attempt').map(x=>[x.attemptId,x.generation,x.workerId,x.outcome,x.landedRevision]);
+  // A1: a landing whose finalize is refused keeps its journal (wt-replay-1); it becomes the strong journal of attempt-old.
+  let r=await landRun(p,'wt-recover-strong-a1',{'src/a.txt':'done\n'},{...REVIEW,FAKE_EVIDENCE_MODE:'finalize_attempt-refuse'});
+  const c=mainOf(p),j0=journalOf(p);
+  assert.ok(r.code===0&&c!==main&&j0&&j0.targetAfter===c,'A1 did not land C and keep its journal'+tail(r.log));
+  const a1={...j0,attemptId:'attempt-old',generation:6,workerId:'worker-old',candidateId:'cand-old',
+    treeSha:git(p.top,'rev-parse',c+'^{tree}').trim(),baseRevision:main,planRevision:1,profile:'verified-local'};
+  const seed=()=>{write(journal(p),JSON.stringify(a1));fs.rmSync(moe('attempts'),{recursive:true,force:true});
+    write(moe('attempts/attempt-old.json'),JSON.stringify({id:'attempt-old',taskId:TASK,generation:6,workerId:'worker-old',phase:'closed',
+      executionPolicySnapshot:{version:2,profile:'verified-local',planRevision:1}}));};
+  seed();write(moe('candidates/cand-old.json'),JSON.stringify({id:'cand-old',taskId:TASK,treeSha:a1.treeSha,baseRevision:main,deliveryTarget:'refs/heads/main'}));
+  // A2 lands nothing new; its receipt is refused (pre-flight replay and landing), so its finalize defers.
+  const r2=await landRun(p,'wt-recover-strong-a2',{},{...REVIEW,FAKE_EVIDENCE_MODE:'receipt-refused'},{keep:true}),j2=journalOf(p);
+  assert.deepEqual([r2.code,mainOf(p),phase(p),fin(),said(r2,'MOE_FINALIZE_DEFERRED_RECEIPT'),rpc('record_delivery_receipt').map(x=>x.candidateId)],
+    [0,c,'finalizing',[],1,['cand-old','cand-old']],'A2: exit, main, phase, finalizes, deferral lines or receipts'+tail(r2.log));
+  // The next pre-flight replays the journal: the receipt is recorded, A2 closes landed, the journal goes, no hold remains.
+  r=await landRun(p,'wt-recover-strong-replay',{},{FAKE_CLAIM_MODE:'finalizing',MOE_TASKLESS_WAIT_SEC:'5'},{keep:true});
+  const held=fs.readdirSync(moe('attempts')).map(f=>JSON.parse(read(moe('attempts/'+f)))).filter(a=>a.workerId===WID&&a.phase==='finalizing');
+  assert.deepEqual([phase(p),held.length,present(journal(p)),fin(),mainOf(p)],['closed',0,false,[['attempt-postflight',7,WID,'landed',c]],c],
+    'the replay left A2 finalizing, kept the journal or finalized another attempt'+tail(r.log));
+  assert.deepEqual(j2,{...a1,attemptId:'attempt-postflight',generation:7,workerId:WID},'A2 did not rebind the journal to itself alone');
+  assert.equal(said(r2,'now names attempt attempt-postflight (generation 7), which adopted its landing.'),1,'A2: the rebind line'+tail(r2.log));
+  // Unbound: the rewrite fails (POSIX: the receipt dir unwritable; win32: the journal read-only, which File.Replace refuses).
+  seed();const lock=winHost?journal(p):path.dirname(journal(p));fs.chmodSync(lock,winHost?0o444:0o555);
+  try{
+    let writable=true;try{fs.accessSync(lock,fs.constants.W_OK);}catch{writable=false;}
+    if(writable)throw new Error(`cannot make ${lock} unwritable (running as root?)`);
+    r=await landRun(p,'wt-recover-strong-unbound',{},{...REVIEW,FAKE_EVIDENCE_MODE:'receipt-refused'},{keep:true});
+  }finally{fs.chmodSync(lock,winHost?0o644:0o755);}
+  assert.deepEqual([phase(p),journalOf(p),fin(),said(r,'MOE_FINALIZE_DEFERRED_RECEIPT'),said(r,'could not be rebound to attempt attempt-postflight'),mainOf(p)],
+    ['closed',a1,[['attempt-postflight',7,WID,'landed',c]],0,1,c],'unbound: phase, journal, finalize, deferral or warn lines'+tail(r.log));
+}
 // The conflict chain: the resume leaves markers and MERGE_HEAD; its checkpoint is one commit on T keeping MERGE_HEAD and
 // the unmerged stages; a completion with markers lands nothing (MOE_WORKTREE_UNRESOLVED_CONFLICT, routed conflict again);
 // resolved, C lands B's other change and the partial edit, keeps B's change to a DENY path the task never stages, the
@@ -1918,6 +1957,7 @@ Object.assign(cases,{'config-fail':configFail,tooling,'link-fail':linkFail,'link
   'board-snapshot':boardSnapshot,'board-race':boardRace,'board-push':boardPush,'wt-board':wtBoard,'wt-guard':wtGuard,'wt-follow':wtFollow,'wt-follow-sites':wtFollowSites,'wt-follow-race':wtFollowRace,'wt-qa-gate':wtQaGate,'wt-qa-park':wtQaPark,codes});
 cases['wt-follow-lock']=wtFollowLock;
 cases['wt-settings']=wtSettings;
+cases['wt-recover-strong']=wtRecoverStrong;
 const only=process.env.MOE_WORKTREE_ONLY?process.env.MOE_WORKTREE_ONLY.split(',').map(s=>s.trim()).filter(Boolean):null;
 (async()=>{
   let ok=0,failed=0;
