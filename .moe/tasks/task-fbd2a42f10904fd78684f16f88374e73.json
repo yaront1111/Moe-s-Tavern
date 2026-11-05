@@ -19,110 +19,84 @@
     {
       "stepId": "step-1",
       "description": "Read the account's sign-in, read-only, with its tests (scripts/moe-account-lease.mjs, next to readVmCredential; edit with this seat's own editor, never a shell write).\n- Export `VM_CREDENTIAL_REASONS = Object.freeze(['no-signin-file', 'signed-out', 'expired', 'no-claude'])`.\n- Add the constants SIGNIN_FILE '.credentials.json', MAX_SIGNIN_BYTES 65536 and RENEW_MARGIN_MS 300000. Comment: claude 2.1.318 renews its sign-in when now + 300000 >= expiresAt (its bundled Ex()); task-docs read this exported list.\n- Export `readSignInCredential(configDir, id)`. It returns `{ token, expiresAt }` or `{ reason }`, never throws, and never returns or keeps anything else from the file.\n  - `no-signin-file` unless all hold: ACCOUNT_ID_RE.test(id); configDir is a non-empty string; path.basename(path.resolve(configDir)) === id; lstat(configDir).isDirectory(); lstat(<configDir>/.credentials.json).isFile(). Then open with O_RDONLY | (O_NOFOLLOW ?? 0), fstat isFile and size <= MAX_SIGNIN_BYTES, read, and close in finally: readVmCredential's pattern. Any IO error is no-signin-file.\n  - `signed-out` unless JSON.parse succeeds and `claudeAiOauth` is an object whose accessToken matches VM_TOKEN_RE, whose expiresAt is a positive safe integer below 8.64e15 (a valid Date), and whose scopes is an array containing 'user:inference'.\n  - Read-only: no write, chmod or utimes. Only accessToken and expiresAt leave the function; never the refresh token.\nTests in scripts/tests/moe-account-lease.test.mjs, in temp folders shaped like `<tmp>/claude-accounts/acct-1/.credentials.json`, never a real account. Use canaries ACCESS (sk-ant-oat01-…), REFRESH (sk-ant-ort01-…) and RENEWED.\n- A valid file returns exactly { token: ACCESS, expiresAt }.\n- One row per no-signin-file cause: missing folder; folder without the file; a folder named for another id; the file is a directory; a symlinked file (skip with a reason where symlinks need privileges, as the vm-credential test does); 65537 bytes.\n- One row per signed-out cause: not JSON; {}; no accessToken; an sk-ant-api03 token; expiresAt as a string or 1e16; scopes without user:inference.\n- Every row asserts the file's bytes and mtimeMs are unchanged and that no returned value contains REFRESH.\nError handling: every fs call sits in the existing try/finally shape; nothing here can throw to a caller.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/moe-account-lease.mjs",
         "scripts/tests/moe-account-lease.test.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/moe-account-lease.mjs",
-        "scripts/tests/moe-account-lease.test.mjs"
-      ],
-      "note": "VM_CREDENTIAL_REASONS, SIGNIN_FILE/MAX_SIGNIN_BYTES/RENEW_MARGIN_MS, readSmallFile (readVmCredential's O_NOFOLLOW+fstat+size-cap pattern, read loop) and readSignInCredential/signInFromText added. Tests: valid (incl. trailing sep and exactly 64 KiB), 8 no-signin-file rows (missing folder, no file, other id's folder, bad id, empty configDir, file is dir, 65537 bytes, symlinked file), 13 signed-out rows; each asserts bytes+mtime unchanged and no refresh canary. node --test -t 'readSignInCredential|vm-credential': 4/4 pass.",
-      "startedAt": "2026-11-05T18:59:07.247Z",
-      "completedAt": "2026-11-05T19:01:14.209Z"
+      ]
     },
     {
       "stepId": "step-2",
       "description": "Renewal through the host's own claude, the resolution and both commands, with their tests (same two files).\n- Generalize probeCommand: export `claudeCommand(words, tail, env, platform, exists)` with probeCommand's exact rules:\n  - a .js/.mjs/.cjs claude runs under this node;\n  - on Windows, PATH x PATHEXT; an .exe/.com runs directly, a .cmd through cmd.exe, refusing any word with '\"', '%', '!', CR or LF.\n  probeCommand becomes `claudeCommand(words, ['auth', 'status', '--json'], …)`, and its existing tests stay unchanged.\n- Export `RENEW_ARGS = ['-p', '--model', 'haiku', '--no-session-persistence', '--strict-mcp-config', '--tools', '']` and `RENEW_PROMPT` (a constant one-line prompt, e.g. 'Reply with OK.'). Comment: the empty last word disables every tool, and `--tools` is variadic, so the prompt goes on stdin, not as a positional. Verified 2026-11-05 against an empty CLAUDE_CONFIG_DIR: WSL claude 2.1.318, Windows claude.exe and the npm claude.cmd through cmd.exe all answer 'Not logged in · Please run /login', and a bad flag answers 'error: unknown option'.\n- Export `renewEnv(env, dir, platform)`: accountEnv(env, dir, platform) minus every name starting with MOE_ and CLAUDE_CODE_PLUGIN_DIRS, case-insensitive on win32.\n- Export `renewSignIn(configDir, words, env, platform)`:\n  - plan = claudeCommand(words, RENEW_ARGS, …); null returns false.\n  - spawnSync as probeSignIn does (shell for the cmd line) with input RENEW_PROMPT, stdio ['pipe','ignore','ignore'], cwd os.tmpdir(), windowsHide and PROBE_TIMEOUT_MS.\n  - Return false only for ENOENT; otherwise true, whatever claude's exit or a timeout, because the re-read decides.\n  - Never read claude's output.\n- Export `resolveVmCredential(env, id, configDir, words, { now = Date.now, renew = renewSignIn } = {})`:\n  - readVmCredential first: `{ source: 'minted', token }`.\n  - Else readSignInCredential: a reason passes through.\n  - expiresAt - now() > RENEW_MARGIN_MS gives `{ source: 'signin', token, expiresAt }`.\n  - Else call renew once (false gives `{ reason: 'no-claude' }`) and re-read once (a reason passes through). Still within the margin gives `{ reason: 'expired' }`.\n  - Moe itself never refreshes, never calls an OAuth endpoint and never writes the file. Claude's own refresh lock makes concurrent renewals by several seats safe.\n- main():\n  - `vm-credential <id>` alone stays byte-for-byte.\n  - `vm-credential <id> <configDir> <words…>`: words are required, else usage and exit 2. On success, the token goes to stdout with no newline, exit 0. Otherwise one stderr line `MOE_VM_CREDENTIAL_UNAVAILABLE reason=<reason>`, exit 3.\n  - `vm-credential-state <id> <configDir> <words…>`: missing arguments give usage and exit 2. Otherwise exit 0 with one line: `minted`, `signin\\t<new Date(expiresAt).toISOString()>` or `unavailable\\t<reason>`.\nTests:\n- Add a fakeRenewClaude fixture, separate from fakeClaude, whose log shape the signin-state test pins with deepEqual.\n  - It logs args, cwd, stdin, CLAUDE_CONFIG_DIR, and only the presence (never a value) of MOE_WORKER_ID, CLAUDE_CODE_PLUGIN_DIRS, CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY and CLAUDE_CODE_USE_BEDROCK.\n  - With FAKE_RENEW_TOKEN set, it rewrites $CLAUDE_CONFIG_DIR/.credentials.json the way claude's refresh does (new access and refresh canaries, expiresAt now + 8 h) and logs the sha256 of what it wrote. FAKE_EXIT sets its exit code.\n- Rows:\n  1. Minted wins over a garbage sign-in; state prints `minted`; no claude ran.\n  2. A valid sign-in (2 h left): fetch stdout === ACCESS, stderr ''; state prints the ISO time; no claude ran; the file's bytes and mtime are unchanged.\n  3. Renewal from 60 s left and from an already expired token: exactly one run. Its args are the words' extra args plus RENEW_ARGS, stdin === RENEW_PROMPT, realpath(cwd) === realpath(os.tmpdir()), CLAUDE_CONFIG_DIR is the folder, none of the five names is present (all five set in the helper's env), and the file's sha equals the fake's own write. A state call right after runs no claude.\n  4. expired: the fake exits 1 writing nothing, or writes a token with 2 minutes left.\n  5. no-claude: a missing .js claude path.\n  6. The boundary through resolveVmCredential with an injected now and a stub renew: exactly 300000 ms left renews, 300001 does not.\n  7. Usage errors.\n  8. A win32-only claude.cmd renewal row asserting the last two args are '--tools' and ''.\n- Every row asserts that no canary appears in state stdout/stderr or fetch stderr, and that fetch stdout never holds REFRESH. The existing one-argument vm-credential test passes unchanged.\nError handling: renewSignIn and resolveVmCredential never throw. main() keeps its single try/catch, and a usage error prints USAGE only.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/moe-account-lease.mjs",
         "scripts/tests/moe-account-lease.test.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/moe-account-lease.mjs",
-        "scripts/tests/moe-account-lease.test.mjs"
-      ],
-      "note": "claudeCommand (probeCommand now delegates; its tests unchanged), RENEW_ARGS (frozen), RENEW_PROMPT, renewEnv, renewSignIn (false on ENOENT or a spawnSync throw, else true; output never read), resolveVmCredential, vmCredentialCommand for `vm-credential <id> <configDir> <claude…>` and `vm-credential-state`; one-arg vm-credential path unchanged; USAGE lists both forms. Tests: fakeRenewClaude fixture (logs args/cwd/stdin/CLAUDE_CONFIG_DIR and only names of seat vars), rows 1-8 of the plan incl. the win32 claude.cmd row; canary checks on every row. Linux node: 56 pass/2 Windows-only skips; node.exe: 70 pass/2 skips (both claude.cmd rows ran). Scratch mutants (outside the repo): 9/10 killed; the surviving 'no fstat size cap' is equivalent (the post-read size<=max check still refuses 65537 bytes).",
-      "startedAt": "2026-11-05T19:01:16.322Z",
-      "completedAt": "2026-11-05T19:06:25.324Z"
+      ]
     },
     {
       "stepId": "step-3",
       "description": "The contract text, so every statement of the account-folder exception stays true. Edit with this seat's own editor: Edit/apply_patch, never Serena for docs/, never a shell write.\n- scripts/moe-account-lease.mjs header. Replace '.credentials.json and every other file in the folder are never opened' with the rule: only vm-credential and vm-credential-state open .credentials.json.\n  - The read is read-only, for a verified-local VM seat's job credential, and takes only the short-lived access token.\n  - It never prints, passes or uses the refresh token and never writes the file. Renewal is left to the host's own claude.\n  - Cite the human directive of 2026-11-05 (task-a200486f).\n  - Every other file in the folder is still never opened.\n  - Add both new command forms to the header's command table and to USAGE.\n- docs/SCHEMA.md, the one-line `claude-accounts/<id>/` entry (about line 1969).\n  - Keep 'The daemon and the `accounts` CLI never open a file inside it' and the trust sentence.\n  - Reword 'The one exception is' so it stays true: two exceptions, both in `scripts/moe-account-lease.mjs`.\n  - Add the read-only `.credentials.json` access-token read for a verified-local VM seat (`vm-credential`, never the refresh token, nothing written).\n  - Keep the entry on ONE line: account-trust-docs slices it up to the next '- '.\n- packages/moe-daemon/src/accounts/registry.ts: comment-only edits.\n  - The header gets the same two-exception wording, keeping 'neither this module, the daemon nor the accounts CLI opens a file inside it' and 'interactive claude seat only'.\n  - The accountConfigDir JSDoc stays ONE line (account-trust-docs matches `/** … */` on one line) and adds the .credentials.json access-token read after the .claude.json clause.\n- scripts/tests/account-trust-docs.test.mjs: add one test that the SCHEMA entry, the registry.ts header and the helper header each name `.credentials.json`, `vm-credential` and the refresh token. Keep every existing assertion.\nError handling: if an existing account-trust-docs assertion fails after the edit, the new wording dropped a pinned phrase. Restore the phrase; never loosen the test.",
-      "status": "COMPLETED",
+      "status": "PENDING",
       "affectedFiles": [
         "scripts/moe-account-lease.mjs",
         "docs/SCHEMA.md",
         "packages/moe-daemon/src/accounts/registry.ts",
         "scripts/tests/account-trust-docs.test.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/moe-account-lease.mjs",
-        "docs/SCHEMA.md",
-        "packages/moe-daemon/src/accounts/registry.ts",
-        "scripts/tests/account-trust-docs.test.mjs"
-      ],
-      "note": "Helper header: two-exception rule (trust's .claude.json; vm-credential/vm-credential-state read .credentials.json read-only, access token + expiry only, refresh token never printed/passed/used, file never written, renewal by the host's own claude, directive 2026-11-05 task-a200486f), every other file never opened; command table gains both new forms. SCHEMA claude-accounts entry (still one line): 'There are two exceptions, both in …'. registry.ts: comment-only header rewording + one-line accountConfigDir JSDoc. account-trust-docs: one new test pinning .credentials.json / vm-credential / read-only / refresh token in all three places, no 'one exception', and the JSDoc; existing assertions untouched. account-trust-docs 6/6 on node and node.exe.",
-      "startedAt": "2026-11-05T19:06:26.128Z",
-      "completedAt": "2026-11-05T19:07:36.330Z"
+      ]
     },
     {
       "stepId": "step-4",
       "description": "Verify, once. Run checkRefs[0] exactly as stored, from this task's worktree. Its output is the complete_task evidence. It does three things:\n- Checks that registry.ts changes only comment lines against the merge base.\n- Smokes the REAL installed claude with the exported claudeCommand, RENEW_ARGS, RENEW_PROMPT and renewEnv against an EMPTY temp config folder, on WSL node and on Windows node.exe. Claude must answer 'Not logged in', never 'unknown option'. This uses no account and no usage, as the task rail allows.\n- Runs moe-account-lease.test.mjs and account-trust-docs.test.mjs on both nodes.\nThe gate takes about a minute. Before this change it fails, because the exports do not exist: verified on 4f0280c3. With simulated exports, the smoke passed on both nodes.\nError handling for a red run:\n- A smoke answer with 'unknown option' means RENEW_ARGS carries a flag the installed claude rejects. Fix RENEW_ARGS and say so in the summary; never weaken the smoke.\n- A WSL interop failure (UtilAcceptVsock) is not a result: rerun once.\n- A test that fails only on node.exe is a Windows path or quoting defect in this diff. Fix it here.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "checkRefs[0] run verbatim (bash, from the worktree): EXIT=0 in 23 s. registry.ts comment-only check passed; real-claude smoke (claudeCommand+RENEW_ARGS+RENEW_PROMPT+renewEnv, empty temp CLAUDE_CONFIG_DIR) answered 'Not logged in' with no 'unknown option' on node and node.exe; node --test both files: 62 pass/2 skip (Windows-only); node.exe: 76 pass/2 skip (POSIX-only). Side check: CLAUDECODE=1 does not make `claude -p` refuse (still 'Not logged in'), so a nested env cannot silently defeat renewal.",
-      "startedAt": "2026-11-05T19:07:37.175Z",
-      "completedAt": "2026-11-05T19:08:37.453Z"
+      "status": "PENDING",
+      "affectedFiles": []
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, once, before complete_task. Name each check in the completion summary.\n- Two seats renewing one account at once: two claude runs. Claude's own refresh lock serializes them, and the second adopts the first's refresh. Confirm Moe adds no lock and never refreshes itself.\n- Claude rewriting the file mid-read: a torn JSON reads as signed-out once, and the wrapper's wait re-checks. Confirm there is no throw.\n- Hostile files: the size cap applies before the read, symlinks are never followed, and a configDir pointing at another account's folder is refused by the basename check.\n- Windows: PATHEXT resolution and the cmd.exe quoting of the empty argument.\n- Can any path print, log or return the refresh token, another file field, a path or a token in an error line?\n- Is the one-argument form byte-identical? Its test must pass unchanged.\n- Does `vm-credential-state` exit 0 in every non-usage case? Slice B's wrappers rely on that.\n- Is the renewal run free of the seat's identity (MOE_*) and Moe's mods (CLAUDE_CODE_PLUGIN_DIRS)?\nFix what you find, with a test for it, before complete_task.",
-      "status": "COMPLETED",
-      "affectedFiles": [],
-      "note": "Adversarial review, no fix needed: (1) two seats renewing at once = two claude runs serialized by claude's own refresh lock; Moe adds no lock, never refreshes, never writes the file. (2) torn mid-rewrite read = JSON.parse catch -> signed-out, no throw; fstat isFile before read so no FIFO hang. (3) hostile files: lstat isFile + O_NOFOLLOW (Windows: lstat only, symlinks need privilege), fstat size cap + post-read size<=max, basename(resolve(configDir))===id refuses another account's folder and '..'. (4) Windows: PATHEXT via findWindowsCommand, empty --tools word quoted \"\" for cmd.exe, verified by the node.exe claude.cmd row. (5) leaks: only token+expiresAt leave signInFromText; error lines are fixed strings; state never prints a credential; refresh token never read into anything returned/passed. (6) one-arg vm-credential path unchanged, its test passes unchanged (only USAGE text grew). (7) vm-credential-state exits 0 on every non-usage path: resolveVmCredential's callees never throw, expiresAt < 8.64e15 so toISOString is safe. (8) renewal env drops MOE_* and CLAUDE_CODE_PLUGIN_DIRS (case-insensitive on win32), asserted via the fake's seen-names log. Noted, per plan: EACCES on a non-executable claude reads as expired, not no-claude (plan: false only for ENOENT).",
-      "startedAt": "2026-11-05T19:08:38.021Z",
-      "completedAt": "2026-11-05T19:09:31.206Z"
+      "status": "PENDING",
+      "affectedFiles": []
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
-  "assignedWorkerId": null,
+  "status": "BLOCKED",
+  "assignedWorkerId": "worker-b3b3db54",
   "branch": null,
   "prLink": null,
-  "reopenCount": 0,
-  "reopenReason": null,
+  "reopenCount": 1,
+  "reopenReason": "Held by the governor for the human's approval of size-exception proposal prop-550014df (EPIC ADD_RAIL; QA comment-e594586f found the substance passes and no code change is needed). Do not claim this row or change its bytes. After the approval the governor sets it to REVIEW for a size-only QA re-check.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
   "order": 538.6,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-e594586f7c12451c87faf43616191b26",
+      "author": "qa-a196fc69",
+      "content": "QA round 1 (qa-a196fc69): size-only reject. Substance passes. No DoD item failed and no code change is required.\n\nEvidence, so the next QA round can re-check quickly:\n- checkRefs[0], run verbatim in a clean clone at 9c2129d4 (/mnt/d/moe-scratch): EXIT 0 in 24 s.\n  - Linux node: 62 pass, 2 skip. node.exe: 76 pass, 2 skip.\n  - Real-claude smoke against an empty temp config folder: 'Not logged in' on both.\n- registry.ts is comment-only against 4f0280c3. I checked it by hand, because the checkRef's base resolves to HEAD.\n- The one-argument `vm-credential` output is byte-identical at 4f0280c3 and 9c2129d4, for both a missing token and a stored one.\n- A bare `claude` missing from PATH gives `reason=no-claude` with exit 3, and state prints `unavailable<TAB>no-claude` with exit 0.\n- 12 scratch mutants: 10 killed.\n  - M11 (drop the lstat isFile check) is equivalent on Linux, because O_NOFOLLOW plus fstat still refuse.\n  - M1 (renewSignIn returns true on ENOENT) survives. No row runs a non-.js claude that is missing from PATH. This is optional; it would grow the diff.\n- Test files: 0 deletions.\n\nSize: +579/-25, net 554 (`git show --numstat --format=`), against QA's 400 cap. No project or epic rail waives it.\n\nProposed EPIC ADD_RAIL text for epic-b8c6bbda4def46cbb8d1b351f8ea3eeb:\n\"Slice A size exception: task-fbd2a42f10904fd78684f16f88374e73 (vm-credential from the account's host sign-in), as landed in completion 9c2129d4 on moe/work-2026-10-24, may retain 604 changed lines (+579/-25, net 554, by git show --numstat --format=) across exactly these 5 files: scripts/moe-account-lease.mjs +199/-20, packages/moe-daemon/src/accounts/registry.ts +8/-4 (comments only) and docs/SCHEMA.md +1/-1 (runtime and docs net 183), plus scripts/tests/moe-account-lease.test.mjs +348 and scripts/tests/account-trust-docs.test.mjs +23 (tests 371). Waives size only; grow only by QA-required fixes. Do not re-slice, rewrite or re-land the landed bytes. Every DoD item, the rails, substantive QA and fresh verification still apply.\"",
+      "timestamp": "2026-11-05T19:18:36.222Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:47:33.504Z",
-  "updatedAt": "2026-11-05T19:11:33.589Z",
+  "updatedAt": "2026-11-05T19:19:25.721Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:53:19.366Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "rejectCount": 1,
+    "reopenCount": 1
   },
   "contextFetchedBy": [
-    "architect-fe831cde",
-    "worker-b3b3db54"
+    "worker-b3b3db54",
+    "qa-a196fc69"
   ],
-  "tier": "standard",
-  "effort": "xhigh",
+  "tier": "heavy",
+  "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [
-    "step-1",
-    "step-2",
-    "step-3",
-    "step-4",
-    "step-5"
-  ],
+  "stepsCompleted": [],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T18:57:21.860Z",
   "executionContract": {
@@ -235,9 +209,35 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b3b3db54@2026-11-05T18:57:38Z",
-    "at": "2026-11-05T19:11:33.589Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-05T19:11:59Z",
+    "at": "2026-11-05T19:19:22.624Z"
+  },
+  "reviewCompletedAt": "2026-11-05T19:18:45.635Z",
+  "rejectionDetails": {
+    "issues": [
+      {
+        "type": "other",
+        "description": "Oversized: completion 9c2129d4 is +579/-25 (net 554) across 5 files, over the 400 net-LOC QA cap, and no size rail covers task-fbd2a42f. Fix: file an EPIC ADD_RAIL size exception for exactly this landed slice (text in comment-e594586f), ping #governors, then complete_task once the human approves. No code change is needed; do not re-slice or re-land the bytes."
+      }
+    ]
+  },
+  "rejectionHistory": [
+    {
+      "reason": "Size-only reject. Substance passes in full. No DoD item failed and no code change is required.\n\nSize: completion 9c2129d4 is +579/-25, net 554 changed lines (`git show --numstat --format=`), over QA's 400 net-LOC cap (docs/roles/qa.md). No project or epic rail waives size for this task. The epic's size-exception rails name other tasks only, and no proposal under .moe/proposals names task-fbd2a42f.\n\nPreferred route, with no byte change. This follows the CQ precedent for landed bytes (mem:decision-size-only-reject-of-landed-bytes).\n1. File moe.propose_rail EPIC ADD_RAIL on epic-b8c6bbda4def46cbb8d1b351f8ea3eeb, using the exact text in task comment comment-e594586f. It names completion 9c2129d4, the 5 files with their numstat, net 554 (183 runtime and docs, 371 tests), and \"waives size only; grow only by QA-required fixes\".\n2. Ping #governors with the proposal id and add a task comment.\n3. Call complete_task only after the human APPROVES the proposal. Do not report_blocked green work.\nThe next QA round confirms APPROVED, re-checks the numstat and re-runs checkRefs[0].\n\nAlternative, not recommended: compact the tests to bring the net under 400, with every mutant still killed. This rewrites landed bytes.\n\nQA evidence (full detail in comment-e594586f):\n- checkRefs[0], run verbatim in a clean clone at 9c2129d4: EXIT 0 in 24 s. Linux node 62 pass, 2 skip; node.exe 76 pass, 2 skip. The real-claude smoke answered 'Not logged in' on both.\n- registry.ts is comment-only against 4f0280c3. I checked it by hand, because the checkRef's base resolves to HEAD.\n- The one-argument vm-credential output is byte-identical to the base.\n- A bare claude missing from PATH gives no-claude.\n- 10 of 12 mutants are killed. M11 is equivalent on Linux. M1 (the ENOENT branch) is untested; a row for it is optional, not required.",
+      "rejectedAt": "2026-11-05T19:18:45.635Z",
+      "reopenCount": 1,
+      "issues": [
+        {
+          "type": "other",
+          "description": "Oversized: completion 9c2129d4 is +579/-25 (net 554) across 5 files, over the 400 net-LOC QA cap, and no size rail covers task-fbd2a42f. Fix: file an EPIC ADD_RAIL size exception for exactly this landed slice (text in comment-e594586f), ping #governors, then complete_task once the human approves. No code change is needed; do not re-slice or re-land the bytes."
+        }
+      ]
+    }
+  ],
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-05T19:19:25.721Z",
+  "blockedReason": "Held by the governor for the human's approval of size-exception proposal prop-550014df (EPIC ADD_RAIL; QA comment-e594586f found the substance passes and no code change is needed). Do not claim this row or change its bytes. After the approval the governor sets it to REVIEW for a size-only QA re-check."
 }

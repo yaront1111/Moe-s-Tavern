@@ -20,7 +20,17 @@
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/MCP_SERVER.md"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Docs, part 1: the credential contract. Edit with this seat's own editor: Edit on Claude, apply_patch on a codex exec seat. Never use Serena (it ignores docs/) and never a shell write. Take every fact from the LANDED code of slice A (task-fbd2a42f: scripts/moe-account-lease.mjs, its VM_CREDENTIAL_REASONS, the renewal run, the vm-credential and vm-credential-state commands) and slice B (task-98053b89: the wrappers' `[seat] VM credential` and MOE_VM_CREDENTIAL_UNAVAILABLE lines, and their minimum token life), not from this plan's paraphrase. Where the code differs, document the code and say so in the completion summary.\n(a) docs/ARCHITECTURE.md, `### The verified-local path`. Replace the sub-bullet that starts `  - Credentials: a claude seat sends the leased account's VM token` (4 lines, through the codex sentence) with ONE sub-bullet. It starts exactly `  - Credentials: a claude seat sends the leased account's VM credential` and wraps like its neighbours (about 118 columns, 4-space continuation lines). In this order it says:\n  1. The wrapper reads the credential through `moe-account-lease.mjs vm-credential <id> <configDir> <claude command>`: a minted VM token when one is stored (`accounts vm-token <id>`, optional, valid about a year), else the short-lived access token of the account's own host sign-in, read-only from `.credentials.json` in its Claude config folder.\n  2. It reaches the guest only in the job frame, sent to `seat-job` on stdin, as `CLAUDE_CODE_OAUTH_TOKEN`.\n  3. The refresh token never leaves the host: Moe never uses, sends or writes it and never writes that file. When 5 minutes or less are left, the host's own claude renews the sign-in first (claude's own refresh, under its own lock, as when a host seat starts on that account), so host seats keep their sign-in.\n  4. The access token lasts 8 hours from claude's last renewal, and the guest cannot renew it, so a job cannot outlive it. The wrapper sends a sign-in token only when at least an hour is left. With less, the seat waits with the task held (`MOE_VM_CREDENTIAL_UNAVAILABLE`, reason `short-life`) until the host's claude renews the token in its last 5 minutes. A job that still runs past the expiry ends with claude's authentication error, and its work lands as for any nonzero exit: a worker's candidate commit, while a QA job leaves the row in REVIEW. The next job gets a renewed token. A minted token avoids this.\n  5. With no usable credential, the seat prints `MOE_VM_CREDENTIAL_UNAVAILABLE` with a reason, waits with the task held and never falls back to the host.\n  6. macOS keeps the sign-in in the login Keychain, which Moe does not read, so a macOS host needs a minted token.\n  7. Rotation stays on. The existing codex sentence stays as is.\n(b) docs/MCP_SERVER.md, `## Claude Account Rotation`.\n  - In the bullet `- **No credential passes through Moe.**` (about line 3359), keep the daemon and CLI sentences. Replace \"Only the wrapper's helper opens one file there, `.claude.json`, for an interactive seat's folder trust (below).\" with: the wrapper's helper opens two files there, `.claude.json` for an interactive seat's folder trust (below), and, read-only, `.credentials.json` for a verified-local VM seat's job credential. It takes only the short-lived access token, never the refresh token, writes nothing, and leaves renewal to the host's own claude (see Credentials under `### The verified-local path` in docs/ARCHITECTURE.md).\n  - Retitle that bold lead-in so it stays true, e.g. `**No credential passes through the daemon.**`; no test pins it.\n  - In the trust sub-bullet (about line 3362), replace \"and `.credentials.json` is never opened\" with \"and the trust step never opens `.credentials.json`\". After the 2026-10-26 sign-off sentence, add that the VM credential read follows the human's directive of 2026-11-05 (task-a200486f).\n  - In the CLI Commands line (about line 3379), mark `vm-token <id> [--remove]` optional: without a token, a claude VM seat uses the account's sign-in.\nError handling: if an anchor quoted here is not found exactly once, re-read the section and anchor on unique text. Never edit a near match. The test for this step is checkRefs[1] in step 4.",
+          "reason": "Slice B (task-98053b89) now sends a sign-in token only with at least 1 h left (reason short-life). This follows the governor's heads-up of 2026-11-05 (comment-8231aee4 on task-98053b89) and the decision in chan-b6d8273b, msg-10c4a9e4828740a7840483aa5f05c38d. Item 4 states it. The '8 hours' fact that checkRefs[1] pins stays.",
+          "amendedBy": "architect-fe831cde",
+          "amendedAt": "2026-11-05T19:14:32.405Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-2",
@@ -29,7 +39,17 @@
       "affectedFiles": [
         "docs/CERTIFICATION.md",
         "docs/TROUBLESHOOTING.md"
-      ]
+      ],
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Docs, part 2: operator steps and codes. Same editor rule and same source-of-truth rule as step 1.\n(a) docs/CERTIFICATION.md, activation step 2 (about line 164, starting `2. **Mint a VM token for each rotation account**`). Replace the whole step with `2. **Sign in each rotation account**`. It says:\n  - How: the Accounts tab's Sign in, or `node <plugin>/daemon/index.js accounts login <id>` (on Windows `node <plugin>\\daemon\\index.js accounts login <id>`).\n  - On Windows and Linux nothing more is needed: a claude seat VM gets a short-lived credential from the leased account's own sign-in, renewed on the host by claude.\n  - A VM token stays optional. `accounts vm-token <id>`, or **Set VM token...** on the Accounts tab, runs `claude setup-token` and stores a year-long token outside every project.\n  - Why it stays: it is the route on macOS, whose sign-in is in the Keychain, and it never expires in the middle of a long job.\n  - Keep the codex sentence (OPENAI_API_KEY or CODEX_API_KEY).\n(b) docs/TROUBLESHOOTING.md, `## Verified-local (VM route) Issues` table.\n  - Rewrite the row that starts with the MOE_VM_CREDENTIAL_UNAVAILABLE code. For claude, name every reason the helper prints, each backticked verbatim from VM_CREDENTIAL_REASONS, with its cause:\n    - no-signin-file: no readable `.credentials.json` in the account folder, as on macOS;\n    - signed-out: no usable claude.ai login in it;\n    - expired: the host's claude could not renew it;\n    - no-claude: renewal was needed but the wrapper's claude command cannot run.\n  - The same row also names the wrappers' own reasons, backticked as slice B prints them:\n    - short-life: a sign-in token with less than an hour left. It clears by itself once the host's claude renews it in its last 5 minutes.\n    - no-lease: no account is leased.\n    - unknown: the helper failed or gave an unexpected answer.\n  - The same row says a minted token is used first, and that the claude seat posts one #governors message, retries and holds the task. A codex seat missing its key stops instead; it does not retry.\n  - Fix column: sign the account in again (Accounts tab, or `accounts login <id>`), or set an optional VM token (`accounts vm-token <id>`, the only route on macOS); for codex, set the key. For `short-life`, waiting is enough.\n  - Right after it, add a row for the `[seat] VM credential account=<id> source=…` line (both wrappers, as slice B prints it):\n    - it shows which credential the job got: a minted token, or the sign-in with its expiry, which is at least an hour away when the job starts;\n    - a job still running at that expiry ends with claude's own authentication error, its work lands as for any nonzero exit, and the next job gets a renewed credential;\n    - fix: none, or set a VM token for jobs that can run longer than the token has left.\nError handling: as in step 1, never edit a near match. Keep every table row on one line. The test for this step is checkRefs[1], which requires each VM_CREDENTIAL_REASONS value in the MOE_VM_CREDENTIAL_UNAVAILABLE row.",
+          "reason": "Slice B (task-98053b89) adds the wrapper reason short-life: a sign-in token with less than 1 h left waits for renewal. This follows the governor's heads-up of 2026-11-05 and the decision in chan-b6d8273b, msg-10c4a9e4828740a7840483aa5f05c38d. The TROUBLESHOOTING rows name it, plus the wrappers' existing no-lease and unknown reasons. The checkRefs[1] requirements are unchanged.",
+          "amendedBy": "architect-fe831cde",
+          "amendedAt": "2026-11-05T19:14:32.448Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
     },
     {
       "stepId": "step-3",
@@ -52,7 +72,7 @@
       "affectedFiles": []
     }
   ],
-  "planRevision": 1,
+  "planRevision": 3,
   "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
@@ -79,7 +99,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:22:46.400Z",
-  "updatedAt": "2026-11-05T19:01:23.910Z",
+  "updatedAt": "2026-11-05T19:14:32.448Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:22:49.127Z",
     "plannedStepCount": 5,
