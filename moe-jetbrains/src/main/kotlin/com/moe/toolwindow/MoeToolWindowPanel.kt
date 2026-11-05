@@ -61,6 +61,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     private val epicFilter = ComboBox<EpicFilterItem>()
     private var selectedEpicId: String? = null
     private var updatingEpicFilter = false
+    /** The epic filter's items as last put in its model. */
+    private var epicFilterItems: List<EpicFilterItem> = emptyList()
     private val workerPanel = WorkerPanel()
     /** The header's Claude account line; hidden until the daemon reports accounts. */
     private val accountsLabel = JBLabel()
@@ -579,7 +581,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                 status: String,
                 columnTasks: List<Task>,
                 isBacklog: Boolean = false,
-                isDone: Boolean = false
+                isDone: Boolean = false,
+                hiddenCount: Int = 0
             ): TaskColumn {
                 val wipLimit = columnLimits[status]
                 val column = TaskColumn(
@@ -669,7 +672,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     onNext = if (!isDone) { task -> handleNext(task) } else null,
                     onPrevious = if (!isBacklog) { task -> handlePrevious(task) } else null,
                     onReleaseAgent = { task -> handleReleaseAgent(task) },
-                    epicSortByDate = epicSortByDate
+                    epicSortByDate = epicSortByDate,
+                    hiddenCount = hiddenCount
                 )
                 val colPref = column.preferredSize
                 column.preferredSize = Dimension(BoardStyles.columnWidth, colPref.height)
@@ -715,9 +719,14 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
 
             fun updateColumn(config: ColumnConfig, force: Boolean = false) {
                 val container = columnContainers[config.status] ?: return
-                val columnTasks = tasks.filter { displayStatus(it.status) == config.status }
+                val statusTasks = tasks.filter { displayStatus(it.status) == config.status }
+                // Done renders only its newest cards (after the search and epic filter): hundreds of
+                // DONE cards are a handful of Swing components each, rebuilt on every board change.
+                // A hidden task's own edits need no rebuild; a newly DONE task is the newest, so it shows.
+                val (columnTasks, hiddenCount) =
+                    if (config.isDone) BoardDoneCap.visible(statusTasks, BoardDoneCap.DONE_COLUMN_CAP) else statusTasks to 0
                 val taskFingerprint = boardTaskFingerprint(columnTasks)
-                val fingerprint = "$taskFingerprint|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
+                val fingerprint = "$taskFingerprint|hidden=$hiddenCount|approvals=$approvalFingerprint|epics=$epicMetaFingerprint|collapsed=${collapsedEpics.toList().sorted().joinToString(",")}|wip=${columnLimits[config.status] ?: ""}|sortByDate=$epicSortByDate"
 
                 if (!force && columnFingerprints[config.status] == fingerprint && container.componentCount > 0) {
                     return
@@ -728,7 +737,8 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
                     status = config.status,
                     columnTasks = columnTasks,
                     isBacklog = config.isBacklog,
-                    isDone = config.isDone
+                    isDone = config.isDone,
+                    hiddenCount = hiddenCount
                 )
 
                 container.removeAll()
@@ -755,7 +765,6 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
     }
 
     private fun updateEpicFilter(epics: List<com.moe.model.Epic>) {
-        updatingEpicFilter = true
         val currentSelection = selectedEpicId
         val items = mutableListOf<EpicFilterItem>()
         items.add(EpicFilterItem(MoeBundle.message("moe.panel.allEpics"), null))
@@ -763,6 +772,11 @@ class MoeToolWindowPanel(private val project: Project) : JBPanel<MoeToolWindowPa
         for (epic in sorted) {
             items.add(EpicFilterItem(epic.title, epic.id))
         }
+        // The daemon republishes an unchanged board every 3 s. A new model would close an open dropdown and reset its
+        // scroll, so the same items keep the model, and with it the selection the user made from them.
+        if (items == epicFilterItems) return
+        epicFilterItems = items
+        updatingEpicFilter = true
         epicFilter.model = javax.swing.DefaultComboBoxModel(items.toTypedArray())
         // Restore selection if it still exists, otherwise reset to "All Epics"
         val foundIndex = if (currentSelection != null) {

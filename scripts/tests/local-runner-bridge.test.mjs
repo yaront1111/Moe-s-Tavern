@@ -433,6 +433,36 @@ test('S8 bridge mode refuses a non-root euid without writing a frame',
     assert.deepEqual([run.status, run.stdout.length], [77, 0], String(run.stderr));
   });
 
+// loads() counts the brackets outside strings before json.loads parses, and JSON_STRING rescans the rest of the text from
+// each later quote of a string left open: an agent frame of escaped quotes holds the bridge's loop for minutes. Skipped
+// until its fix (an optional closing quote, which still counts every bracket json.loads could recurse into) lands with a
+// move of CERTIFICATION_PINS.supervisorSha256, the governed pin of guest-supervisor.py.
+const PINNED = 'deferred: certified supervisor pin';
+test('S21 loads() refuses a frame-sized open string at once and keeps its depth refusals', { skip: PINNED || NO_GUEST }, () => {
+  const run = harness(String.raw`import time
+deep, flat = '[' * 513 + ']' * 513, '[' * 512 + ']' * 512
+def verdict(text):
+    try:
+        m.loads(text)
+        return 'ok'
+    except ValueError as error:
+        return 'nested' if str(error) == 'JSON nested past its limit' else 'invalid'
+cases = [flat, deep, '["' + '\\"' * 1000 + '",' + deep + ']', '["[[[[", {"a": "]]]\\"[{"}]', deep[:600] + '"x',
+         '"' + '\\"' * 1000, '["a\\\n' + deep + '"]']
+out = [verdict(text) for text in cases] + [verdict('"x' + deep) != 'ok']
+body = ('"' + '\\"' * 131071).encode()  # one byte under MAX_GUEST_FRAME_BYTES, as the agent ingress frames it
+start = time.monotonic()
+try:
+    m.take_frames(bytearray(), len(body).to_bytes(4, 'big') + body, m.MAX_GUEST_FRAME_BYTES)
+except ValueError:
+    out += ['invalid', time.monotonic() - start]
+print(json.dumps(out))`);
+  assert.equal(run.status, 0, String(run.error ?? run.stderr));
+  const out = JSON.parse(run.stdout);
+  assert.deepEqual(out.slice(0, -1), ['ok', 'nested', 'nested', 'ok', 'nested', 'invalid', 'nested', true, 'invalid']);
+  assert.ok(out.at(-1) < 5, `${out.at(-1)}s`);
+});
+
 // CQ-R08c: Node is the host on the supervisor's stdio and every agent on its socket. Linux checks the real
 // SO_PEERCRED; macOS has none, so there the peer uid is injected.
 const PEER = process.platform === 'linux' ? '' : ', peer_uid=lambda sock: os.getuid()';

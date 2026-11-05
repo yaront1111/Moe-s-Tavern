@@ -26,7 +26,8 @@
 // to expose. Two receipts for one candidate, which only files placed on disk by
 // hand can cause, make "did it land?" unanswerable, so the lookup and the
 // recorder both refuse them (DELIVERY_RECEIPT_AMBIGUOUS). This module has NO
-// update and NO delete function, and readers hand out copies.
+// update and NO delete function, and readers hand out copies. A receipt leaves
+// only with its task: deleteTask (taskStore.ts) drops a deleted task's records.
 //
 // Follows the candidateStore / checkRunStore pattern: stateless functions taking
 // the state handle first, and every mutation assumes THE CALLER HOLDS
@@ -43,6 +44,7 @@ import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/e
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { getCandidate, renderGot, REVISION_RE } from './candidateStore.js';
+import { recordsWhere } from './recordIndex.js';
 
 /** The longest push result a receipt keeps. A longer one is refused, never truncated, so the record stays verbatim. */
 export const MAX_PUSH_RESULT_CHARS = 2000;
@@ -167,7 +169,7 @@ export function getDeliveryReceipt(state: StateManager, receiptId: string): Deli
  * a guess, and a guess is how a crash replay lands a second time.
  */
 export function getDeliveryReceiptForCandidate(state: StateManager, candidateId: string): DeliveryReceipt | null {
-  const matches = Array.from(state.receipts.values()).filter((receipt) => receipt.candidateId === candidateId);
+  const matches = recordsWhere(state, state.receipts, 'candidateId', candidateId);
   if (matches.length === 0) return null;
   if (matches.length > 1) {
     const receiptIds = matches.map((receipt) => receipt.id).sort();

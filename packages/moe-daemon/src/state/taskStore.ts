@@ -43,9 +43,10 @@ import {
   sanitizeStringIdArray,
   trimComments,
 } from './validators.js';
-import { runDependencyUnblock } from './dependencyUnblock.js';
+import { alertReopenedDependencyCycles, runDependencyUnblock } from './dependencyUnblock.js';
 import { closeHandedBackAttempts, closeOpenAttempts, listAttempts } from './attemptStore.js';
 import { nextStatusForRelease } from './workerLifecycle.js';
+import { removeEntityFile, unlinkWithRetry } from './persistence.js';
 
 /** Hard cap on declared dependency ids per task (dependsOn / blockedOnTaskIds). */
 export const MAX_TASK_DEPENDENCY_IDS = 20;
@@ -681,6 +682,9 @@ export async function updateTask(
       } catch (error) {
         logger.warn({ taskId: updated.id, error }, 'Dependency unblock scan failed after terminal transition');
       }
+    } else if (task.status === 'DONE' || task.status === 'ARCHIVED') {
+      // Reopened: a cycle admitted while this row was satisfied is live again.
+      alertReopenedDependencyCycles(state, updated);
     }
   }
 
@@ -706,20 +710,17 @@ export async function deleteTask(state: StateManager, taskId: string, actorWorke
   }
 
   const filePath = path.join(state.moePath, 'tasks', `${taskId}.json`);
-  try {
-    if (fs.existsSync(filePath)) {
-      // Suppress the watcher echo so our own delete doesn't re-trigger load().
-      state.fileWatcher?.ignorePath(filePath);
-      fs.unlinkSync(filePath);
-    }
-  } catch (error) {
-    const fsError = error as NodeJS.ErrnoException;
-    if (fsError.code !== 'ENOENT') {
-      throw error;
-    }
+  if (fs.existsSync(filePath)) {
+    // Suppress the watcher echo so our own delete doesn't re-trigger load().
+    state.fileWatcher?.ignorePath(filePath);
+    // Windows' transient EPERM/EBUSY/EACCES is retried; a file that still will
+    // not go throws, and the task stays (its attempts already closed).
+    unlinkWithRetry(filePath);
   }
 
   state.tasks.delete(taskId);
+  await releaseDeletedTaskResources(state, taskId);
+  purgeDeliveryRecords(state, taskId);
 
   // Clear orphaned parentTaskId references (B30)
   for (const t of state.tasks.values()) {
@@ -742,7 +743,58 @@ export async function deleteTask(state: StateManager, taskId: string, actorWorke
 
   state.appendActivity('TASK_DELETED', { title: task.title }, task, undefined, undefined, undefined, actorWorkerId);
   state.emit({ type: 'TASK_DELETED', payload: task });
+
+  // A legacy consumer BLOCKED on this id now counts it met (a gone prerequisite):
+  // unblock it now, not at the sweep. Never throws, like the DONE hook.
+  try {
+    await runDependencyUnblock(state, taskId, 'deleted');
+  } catch (error) {
+    logger.warn({ taskId, error }, 'Dependency unblock scan failed after task deletion');
+  }
   return task;
+}
+
+/**
+ * A deleted task's leases and queue entries, released by force and granted
+ * onward now: left alone, the waiters behind them wait for the lease reaper.
+ * A failed release is only logged; the reaper drops a gone task's claims.
+ */
+async function releaseDeletedTaskResources(state: StateManager, taskId: string): Promise<void> {
+  for (const resource of Array.from(state.resources.values())) {
+    if (!resource.holders.some((h) => h.taskId === taskId) && !resource.queue.some((q) => q.taskId === taskId)) continue;
+    try {
+      await state.releaseResource({ resourceId: resource.id, workerId: '', taskId, force: true });
+    } catch (error) {
+      logger.warn({ taskId, resourceId: resource.id, error }, 'Failed to release a deleted task\'s resource claim; the reaper drops it');
+    }
+  }
+}
+
+/**
+ * A deleted task's delivery records: its candidates with their check runs and
+ * receipts, and its reviews. Nothing reads them once the row is gone, and kept
+ * they grow every store for the life of the project. An archived task keeps its
+ * evidence. Its attempts stay: closed above, they answer a replayed
+ * reattach_attempt (which looks the attempt up before the task) as before. A
+ * file that will not unlink is tombstoned, so no reload brings its record back.
+ */
+function purgeDeliveryRecords(state: StateManager, taskId: string): void {
+  const candidateIds = new Set<string>();
+  for (const candidate of state.candidates.values()) if (candidate.taskId === taskId) candidateIds.add(candidate.id);
+  let dropped = 0;
+  const drop = <T extends { id: string }>(kind: string, map: Map<string, T>, owned: (record: T) => boolean): void => {
+    for (const [id, record] of Array.from(map)) {
+      if (!owned(record)) continue;
+      map.delete(id);
+      removeEntityFile(state, path.join(state.moePath, kind, `${id}.json`));
+      dropped++;
+    }
+  };
+  drop('candidates', state.candidates, (candidate) => candidateIds.has(candidate.id));
+  drop('checks', state.checkRuns, (run) => candidateIds.has(run.candidateId));
+  drop('receipts', state.receipts, (receipt) => candidateIds.has(receipt.candidateId));
+  drop('reviews', state.reviews, (review) => review.taskId === taskId);
+  if (dropped > 0) state.stateVersion++;
 }
 
 export async function approveTask(

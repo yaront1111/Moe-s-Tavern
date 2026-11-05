@@ -127,6 +127,9 @@ export class MetricsViewProvider implements vscode.WebviewViewProvider, vscode.D
 
     private getHtml(): string {
         const csp = this._view?.webview.cspSource ?? '';
+        // A rebuilt view marks the range the provider still queries, not always 30d.
+        const chip = (days: number | null, label: string): string =>
+            `<button class="range-chip${this.rangeDays === days ? ' active' : ''}" data-days="${days ?? ''}">${label}</button>`;
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -229,9 +232,9 @@ export class MetricsViewProvider implements vscode.WebviewViewProvider, vscode.D
 <body>
     <div class="toolbar">
         <span class="toolbar-label">Range:</span>
-        <button class="range-chip" data-days="7">7d</button>
-        <button class="range-chip active" data-days="30">30d</button>
-        <button class="range-chip" data-days="">All</button>
+        ${chip(7, '7d')}
+        ${chip(30, '30d')}
+        ${chip(null, 'All')}
         <span class="last-updated" id="lastUpdated"></span>
     </div>
     <div class="kpis">

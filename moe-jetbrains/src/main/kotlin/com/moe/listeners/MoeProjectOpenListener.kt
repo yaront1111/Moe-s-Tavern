@@ -3,6 +3,7 @@ package com.moe.listeners
 import com.moe.services.MoeProjectService
 import com.moe.util.MoeProjectRegistry
 import com.intellij.ide.lightEdit.LightEdit
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManagerListener
@@ -17,6 +18,8 @@ class MoeProjectOpenListener : ProjectManagerListener {
         MoeProjectRegistry.registerProject(basePath, project.name)
         // Auto-connect to daemon when project opens (initializes .moe if missing)
         val service = project.service<MoeProjectService>()
-        service.connect()
+        // projectOpened can run on the EDT, and connect() blocks on IO: the .moe/ scaffold, daemon.json, a port probe, a spawn.
+        val app = ApplicationManager.getApplication()
+        if (app != null) app.executeOnPooledThread { service.connect() } else service.connect()
     }
 }

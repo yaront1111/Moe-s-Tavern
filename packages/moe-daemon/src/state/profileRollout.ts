@@ -160,7 +160,10 @@ export async function updateProjectSettings(state: StateManager, input: Partial<
   }
 
   const updated: Project = { ...project, settings, updatedAt: new Date().toISOString() };
-  await atomicWriteJsonAsync(path.join(state.moePath, 'project.json'), updated);
+  const projectFile = path.join(state.moePath, 'project.json');
+  // Watched: without the ignore, every settings change reloads the whole state.
+  state.fileWatcher?.ignorePath(projectFile);
+  await atomicWriteJsonAsync(projectFile, updated);
   state.project = updated;
 
   // An approvalMode switch reaches the in-memory SPEED timers. Leaving for CONTROL

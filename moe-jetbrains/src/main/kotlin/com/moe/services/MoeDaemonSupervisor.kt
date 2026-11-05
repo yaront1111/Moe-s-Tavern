@@ -224,7 +224,7 @@ class MoeDaemonSupervisor(
             if (oldProcess != null) {
                 try {
                     if (oldProcess.isAlive) {
-                        oldProcess.destroyForcibly()
+                        destroyTree(oldProcess, graceMs = 0)
                         log.info("Destroyed previous daemon process before spawning new one")
                     }
                 } catch (ex: Exception) {
@@ -369,18 +369,49 @@ class MoeDaemonSupervisor(
             // handle's start time before signaling, which guards against a process reusing the pid.
             val target = processLookup(info.pid.toLong()) ?: return null
             if (!isProtected) {
-                target.destroy()
-                return null
+                // A failed signal is ignored, as it always was; a delivered one is waited for.
+                return if (target.destroy()) awaitPosixExit(target) else null
             }
             when {
                 activationRefusal(info) != null -> restartRefusal(info.pid, NOT_STARTED_HERE)
-                target.destroy() -> null
+                target.destroy() -> awaitPosixExit(target)
                 else -> restartRefusal(info.pid, STOP_FAILED)
             }
         } catch (ex: Exception) {
             log.warn("Restart Daemon could not stop pid ${info.pid}: ${ex.message}")
             if (isProtected) restartRefusal(info.pid, STOP_FAILED) else null
         }
+    }
+
+    /**
+     * SIGTERM starts the daemon's graceful shutdown, which ends within its own 10 s force-exit bound. A daemon started
+     * before the old one exits would race it for the port and the startup lock, so wait for that exit. Past the bound
+     * only this IDE's own spawn tree may still be killed; any other process left running refuses the restart.
+     */
+    private fun awaitPosixExit(target: ProcessHandle): String? = try {
+        val own = spawnedDaemonProcess
+        when {
+            ExitBound().await { !running(target) } -> null
+            own != null && ownTreeHolds(own, target) -> {
+                log.warn("Restart Daemon: pid ${target.pid()} is still running after SIGTERM; killing this IDE's daemon tree")
+                destroyTree(own, graceMs = 0)
+                if (ExitBound().await { !running(target) }) null else survivorRefusal(target.pid())
+            }
+            else -> {
+                log.warn("Restart Daemon: pid ${target.pid()} is still running after SIGTERM")
+                survivorRefusal(target.pid())
+            }
+        }
+    } catch (ex: Exception) {
+        log.warn("Restart Daemon could not confirm the old Moe daemon stopped: ${ex.message}")
+        if (ex is InterruptedException) Thread.currentThread().interrupt()
+        INCOMPLETE_RESTART
+    }
+
+    // [own] or a process below it; a Process without a handle holds nothing.
+    private fun ownTreeHolds(own: Process, target: ProcessHandle): Boolean {
+        val root = try { own.toHandle() } catch (_: UnsupportedOperationException) { return false }
+        return sameProcess(root, target) || root.descendants().use { below -> below.anyMatch { sameProcess(it, target) } }
     }
 
     // Today's guards pick the daemon.json process; signals then reach only this IDE's spawn tree or a PROTECTED-verified one.
@@ -420,8 +451,13 @@ class MoeDaemonSupervisor(
         val old = OldTree(run, roots, parent?.takeIf { p -> roots.none { it.pid() == p.pid() } }, unresolvedWindowsTree)
         unresolvedWindowsTree = old
         old.walk()
-        if (!installedStop()) {
+        val stopExit = installedStop()
+        if (stopExit != 0) {
             if (isProtected && info != null && run != null) return restartRefusal(info.pid, STOP_FAILED)
+            // Exit 1: the stop could not verify the daemon.json pid (most often alive with /health unanswered, else
+            // another pid namespace's or a bindHost not of this machine) and signalled nothing. Only this IDE's own
+            // spawn tree may still be killed, so any other such process refuses.
+            if (stopExit == 1 && info != null && run != null && !old.holds(run)) return unresponsiveRefusal(info.pid)
             log.warn("Restart Daemon: the installed stop failed; terminating the old supervisor tree")
         }
         val bound = ExitBound()
@@ -474,6 +510,9 @@ class MoeDaemonSupervisor(
         }
 
         fun terminateDescendants() = (tree + runs).forEach(::terminate)
+
+        /** Whether [handle] is a root this IDE may signal or a process a walk found below one. */
+        fun holds(handle: ProcessHandle): Boolean = (roots + tree).any { sameProcess(it, handle) }
 
         fun survivor(): ProcessHandle? = (runs + roots + tree + watched).firstOrNull(::running)
     }
@@ -535,19 +574,24 @@ class MoeDaemonSupervisor(
         }
     }
 
-    // RF03's installed stop: its sentinel makes a supervisor exit instead of respawning `_run`. Only exit 0 succeeds.
-    private fun installedStop(): Boolean = try {
+    // RF03's installed stop: its sentinel makes a supervisor exit instead of respawning `_run`. Only exit 0 succeeds;
+    // the exit code, or null when the stop could not run or did not finish.
+    private fun installedStop(): Int? = try {
         val runtimeProfile = profile()
-        stopCommandForProfile(basePath, runtimeProfile)?.let { runStop(stopBuilder(it, runtimeProfile)) } == 0
+        stopCommandForProfile(basePath, runtimeProfile)?.let { runStop(stopBuilder(it, runtimeProfile)) }
     } catch (ex: Exception) {
         log.warn("Restart Daemon: the installed stop failed: ${ex.message}")
         if (ex is InterruptedException) Thread.currentThread().interrupt()
-        false
+        null
     }
 
     // The pid comes from the repository, so neither refusal calls that process a Moe daemon.
     private fun survivorRefusal(pid: Long) = "Restart Daemon did not start a new Moe daemon: pid $pid is still running after the stop, " +
         "and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon."
+
+    private fun unresponsiveRefusal(pid: Int) = "Restart Daemon did not start a new Moe daemon: the stop could not verify pid $pid, " +
+        "which .moe/daemon.json names (usually: alive, but its /health check never answered), so it left that process running. " +
+        "Check what that process is and stop it yourself, then use Restart Daemon."
 
     private fun restartRefusal(pid: Int, reason: String) =
         "Protected execution profile: Restart Daemon did not stop pid $pid, which .moe/daemon.json names: $reason. " +
@@ -1011,11 +1055,8 @@ class MoeDaemonSupervisor(
         try {
             if (process.isAlive) {
                 log.info("Killing spawned daemon process")
-                process.destroy()
                 // Give it a moment to terminate gracefully
-                if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                    process.destroyForcibly()
-                }
+                destroyTree(process, graceMs = 2_000)
             }
         } catch (ex: Exception) {
             log.warn("Error killing spawned daemon: ${ex.message}")
@@ -1023,6 +1064,35 @@ class MoeDaemonSupervisor(
             // Keep stale references cleared; preserve any newer process assigned concurrently.
             if (spawnedDaemonProcess === process) {
                 spawnedDaemonProcess = null
+            }
+        }
+    }
+
+    /**
+     * Stops [process] and every process below it: a `cmd /c` or shell root forwards no signal, and a supervisor killed
+     * alone leaves its `_run` running. The tree is read first, while the root still links it, and is signalled parents
+     * first, so a supervisor goes before it could respawn its `_run`. With [graceMs] the root gets that long to exit and
+     * each process below is asked to stop as the root was; without, all are killed at once.
+     */
+    private fun destroyTree(process: Process, graceMs: Long) {
+        val below = try {
+            process.descendants().use { it.toList() }
+        } catch (ex: Exception) {
+            log.debug("Cannot list the processes below the spawned daemon: ${ex.message}")
+            emptyList()
+        }
+        if (graceMs <= 0) {
+            process.destroyForcibly()
+            below.forEach(::terminate)
+            return
+        }
+        process.destroy()
+        if (!process.waitFor(graceMs, TimeUnit.MILLISECONDS)) process.destroyForcibly()
+        below.forEach {
+            try {
+                if (it.isAlive) it.destroy()
+            } catch (ex: Exception) {
+                log.debug("Cannot stop pid ${it.pid()}: ${ex.message}")
             }
         }
     }

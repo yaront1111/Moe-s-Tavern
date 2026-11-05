@@ -59,7 +59,7 @@ describe('resourceStore lifecycle reconciliation', () => {
       status: 'BLOCKED', blockedResourceId: 'box', blockedFromStatus: 'WORKING',
       assignedWorkerId: null, dependsOn: ['task-dependency'],
     });
-    await h.state.releaseResource({ ...waiter, taskId: 'task-ready' });
+    await h.state.releaseResource({ ...waiter, taskId: 'task-ready', workerId: 'worker-ready' });
     expect(readResource().holders).toEqual([]);
     expect(readResource().queue).toEqual([queued]);
 

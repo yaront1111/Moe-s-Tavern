@@ -34,6 +34,8 @@ Every time the agent calls a Moe MCP tool (`mcp__moe__*`), the plugin forwards a
 
 The hook is **fail-open**: if the daemon is unreachable, the tool call still succeeds. Errors go to stderr only.
 
+Before it sends, the hook checks that the daemon serves this project, as `moe-proxy` does. The `projectPath` in `.moe/daemon.json` must name the directory the file sits in (`D:\x` and `/mnt/d/x` count as the same path), and the daemon's `GET /health` must not name another project. The `/health` check waits at most 1 second, and a daemon that gives no usable answer (an older daemon, or none) is still sent the event. On a mismatch the event is dropped, fail-open like any other error. `callTool` runs the same check and rejects with `DAEMON_PROJECT_MISMATCH`.
+
 Opt out per session:
 
 ```bash
@@ -71,6 +73,8 @@ If neither is available, the hook silently skips the event.
 ## Troubleshooting
 
 **"Moe daemon not running"** — Make sure the daemon was started for *this project* (`moe-daemon start --project <path>`). The plugin walks up from your cwd looking for `.moe/daemon.json`. It also checks `~/.moe/projects.json` as a last-resort fallback.
+
+**"belongs to a different project" / "serves another project"** — `.moe/daemon.json` names another project (it was copied or committed, or the project moved), or its port now belongs to another project's daemon. The plugin sends nothing there. Restart this project's daemon (`moe-daemon start --project <path>`); it rewrites the file.
 
 **Port mismatch** — `.moe/daemon.json` records the port the daemon picked. If you see `CONNECT_FAILED`, the daemon probably crashed without cleaning up the file. Stop it (`moe-daemon stop --project <path>`) and start again.
 

@@ -42,12 +42,23 @@ function Quote-ForCommand {
     return "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + "'"
 }
 
-# Build project argument
+# Build project argument. The agent windows do not start in this caller's
+# location (see Start-AgentWindow), so a relative -Project is made absolute
+# here. A path that does not exist goes as given: moe-agent.ps1 reports it.
 $projectArg = ""
+$projectDir = $null
 if ($Project) {
+    $resolvedProject = Resolve-Path -LiteralPath $Project -ErrorAction Ignore
+    if ($resolvedProject) {
+        $Project = $resolvedProject.ProviderPath
+        $projectDir = $Project
+    }
     $projectArg = "-Project " + (Quote-ForCommand $Project)
 } elseif ($ProjectName) {
     $projectArg = "-ProjectName " + (Quote-ForCommand $ProjectName)
+    $projects = Load-Registry
+    $match = $projects | Where-Object { $_.name -eq $ProjectName } | Select-Object -First 1
+    if ($match) { $projectDir = $match.path }
 } else {
     Write-Error "Provide -Project or -ProjectName"
     exit 1
@@ -62,14 +73,7 @@ if ($CommandArgs -and $CommandArgs.Count -gt 0) {
 }
 
 if (-not $Team) {
-    $teamPath = $null
-    if ($Project) {
-        $teamPath = Resolve-Path -LiteralPath $Project -ErrorAction SilentlyContinue
-    } elseif ($ProjectName) {
-        $projects = Load-Registry
-        $match = $projects | Where-Object { $_.name -eq $ProjectName } | Select-Object -First 1
-        if ($match) { $teamPath = $match.path }
-    }
+    $teamPath = $projectDir
     if ($teamPath) {
         $teamLeaf = Split-Path -Leaf $teamPath
         if ([string]::IsNullOrWhiteSpace($teamLeaf)) {
@@ -87,13 +91,23 @@ $teamArg = "-Team " + (Quote-ForCommand $Team)
 # the child's argv parser drops embedded double quotes, so a value with a space
 # was split across moe-agent.ps1's positional parameters (task-c4f17045).
 # -EncodedCommand (Base64 of UTF-16LE) reaches the child's PowerShell parser
-# intact. The child starts in the scripts dir, where the old `cd` put it.
+# intact. The child starts in the project directory, where moe-agent.sh's
+# agents run: a ps1 claude runs in its window's location, and the account
+# trust step accepts only a launch inside the project. With no project
+# directory on disk it starts in the scripts dir, never in the caller's location.
+# Windows PowerShell started in a directory whose path has [ or ] takes $PSHOME
+# as its location instead, so the command first sets it again, literally. Its
+# text comes from a script block, which keeps the cmdlet in code for the G1
+# scan in literal-project-path.test.mjs.
+$launchDir = $scriptDir
+if ($projectDir -and (Test-Path -LiteralPath $projectDir -PathType Container)) { $launchDir = $projectDir }
+$enterLaunchDir = { Set-Location -LiteralPath $args[0] }
 function Start-AgentWindow {
     param([string]$RoleName)
-    $line = "& $(Quote-ForCommand $agentScript) -Role $RoleName $projectArg $commandArg $teamArg"
+    $line = "& {$enterLaunchDir} $(Quote-ForCommand $launchDir); & $(Quote-ForCommand $agentScript) -Role $RoleName $projectArg $commandArg $teamArg"
     $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($line))
     try {
-        Start-Process powershell -ArgumentList "-NoExit", "-EncodedCommand", $encoded -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($scriptDir)) -ErrorAction Stop
+        Start-Process powershell -ArgumentList "-NoExit", "-EncodedCommand", $encoded -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($launchDir)) -ErrorAction Stop
         return $true
     } catch {
         Write-Host "Failed to start the $RoleName agent: $($_.Exception.Message)" -ForegroundColor Red

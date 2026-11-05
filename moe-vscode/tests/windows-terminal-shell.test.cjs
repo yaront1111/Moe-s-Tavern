@@ -314,7 +314,7 @@ const PROJECT = '/home/dev/app';
 const ACCOUNT_WORDS = "'/opt/moe/daemon/dist/accounts/cli.js' '--accounts-file' '/home/dev/.moe/claude-accounts.json' '--protected-project' '/home/dev/app' 'login' 'acct-2'";
 const W_DECODED = `& '${W_NODE}' ${ACCOUNT_WORDS}`;
 const W_LINE = `& '${W_POWERSHELL}' -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${Buffer.from(W_DECODED, 'utf16le').toString('base64')}`;
-const P_LINE = `'/opt/node/bin/node' ${ACCOUNT_WORDS}`;
+const P_LINE = `env '/opt/node/bin/node' ${ACCOUNT_WORDS}`;
 /** A selector answering `answer` and recording its (node, windows) calls. */
 const recording = answer => { const calls = []; const select = (node, windows) => { calls.push([node, windows]); return answer; }; return { calls, select }; };
 

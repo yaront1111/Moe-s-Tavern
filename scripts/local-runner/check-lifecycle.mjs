@@ -93,7 +93,9 @@ function parse(input) {
  * after the delete, onReady's own error unchanged or CHECK_READY_TIMEOUT. input.onCleanup, optional, is told once the delete
  * has settled, on every path past those two refusals and before the run settles, a rejection included: a frozen {vm, failure},
  * failure CHECK_VM_DELETE_FAILED for 'delete-failed', else null. It is never awaited, and its throw or rejection is ignored.
- * The second argument injects the steps.
+ * An abort during provisioning or a host input or transfer step stops waiting for that step (none takes the signal) and
+ * deletes the VM at once, after any launch in flight settles, so a caller's stop window is not spent on a download or a
+ * readiness wait: failure CHECK_ABORTED. The second argument injects the steps.
  */
 export async function runCheckJob(input, { provision = provisionGuest, materialize = materializeSnapshot, session = runCheckSession, verify = verifyWorkspace,
   remove = deleteOwned, toolchain = fetchNodeToolchain, dependencies = buildDependencyCache, installToolchain = copyToolchain,
@@ -101,9 +103,23 @@ export async function runCheckJob(input, { provision = provisionGuest, materiali
   const o = parse(input);
   if (!o) throw checkError('CHECK_JOB_INPUT_INVALID');
   if (o.signal?.aborted) throw checkError('CHECK_ABORTED');
-  const run = { name: null, environment: null, observed: null, workspace: 'unverified' };
+  const run = { name: null, environment: null, observed: null, workspace: 'unverified', launching: undefined, launched: undefined };
   // Provisioning gets this wrapper, never the owner's ledger: it captures this run's own reservation to delete, even after a throw.
-  const ledger = { ...o.ledger, reserve: async who => { const record = await o.ledger.reserve(who); run.name = record?.instance ?? null; return record; } };
+  // Once aborted it neither reserves nor launches, so a step the abort left running (unlessAborted) adds no VM after the delete.
+  // A launch is in flight from its 'launching' write to the record's next write.
+  const ledger = { ...o.ledger,
+    reserve: async who => {
+      if (o.signal?.aborted) throw checkError('CHECK_ABORTED');
+      const record = await o.ledger.reserve(who); run.name = record?.instance ?? null; return record;
+    },
+    update: async (expected, changes) => {
+      run.launched?.();
+      if (changes?.phase === 'launching') {
+        if (o.signal?.aborted) throw checkError('CHECK_ABORTED');
+        run.launching = new Promise(resolve => { run.launched = resolve; });
+      }
+      return o.ledger.update(expected, changes);
+    } };
   let failure;
   let vm = 'none';
   try {
@@ -132,15 +148,17 @@ async function checkJob(o, run, ledger, steps) {
   const { provision, materialize, session, verify } = steps;
   const { platform, owner, cacheDir, supervisor, credential, provider, signal } = o;
   let guest;
-  try { guest = await provision({ platform, ledger, owner, cacheDir, supervisor, credential, provider }); } catch (error) {
-    return codeOf(error, PROVISION_CODE, 'CHECK_PROVISION_FAILED');
-  }
+  try {
+    guest = await unlessAborted(signal, provision({ platform, ledger, owner, cacheDir, supervisor, credential, provider }), () => run.launching);
+  } catch (error) { return error?.code === 'CHECK_ABORTED' ? 'CHECK_ABORTED' : codeOf(error, PROVISION_CODE, 'CHECK_PROVISION_FAILED'); }
+  if (guest === ABORTED) return 'CHECK_ABORTED';
   if (guest?.provisioned !== true) return 'CHECK_PROVISION_UNAVAILABLE';
   if (guest.instance !== run.name) return 'CHECK_PROVISION_FAILED';
   // R07 readiness ran every boundary probe, each job identity's denied read of the supervisor credential among them.
   if (guest.bootstrapReady !== true || !Array.isArray(guest.failures) || guest.failures.length !== 0) return 'CHECK_GUEST_NOT_READY';
   if (signal?.aborted) return 'CHECK_ABORTED';
-  const host = await hostInputs(o, guest.image?.source?.arch, steps);
+  const host = await unlessAborted(signal, hostInputs(o, guest.image?.source?.arch, steps));
+  if (host === ABORTED) return 'CHECK_ABORTED';
   if (typeof host === 'string') return host;
   try {
     // The launch size, not the observed one, which varies per boot: identical VMs then share fresh evidence (R11d).
@@ -149,10 +167,11 @@ async function checkJob(o, run, ledger, steps) {
       dependencyDigest: host.cache === null ? null : host.cache.digest });
   } catch { return 'CHECK_ENVIRONMENT_UNKNOWN'; }
   if (signal?.aborted) return 'CHECK_ABORTED';
-  try { await materialize({ name: run.name, snapshot: o.snapshot, provider }); } catch (error) {
-    return codeOf(error, TRANSFER_CODE, 'CHECK_MATERIALIZE_FAILED');
-  }
-  const installed = await installHostInputs(o, run.name, host, steps);
+  try {
+    if ((await unlessAborted(signal, materialize({ name: run.name, snapshot: o.snapshot, provider }))) === ABORTED) return 'CHECK_ABORTED';
+  } catch (error) { return codeOf(error, TRANSFER_CODE, 'CHECK_MATERIALIZE_FAILED'); }
+  const installed = await unlessAborted(signal, installHostInputs(o, run.name, host, steps));
+  if (installed === ABORTED) return 'CHECK_ABORTED';
   if (installed !== null) return installed;
   if (signal?.aborted || (await ready(o, run.environment)) === ABORTED) return 'CHECK_ABORTED';
   try {
@@ -201,6 +220,22 @@ async function installHostInputs({ provider, signal }, name, { toolchain, cache 
     return codeOf(error, TRANSFER_CODE, 'CHECK_DEPENDENCIES_FAILED');
   }
   return null;
+}
+
+// A step's own settlement, or ABORTED once the run is aborted and the step is still running: a macrotask later (a step settling
+// as the abort lands still wins), and with no launch in flight (a delete racing a launch could miss the VM it creates; a launch
+// bounds itself). The run then reaches its delete within the stop window. The step left running settles unobserved, and the
+// run's ledger refuses it any reservation or launch.
+async function unlessAborted(signal, promise, launching = () => undefined) {
+  const step = Promise.resolve(promise);
+  if (signal === undefined) return step;
+  step.catch(() => {});
+  let onAbort;
+  const stopped = new Promise(resolve => { onAbort = () => setImmediate(resolve); });
+  if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
+  try { return await Promise.race([step, stopped.then(launching).then(() => ABORTED)]); } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 // onReady, bounded by timeoutMs and the signal. Its own error and the timeout propagate, so runCheckJob rethrows them

@@ -5,6 +5,7 @@ import os from 'os';
 import http from 'http';
 import net from 'net';
 import dns from 'dns';
+import { EventEmitter } from 'events';
 import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { execSync, spawn, spawnSync, type ChildProcess } from 'child_process';
@@ -20,9 +21,13 @@ import {
   readDaemonInfo,
   readLockInfo,
   releaseLock,
+  releaseOwnLock,
+  removeOwnDaemonInfo,
+  scrubSeatIdentityEnv,
   staleLockReason,
   statusDaemon,
   stopDaemon,
+  superviseChildEnd,
   validateDaemonInfoForProject,
 } from './index.js';
 
@@ -985,6 +990,250 @@ setInterval(() => {}, 60000);`;
       expect(fs.existsSync(jsonPath())).toBe(false);
     });
   });
+
+  // A1: a live pid whose port takes the connection but whose /health never answers, even on the longer retry, is
+  // neither this project's daemon nor stale. Nothing signals it, removes its daemon.json or starts a second daemon.
+  describe('a daemon.json that /health cannot verify', () => {
+    let savedExitCode: typeof process.exitCode;
+    const quietServers: net.Server[] = [];
+    const accepted = new Set<net.Socket>();
+
+    beforeEach(() => {
+      savedExitCode = process.exitCode;
+      process.exitCode = undefined;
+      // The retry, kept short here; still well past the slow answer in U1b.
+      vi.stubEnv('MOE_HEALTH_RETRY_TIMEOUT_MS', '1500');
+    });
+
+    afterEach(async () => {
+      process.exitCode = savedExitCode;
+      vi.unstubAllEnvs();
+      for (const socket of accepted) socket.destroy();
+      accepted.clear();
+      await Promise.all(quietServers.map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+      quietServers.length = 0;
+    });
+
+    /** A port that takes every connection and then never writes ('silent') or closes it at once ('close'). */
+    async function quietPort(mode: 'silent' | 'close' = 'silent'): Promise<{ port: number; connections: () => number }> {
+      let connections = 0;
+      const server = net.createServer((socket) => {
+        connections += 1;
+        socket.on('error', () => {});
+        if (mode === 'close') socket.destroy();
+        else { accepted.add(socket); socket.resume(); }
+      });
+      quietServers.push(server);
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      return { port: (server.address() as net.AddressInfo).port, connections: () => connections };
+    }
+
+    /** /health naming this project and process.pid, answered with `statusCode` after `delayMs`. */
+    async function answeringPort(statusCode: number, delayMs = 0): Promise<number> {
+      const server = http.createServer((_req, res) => {
+        setTimeout(() => {
+          res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: statusCode === 200 ? 'healthy' : 'unhealthy', projectPath: testDir, pid: process.pid }));
+        }, delayMs);
+      });
+      servers.push(server);
+      await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+      return (server.address() as net.AddressInfo).port;
+    }
+
+    const nonZeroSignals = (spy: ReturnType<typeof killSpyWithoutSignals>) =>
+      spy.mock.calls.filter(([, signal]) => signal !== 0 && signal !== undefined);
+    type Calls = { mock: { calls: unknown[][] } };
+    const statusLines = (spy: Calls) => spy.mock.calls.filter(([, msg]) => msg === 'Daemon status').map(([fields]) => fields);
+    const messages = (spy: Calls) => spy.mock.calls.map((args) => String(args.at(-1)));
+
+    it('U1 a port that takes the connection but never answers, or closes it unanswered, is unverified after one retry', async () => {
+      for (const mode of ['silent', 'close'] as const) {
+        const { port, connections } = await quietPort(mode);
+        expect([mode, await validateDaemonInfoForProject(testDir, daemonInfo({ port })), connections()])
+          .toEqual([mode, { valid: false, reason: 'health check unanswered', unverified: true }, 2]);
+      }
+    });
+
+    it('U1b an answer slower than the first probe but inside the retry confirms the daemon', async () => {
+      const info = daemonInfo({ port: await answeringPort(200, 500) });
+      expect(await validateDaemonInfoForProject(testDir, info)).toEqual({ valid: true, info });
+    });
+
+    it('U2 stopDaemon sends no signal, keeps daemon.json and its lock, writes no sentinel, and exits 1 naming the pid', async () => {
+      const raw = writeDaemonFiles((await quietPort()).port, process.pid);
+      const killSpy = killSpyWithoutSignals();
+      const errors = vi.spyOn(logger, 'error');
+
+      await stopDaemon(testDir);
+
+      expect(nonZeroSignals(killSpy)).toEqual([]);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(fs.existsSync(stopPath())).toBe(false);
+      expect(process.exitCode).toBe(1);
+      expect(messages(errors).join('\n')).toMatch(new RegExp(`daemon.json names pid ${process.pid}.*no signal sent and daemon.json kept`));
+    });
+
+    it('U3 existingDaemonBlocksStart neither removes the daemon.json nor lets a second daemon start, and exits 1', async () => {
+      const raw = writeDaemonFiles((await quietPort()).port, process.pid);
+      const errors = vi.spyOn(logger, 'error');
+
+      expect(await existingDaemonBlocksStart(testDir)).toBe(true);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(fs.existsSync(lockPath())).toBe(true);
+      expect(process.exitCode).toBe(1);
+      expect(messages(errors).join('\n')).toMatch(/not removing daemon\.json and not starting a second daemon/);
+    });
+
+    it('U4 statusDaemon reports it unverified and removes nothing', async () => {
+      const raw = writeDaemonFiles((await quietPort()).port, process.pid);
+      const logged = vi.spyOn(logger, 'info');
+
+      await statusDaemon(testDir);
+
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+      expect(statusLines(logged)).toMatchObject([{ status: 'unverified', owner: 'local', reason: 'health check unanswered', pid: process.pid }]);
+    });
+
+    it('U5 a 503 /health that names this project and pid is this daemon: stop signals it and start finds it running', async () => {
+      writeDaemonFiles(await answeringPort(503), process.pid);
+      const killSpy = killSpyWithoutSignals();
+
+      expect(await existingDaemonBlocksStart(testDir)).toBe(true);
+      await stopDaemon(testDir);
+
+      expect(nonZeroSignals(killSpy)).toEqual([[process.pid, 'SIGTERM']]);
+      expect(process.exitCode ?? 0).toBe(0);
+    });
+
+    it('U6 a namespaced record whose /health is silent is unverified too, and status keeps it', async () => {
+      const info = daemonInfo({ port: (await quietPort()).port, pid: DEAD_PID, pidNamespace: 'pid:[1]' });
+      expect(await validateDaemonInfoForProject(testDir, info))
+        .toEqual({ valid: false, reason: 'health check unanswered', namespaced: true, unverified: true });
+
+      const raw = writeDaemonFiles(info.port, DEAD_PID, testDir, { pidNamespace: 'pid:[1]' });
+      await statusDaemon(testDir);
+      expect(fs.readFileSync(jsonPath(), 'utf-8')).toBe(raw);
+    });
+  });
+
+  // A2: by the time a daemon shuts down, a newer starter may own .moe/daemon.json and the lock.
+  it('removeOwnDaemonInfo and releaseOwnLock keep another pid\'s files and remove only their own', () => {
+    const newer = writeDaemonFiles(4321, DEAD_PID);
+    const newerLock = fs.readFileSync(lockPath(), 'utf-8');
+    removeOwnDaemonInfo(testDir);
+    releaseOwnLock(testDir);
+    expect([fs.readFileSync(jsonPath(), 'utf-8'), fs.readFileSync(lockPath(), 'utf-8')]).toEqual([newer, newerLock]);
+
+    writeDaemonFiles(4321, process.pid);
+    removeOwnDaemonInfo(testDir);
+    releaseOwnLock(testDir);
+    expect([fs.existsSync(jsonPath()), fs.existsSync(lockPath())]).toEqual([false, false]);
+  });
+
+  // A4: a failed spawn emits 'error' and no 'exit'; a failed kill emits 'error' while the child runs on.
+  it('superviseChildEnd ends a child once: at an error that left no process, or at its exit', () => {
+    vi.spyOn(logger, 'error').mockImplementation(() => undefined);
+    const child = (pid: number | undefined) => Object.assign(new EventEmitter(), { pid }) as unknown as ChildProcess;
+    const ends: unknown[][] = [];
+
+    const failed = child(undefined);
+    superviseChildEnd(failed, (...args) => ends.push(['failed', ...args]));
+    failed.emit('error', Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+    failed.emit('exit', -2, null);
+
+    const running = child(4242);
+    superviseChildEnd(running, (...args) => ends.push(['running', ...args]));
+    running.emit('error', new Error('kill EPERM'));
+    expect(ends).toEqual([['failed', null, null]]);
+    running.emit('exit', 1, null);
+    expect(ends).toEqual([['failed', null, null], ['running', 1, null]]);
+  });
+
+  // C2: a daemon a wrapper autostarted inherits that seat's identity; it serves every seat.
+  it('scrubSeatIdentityEnv drops every seat identity variable and keeps the rest', () => {
+    const seat = ['MOE_WORKER_ID', 'MOE_TASK_ID', 'MOE_SESSION_ID', 'MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION',
+      'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_WORKER_TYPE'];
+    const env: NodeJS.ProcessEnv = { ...Object.fromEntries(seat.map((name) => [name, 'x'])), MOE_PROJECT_PATH: '/p', MOE_DEFAULT_PORT: '9876', PATH: '/bin' };
+    scrubSeatIdentityEnv(env);
+    expect(env).toEqual({ MOE_PROJECT_PATH: '/p', MOE_DEFAULT_PORT: '9876', PATH: '/bin' });
+  });
+});
+
+// The supervisor's child handling (A4) and the seat identity the daemon drops (C2), run as the CLI runs: this source
+// through tsx, a scrubbed env and a scratch HOME, with a preload that stands in for the condition under test.
+describe('supervisor and seat env', () => {
+  const tsx = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+  const entry = fileURLToPath(new URL('./index.ts', import.meta.url));
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-supervisor-'));
+    fs.mkdirSync(path.join(scratch, 'home'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  });
+
+  /** Run the CLI with `preload` imported after tsx; returns its exit status and the msg of every JSON log line. */
+  function cli(preload: string, extraEnv: NodeJS.ProcessEnv, ...args: string[]): { status: number | null; msgs: string[] } {
+    const home = path.join(scratch, 'home');
+    const env: NodeJS.ProcessEnv = {
+      PATH: process.env.PATH, HOME: home, USERPROFILE: home, NODE_ENV: 'production',
+      NODE_OPTIONS: `--import ${tsx} --import ${pathToFileURL(preload).href}`,
+      ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP } : {}),
+      ...extraEnv,
+    };
+    const result = spawnSync(process.execPath, [entry, ...args], { env, encoding: 'utf-8', timeout: 45_000, windowsHide: true });
+    const msgs = `${result.stdout}${result.stderr}`.split('\n').flatMap((line) => {
+      try { return [String((JSON.parse(line) as { msg?: unknown }).msg)]; } catch { return []; }
+    });
+    return { status: result.status, msgs };
+  }
+
+  it('S1 a daemon spawn that fails with an error event restarts through the backoff until the cap, not a supervisor crash', () => {
+    const project = path.join(scratch, 'project');
+    fs.mkdirSync(path.join(project, '.moe'), { recursive: true });
+    const preload = path.join(scratch, 'no-node.mjs');
+    // Every spawn of the _run child now fails asynchronously: 'error' (ENOENT), never 'exit'.
+    fs.writeFileSync(preload, `process.execPath = ${JSON.stringify(path.join(scratch, 'missing', 'node'))};\n`);
+
+    const run = cli(preload, {}, 'start', '--project', project);
+
+    const count = (msg: string) => run.msgs.filter((line) => line === msg).length;
+    expect({
+      status: run.status, errors: count('Supervisor child process error'), crashes: count('Daemon crashed'),
+      restarts: count('Restarting daemon after backoff'), gaveUp: count('Too many restarts, supervisor giving up'),
+    }).toEqual({ status: 1, errors: 5, crashes: 5, restarts: 4, gaveUp: 1 });
+  }, 60_000);
+
+  it('S2 start and _run drop the seat identity variables from their env before anything else, and keep the rest', () => {
+    const dump = path.join(scratch, 'env');
+    const preload = path.join(scratch, 'dump-env.mjs');
+    // At exit, the MOE_* names left in this process's env, keyed by the command.
+    fs.writeFileSync(preload, [
+      "import fs from 'node:fs';",
+      "process.on('exit', () => fs.writeFileSync(`${process.env.MOE_TEST_ENV_DUMP}.${process.argv[2]}`,",
+      "  JSON.stringify(Object.keys(process.env).filter((name) => name.startsWith('MOE_')).sort())));",
+      '',
+    ].join('\n'));
+    const seat = {
+      MOE_WORKER_ID: 'worker-seat', MOE_TASK_ID: 'task-seat', MOE_SESSION_ID: 'session', MOE_ATTEMPT_ID: 'attempt',
+      MOE_ATTEMPT_GENERATION: '1', MOE_RUNNER_PROCESS_STARTED_AT: '1', MOE_RUNNER_HOST: 'host', MOE_WORKER_TYPE: 'claude',
+    };
+    // No .moe/: each command refuses right after the scrub, before any spawn, lock or port.
+    const bare = path.join(scratch, 'bare');
+    fs.mkdirSync(bare);
+
+    for (const command of ['start', '_run']) {
+      const run = cli(preload, { ...seat, MOE_TEST_ENV_DUMP: dump }, command, '--project', bare);
+      expect([command, run.status, JSON.parse(fs.readFileSync(`${dump}.${command}`, 'utf-8'))])
+        .toEqual([command, 1, ['MOE_TEST_ENV_DUMP']]);
+    }
+  }, 60_000);
 });
 
 describe('port probing', () => {

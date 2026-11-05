@@ -229,8 +229,9 @@ interface ChannelScan {
  * Read one channel forward from `sinceId`. A filtered channel (outside the
  * caller's filter, or any channel with none) whose full page held nothing
  * deliverable reads on, up to MAX_SKIP_PAGES, so a routed line behind a long
- * run of other seats' chatter still arrives in this call. Throws on a failed
- * read; the caller then records nothing for the channel.
+ * run of other seats' chatter still arrives in this call; so does any channel
+ * after a full page of the caller's own posts. Throws on a failed read; the
+ * caller then records nothing for the channel.
  */
 async function scanChannel(ctx: DrainContext, channelId: string, sinceId: string | undefined): Promise<ChannelScan> {
   const scan: ChannelScan = { deliver: [], skipAfter: new Map(), partial: false };
@@ -252,15 +253,21 @@ async function scanChannel(ctx: DrainContext, channelId: string, sinceId: string
       : page.filter((message) =>
         !(Date.parse(message.timestamp) < floor) || (message.mentions ?? []).includes(ctx.workerId));
     scan.partial = messages.length >= PER_CHANNEL_SCAN_LIMIT;
+    let ownRun = scan.partial;
     for (const message of messages) {
       // Own posts (like history under the floor) neither deliver nor move a cursor.
       if (message.sender === ctx.workerId) continue;
+      ownRun = false;
       if (!ctx.admits(message)) { pendingSkip = message.id; continue; }
       recordSkip(scan, pendingSkip);
       pendingSkip = undefined;
       scan.deliver.push(message);
     }
-    if (!filtered || scan.deliver.length > 0 || page.length < PER_CHANNEL_SCAN_LIMIT || pages >= MAX_SKIP_PAGES) break;
+    // Except a full page of nothing but own posts: a cursor held before that run
+    // would read the same page on every call and never reach the lines behind it.
+    // The run is skipped like a filtered line, and the scan reads on.
+    if (ownRun) pendingSkip = page[page.length - 1].id;
+    if ((!filtered && !ownRun) || scan.deliver.length > 0 || page.length < PER_CHANNEL_SCAN_LIMIT || pages >= MAX_SKIP_PAGES) break;
     from = page[page.length - 1].id;
   }
   recordSkip(scan, pendingSkip);

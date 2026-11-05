@@ -2,12 +2,12 @@
 
 **An AI agent task board. Turn your coding agents into a team you can steer.**
 
-Run Claude Code, Codex, Gemini CLI, and Grok Build through a shared task board in your IDE. Give agents clear roles, review their plans, and follow the work through implementation and QA.
+Run Claude Code, Codex, Antigravity (agy), and Grok Build through a shared task board in your IDE. Give agents clear roles, review their plans, and follow the work through implementation and QA.
 
 [![CI](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yaront1111/Moe-s-Tavern/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
-![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Grok%20Build-6f42c1.svg)
+![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity%20%28agy%29%20%C2%B7%20Grok%20Build-6f42c1.svg)
 
 **[Get started](#get-started) · [See the workflow](#how-it-works) · [Features](#what-you-get) · [Claude accounts](#run-claude-agents-across-several-accounts) · [Documentation](#documentation)**
 
@@ -30,7 +30,7 @@ Start with one small task. As you add agents, the same board keeps their plans, 
 | **A live board inside your IDE** | Organize work into epics and tasks, inspect plans and implementation steps, and follow progress from Backlog to Done. JetBrains is the primary interface; a VS Code / Antigravity extension is also included. |
 | **Plan approval before implementation** | Review proposed steps and affected files in the default **CONTROL** mode. Choose SPEED or TURBO when you want more automation. |
 | **Agents with distinct jobs** | Give planning, implementation, and QA their own roles. Add a governor to help monitor the team and surface blockers. |
-| **Your choice of coding CLI** | Launch Claude Code, Codex, Gemini CLI, or Grok Build. Pick different providers for different roles. |
+| **Your choice of coding CLI** | Launch Claude Code, Codex, Antigravity (agy), or Grok Build. Pick different providers for different roles. |
 | **Several Claude accounts, one team** | Sign in each of your Claude subscription accounts once. Moe shows every account's 5-hour and weekly usage and moves Claude Code agents to the next account at a switch point you set, between steps and never mid-step. |
 | **Coordination for parallel work** | Use teams, task dependencies, chat channels, and @mentions to coordinate agents. File overlap warnings help flag potential collisions. |
 | **Context that survives a session** | Keep tasks, plans, decisions, and handoffs with your project. Add [Serena](docs/MEMORY.md) for shared agent memory across sessions. |
@@ -73,7 +73,7 @@ Download the plugin from the [latest GitHub Release](https://github.com/yaront11
 - **JetBrains** — `moe-jetbrains-<version>.zip`. Open **Settings / Preferences → Plugins → gear icon → Install Plugin from Disk**, select the ZIP, and restart the IDE.
 - **VS Code / Antigravity** — `moe-vscode-<version>.vsix`. Install it with **Extensions: Install from VSIX**, open your target project, then run **Moe: Connect to Daemon**.
 
-The plugins bundle their own daemon and proxy. You still need Node.js on PATH and one coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build) installed and signed in. After installing, continue at [step 2](#2-open-the-board).
+The plugins bundle their own daemon and proxy. You still need Node.js on PATH and one coding CLI (Claude Code, Codex, Antigravity (agy), or Grok Build) installed and signed in. After installing, continue at [step 2](#2-open-the-board).
 
 > JetBrains Marketplace, VS Code Marketplace, Open VSX, and npm listings are not published yet. [Claude account rotation](#run-claude-agents-across-several-accounts) arrived after v0.8.0; [build from source](#1-build-from-source) to use it before the next release.
 
@@ -102,7 +102,7 @@ You need a JetBrains IDE and your platform's package manager: **WinGet on Window
 | Agent | Windows | macOS / Linux |
 | --- | --- | --- |
 | Codex | `-AgentCommand codex` | `--agent codex` |
-| Gemini CLI | `-AgentCommand gemini` | `--agent gemini` |
+| Antigravity (agy) | `-AgentCommand gemini` | `--agent gemini` |
 | Skip agent installation | `-AgentCommand none` | `--agent none` |
 
 Grok Build is supported by the agent launchers. The Windows installer also accepts `-AgentCommand grok`; on macOS/Linux, install Grok Build separately.
@@ -211,7 +211,7 @@ moe-daemon accounts check                    # exits 0 when every account is on 
 - **Limits are handled for you.** If Claude refuses a launch at its limit, the launcher retries on the next account at once. When every account is spent, agents keep their tasks and resume at the earliest reset.
 - **You always know which account is in use.** The **Accounts** tab shows each account's sign-in, 5-hour and weekly usage, and status. The tool-window header shows the active account, worker cards name theirs, and `#governors` gets a 🔁 post on every switch.
 - **Credentials stay with Claude.** Each account is its own Claude config folder under `~/.moe/claude-accounts/`. Moe creates the folder and hands its path to Claude; it never reads, copies, or stores a login.
-- **Off until you sign an account in.** Until then, or whenever Bedrock, Vertex, or Foundry is configured, Claude launches exactly as before. `MOE_ACCOUNT_ROTATION=off` turns rotation off. Codex, Gemini CLI, and Grok Build seats are unaffected.
+- **Off until you sign an account in.** Until then, or whenever Bedrock, Vertex, or Foundry is configured, Claude launches exactly as before. `MOE_ACCOUNT_ROTATION=off` turns rotation off. Codex, Antigravity (agy), and Grok Build seats are unaffected.
 
 One account list serves every project on the machine. Each account folder takes the place of `~/.claude` for its sessions, so add any user-level settings, `CLAUDE.md`, agents, skills, or plugins your agents rely on to each folder.
 

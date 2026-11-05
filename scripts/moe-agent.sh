@@ -636,7 +636,7 @@ CMD_BASE=$(basename "$CMD_FIRST")
 CMD_BASE="${CMD_BASE%.*}"
 if [ "$CMD_BASE" = "codex" ]; then
     CLI_TYPE="codex"
-elif [ "$CMD_BASE" = "gemini" ]; then
+elif [ "$CMD_BASE" = "gemini" ] || [ "$CMD_BASE" = "agy" ]; then
     CLI_TYPE="gemini"
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
@@ -953,7 +953,8 @@ protected_resolve_cli() { # $1 = the CLI name; sets COMMAND_BIN to its absolute 
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     require_protected_runtime_file MOE_PROXY_PATH "$PROXY_PATH_OVERRIDE"
     require_protected_runtime_file MOE_DAEMON_PATH "$DAEMON_PATH_OVERRIDE"
-    protected_resolve_cli "$COMMAND"
+    # Gemini mode runs Antigravity only: the trusted lookup takes agy, never the Gemini CLI.
+    if [ "$CLI_TYPE" = "gemini" ]; then protected_resolve_cli agy; else protected_resolve_cli "$COMMAND"; fi
 fi
 
 # serena_ignore_override ROOT -- hand Serena git's own ignore sources (docs/MEMORY.md,
@@ -2716,12 +2717,73 @@ PY
     return 1
 }
 
+# protected_entries_json ARGS -- ARGS (today's record_candidate JSON) with protectedEntries
+# appended, printed only on a strong landing (strong_landing_task) whose pre-flight context
+# declares a non-empty task.executionContract.requiredChecks. The entries are the candidate
+# tree's (FROZEN_TREE's) blobs under every definition's configs, scripts and assertionRoots,
+# exact {path, oid} in UTF-8 byte order, listed the way the daemon's
+# measureRequiredCheckSnapshot lists them ([] for no path, with no git call: ls-tree without
+# a pathspec lists the whole tree). Prints nothing and returns 1 otherwise. A tree it cannot
+# measure faithfully also prints one [WARN] line: the field is omitted, never invented, so
+# qa_approve fails closed (protected-checks-unmeasured). Twin: Get-MoeProtectedEntries.
+protected_entries_json() {
+    local out rc=0 reason
+    strong_landing_task "$LAND_TASK_ID" || return 1
+    out=$($PYTHON_CMD -c '
+import json,re,subprocess,sys
+task,tree,top,args=sys.argv[1:]
+try:
+    t=json.loads(sys.stdin.buffer.read().decode("utf-8"))["task"]
+    assert t["id"]==task
+    defs=t["executionContract"]["requiredChecks"]
+    assert isinstance(defs,list) and defs
+except Exception:
+    sys.exit(3)
+def unmeasured(reason):
+    print(reason); sys.exit(4)
+def unsupported(p):
+    return (not p or p!=p.strip() or p[0]==chr(0xfeff) or p[-1]==chr(0xfeff) or "\\" in p or chr(0xfffd) in p
+            or len(p.encode("utf-16-le"))>1000 or re.search("[\x00-\x1f\x7f]",p) or p[0]=="/"
+            or re.match("[A-Za-z]:/",p) or any(s in ("",".","..") for s in p.split("/")))
+paths=[]
+for d in defs:
+    if not isinstance(d,dict): unmeasured("requiredChecks unreadable")
+    for k in ("configs","scripts","assertionRoots"):
+        v=d.get(k)
+        v=[] if v is None else v
+        if not isinstance(v,list) or not all(isinstance(p,str) and p for p in v): unmeasured("requiredChecks unreadable")
+        for p in v:
+            if p not in paths: paths.append(p)
+entries=[]
+if paths:
+    r=subprocess.run(["git","-C",top,"--literal-pathspecs","ls-tree","-r","-z","--full-tree",tree,"--"]+paths,
+                     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    if r.returncode or not r.stdout.endswith(b"\0") and r.stdout: unmeasured("git ls-tree failed")
+    for rec in r.stdout.split(b"\0")[:-1]:
+        m=re.fullmatch(rb"(100644|100755|120000) blob ([0-9a-f]{40})\t(.+)",rec,re.S)
+        if not m: unmeasured("non-blob entry")
+        try: p=m.group(3).decode("utf-8")
+        except UnicodeDecodeError: unmeasured("unsupported path")
+        if unsupported(p): unmeasured("unsupported path")
+        entries.append({"path":p,"oid":m.group(2).decode("ascii")})
+    if len(entries)>2000: unmeasured("more than 2000 entries")
+entries.sort(key=lambda e:e["path"].encode("utf-8"))
+a=json.loads(args); a["protectedEntries"]=entries
+print(json.dumps(a))
+' "$LAND_TASK_ID" "$FROZEN_TREE" "$MOE_TOP" "$1" 2>/dev/null <<< "${PREFLIGHT_CONTEXT:-}") || rc=$?
+    if [ "$rc" = 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    [ "$rc" != 3 ] || return 1
+    reason="git ls-tree failed"; [ "$rc" != 4 ] || [ -z "$out" ] || reason="$out"
+    printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "record_candidate: the protected check files of task $LAND_TASK_ID were not measured on tree $FROZEN_TREE ($reason); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured." >&2
+    return 1
+}
+
 # Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
 # missing, closed or superseded by another claim, or parked, no gate result can
 # be bound to it: GATE_EVIDENCE_UNAVAILABLE tells the landing to park the frozen
 # bytes without running the gate and without announcing a gate failure.
 record_candidate_rpc() {
-    local args detail
+    local args detail measured
     GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
     if [ -z "$MOE_ATTEMPT_ID" ] || [ -z "$MOE_ATTEMPT_GENERATION" ]; then
         GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="no pinned attempt identity"; return 1
@@ -2734,6 +2796,8 @@ import json,sys
 t,a,g,w,c,b,s,r=sys.argv[1:]
 print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,baseRevision=b,treeSha=s,deliveryTarget=r)))
 ' "$LAND_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$FROZEN_CANDIDATE_ID" "$FROZEN_BASE_REVISION" "$FROZEN_TREE" "refs/heads/$LAND_BRANCH") || return 1
+    # The strong profile's protected check files (task-ee10405f); every other landing keeps args.
+    measured=$(protected_entries_json "$args") && args="$measured"
     moe_evidence_rpc record_candidate "$args" && return 0
     # A claim can supersede the attempt between the read above and the RPC.
     if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then
@@ -6004,7 +6068,11 @@ finalize_postflight() {
     [ "${MOE_FINALIZE_DONE:-false}" != true ] || return "${MOE_FINALIZE_RC:-0}"
     MOE_FINALIZE_DONE=true
     MOE_FINALIZE_RC=1
-    local outcome=failed
+    local outcome=failed strong=""
+    # A strong landing: this session's pin, or (under any pin) a worktree landing whose
+    # own journal is strong, as strong_landing_task also journals strong from an attempt
+    # record or a leftover journal (RECEIPT_STRONG, set only by wt_land_published).
+    if [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] || [ "${RECEIPT_STRONG:-}" = true ]; then strong=1; fi
     case "${LAND_OUTCOME:-nothing}" in
         # A worktree completion is landed only once its C is on the target
         # (land_worktree_completion clears MOE_WT_COMPLETION then); until then a
@@ -6019,7 +6087,7 @@ finalize_postflight() {
     # transfer) the attempt stays finalizing, which holds qa_approve and every
     # claim of the task, so nothing reaches DONE and no dependent is released
     # before the replay settles it.
-    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] \
+    if [ "$outcome" = landed ] && [ -n "$strong" ] \
         && { [ "${LAND_PROOF_UNTRANSFERRED:-}" = true ] \
             || { [ "${RECEIPT_ACKED:-}" != true ] && [ -n "${RECEIPT_JOURNAL:-}" ] && [ -e "$RECEIPT_JOURNAL" ]; }; }; then
         echo -e "${YELLOW}[WARN]${NC} MOE_FINALIZE_DEFERRED_RECEIPT: task ${LAND_TASK_ID:-} -- the delivery receipt of $LAND_SHA is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes."
@@ -6030,7 +6098,7 @@ finalize_postflight() {
     MOE_FINALIZE_RC=0
     # CQ-V08b: the strong journal goes only once its attempt is closed; a lost
     # finalize (above) or an attempt still open keeps it for the next replay.
-    if [ "$outcome" = landed ] && [ "${PINNED_ATTEMPT_PROFILE:-}" = verified-local ] && [ -n "${RECEIPT_JOURNAL:-}" ] \
+    if [ "$outcome" = landed ] && [ -n "$strong" ] && [ -n "${RECEIPT_JOURNAL:-}" ] \
         && [ "$(moe_pinned_attempt_phase)" = closed ]; then
         rm -f "$RECEIPT_JOURNAL"
     fi
@@ -6475,9 +6543,9 @@ PY
 # or stops the loop, and keeps the journal for the next pre-flight to replay.
 # DELIVERY_RECEIPT_CONFLICT means a receipt already records this candidate's
 # landing: logged, never retried. RECEIPT_ACKED=true on either answer. A strong
-# journal (its own profile verified-local) outlives an accepted receipt until
-# its attempt is closed (CQ-V08b): finalize_postflight or the next replay drops
-# it. Twin: Send-MoeReceipt.
+# journal (its own profile verified-local) outlives an accepted or a conflicting
+# receipt until its attempt is closed (CQ-V08b): finalize_postflight or the next
+# replay drops it. Twin: Send-MoeReceipt.
 receipt_send() {
     local report="$1" journal="$2" parsed args cand strong err="$SECURE_TEMP_DIR/receipt-err.txt"
     RECEIPT_ACKED=""
@@ -6500,7 +6568,7 @@ print(d["candidateId"]); print("1" if d.get("profile")=="verified-local" else "-
     if grep -q '"codeName": *"DELIVERY_RECEIPT_CONFLICT"' "$err" 2>/dev/null; then
         echo -e "${YELLOW}[WARN]${NC} candidate $cand already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
         RECEIPT_ACKED=true
-        [ -z "$journal" ] || rm -f "$journal"
+        [ -z "$journal" ] || [ "$strong" = 1 ] || rm -f "$journal"
         return 0
     fi
     echo -e "${YELLOW}[WARN]${NC} delivery receipt not recorded for candidate $cand; journal kept at $journal for the next pre-flight to replay."
@@ -6509,7 +6577,7 @@ print(d["candidateId"]); print("1" if d.get("profile")=="verified-local" else "-
 
 # receipt_journal_fields JOURNAL -- the replay's fields of a well-formed journal,
 # \x1f-separated (owed is 1 while it owes a ledger row; the last, wt, is a worktree
-# journal's publicationMode, local or remote: no candidate, and its ledger is the
+# journal's publicationMode, local or remote: no candidate unless strong, and its ledger is the
 # exact committed row); 1 when malformed. The optional `ledger` must be {sessionId,
 # role, status?} inside the bounds moe.record_commit takes.
 # Twin: Invoke-MoeReceiptReplay's check + Test-MoeOwedLedger.
@@ -6530,7 +6598,8 @@ ok=(os.path.basename(f)==str(d.get('taskId'))+'.json' and re.fullmatch(r'[A-Za-z
     and (l is None or (isinstance(l,dict) and all(isinstance(l.get(k),str) and l[k].strip() and len(l[k])<=n
         for k,n in (('sessionId',255),('role',64))) and (l.get('status') is None or isinstance(l['status'],str)))))
 strong=d.get('profile')=='verified-local'
-if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha']))): sys.exit(1)
+if not ok or (strong and not (isinstance(d.get('treeSha'),str) and rev.fullmatch(d['treeSha'])
+    and isinstance(d.get('candidateId'),str) and ids.fullmatch(d['candidateId']))): sys.exit(1)
 print('\x1f'.join([d['taskId'],d['target'],d['targetAfter'],d['attemptId'],str(g),d['workerId'],d['targetBefore'],'' if l is None else '1',
     '1' if strong else '',d['treeSha'].lower() if strong else '',pm if wt else '']))
 PY
@@ -6703,7 +6772,8 @@ receipt_replay() {
             report=$($PYTHON_CMD -c 'import json,sys;d=json.load(open(sys.argv[1],encoding="utf-8"));d.pop("ledger",None);print(json.dumps(d))' "$f" 2>/dev/null) || report=""
             receipt_journal_write "$f" "$report"
         fi
-        [ -n "$wt" ] || receipt_send "$(cat "$f")" "$f" || continue
+        # A worktree journal sends a receipt only under the strong profile (CQ-M07t).
+        [ -n "$wt" ] && [ -z "$strong" ] || receipt_send "$(cat "$f")" "$f" || continue
         phase=$(moe_pinned_attempt_phase "$aid" "$tid" "$gen" "$owner")
         if [ "$phase" = finalizing ]; then
             args=$(finalize_args "$tid" "$aid" "$gen" "$owner" landed "$landed") || continue
@@ -6715,7 +6785,7 @@ receipt_replay() {
         fi
         # CQ-V08b: a strong journal (kept past its accepted receipt) goes only
         # once its attempt is closed.
-        if [ -n "$strong" ] && [ -z "$wt" ] && [ "$phase" != closed ] && [ -e "$f" ]; then
+        if [ -n "$strong" ] && [ "$phase" != closed ] && [ -e "$f" ]; then
             echo -e "${YELLOW}[WARN]${NC} receipt journal $f kept: attempt $aid of task $tid is $phase, not closed; nothing finalized."
             continue
         fi
@@ -6746,7 +6816,7 @@ run_landing() {
     ATTR_DIR="$work/attr"
     mkdir -p "$ATTR_DIR"
     LAND_OUTCOME="failed"; LAND_SHA=""; LAND_TREE=""; LAND_CODE=""; LAND_MESSAGE=""; LAND_BRANCH=""; LAND_PUSHED=""; LAND_RECORDED=""; LAND_PUSH_RESULT=""
-    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
+    RECEIPT_BEFORE=""; RECEIPT_LANDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""; RECEIPT_STRONG=""
     LAND_N_PATHS=0; LAND_N_INFERRED=0; LAND_RESCUE_REF=""; LAND_STAGED_FILE=""; LAND_DROPPED_FILE=""
     TI_N_STAGED=0; TI_N_INFERRED=0
     local policy_override="${LAND_POLICY_OVERRIDE:-}"
@@ -7588,15 +7658,19 @@ worktree_sync_branch() {
 
 # wt_journal_write PATH B C -- L8, the strict worktree journal: identity, target,
 # B, C, W, the task branch and the exact completion row it owes (no candidate,
-# no delivery receipt). 1 on any write, rename or read-back failure, and then no
-# journal describes C.
+# no delivery receipt). Under the strong profile (CQ-M07t) it also carries the
+# frozen candidate and CQ-V07's intent fields, for the delivery receipt; any of
+# them missing or malformed writes no journal. 1 on any write, rename or
+# read-back failure, and then no journal describes C.
 wt_journal_write() {
-    local report
+    local report strong=""
+    [ -z "${LAND_TASK_ID:-}" ] || ! strong_landing_task "$LAND_TASK_ID" || strong=1
     report=$($PYTHON_CMD - "$2" "$3" "$LAND_TASK_ID" "$WORKER_ID" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" \
         "${MOE_SID:-$WORKER_ID@unknown}" "refs/heads/$LAND_BRANCH" "$MOE_WT_PATH" "refs/heads/$MOE_WT_BRANCH" "$ROLE" \
-        "${LAND_STATUS:-}" "${MOE_REL:-}" "$LAND_STAGED_FILE" "${LAND_WT_PUB:-local}" <<'PY' 2>/dev/null
+        "${LAND_STATUS:-}" "${MOE_REL:-}" "$LAND_STAGED_FILE" "${LAND_WT_PUB:-local}" \
+        "$strong" "${FROZEN_CANDIDATE_ID:-}" "${FROZEN_TREE:-}" "${PINNED_ATTEMPT_PLAN_REVISION:-}" <<'PY' 2>/dev/null
 import json,re,sys
-b,c,t,w,a,g,sid,target,wt,br,role,status,rel,staged,pm=sys.argv[1:]
+b,c,t,w,a,g,sid,target,wt,br,role,status,rel,staged,pm,strong,cand,tree,rev=sys.argv[1:]
 if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a) or not re.fullmatch(r'[1-9][0-9]{0,15}',g): sys.exit(1)
 paths=[]
 for r in open(staged,'rb').read().decode('utf-8','surrogateescape').split('\0'):
@@ -7605,8 +7679,12 @@ for r in open(staged,'rb').read().decode('utf-8','surrogateescape').split('\0'):
 row=dict(taskId=t,outcome='committed',kind='completion',sha=c,ref=target,role=role,sessionId=sid,workerId=w,
     paths=paths[:500],inferredPaths=[],unattributedPaths=[],**({} if pm=='remote' else {'pushed':False}))
 if status: row['status']=status
-print(json.dumps(dict(taskId=t,workerId=w,attemptId=a,generation=int(g),sessionId=sid,workspaceMode='worktree',publicationMode=pm,
-    target=target,targetBefore=b,targetAfter=c,landedRevision=c,worktree=wt,taskBranch=br,ledger=row)))
+d=dict(taskId=t,workerId=w,attemptId=a,generation=int(g),sessionId=sid,workspaceMode='worktree',publicationMode=pm,
+    target=target,targetBefore=b,targetAfter=c,landedRevision=c,worktree=wt,taskBranch=br,ledger=row)
+if strong:
+    if not (re.fullmatch(r'[A-Za-z0-9_-]{1,128}',cand) and re.fullmatch(r'[0-9a-f]{40}',tree) and re.fullmatch(r'[1-9][0-9]{0,15}',rev)): sys.exit(1)
+    d.update(candidateId=cand,treeSha=tree,baseRevision=b,planRevision=int(rev),profile='verified-local')
+print(json.dumps(d))
 PY
     ) && intent_journal_write "$1" "$report" || return 1
     [ "$(cat "$1" 2>/dev/null)" = "$report" ] && return 0
@@ -7617,6 +7695,37 @@ PY
 # wt_journal_push_result JOURNAL RESULT -- the journal's pushResult, best-effort.
 wt_journal_push_result() {
     receipt_journal_write "$1" "$($PYTHON_CMD -c 'import json,sys; d=json.load(open(sys.argv[1],encoding="utf-8")); d["pushResult"]=sys.argv[2]; print(json.dumps(d))' "$1" "$2" 2>/dev/null)"
+}
+
+# wt_journal_rebind JOURNAL -- task-eafb62c4: only the recovered path (§2.9: the
+# target already holds the journaled C and T adds nothing) hands wt_land_published
+# a journal of another attempt; a fresh round journals this one. Adopting that C
+# rebinds the journal to this session's pinned attempt (attemptId, generation,
+# workerId; every other field kept) before any receipt or finalize, so a deferred
+# finalize (CQ-V08) is this attempt's and the next replay closes it. 0 once the
+# journal names this attempt (no write when it already does); 1 when it cannot be
+# rebound: no valid pinned identity, or the write failed, which removes its tmp
+# file and leaves the journal as it was. Twin: Set-MoeJournalAttempt.
+wt_journal_rebind() {
+    local out
+    out=$($PYTHON_CMD - "$1" "${MOE_ATTEMPT_ID:-}" "${MOE_ATTEMPT_GENERATION:-}" "$WORKER_ID" <<'PY' 2>/dev/null
+import json,os,re,sys
+f,a,g,w=sys.argv[1:]
+if not (re.fullmatch(r'[A-Za-z0-9_-]{1,128}',a) and re.fullmatch(r'[1-9][0-9]{0,15}',g)): sys.exit(1)
+with open(f,encoding='utf-8') as i: d=json.load(i)
+if [d.get('attemptId'),d.get('generation'),d.get('workerId')]==[a,int(g),w]: sys.exit(0)
+d.update(attemptId=a,generation=int(g),workerId=w); tmp=f+'.tmp.'+str(os.getpid())
+try:
+    with open(tmp,'w',encoding='utf-8',newline='') as o: o.write(json.dumps(d)); o.flush(); os.fsync(o.fileno())
+    os.replace(tmp,f)
+except Exception:
+    try: os.unlink(tmp)
+    except OSError: pass
+    sys.exit(1)
+print('rebound')
+PY
+    ) || return 1
+    [ "$out" != rebound ] || echo -e "${BLUE}[receipt]${NC} receipt journal $1 now names attempt $MOE_ATTEMPT_ID (generation $MOE_ATTEMPT_GENERATION), which adopted its landing."
 }
 
 # wt_journal_unverified JOURNAL -- 0 when the journal's pushResult says a [remote
@@ -7891,13 +8000,32 @@ if [ "$MIGRATION" = true ]; then run_migration_landing; exit 1; fi
 
 # wt_land_published W BRANCH JOURNAL -- L11-L12 once C is on the target (signals
 # deferred): sync BRANCH (best-effort), send the journal's exact completion row
-# and finalize_attempt landed; the journal goes once both answered.
+# and finalize_attempt landed; the journal goes once both answered. A strong
+# journal (its own profile verified-local, CQ-M07t) also sends its delivery
+# receipt between the two, and sets RECEIPT_STRONG so finalize_postflight treats
+# it as a strong landing whatever this session's pin (task-edf2162b). A journal of
+# another attempt (only the recovered path, §2.9, hands one over) is first rebound
+# to this session's attempt (task-eafb62c4).
 wt_land_published() {
     local ok=true
     MOE_WT_COMPLETION=false
     echo -e "${GREEN}[OK]${NC} Landed task $LAND_TASK_ID on $LAND_BRANCH: $LAND_SHA ($LAND_N_PATHS paths)"
     git -C "$1" merge-base --is-ancestor "$LAND_SHA" "refs/heads/$2" 2>/dev/null || worktree_sync_branch "$1" "$2" "$LAND_SHA" || true
     if receipt_ledger_send "$3" "$LAND_SHA"; then LAND_RECORDED=true; else ok=false; fi
+    if $PYTHON_CMD -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1],encoding="utf-8")).get("profile")=="verified-local" else 1)' "$3" 2>/dev/null; then
+        # The receipt follows the row, as in the replay, so a lost row sends none. finalize_postflight
+        # defers while the receipt is unacknowledged (CQ-V08) and drops the journal only once the
+        # attempt is closed (CQ-V08b); otherwise the next pre-flight replays it.
+        RECEIPT_JOURNAL="$3"; RECEIPT_ACKED=""; RECEIPT_STRONG=true
+        # A journal of another attempt (the recovered path) is this attempt's once rebound (task-eafb62c4); one that
+        # cannot be rebound defers nothing, so this attempt finalizes and the next pre-flight replays the journal.
+        wt_journal_rebind "$3" || { RECEIPT_JOURNAL=""; echo -e "${YELLOW}[WARN]${NC} receipt journal $3 names another attempt and could not be rebound to attempt ${MOE_ATTEMPT_ID:-<none>}; the finalize does not wait on its delivery receipt, and the next pre-flight replays it."; }
+        [ "$ok" != true ] || receipt_send "$(cat "$3")" "$3" || true
+        finalize_postflight || true
+        [ ! -e "$3" ] || echo -e "${YELLOW}[WARN]${NC} receipt journal $3 kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it."
+        wt_release_signals
+        return
+    fi
     finalize_postflight || ok=false
     if [ "$ok" = true ]; then
         rm -f "$3"
@@ -10223,7 +10351,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     # Results are baked into SYSTEM_APPEND/PROMPT below so the agent starts
     # already initialized instead of being told to do these via prompt.
     MOE_FINALIZE_DONE=false; MOE_FINALIZE_RC=0; MOE_UNLANDED_REASON=""; FROZEN_TREE=""; FROZEN_BASE=""; FROZEN_COMMIT=""
-    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""
+    LAND_OUTCOME=nothing; LAND_SHA=""; LAND_RESCUE_SHA=""; LAND_RECORDED=""; RECEIPT_JOURNAL=""; LAND_PROOF_UNTRANSFERRED=""; RECEIPT_ACKED=""; RECEIPT_STRONG=""
     GATE_STARTED=false; GATE_FINISHED=false; GATE_RECORDED=false
     # Exported blank: no CLI inherits a previous task's attempt (sh hot reload keeps env).
     export MOE_ATTEMPT_ID="" MOE_ATTEMPT_GENERATION=""
@@ -10453,14 +10581,17 @@ PYEOF
         # out of the whole claim/baseline/landing path), a pending unread
         # mention (answered by a chat-only session below instead of waited on),
         # and a launch outage (the seat claims no new task until a probe launches).
-        # NOT moe.wait_for_task, and that is measured rather than preferred:
-        # moe_rpc pipes ONE json line into a fresh moe-proxy and closes stdin,
-        # and the proxy treats stdin EOF as shutdown, erroring every still-open
-        # request after a flat 2s grace ("Proxy shutting down before response
-        # received" -- reproduced against a real daemon on 2026-09-12). A
-        # blocking long-poll therefore cannot survive this transport in either
-        # wrapper, so the wait is a bounded CLAIM poll over the same
-        # non-blocking RPC the pre-flight already uses.
+        # NOT moe.wait_for_task. moe_rpc pipes ONE json line into a fresh
+        # moe-proxy and closes stdin. When this was measured against a real
+        # daemon (2026-09-12), the proxy errored every still-open request 2s
+        # after that EOF ("Proxy shutting down before response received"), so
+        # a blocking long-poll could not survive this transport in either
+        # wrapper. The proxy now lets a request it already sent in such a
+        # one-shot session run to its own deadline (MOE_MESSAGE_TIMEOUT_MS, or
+        # MOE_BLOCKING_TIMEOUT_MS for the long-polls); only a message still
+        # queued, with no daemon connection open, keeps the 2s drain (One-shot
+        # calls in packages/moe-proxy/README.md). The wait remains a bounded
+        # CLAIM poll over the same non-blocking RPC the pre-flight already uses.
         if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$LAUNCH_OUTAGE" != true ] \
             && [ "$PREFLIGHT_HAS_UNREAD_MENTION" = false ] && [ -n "$CLAIM_RESULT" ] && [ -n "$PYTHON_CMD" ]; then
             CLAIM_WAIT_NEEDED=$($PYTHON_CMD -c "
@@ -11634,12 +11765,18 @@ $PROMPT_BODY"
         rm -f "$CODEX_SEAT_INSTRUCTIONS_FILE" 2>/dev/null || true
         rm -f "$CODEX_SESSION_CONTEXT_FILE" 2>/dev/null || true
     elif [ "$CLI_TYPE" = "gemini" ]; then
-        if [ "$COMMAND_BIN" = "gemini" ] && command -v agy &> /dev/null; then
-            COMMAND_BIN="agy"
+        # Gemini mode runs Antigravity (agy) only, never the Gemini CLI, which rejects agy's flags.
+        # MOE_AGY_COMMAND names agy when the IDE's PATH lacks it; a blank value counts as unset.
+        # Under the protected marker COMMAND_BIN is already the trusted agy (protected_resolve_cli).
+        if [ "$RUNTIME_PROTECTED" != 1 ]; then
+            case "${MOE_AGY_COMMAND:-}" in
+                *[![:space:]]*) COMMAND_BIN="$MOE_AGY_COMMAND" ;;
+                *) if [ "$CMD_BASE" = "gemini" ]; then COMMAND_BIN="agy"; fi ;;
+            esac
         fi
-        # Check agy is available
         if ! command -v "$COMMAND_BIN" &> /dev/null; then
-            echo -e "${RED}[ERROR]${NC} Antigravity command not found: $COMMAND_BIN. Please ensure Antigravity CLI (agy) is installed."
+            # printf, not echo -e: a backslash in the path (agy\c) must not end or mangle the line.
+            printf '%b[ERROR]%b %s\n' "$RED" "$NC" "Antigravity CLI (agy) not found: $COMMAND_BIN. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH)."
             exit 1
         fi
 

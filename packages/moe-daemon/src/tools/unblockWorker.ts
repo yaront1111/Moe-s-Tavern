@@ -2,7 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
 import { missingRequired, notFound, invalidState } from '../util/errors.js';
-import { nextStatusForRelease } from '../state/workerLifecycle.js';
+import { dropBlockedResourceQueueEntry, nextStatusForRelease } from '../state/workerLifecycle.js';
 
 export function unblockWorkerTool(_state: StateManager): ToolDefinition {
   return {
@@ -97,6 +97,7 @@ export function unblockWorkerTool(_state: StateManager): ToolDefinition {
             ...unblockUpdates(owned),
             assignedWorkerId: params.retryTask ? owned.assignedWorkerId : null,
           }, 'TASK_UNBLOCKED');
+          await dropBlockedResourceQueueEntry(state, owned, params.workerId);
           unblockedTaskIds.push(owned.id);
           if (!params.retryTask) releasedTaskIds.push(owned.id);
         } else if (!params.retryTask) {

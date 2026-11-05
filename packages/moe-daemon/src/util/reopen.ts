@@ -38,6 +38,11 @@ export function resetPlanStepsToPending(plan: ImplementationStep[]): Implementat
  *    the failed-DoD-item log so the reopened task starts a fresh attempt with a
  *    clean budget (a human reopening a parked task un-parks it; the same-item
  *    net counts only within the new attempt, not across the task's whole life)
+ *  - stamp reopenedAt (now): a reopen opens a new work round, and
+ *    completionCommitsForReview anchors the round on the later of this and the
+ *    newest rejection, so a completion commit landed before the reopen never
+ *    satisfies the next review (qa_approve's warning, the strict delivery
+ *    policies, the unrecorded-landing retry)
  *  - clear contextFetchedBy so whoever re-claims the reopened task is FORCED to
  *    call get_context again (assertContextFetched) — i.e. actually re-read the
  *    rejectionDetails/reopenReason instead of resuming on a stale context stamp
@@ -63,6 +68,7 @@ export function buildReopenClearingUpdates(task: Task): Partial<Task> {
     critiqueBlockCount: undefined,
     failedDodItems: [],
     contextFetchedBy: [],
+    reopenedAt: new Date().toISOString(),
   };
 
   // A string/array metrics (a hand-edited row) and a row with no metrics object

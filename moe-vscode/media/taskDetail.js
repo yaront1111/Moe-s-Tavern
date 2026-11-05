@@ -434,5 +434,9 @@
             // Last, so nothing here can hold up the plan token above.
             renderDelivery(msg.delivery);
             renderReleaseAgent(msg.releaseAgentLabel);
+        } else if (msg.type === 'commentNotSent') {
+            // The comment never left the extension: give it back unless something new was typed since.
+            var commentInput = document.getElementById('commentInput');
+            if (commentInput && !commentInput.value) { commentInput.value = msg.content; }
         }
     });

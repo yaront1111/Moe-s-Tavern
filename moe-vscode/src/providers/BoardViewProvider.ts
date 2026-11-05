@@ -124,7 +124,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                 'Delete'
             );
             if (choice !== 'Delete' || this.disposed) return;
-            this.daemonClient.deleteTask(taskId);
+            if (!this.daemonClient.deleteTask(taskId)) {
+                void vscode.window.showWarningMessage('Not connected to Moe daemon — task was not deleted.');
+            }
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             void vscode.window.showErrorMessage(`Failed to delete task: ${errMsg}`);
@@ -147,7 +149,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
                 'Archive'
             );
             if (choice !== 'Archive' || this.disposed) return;
-            this.daemonClient.archiveDoneTasks(scope);
+            if (!this.daemonClient.archiveDoneTasks(scope)) {
+                void vscode.window.showWarningMessage('Not connected to Moe daemon — done tasks were not archived.');
+            }
         } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             void vscode.window.showErrorMessage(`Failed to archive tasks: ${errMsg}`);

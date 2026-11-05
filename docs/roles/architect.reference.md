@@ -52,6 +52,14 @@ One self-contained deliverable per task — a function, a test file, a review; o
 - **Workers read prerequisites from the board**: every `dependsOn` target rides in the dependent's `get_context.epicSiblings` with `landed`, `verification`, `reviewSummary` and `completionSummary` — so never write DoD items that grep HEAD for a sibling's output or "verify-or-block" on another task's code.
 - **No per-slice evidence rows**: security/evidence/verification/hardening rows per slice are the "by evidence type" anti-seam (`moe-epic-breakdown`) — each task proves its own slice, the epic's ONE final hardening task owns the concentrated pass. `create_task` warns on meta-titled duplicates and past the epic ceiling but never fails; treat the warnings as a re-slice signal, not noise.
 
+## Verified-local plans
+
+In a project whose `executionProfile` is `verified-local`, only an approved check delivers (`owedChecks` in `scripts/local-runner/check-dispatch.mjs`, the rules in `packages/moe-daemon/src/delivery/policy.ts`):
+- **Declare every owed check** in `executionContract.requiredChecks`. A task owes each declared entry, plus the `qualityGate` when it is set, `autoCommit` is not `false`, and the task owes it (`qualityGateScope` `everyTask`, or the epic's final task).
+- **Declare the owed gate as an entry**: one entry's `command` must equal the trimmed `qualityGate`, with `configs` naming its `package-lock.json` files (their directories become the check VM's dependency installs) and `assertionRoots` naming the test roots it asserts. A gate owed with no matching entry has no dependency choice, and check-dispatch stops the whole set before any VM with `RUNNER_DEPENDENCIES_UNDECLARED`.
+- **A task that owes nothing** never delivers: its landing stops with `MOE_CHECK_DISPATCH_REFUSED: RUNNER_NOTHING_OWED`, and `moe.qa_approve` reports `required-checks-undeclared`.
+- **An architecture check** counts only as the installed `moe-daemon check-architecture`; any other form runs code the candidate builds and never delivers (`required-check-untrusted-checker`).
+
 ## Rail Proposals (escape hatch)
 
 Only when a rail is wrong for this task — not when you can rewrite the plan to satisfy it.

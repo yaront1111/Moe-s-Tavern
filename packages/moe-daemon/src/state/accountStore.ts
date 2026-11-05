@@ -139,6 +139,21 @@ function fleetOf(state: StateManager): Fleet {
   return fleet;
 }
 
+/** A lease counts only while its seat's record exists and is not DEAD: a gone seat runs no launch to switch. */
+function holdsSeat(state: StateManager, workerId: string): boolean {
+  const worker = state.getWorker(workerId);
+  return !!worker && worker.status !== 'DEAD';
+}
+
+/**
+ * Drop a seat's lease when it is marked DEAD (workerLifecycle.deregisterWorker: moe.deregister_worker or the
+ * reload-hold expiry) or deregisters into a hot reload's hold: its claude session is over, and the wrapper leases
+ * again before it launches the next one.
+ */
+export function forgetAccountLease(state: StateManager, workerId: string): void {
+  fleets.get(state)?.leases.delete(workerId);
+}
+
 function iso(ms: number): string {
   return new Date(ms).toISOString();
 }
@@ -423,8 +438,9 @@ export async function recordAccountReport(state: StateManager, report: AccountRe
   recorded = recorded || merged.written;
   // A restart forgets every lease. The wrapper only reports the account its
   // running claude was launched under, so learn it back (after the merge, so
-  // the one broadcast carries both); a lease is never replaced.
-  if (report.workerId && !fleet.leases.has(report.workerId)) {
+  // the one broadcast carries both). A live seat's lease is never replaced; one
+  // held by a DEAD or unknown seat is ignored, so its report replaces it.
+  if (report.workerId && !(fleet.leases.has(report.workerId) && holdsSeat(state, report.workerId))) {
     await settleLease(state, fleet, report.workerId, account.id, nowMs);
   }
   refreshAccounts(state, nowMs);
@@ -467,11 +483,12 @@ function mergeReportUsage(
  * refused, signed out or removed) and the next lease would pick another one.
  * Only a seat whose account this process knows counts: one it leased, or one
  * whose wrapper reported usage since a restart. A seat that never leased
- * (rotation off, another CLI) is never told to switch.
+ * (rotation off, another CLI) is never told to switch, and neither is one
+ * whose record is gone or DEAD.
  */
 export function accountSwitchFor(state: StateManager, workerId: string | undefined, nowMs: number = Date.now()): AccountSwitch | null {
   const fleet = fleets.get(state);
-  const from = workerId ? fleet?.leases.get(workerId) : undefined;
+  const from = workerId && holdsSeat(state, workerId) ? fleet?.leases.get(workerId) : undefined;
   if (!fleet || !from) return null;
   const file = registryFilePath();
   const { registry } = loadRegistry(fleet, file);

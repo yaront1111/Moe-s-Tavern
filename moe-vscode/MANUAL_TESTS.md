@@ -18,8 +18,69 @@
 
 ## Failed reconnect keeps retrying
 1. Enable `moe.autoConnect=true`.
-2. Point `moe.daemon.port` at an unused port or stop the daemon after a connected session.
-3. Expected: reconnect attempts continue on the timer until `maxReconnectAttempts` is exhausted, including failures that occur before a WebSocket close event.
+2. Point `moe.daemon.port` at an unused port, or open the workspace while no daemon runs and `moe.daemon.autoStart` is off. (A daemon stopped after a connected session ends differently: see step 6 of the next section.)
+3. Expected: reconnect attempts continue 5 s, 10 s, 20 s, then every 30 s (the Moe output channel logs each one), including failures that occur before a WebSocket close event and a first connect that found no daemon. After 10 retries, about 4 minutes, one "Moe daemon connection failed after 10 retries." message with a **Reconnect** button appears.
+
+## Reconnect after a daemon restart
+1. With `moe.autoConnect=true`, connect to a daemon started with `node packages/moe-daemon/dist/index.js start --project <path>`.
+2. Run `stop` for that project, then within a minute or two `start` it again while another process holds its old port (for example `node -e "require('net').createServer().listen(<old port>, '127.0.0.1')"`), so it comes back on another port.
+3. Expected: the status bar shows disconnected, then connected on its own once the new daemon writes `.moe/daemon.json`. Between `stop` and `start`, `status` shows that the extension started no daemon of its own, and the extension never deletes `.moe/daemon.json`.
+4. Kill the daemon process that `.moe/daemon.json` names (not its supervisor). Expected: the supervisor restarts it and the extension reconnects without a click; afterwards `status` shows one daemon.
+5. Repeat step 2 and run `Moe: Disconnect from Daemon` before the `start`. Expected: no retries follow, and the extension stays disconnected after the daemon is back. Closing the window while it waits leaves no retry running either.
+6. Run `stop` and leave the daemon stopped. Expected: the same retries (5 s, 10 s, 20 s, then every 30 s), and the extension starts no daemon. After 10 retries, about 4 minutes, one warning, "The Moe daemon shut down and did not come back.", appears with a **Reconnect** button, and no "connection failed" error. **Reconnect** connects as `Moe: Connect to Daemon` does, so with `moe.daemon.autoStart` on it starts the daemon.
+
+## Reconnect during a handshake
+1. Run `Moe: Reconnect to Daemon` while the status bar shows connecting (for example right after a daemon restart), or twice in quick succession.
+2. Expected: "Reconnected to daemon" appears only when the status bar shows connected; a failed attempt shows "Failed to reconnect: ..." instead.
+
+## Protected profile: a stop that cannot stop the daemon
+1. In a protected-profile workspace, start the daemon outside this window (so the extension cannot verify it), then make it unable to answer `/health`, for example by suspending it (`kill -STOP <pid>`).
+2. Connect and choose **Stop and Replace** in the refusal dialog.
+3. Expected: the installed CLI's `stop` exits 1 and an error says "Protected execution profile: the installed Moe CLI did not stop the running Moe daemon (pid <pid>; stop exited 1), so no replacement was started. Stop that process yourself, then reconnect." `.moe/daemon.json` still names the old pid, no second daemon starts, and no retry follows. Resume the process (`kill -CONT <pid>`) afterwards.
+
+## Daemon refusals reach the user
+1. Set a WIP limit the board can hit (for example `columnLimits.WORKING` of 1 with one WORKING task) and drag another task into Working.
+2. Expected: an error message carrying the daemon's refusal text, not only an Output-channel line.
+3. Open Plan Review on an AWAITING_APPROVAL task and approve that plan elsewhere (JetBrains or `scripts/moe-call.sh`), then click **Reject**. Expected: "This task is no longer awaiting plan approval, so nothing was rejected." and the task stays as it is. Repeat from task detail, and once with the reject reason prompt open while the plan is approved elsewhere.
+
+## Unsent edits stay
+1. Open Create Task, Create Epic, a task detail and an epic detail, then stop the daemon so the extension is disconnected.
+2. Click Create, Save, Delete and Add Comment (with a comment typed).
+3. Expected: a warning per action ("Not connected to Moe daemon — task was not created.", "... task was not saved.", "... comment was not added." and so on), every panel stays open with what was typed, and the comment goes back into the comment box if it is still empty. Reconnect and repeat: each action goes through and its form closes.
+
+## Board cards update in place
+1. Keep the board open while a task's description, epic, human-review flag, blocker, reopen count or plan-critique verdict changes on the daemon side (an agent, JetBrains or `scripts/moe-call.sh`).
+2. Expected: the card shows the change at once, without a status change or a board refresh.
+
+## Settings follow changes made elsewhere
+1. Run `Moe: Open Settings`, then change the approval mode and agent command from JetBrains (or another VS Code window) and save there.
+2. Expected: the open form shows the new values without reopening, and the read-only Landing & Gate Policy section refreshes after a policy change.
+3. Type a new agent command in the form, then change the approval mode elsewhere. Expected: the form keeps your agent command and shows the new mode; Save writes both.
+
+## Forms keep what was typed while hidden
+1. Open Create Task, Create Epic, an epic detail or Settings, type into it, switch to another editor tab, then back.
+2. Expected: the text is still there.
+
+## Launch lines in any default shell (macOS and Linux)
+1. Set the default terminal profile to fish, tcsh or PowerShell (`pwsh`). Run `Moe: Start Agent` → worker, and **Sign in** on an account in the **Claude accounts** view.
+2. Expected: each line starts with `env` and runs: the seat registers with the daemon, and the accounts CLI starts its login.
+
+## Chat after a reload or a reconnect
+1. Select a non-general chat channel, then run **Developer: Reload Window**. Expected: the same channel is selected again, its messages reload and the input is enabled.
+2. Disconnect, have an agent post to the channel, then reconnect. Expected: the message shows up without selecting the channel again.
+3. Keep the channel open while more than 500 messages are posted to it (a loop of `scripts/moe-call.sh chat_send ...`). Expected: the view shows the newest 500, and a window reload restores no more than that.
+4. Post `[docs](https://example.com" style="color:red)` to a channel. Expected: the link text is not red and the link has no `style` attribute (inspect with **Developer: Open Webview Developer Tools**).
+
+## Metrics range after a view rebuild
+1. In the Metrics view, pick **7d**, then move the view to another sidebar or the panel (or reload it).
+2. Expected: **7d** is still the marked range, and the figures are 7-day figures.
+
+## Activity log
+1. Run `Moe: Show Activity Log` while connected. Expected: a document with the latest 50 events opens.
+2. Open the board's Activity tab (it asks for 200 events) and run the command again. Expected: the document lists 50 events, and the Activity tab keeps its own 200: neither request is answered with the other's reply.
+
+## Output channel
+1. Open the Output panel's channel list. Expected: one "Moe" entry, carrying both the extension's and the daemon client's lines.
 
 ## send/close race does not throw
 1. While connected, trigger UI actions such as Refresh Board or Chat requests.

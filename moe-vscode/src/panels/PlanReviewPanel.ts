@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { MoeDaemonClient } from '../services/MoeDaemonClient';
 import type { ImplementationStep, MoeStateSnapshot, StepAmendment, Task, TaskComment } from '../types/moe';
 
+/** A Reject clicked after the task left AWAITING_APPROVAL: the daemon would refuse it, so nothing is sent. */
+export const STALE_REJECT = 'This task is no longer awaiting plan approval, so nothing was rejected.';
+
 /**
  * Plan Review Panel - a webview panel for reviewing implementation plans
  * of tasks in AWAITING_APPROVAL status.
@@ -120,6 +123,13 @@ export class PlanReviewPanel implements vscode.Disposable {
 
     private findTask(): Task | undefined {
         return this.client.currentState?.tasks.find(t => t.id === this.taskId);
+    }
+
+    /** True while the task still awaits plan approval; otherwise says nothing was rejected. */
+    private awaitingApproval(): boolean {
+        if (this.findTask()?.status === 'AWAITING_APPROVAL') { return true; }
+        vscode.window.showWarningMessage(STALE_REJECT);
+        return false;
     }
 
     private debouncedUpdate(): void {
@@ -250,6 +260,7 @@ export class PlanReviewPanel implements vscode.Disposable {
                 case 'reject': {
                     const reason = msg.reason;
                     if (reason) {
+                        if (!this.awaitingApproval()) { break; }
                         if (this.client.rejectTask(this.taskId, reason)) {
                             vscode.window.showInformationMessage('Plan rejected');
                             this.dispose();
@@ -261,11 +272,15 @@ export class PlanReviewPanel implements vscode.Disposable {
                 }
 
                 case 'promptReject': {
+                    // Reject stays enabled after the task moves on: judge the task as it is now, before the prompt
+                    // and again after it, since the plan can move while the reason is typed.
+                    if (!this.awaitingApproval()) { break; }
                     const reason = await vscode.window.showInputBox({
                         prompt: 'Rejection reason',
                         placeHolder: 'Why is this plan being rejected?',
                     });
                     if (reason) {
+                        if (!this.awaitingApproval()) { break; }
                         if (this.client.rejectTask(this.taskId, reason)) {
                             vscode.window.showInformationMessage('Plan rejected');
                             this.dispose();
@@ -277,9 +292,11 @@ export class PlanReviewPanel implements vscode.Disposable {
                 }
 
                 case 'addComment': {
-                    const content = msg.content;
-                    if (content && content.trim()) {
-                        this.client.addTaskComment(this.taskId, content.trim());
+                    const content = msg.content?.trim();
+                    if (content && !this.client.addTaskComment(this.taskId, content)) {
+                        vscode.window.showWarningMessage('Not connected to Moe daemon — comment was not added.');
+                        // The page cleared its input on send: hand the text back so it is not lost.
+                        void this.postControl({ type: 'commentNotSent', content });
                     }
                     break;
                 }

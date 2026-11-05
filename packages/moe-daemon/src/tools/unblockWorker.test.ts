@@ -220,3 +220,47 @@ describe('moe.unblock_worker on a BLOCKED task (seat-only default)', () => {
   });
 });
 
+describe('moe.unblock_worker resolveBlocks drops the queue entry of the resource the task was blocked on', () => {
+  const h = new ToolTestHarness();
+  beforeEach(() => h.init());
+  afterEach(() => { vi.restoreAllMocks(); h.cleanup(); });
+
+  // task-h holds 'box'; task-b (the one unblocked by hand) and task-w wait on it, in that order.
+  beforeEach(async () => {
+    h.setupMoeFolder();
+    h.createEpic();
+    const blocked = { status: 'BLOCKED' as const, blockedFromStatus: 'WORKING' as const, blockedReason: 'waiting on the box', blockedResourceId: 'box', blockedAt: '2026-11-05T00:00:00.000Z' };
+    h.createTask({ id: 'task-h', status: 'WORKING', assignedWorkerId: 'worker-h', order: 1 });
+    h.createTask({ id: 'task-b', ...blocked, assignedWorkerId: 'worker-b', order: 2 });
+    h.createTask({ id: 'task-w', ...blocked, assignedWorkerId: 'worker-w', order: 3 });
+    h.createWorker({ id: 'worker-h', status: 'CODING', currentTaskId: 'task-h' });
+    h.createWorker({ id: 'worker-b', status: 'BLOCKED', currentTaskId: 'task-b' });
+    h.createWorker({ id: 'worker-w', status: 'BLOCKED', currentTaskId: 'task-w' });
+    await h.state.load();
+    for (const n of ['h', 'b', 'w']) await h.state.acquireResource({ resourceId: 'box', taskId: `task-${n}`, workerId: `worker-${n}` });
+  });
+
+  const box = () => {
+    const resource = h.state.getResource('box')!;
+    return { holders: resource.holders.map((l) => l.taskId), queue: resource.queue.map((q) => q.taskId) };
+  };
+  const releaseHolder = () => h.state.releaseResource({ resourceId: 'box', workerId: 'worker-h', taskId: 'task-h', force: true });
+
+  it('drops only that entry, so the next grant reaches a task still waiting, not the unblocked one', async () => {
+    expect(box()).toEqual({ holders: ['task-h'], queue: ['task-b', 'task-w'] });
+
+    await unblockWorkerTool(h.state).handler({ workerId: 'worker-b', resolution: 'box not needed', resolveBlocks: true, retryTask: true }, h.state);
+
+    expect(h.state.getTask('task-b')).toMatchObject({ status: 'WORKING', assignedWorkerId: 'worker-b', blockedResourceId: null });
+    expect(box()).toEqual({ holders: ['task-h'], queue: ['task-w'] });
+    await releaseHolder();
+    expect(box().holders).toEqual(['task-w']);
+  });
+
+  it('a seat-only unblock keeps the entry: the task is still BLOCKED and still waiting', async () => {
+    await unblockWorkerTool(h.state).handler({ workerId: 'worker-b', resolution: 'seat freed' }, h.state);
+
+    expect(h.state.getTask('task-b')).toMatchObject({ status: 'BLOCKED', blockedResourceId: 'box' });
+    expect(box()).toEqual({ holders: ['task-h'], queue: ['task-b', 'task-w'] });
+  });
+});

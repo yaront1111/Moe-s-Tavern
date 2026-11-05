@@ -1,5 +1,6 @@
 package com.moe.services
 
+import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.intellij.openapi.project.Project as IdeaProject
@@ -9,6 +10,7 @@ import com.moe.model.MoeState
 import com.moe.model.ReadinessFailure
 import com.moe.model.ReadinessReply
 import com.moe.util.MoeProjectRegistry
+import com.moe.util.RuntimeProfile
 import org.java_websocket.WebSocket
 import org.java_websocket.WebSocketImpl
 import org.java_websocket.client.WebSocketClient
@@ -22,13 +24,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.Timeout
+import java.io.File
 import java.lang.reflect.Proxy
 import java.net.InetSocketAddress
 import java.net.URI
+import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 
 class MoeProjectConnectionTest {
@@ -311,6 +317,113 @@ class MoeProjectConnectionTest {
         assertEquals(emptyList<String>(), fixture.frames.toList())
     }
 
+    @Test
+    fun `DAEMON_SHUTTING_DOWN follows the restarted daemon that daemon json names, and starts none`() = withConnection { fixture ->
+        val root = Files.createTempDirectory("moe-follow").toFile().also { File(it, ".moe").mkdirs() }
+        val starts = injectSupervisor(fixture.service, root)
+        val restarted = LoopbackDaemon()
+        try {
+            fixture.connect(41050)
+            // The crashed daemon's supervisor restarted it on another port and rewrote daemon.json.
+            File(root, ".moe/daemon.json").writeText(Gson().toJson(DaemonInfo(restarted.port, 41051, "now", "")))
+            val conn = fixture.serverConnection()
+            conn.send("""{"type":"DAEMON_SHUTTING_DOWN"}""")
+            fixture.flush(conn)
+            conn.close()
+
+            awaitUntil("The service did not follow the restarted daemon") {
+                fixture.service.isConnected() && (fixture.service.field("clientDaemonInfo") as DaemonInfo?)?.port == restarted.port
+            }
+            assertEquals("The follow starts no daemon", 0, starts.get())
+        } finally {
+            fixture.service.dispose()
+            restarted.close()
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `following a shut-down daemon starts none and gives up after its bounded window`() = withConnection { fixture ->
+        val root = Files.createTempDirectory("moe-follow-gone").toFile().also { File(it, ".moe").mkdirs() }
+        val starts = injectSupervisor(fixture.service, root)
+        val statuses = CopyOnWriteArrayList<Pair<Boolean, String>>()
+        fixture.service.addListener(object : MoeStateListener {
+            override fun onState(state: MoeState) {}
+            override fun onStatus(connected: Boolean, message: String) { statuses.add(connected to message) }
+        })
+        try {
+            fixture.service.setField("followingDaemonRestart", true)
+            fixture.service.call("scheduleReconnect")
+            // The first attempt, 1 s later, finds no daemon.json: it starts nothing and waits for the next one.
+            awaitUntil("The first follow attempt did not schedule the next") { (false to "Reconnecting... (2/10)") in statuses }
+            assertEquals(0, starts.get())
+
+            fixture.service.setField("reconnectAttempts", 10)
+            fixture.service.call("rejoinRestartedDaemon")
+            assertEquals(false to "The daemon shut down and did not come back. Use Restart Daemon to start it.", statuses.last())
+            assertEquals(0, starts.get())
+            assertFalse(fixture.service.isConnected())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `the follow waits 1, 2 and 4 s, then 8 s, so ten attempts cover the supervisor's restart minute`() {
+        val delays = (1..10).map { MoeProjectService.followDelayMs(it) }
+        assertEquals(listOf(1_000L, 2_000L, 4_000L) + List(7) { 8_000L }, delays)
+        assertTrue("${delays.sum()} ms", delays.sum() >= 60_000L)
+    }
+
+    @Test
+    fun `an unreadable frame leaves a live board connected`() = withConnection { fixture ->
+        val statuses = CopyOnWriteArrayList<Pair<Boolean, String>>()
+        val applied = CountDownLatch(1)
+        fixture.service.addListener(object : MoeStateListener {
+            override fun onState(state: MoeState) { applied.countDown() }
+            override fun onStatus(connected: Boolean, message: String) { statuses.add(connected to message) }
+        })
+        fixture.connect(41052)
+        val conn = fixture.serverConnection()
+        conn.send("not json")
+        conn.send("""{"type":"STATE_SNAPSHOT","payload":{"project":{"id":"proj-1","name":"Moe"},"epics":[],"tasks":[]}}""")
+        fixture.flush(conn)
+
+        assertTrue("The frame after the unreadable one was not applied", applied.await(5, TimeUnit.SECONDS))
+        assertTrue(fixture.service.isConnected())
+        assertEquals(listOf(true to "Connected"), statuses.toList())
+    }
+
+    @Test
+    fun `a reconnect scheduled after dispose shut the scheduler down is dropped, not thrown`() = withConnection { fixture ->
+        // dispose() shuts the scheduler down; a socket callback past scheduleReconnect's checks must not throw.
+        (fixture.service.field("scheduler") as ScheduledExecutorService).shutdown()
+
+        fixture.service.call("scheduleReconnect")
+
+        assertEquals(null, fixture.service.field("reconnectFuture"))
+    }
+
+    /** A second loopback endpoint: the daemon its supervisor restarted. */
+    private class LoopbackDaemon : AutoCloseable {
+        private val started = CountDownLatch(1)
+        private val server = object : WebSocketServer(InetSocketAddress("127.0.0.1", 0), 1) {
+            override fun onStart() { started.countDown() }
+            override fun onOpen(conn: WebSocket?, handshake: ClientHandshake?) {}
+            override fun onMessage(conn: WebSocket?, message: String?) {}
+            override fun onClose(conn: WebSocket?, code: Int, reason: String?, remote: Boolean) {}
+            override fun onError(conn: WebSocket?, ex: Exception?) {}
+        }
+        val port: Int get() = server.port
+
+        init {
+            server.start()
+            assertTrue("The restarted loopback daemon did not start", started.await(5, TimeUnit.SECONDS))
+        }
+
+        override fun close() = server.stop(1000)
+    }
+
     private fun withConnection(
         invokeLater: ((() -> Unit) -> Unit) = { action -> action() },
         test: (ConnectionFixture) -> Unit
@@ -490,6 +603,25 @@ class MoeProjectConnectionTest {
 
         private fun MoeProjectService.field(name: String): Any? =
             MoeProjectService::class.java.getDeclaredField(name).apply { isAccessible = true }.get(this)
+
+        private fun MoeProjectService.setField(name: String, value: Any) =
+            MoeProjectService::class.java.getDeclaredField(name).apply { isAccessible = true }.set(this, value)
+
+        private fun MoeProjectService.call(name: String) {
+            MoeProjectService::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(this)
+        }
+
+        /** Points [service] at [root]'s daemon.json, with every pid alive and port open; counts each daemon start, which fails. */
+        private fun injectSupervisor(service: MoeProjectService, root: File): AtomicInteger {
+            val starts = AtomicInteger()
+            val supervisor = MoeDaemonSupervisor(
+                root.canonicalPath, "Follow Test", portProbe = { _, _ -> true }, processAliveProbe = { true },
+                processStarter = { starts.incrementAndGet(); error("must not start a daemon") },
+                profile = { RuntimeProfile.LEGACY }, docSync = { _, _ -> }
+            )
+            MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }.set(service, supervisor)
+            return starts
+        }
 
         private fun fakeProject(): IdeaProject = Proxy.newProxyInstance(
             IdeaProject::class.java.classLoader,

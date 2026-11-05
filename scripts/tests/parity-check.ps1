@@ -169,6 +169,9 @@ $required = [ordered]@{
     # replace_in_files summary header both wrappers parse.
     'Serena TOOL-tier tools' = @('replace_symbol_body', 'insert_after_symbol', 'insert_before_symbol', 'create_text_file', 'replace_regex',
         'replace_content', 'replace_in_files', 'rename_symbol', 'safe_delete_symbol', 'delete_lines', 'replace_lines', 'insert_at_line', 'occurrence(s) in')
+    # Gemini mode runs Antigravity (agy) only: both wrappers read MOE_AGY_COMMAND
+    # and stop with the same not-found message, never a fallback to the Gemini CLI.
+    'gemini mode (Antigravity)' = @('MOE_AGY_COMMAND', 'Antigravity CLI (agy) not found:', 'Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).')
 }
 foreach ($group in $required.Keys) {
     foreach ($lit in $required[$group]) {

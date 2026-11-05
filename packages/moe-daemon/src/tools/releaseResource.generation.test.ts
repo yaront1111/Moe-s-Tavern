@@ -152,4 +152,49 @@ describe('moe.release_resource generation preconditions', () => {
     expect(res.released).toEqual([]);
     expect(res.releasedHolders).toEqual([]);
   });
+
+  describe('once the row passed to another seat', () => {
+    /** worker-1 acquires the gate for task-1, then the row moves to worker-2 (a QA claim of the REVIEW row). */
+    async function acquiredThenHandedOn(): Promise<string> {
+      const got = await acquireResourceTool(h.state).handler({ resourceId: 'gate', taskId: 'task-1', workerId: 'worker-1' }, h.state) as Record<string, unknown>;
+      expect(got.granted).toBe(true);
+      const acquiredAt = h.state.getResource('gate')!.holders[0].acquiredAt;
+      await h.state.updateTask('task-1', { assignedWorkerId: null });
+      await h.state.updateTask('task-1', { assignedWorkerId: 'worker-2' });
+      return acquiredAt;
+    }
+
+    it('the acquirer\'s late release leaves the lease alone', async () => {
+      await acquiredThenHandedOn();
+      const release = releaseResourceTool(h.state);
+
+      for (const args of [{ resourceId: 'gate', workerId: 'worker-1' }, { resourceId: 'gate', workerId: 'worker-1', taskId: 'task-1' }]) {
+        const res = await release.handler(args, h.state) as Record<string, unknown>;
+        expect(res.released).toEqual([]);
+      }
+      expect(h.state.getResource('gate')!.holders.map((l) => l.taskId)).toEqual(['task-1']);
+    });
+
+    it('the seat holding the row releases it', async () => {
+      await acquiredThenHandedOn();
+      const res = await releaseResourceTool(h.state).handler(
+        { resourceId: 'gate', workerId: 'worker-2', taskId: 'task-1' }, h.state
+      ) as Record<string, unknown>;
+      expect(res.released).toEqual(['task-1']);
+    });
+
+    it('the acquirer releases the exact lease it pinned with taskId + ifAcquiredAt (the wrapper\'s land lease)', async () => {
+      const acquiredAt = await acquiredThenHandedOn();
+      const release = releaseResourceTool(h.state);
+
+      await expect(release.handler(
+        { resourceId: 'gate', workerId: 'worker-1', taskId: 'task-1', ifAcquiredAt: '2000-01-01T00:00:00.000Z' }, h.state
+      )).rejects.toThrow();
+      expect(h.state.getResource('gate')!.holders.map((l) => l.acquiredAt)).toEqual([acquiredAt]);
+      const res = await release.handler(
+        { resourceId: 'gate', workerId: 'worker-1', taskId: 'task-1', ifAcquiredAt: acquiredAt }, h.state
+      ) as Record<string, unknown>;
+      expect(res.released).toEqual(['task-1']);
+    });
+  });
 });

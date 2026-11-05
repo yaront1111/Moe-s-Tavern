@@ -151,6 +151,8 @@ export async function admitCandidate(input) {
     const tree = await writeTree(run, temp, format, options);
     return Object.freeze({ baseTree: options.baseTree, tree, digest: options.candidate.digest });
   } catch (error) { throw fixedError(error); } finally {
-    if (temp !== null) await rm(temp, { recursive: true, force: true }).catch(() => { throw admissionError('ADMISSION_GIT_FAILED'); });
+    // Retried: on Windows a just-exited git or a scanner can hold a blob copy for a moment (EBUSY, EPERM, ENOTEMPTY).
+    const gone = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 };
+    if (temp !== null) await rm(temp, gone).catch(() => { throw admissionError('ADMISSION_GIT_FAILED'); });
   }
 }

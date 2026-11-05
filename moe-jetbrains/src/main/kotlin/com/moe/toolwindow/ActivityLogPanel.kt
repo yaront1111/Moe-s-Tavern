@@ -32,6 +32,7 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
     @Volatile private var allEvents: List<ActivityEvent> = emptyList()
     @Volatile private var selectedFilter: String = "All"
     private var stateListener: MoeStateListener? = null
+    private val logRefresh = ActivityLogRefresh()
 
     private val eventTypes = listOf(
         "All",
@@ -72,7 +73,7 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
 
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
-                if (allEvents.isEmpty()) {
+                if (logRefresh.changed(state)) {
                     service.requestActivityLog(200)
                 }
             }
@@ -91,7 +92,8 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
         }
         service.addListener(stateListener!!)
 
-        // Request initial data
+        // Request initial data, for the board shown now: its next republish then reads nothing.
+        service.getState()?.let { logRefresh.changed(it) }
         service.requestActivityLog(200)
     }
 
@@ -165,5 +167,22 @@ class ActivityLogPanel(private val project: Project) : JBPanel<ActivityLogPanel>
 
             return parts.joinToString(" | ")
         }
+    }
+}
+
+/**
+ * When a published state should re-read the activity log. The daemon logs an event for nearly every board change
+ * but pushes none, and the service republishes an unchanged board every 3 s. The account rotation is left out:
+ * its usage samples change often and log no event.
+ */
+internal class ActivityLogRefresh {
+    @Volatile private var last: MoeState? = null
+
+    /** True when [state] differs from the last state seen, the account rotation aside. */
+    fun changed(state: MoeState): Boolean {
+        val key = state.copy(accountRotation = null)
+        if (key == last) return false
+        last = key
+        return true
     }
 }

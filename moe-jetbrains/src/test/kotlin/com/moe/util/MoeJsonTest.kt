@@ -208,6 +208,22 @@ class MoeJsonTest {
         assertEquals(4, settings.taskSizing.maxDistinctFiles)
     }
 
+    // J11: an unguarded asJsonObject threw on one bad element, dropping the snapshot and flipping a live socket to "disconnected".
+    @Test
+    fun `parseState skips null and non-object epic and task elements and keeps the rest`() {
+        val state = parseState(
+            """
+            {
+              "epics": [null, 7, "epic-x", [], {"id": "epic-1", "title": "Epic"}],
+              "tasks": [null, true, {"id": "task-1", "epicId": "epic-1", "title": "Task"}, ["task-2"]]
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(listOf("epic-1"), state.epics.map { it.id })
+        assertEquals(listOf("task-1"), state.tasks.map { it.id })
+    }
+
     @Test
     fun `parseState falls back safely for malformed optional settings`() {
         val state = parseState(
@@ -768,6 +784,21 @@ class MoeJsonTest {
     }
 
     /** A task payload with [members] spliced in verbatim as extra JSON object members. */
+    @Test
+    fun `task timestamps read verbatim through both parse paths and absent ones are null`() {
+        val stamps = "\"createdAt\": \"2026-11-01T00:00:00.000Z\", \"updatedAt\": \"2026-11-04T12:34:56.789Z\", \"completedAt\": \"2026-11-04T12:00:00.000Z\""
+        for ((path, task) in bothPaths(blockerTaskJson(stamps))) {
+            assertEquals(path, "2026-11-01T00:00:00.000Z", task.createdAt)
+            assertEquals(path, "2026-11-04T12:34:56.789Z", task.updatedAt)
+            assertEquals(path, "2026-11-04T12:00:00.000Z", task.completedAt)
+        }
+        for ((path, task) in bothPaths(blockerTaskJson(""))) {
+            assertNull(path, task.createdAt)
+            assertNull(path, task.updatedAt)
+            assertNull(path, task.completedAt)
+        }
+    }
+
     private fun blockerTaskJson(members: String, status: String = "BLOCKED", id: String = "task-blocked"): String {
         val extra = if (members.isBlank()) "" else "$members,"
         return """

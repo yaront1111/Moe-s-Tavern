@@ -12,6 +12,9 @@
 // (FAKE_CLAIM_MODE=reload-hold) and the attempts/, candidates/,
 // checks/, receipts/ and resources/ records. FAKE_CALL_LOG (a log of every
 // call) and FAKE_READINESS (the get_execution_readiness answer) are inert unset.
+// FAKE_CTX_CONTRACT (task.executionContract on get_context) is inert unset too, and
+// record_candidate refuses a protectedEntries list that the daemon's
+// candidateStore.ts readProtectedEntries would refuse; an absent list stays absent.
 const fs = require('fs');
 const path = require('path');
 const raw = fs.readFileSync(0, 'utf8').trim();
@@ -99,6 +102,32 @@ function attemptFixture() {
 }
 const safeId = v => typeof v === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(v);
 const sha = v => typeof v === 'string' && /^[a-f0-9]{40}$/.test(v);
+// util/affectedFiles.ts normalizeAffectedFile in miniature: null when the daemon refuses the path.
+function normalizedPath(raw) {
+  const t = String(raw).trim();
+  if (!t || t.length > 500) return null;
+  const p = t.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (p.startsWith('/') || /^[A-Za-z]:\//.test(p) || p.split('/').includes('..')) return null;
+  return p.split('/').filter(s => s !== '' && s !== '.').join('/') || null;
+}
+// state/candidateStore.ts readProtectedEntries: an array of at most 2000 exact {path, oid}
+// entries, each path already normalized and free of control characters, each oid lowercase
+// 40-hex, the paths strictly ascending by UTF-8 bytes. Each violation throws, so the wrapper
+// gets the FIXTURE_REFUSED refusal (task-ee10405f).
+function protectedEntriesCheck(list) {
+  if (!Array.isArray(list)) throw new Error('protectedEntries must be an array');
+  if (list.length > 2000) throw new Error('protectedEntries must have at most 2000 entries');
+  let previous;
+  list.forEach((e, i) => {
+    const at = `protectedEntries[${i}]`;
+    if (!e || typeof e !== 'object' || Array.isArray(e) || Object.keys(e).sort().join() !== 'oid,path') throw new Error(at + ' must be exactly {path, oid}');
+    if (typeof e.path !== 'string' || normalizedPath(e.path) !== e.path) throw new Error(at + '.path must already be normalized');
+    if (/[\x00-\x1f\x7f]/.test(e.path)) throw new Error(at + '.path must not contain control characters');
+    if (typeof e.oid !== 'string' || !/^[0-9a-f]{40}$/.test(e.oid)) throw new Error(at + '.oid must be a lowercase 40-hex object id');
+    if (previous !== undefined && Buffer.compare(Buffer.from(previous), Buffer.from(e.path)) >= 0) throw new Error(at + '.path must sort strictly after the previous entry (UTF-8 bytes)');
+    previous = e.path;
+  });
+}
 function candidateReply() {
   let payload;
   const a = JSON.parse(fs.readFileSync(path.join(moe,'attempts',args.attemptId+'.json'),'utf8'));
@@ -106,6 +135,7 @@ function candidateReply() {
   assert.equal(args.generation,a.generation); assert.notEqual(a.phase,'closed');
   assert.ok(safeId(args.id)); assert.ok(sha(args.treeSha)); assert.ok(sha(args.baseRevision));
   assert.match(args.deliveryTarget,/^refs\/heads\/.+/);
+  if (args.protectedEntries !== undefined) protectedEntriesCheck(args.protectedEntries);
   const {generation,workerId,...candidate} = args;
   payload = {success:true,candidate:{...candidate,createdAt:new Date().toISOString()},duplicate:false};
   ensureDir(path.join(moe,'candidates'));
@@ -262,10 +292,11 @@ function evidenceRpc() {
     error:{code:-32002,message,data:{codeName:codeName || 'FIXTURE_REFUSED'}}}) + '\n');
   const mode = process.env.FAKE_EVIDENCE_MODE || '';
   if (mode === tool + '-refuse') { refusal('fixture persistence refused'); return true; }
-  if (mode === tool + '-null') { ok(null); return true; }
+  // receipt-conflict-finalize-lost: a receipt conflict whose every finalize is lost (task-a1f3723f).
+  if (mode === tool + '-null' || (tool === 'finalize_attempt' && mode === 'receipt-conflict-finalize-lost')) { ok(null); return true; }
   if (mode === tool + '-malformed') { ok({success:true}); return true; }
   if (tool === 'record_delivery_receipt' && mode === 'receipt-refused') { refusal('fixture receipt refused'); return true; }
-  if (tool === 'record_delivery_receipt' && mode === 'receipt-conflict') { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
+  if (tool === 'record_delivery_receipt' && ['receipt-conflict','receipt-conflict-finalize-lost'].includes(mode)) { refusal('fixture receipt conflict', 'DELIVERY_RECEIPT_CONFLICT'); return true; }
   // receipt-replay, receipt-rebase-replay, receipt-foreign-replay: the FIRST
   // receipt is never answered; the supervisor hard-kills the wrapper tree while
   // it waits (acceptance case 6's crash).
@@ -636,6 +667,13 @@ switch (tool) {
     if (ctxLanding !== undefined && claimsSoFar >= landingFrom) {
       if (!ctxLanding || typeof ctxLanding !== 'object' || Array.isArray(ctxLanding)) throw new Error('FAKE_CTX_LANDING must be a JSON object');
       ctxPayload.task.landing = ctxLanding;
+    }
+    // FAKE_CTX_CONTRACT: task.executionContract (a JSON object), served only when set, as
+    // getContext.ts does; the strong landing reads its requiredChecks (task-ee10405f). Unset: no field.
+    const ctxContract = jsonKnob('FAKE_CTX_CONTRACT');
+    if (ctxContract !== undefined) {
+      if (!ctxContract || typeof ctxContract !== 'object' || Array.isArray(ctxContract)) throw new Error('FAKE_CTX_CONTRACT must be a JSON object');
+      ctxPayload.task.executionContract = ctxContract;
     }
     // task.landingRetry (WT-03): present only while the finalize_attempt store above holds one.
     const retryFile = path.join(moe, 'landing-retry.json');

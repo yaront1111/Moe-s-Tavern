@@ -122,7 +122,7 @@ function records(f) {
     .map((n) => JSON.parse(fs.readFileSync(path.join(f.records, n), 'utf8')))
     .sort((a, b) => String(a.bound.Role).localeCompare(String(b.bound.Role)));
 }
-const record = (f, bound) => ({ bound: { Command: 'claude', ...bound }, unbound: [], cwd: f.scripts });
+const record = (f, bound, cwd = f.scripts) => ({ bound: { Command: 'claude', ...bound }, unbound: [], cwd });
 
 for (const engine of ENGINES) {
   const opts = { skip: engine.skip };
@@ -153,6 +153,41 @@ for (const engine of ENGINES) {
     assert.equal(r.code, 0, show(r));
     assert.equal(r.stdout.match(/START-PROCESS FilePath=powershell NoExit=True/g)?.length, 3, show(r));
     assert.deepEqual(records(f), ['architect', 'qa', 'worker'].map((Role) => record(f, { Role, Project: project, Team: 'plainteam' })), show(r));
+  });
+
+  // A ps1 claude runs in its window's location, and the account trust step
+  // accepts only a launch inside the project: the windows start in an existing
+  // project, and a relative -Project reaches the agent absolute.
+  test(`${engine.name}: a relative -Project reaches the agents absolute, and they start in it`, opts, async (t) => {
+    const f = fixture(t, 'plain');
+    const project = path.join(f.root, "proj it's $HOME");
+    fs.mkdirSync(project);
+    const r = await runTeam(engine, f, { Project: "proj it's $HOME", NoQa: true, NoArchitect: true });
+    assert.equal(r.code, 0, show(r));
+    assert.deepEqual(records(f), [record(f, { Role: 'worker', Project: project, Team: "proj it's $HOME" }, project)], show(r));
+  });
+
+  test(`${engine.name}: -ProjectName starts the agents in the registered project`, opts, async (t) => {
+    const f = fixture(t, 'plain');
+    const project = path.join(f.root, 'registered proj');
+    const home = path.join(f.root, 'home');
+    fs.mkdirSync(project);
+    fs.mkdirSync(path.join(home, '.moe'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.moe', 'projects.json'), JSON.stringify([{ name: 'reg', path: project }]), 'utf8');
+    const r = await runTeam(engine, f, { ProjectName: 'reg', NoQa: true, NoArchitect: true }, { USERPROFILE: home });
+    assert.equal(r.code, 0, show(r));
+    assert.deepEqual(records(f), [record(f, { Role: 'worker', ProjectName: 'reg', Team: 'registered proj' }, project)], show(r));
+  });
+
+  // Windows PowerShell started in a directory whose path has [ or ] takes
+  // $PSHOME as its location instead, so the window's command sets it again.
+  test(`${engine.name}: a project whose path has [ ] is still where the agents start`, opts, async (t) => {
+    const f = fixture(t, 'plain');
+    const project = path.join(f.root, 'proj [1]');
+    fs.mkdirSync(project);
+    const r = await runTeam(engine, f, { Project: project, NoQa: true, NoArchitect: true });
+    assert.equal(r.code, 0, show(r));
+    assert.deepEqual(records(f), [record(f, { Role: 'worker', Project: project, Team: 'proj [1]' }, project)], show(r));
   });
 
   test(`${engine.name}: a failed launch is reported and exits 1`, opts, async (t) => {

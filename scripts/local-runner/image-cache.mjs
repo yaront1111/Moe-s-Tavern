@@ -4,13 +4,17 @@
 // controller-private, because the verified image waits there until launch (R07's TOCTOU note). Callers
 // choose it; there is no environment variable or default location.
 import { randomBytes } from 'node:crypto';
-import { lstat, mkdir, open, unlink } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { loadCertifiedProvider } from './doctor.mjs';
 import { bootstrapError, IMAGE_ARCHES, MAX_IMAGE_BYTES, verifySourceImage } from './guest-bootstrap.mjs';
 import { renameOver } from './lifecycle.mjs';
 
 export const DOWNLOAD_TIMEOUT_MS = 3_600_000;
+// A download writes its .part within DOWNLOAD_TIMEOUT_MS and verifies it right after, so a .part
+// untouched for twice that is a killed process's leftover (agent-cache's parts share the naming).
+export const STALE_PART_MS = 2 * DOWNLOAD_TIMEOUT_MS;
+const PART_NAME = /^\.[0-9a-f]{64,128}\.\d+\.[0-9a-f]{8}\.part$/;
 const CONTROL = /[\x00-\x1f\x7f]/;
 const VERIFY_CODES = new Set(['IMAGE_INPUT_INVALID', 'IMAGE_UNREADABLE', 'IMAGE_CHECKSUM_MISMATCH']);
 
@@ -20,7 +24,9 @@ export function imageError(code) {
   return Object.assign(new Error('The pinned source image could not be downloaded.'), { code: 'IMAGE_DOWNLOAD_FAILED' });
 }
 
-/** A verified entry, or null to download: absent, or corrupt and removed (the caller downloads once). */
+const sameEntry = (a, b) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+
+/** A verified entry, or null to download: absent, corrupt and removed, or replaced while verified (the caller downloads once). */
 async function cachedImage(target, arch, digest) {
   let stats;
   try { stats = await lstat(target); } catch (error) {
@@ -33,6 +39,9 @@ async function cachedImage(target, arch, digest) {
   } catch (error) {
     if (error?.code !== 'IMAGE_CHECKSUM_MISMATCH') throw imageError(error?.code);
   }
+  // Only the entry that failed: a concurrent download may have renamed its verified pin in meanwhile.
+  const current = await lstat(target).catch(() => null);
+  if (current === null || !sameEntry(current, stats)) return null;
   await unlink(target).catch(error => {
     if (error?.code !== 'ENOENT') throw imageError('IMAGE_CHECKSUM_MISMATCH');
   });
@@ -48,6 +57,19 @@ async function writeBody(handle, body, maxBytes) {
     for (let at = 0; at < chunk.byteLength;) at += (await handle.write(chunk, at)).bytesWritten;
   }
   await handle.sync();
+}
+
+/** Best effort: removes the stale .part files in cacheDir; a live download's .part is never that old. */
+async function sweepStaleParts(cacheDir) {
+  let names;
+  try { names = await readdir(cacheDir); } catch { return; }
+  for (const name of names.filter(entry => PART_NAME.test(entry))) {
+    const file = path.join(cacheDir, name);
+    try {
+      const stats = await lstat(file);
+      if (stats.isFile() && Date.now() - stats.mtimeMs > STALE_PART_MS) await unlink(file);
+    } catch { /* gone already, or not ours to judge */ }
+  }
 }
 
 /** Streams into a private exclusive .part, verifies it, then renames it into place atomically. */
@@ -92,6 +114,7 @@ export async function ensurePinnedImage(input, { fetch = globalThis.fetch, diges
       || !Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > MAX_IMAGE_BYTES) throw imageError('IMAGE_INPUT_INVALID');
   const pin = (await loadCertifiedProvider()).images[arch];
   try { await mkdir(cacheDir, { recursive: true, mode: 0o700 }); } catch { throw imageError('IMAGE_INPUT_INVALID'); }
+  await sweepStaleParts(cacheDir);
   const target = path.join(cacheDir, `${pin.sha256}.img`);
   return (await cachedImage(target, arch, digest)) ?? downloadImage({ pin, arch, cacheDir, target, fetch, digest, maxBytes });
 }

@@ -24,7 +24,8 @@
 // report that differs after normalization (CHECK_RUN_IMMUTABLE). Its one
 // exception is an identical report, which returns the stored run, createdAt
 // included, and writes nothing, so a runner retrying after a crash makes
-// progress instead of failing. Readers hand out copies.
+// progress instead of failing. Readers hand out copies. A run leaves only with
+// its task: deleteTask (taskStore.ts) drops a deleted task's records.
 //
 // Follows the candidateStore pattern: stateless functions taking the state
 // handle first, and every mutation assumes THE CALLER HOLDS state.mutex (tool
@@ -39,6 +40,7 @@ import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_REQUIRED_CHECK_COMMAND_CHARS } from './validators.js';
 import { assertAttemptOfTask, caseVariantId, getCandidate, hasControlChar, renderGot, SHA_RE } from './candidateStore.js';
+import { recordsWhere } from './recordIndex.js';
 
 /** The most output a check run keeps: the END of the log, counted in UTF-8 BYTES, not characters. */
 export const MAX_CHECK_LOG_BYTES = 16384;
@@ -267,8 +269,7 @@ export function getCheckRun(state: StateManager, checkRunId: string): CheckRun |
 
 /** Every run recorded for one candidate, in deterministic order. Copies, so a caller cannot edit stored state. */
 export function listCheckRunsForCandidate(state: StateManager, candidateId: string): CheckRun[] {
-  return Array.from(state.checkRuns.values())
-    .filter((checkRun) => checkRun.candidateId === candidateId)
+  return recordsWhere(state, state.checkRuns, 'candidateId', candidateId)
     .sort(byCreatedAtThenId)
     .map(copy);
 }

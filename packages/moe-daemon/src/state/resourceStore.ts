@@ -289,10 +289,38 @@ export async function acquireResource(state: StateManager, params: AcquireParams
 export interface ReleaseParams {
   resourceId: string;
   workerId: string;
-  /** Default: every lease whose workerId matches, plus any lease for the worker's currentTaskId. */
+  /** Limit the release to this task's lease and queue entry. Default: every one the caller owns (releaseMatchesCaller). */
   taskId?: string;
   /** Governor/human override: release regardless of ownership. */
   force?: boolean;
+  /** release_resource's ifAcquiredAt, which the tool has checked: the acquirer releasing exactly this grant. */
+  ifAcquiredAt?: string;
+}
+
+/**
+ * Whether a release takes this lease or queue entry. force takes the named
+ * task's, else every one. Otherwise the caller must own it. Leases are task-keyed
+ * so they survive CLI respawns and the restart worker purge, so the release path
+ * must be too: the task's CURRENT assignee owns the lease as much as the workerId
+ * that acquired it (a successor wrapper session re-claims the task under a fresh
+ * workerId and must be able to release when the run finishes). The acquirer owns
+ * it only while no other seat holds the task: once the row passed to another
+ * worker, that seat may be using the lease, and the acquirer's release would
+ * grant it onward under that seat. The exception is a release naming the task
+ * and pinning the exact grant (ifAcquiredAt): the worktree wrapper's land lease,
+ * released after finalize_attempt, when QA may already hold the row.
+ */
+export function releaseMatchesCaller(
+  state: StateManager,
+  params: ReleaseParams,
+  owner: { taskId: string; workerId: string; acquiredAt?: string }
+): boolean {
+  if (params.force) return params.taskId ? owner.taskId === params.taskId : true;
+  if (params.taskId && owner.taskId !== params.taskId) return false;
+  const assignee = state.tasks.get(owner.taskId)?.assignedWorkerId;
+  if (assignee === params.workerId) return true;
+  if (owner.workerId !== params.workerId) return false;
+  return !assignee || (params.ifAcquiredAt !== undefined && owner.taskId === params.taskId && owner.acquiredAt === params.ifAcquiredAt);
 }
 
 export interface ReleaseResourceResult {
@@ -310,20 +338,8 @@ export async function releaseResource(state: StateManager, params: ReleaseParams
   const persisted = state.resources.get(params.resourceId);
   if (!persisted) return { released: [], removedFromQueue: [], granted: [] };
   const resource = copyResource(persisted);
-
-  // Leases are task-keyed so they survive CLI respawns and the restart worker
-  // purge — which means the RELEASE path must too: the task's CURRENT assignee
-  // owns the lease just as much as the workerId that originally acquired it
-  // (a successor wrapper session re-claims the task under a fresh workerId and
-  // must be able to release when the run finishes).
-  const callerOwns = (owner: { taskId: string; workerId: string }): boolean =>
-    owner.workerId === params.workerId ||
-    state.tasks.get(owner.taskId)?.assignedWorkerId === params.workerId;
-  const matchesCaller = (owner: { taskId: string; workerId: string }): boolean => {
-    if (params.force) return params.taskId ? owner.taskId === params.taskId : true;
-    if (params.taskId) return owner.taskId === params.taskId && callerOwns(owner);
-    return callerOwns(owner);
-  };
+  const matchesCaller = (owner: { taskId: string; workerId: string; acquiredAt?: string }): boolean =>
+    releaseMatchesCaller(state, params, owner);
 
   const released = resource.holders.filter(matchesCaller);
   const removedFromQueue = resource.queue.filter(matchesCaller);

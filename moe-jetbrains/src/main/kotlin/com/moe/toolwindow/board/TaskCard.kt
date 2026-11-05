@@ -301,7 +301,7 @@ class TaskCard(
 
         val dragAdapter = object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                if (SwingUtilities.isLeftMouseButton(e) && e.clickCount == 1) {
+                if (opensTask(e)) {
                     safeCallback("open task") { onOpen(task) }
                 } else if (SwingUtilities.isRightMouseButton(e)) {
                     showContextMenu(e)
@@ -468,6 +468,14 @@ class TaskCard(
         // Neutral badge background: grey in light themes, lighter grey in dark.
         private const val NEUTRAL_LIGHT_RGB = 0x6B7280
         private const val NEUTRAL_DARK_RGB = 0xA7ABB1
+
+        /**
+         * Whether a click on the card opens the task: a single left click that nothing handled first. The card's
+         * listener is installed on every child, the previous/next arrows included, after the arrow's own listener:
+         * that one runs first and consumes its click, and consume() stops no other listener.
+         */
+        internal fun opensTask(e: MouseEvent): Boolean =
+            !e.isConsumed && SwingUtilities.isLeftMouseButton(e) && e.clickCount == 1
 
         /**
          * Compute the card's timing badge, or null when there is nothing meaningful

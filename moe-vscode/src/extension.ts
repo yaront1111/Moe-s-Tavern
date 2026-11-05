@@ -6,7 +6,7 @@ import { ChatViewProvider } from './providers/ChatViewProvider';
 import { MetricsViewProvider } from './providers/MetricsViewProvider';
 import { ManagedVmTreeProvider } from './providers/ManagedVmTreeProvider';
 import { AccountsTreeProvider } from './providers/AccountsTreeProvider';
-import { MoeDaemonClient, readDaemonJsonText, useProtectedStateRoot } from './services/MoeDaemonClient';
+import { MoeDaemonClient, getOutputChannel, readDaemonJsonText, useProtectedStateRoot } from './services/MoeDaemonClient';
 import type { ReadinessReply } from './services/MoeDaemonClient';
 import { ConnectionStatusBar } from './statusbar/ConnectionStatusBar';
 import { EpicDetailPanel } from './panels/EpicDetailPanel';
@@ -30,7 +30,8 @@ const readiness = (): Promise<ReadinessReply> =>
 export function activate(context: vscode.ExtensionContext) {
     // Before anything reads runtimeProfile: the persisted protected pin lives per user, outside every workspace.
     useProtectedStateRoot(path.join(context.globalStorageUri.fsPath, 'protected-state'));
-    const outputChannel = vscode.window.createOutputChannel('Moe');
+    // The client's "Moe" channel: one Output entry for the extension and the daemon client.
+    const outputChannel = getOutputChannel();
     outputChannel.appendLine('Moe extension is activating...');
 
     // Initialize daemon client
@@ -225,6 +226,10 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('Not connected to daemon. Connect first.');
                 return;
             }
+            const archived = (sent: boolean): void => {
+                if (sent) { vscode.window.showInformationMessage('Done tasks archived'); return; }
+                vscode.window.showWarningMessage('Not connected to Moe daemon — done tasks were not archived.');
+            };
             try {
                 const epics = daemonClient.currentState.epics || [];
                 if (epics.length > 0) {
@@ -236,12 +241,10 @@ export function activate(context: vscode.ExtensionContext) {
                         placeHolder: 'Archive done tasks for which epic?'
                     });
                     if (selected) {
-                        daemonClient.archiveDoneTasks(selected.epicId);
-                        vscode.window.showInformationMessage('Done tasks archived');
+                        archived(daemonClient.archiveDoneTasks(selected.epicId));
                     }
                 } else {
-                    daemonClient.archiveDoneTasks();
-                    vscode.window.showInformationMessage('Done tasks archived');
+                    archived(daemonClient.archiveDoneTasks());
                 }
             } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
@@ -320,7 +323,7 @@ export function activate(context: vscode.ExtensionContext) {
         const providers: Array<{ label: string; description: string; provider: AgentProvider }> = [
             { label: 'Claude', description: lastProvider === 'claude' ? 'Last used' : '', provider: 'claude' },
             { label: 'Codex', description: lastProvider === 'codex' ? 'Last used' : '', provider: 'codex' },
-            { label: 'Gemini', description: lastProvider === 'gemini' ? 'Last used' : '', provider: 'gemini' },
+            { label: 'Antigravity', description: lastProvider === 'gemini' ? 'Last used' : '', provider: 'gemini' },
             { label: 'Grok', description: lastProvider === 'grok' ? 'Last used' : '', provider: 'grok' },
             { label: 'Custom...', description: lastProvider === 'custom' && lastCustomCmd ? `Last: ${lastCustomCmd}` : 'Enter a custom CLI command', provider: 'custom' },
         ];
@@ -444,10 +447,16 @@ export function activate(context: vscode.ExtensionContext) {
                 vscode.window.showWarningMessage('Not connected to daemon. Connect first.');
                 return;
             }
-            daemonClient.requestActivityLog(50);
-            const disposable = daemonClient.onActivityLog((events) => {
-                if (timeoutHandle) { clearTimeout(timeoutHandle); }
-                disposable.dispose();
+            // The reply to this request only: the board's own activity request can never answer it, nor this one the board's.
+            let done = false;
+            const sent = daemonClient.requestActivityLog(50, (events) => {
+                if (done) { return; }
+                done = true;
+                clearTimeout(timeoutHandle);
+                if (!events) {
+                    vscode.window.showWarningMessage('Moe could not read the activity log.');
+                    return;
+                }
                 const lines = events.map(e => {
                     const ts = new Date(e.timestamp).toLocaleTimeString();
                     const taskPart = e.taskId ? ` [${e.taskId.slice(-8)}]` : '';
@@ -459,11 +468,17 @@ export function activate(context: vscode.ExtensionContext) {
                     (textDoc) => vscode.window.showTextDocument(textDoc, { preview: true })
                 );
             });
-            // Bail if the daemon never replies — avoid leaking the listener.
+            // Bail if the daemon never replies.
             const timeoutHandle = setTimeout(() => {
-                disposable.dispose();
+                if (done) { return; }
+                done = true;
                 vscode.window.showWarningMessage('Activity log request timed out.');
             }, 10000);
+            if (!sent) {
+                done = true;
+                clearTimeout(timeoutHandle);
+                vscode.window.showWarningMessage('Not connected to daemon. Connect first.');
+            }
         })
     );
 
@@ -474,10 +489,11 @@ export function activate(context: vscode.ExtensionContext) {
                 return;
             }
             try {
-                daemonClient.disconnect();
                 vscode.window.showInformationMessage('Disconnected. Reconnecting to daemon...');
-                await daemonClient.connect();
-                vscode.window.showInformationMessage('Reconnected to daemon');
+                // reconnect() waits out an attempt still in flight, so it never reports a connection it did not make.
+                if (await daemonClient.reconnect()) {
+                    vscode.window.showInformationMessage('Reconnected to daemon');
+                }
             } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 vscode.window.showErrorMessage(`Failed to reconnect: ${errMsg}`);

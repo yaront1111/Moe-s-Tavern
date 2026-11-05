@@ -81,7 +81,8 @@ function loadPage(html, postMessage) {
         elements.set(el.id, el);
     }
     const document = { getElementById: id => elements.get(id) || null };
-    vm.runInContext(PAGE_JS, vm.createContext({ acquireVsCodeApi: () => ({ postMessage }), document }), { filename: PAGE_PATH });
+    const window = { addEventListener() {} }; // the page's live-settings listener; tests/settings-live.test.cjs drives it
+    vm.runInContext(PAGE_JS, vm.createContext({ acquireVsCodeApi: () => ({ postMessage }), document, window }), { filename: PAGE_PATH });
     const el = id => {
         if (!elements.has(id)) { throw new Error(`no element with id ${id} in the emitted HTML`); }
         return elements.get(id);

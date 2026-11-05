@@ -2,6 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired } from '../util/errors.js';
 import { deregisterWorker } from '../state/workerLifecycle.js';
+import { forgetAccountLease } from '../state/accountStore.js';
 
 export function deregisterWorkerTool(_state: StateManager): ToolDefinition {
   return {
@@ -31,6 +32,8 @@ export function deregisterWorkerTool(_state: StateManager): ToolDefinition {
 
       return state.runExclusive(async () => {
         const result = await deregisterWorker(state, params.workerId!, reason);
+        // The seat's claude session ended: its account lease ends with it (a relaunch leases again).
+        forgetAccountLease(state, params.workerId!);
         return {
           success: true,
           workerId: result.workerId,

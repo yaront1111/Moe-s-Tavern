@@ -1,8 +1,8 @@
 // CQ-V04b check-dispatch.mjs, against scripted fakes: the /runner `call`, and a `runCheck` logging VM create/delete around onReady.
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -328,7 +328,7 @@ function jobSteps(log, { remove = 'deleted', session = PASS, verify = 'intact', 
   return { provision: async ({ ledger, owner }) => { log.push('create'); return { provisioned: true, instance: (await ledger.reserve(owner)).instance,
     bootstrapReady: true, failures: [], supervisorSha256: SUP, image: { source: { arch: 'x64', sha256: IMG }, provider: { imageHash: PROV } } }; },
   toolchain: async () => ({ file: '/t', sha256: TOOL, size: 1, version: '24.22.2' }), materialize, installToolchain: async () => {},
-  session: async () => { log.push('session'); return session; }, verify: async () => verify,
+  session: async input => { log.push('session'); return typeof session === 'function' ? session(input) : session; }, verify: async () => verify,
   remove: async () => {
     log.push('remove');
     await new Promise(setImmediate);
@@ -397,10 +397,11 @@ async function landedSeam(t, log, steps) {
   }
 }
 // runDispatchCli over the scripted daemon, its calls logged among the VM steps; one JSON line with no secret or escape byte.
-async function dispatchCli(runCheck, log, { ctx = context({ envs: [JOB_ENV] }), tools } = {}) {
+async function dispatchCli(runCheck, log, { ctx = context({ envs: [JOB_ENV] }), tools, stopFile, signal } = {}) {
   const [h, lines] = [harness(ctx, { tools }), []];
   const call = async (tool, args) => { log.push(tool.slice(4)); return h.call(tool, args); };
-  const exit = await runDispatchCli(['--project', '/srv/project', '--task', TASK, '--commit', TREE], { open: async () => ({ call, close() {} }),
+  const argv = ['--project', '/srv/project', '--task', TASK, '--commit', TREE, ...(stopFile ? ['--stop-file', stopFile] : [])];
+  const exit = await runDispatchCli(argv, { open: async () => ({ call, close() {} }), signal, pollMs: 20,
     exportSnapshot: async () => JOB_SNAP, loadRunCheck: async () => runCheck, write: text => lines.push(text) });
   assert.deepEqual([lines.length, /SENTINEL|\x1b/.test(lines[0])], [1, false]);
   return { exit, report: JSON.parse(lines[0]), h };
@@ -492,6 +493,27 @@ test('CD5 a dispatch answered after the readiness timeout resumes nothing, and t
     [0, undefined, [...RAN, ...RAN.slice(1)], [['passed', 'deleted'], ['passed', 'deleted']]]);
 });
 
+test('CD7 a dispatch answered after the CLI closed its /runner channel opens no other one: every channel opened is closed', async () => {
+  let release;
+  const [log, late, channels, lines] = [[], new Promise(resolve => { release = resolve; }), [], []];
+  const open = async () => { // a real channel's shape: once closed, its calls reject RUNNER_DISCONNECTED
+    const channel = { closed: false, close() { channel.closed = true; }, async call(tool) {
+      if (tool === 'moe.record_check_dispatch' && channels.length === 1) await late;
+      if (channel.closed) throw fail('RUNNER_DISCONNECTED');
+      return tool === 'moe.get_context' ? context({ envs: [JOB_ENV] }) : { success: true };
+    } };
+    channels.push(channel);
+    return channel;
+  };
+  const short = input => runCheckJob({ ...jobInput(log), ...input, timeoutMs: 30 }, jobSteps(log));
+  const exit = await runDispatchCli(['--project', '/srv/project', '--task', TASK, '--commit', TREE],
+    { open, exportSnapshot: async () => JOB_SNAP, loadRunCheck: async () => short, write: text => lines.push(text) });
+  release();
+  await new Promise(resolve => setTimeout(resolve, 50)); // the late answer's same-id retries run now
+  assert.deepEqual([exit, JSON.parse(lines[0]).stopped?.code], [2, 'RUNNER_CHECK_FAILED']);
+  assert.deepEqual(channels.map(channel => channel.closed), [true]);
+});
+
 test('CD6 hostile or conflicting cleanup metadata fails closed with fixed codes; a huge multibyte tail keeps the diagnostic within the cap', async t => {
   const [intact, throwing] = [{ ...PASS, workspace: 'intact' }, new Proxy({}, { get: (_, key) => { if (key !== 'then') throw new Error(SECRET); } })];
   const seam = (cleanup, result) => async ({ onReady, onCleanup }) => {
@@ -516,4 +538,130 @@ test('CD6 hostile or conflicting cleanup metadata fails closed with fixed codes;
   const [{ outputTail }] = h.of('moe.record_check_observation'), kept = outputTail.slice(0, -DIAG.length - 1), size = Buffer.byteLength(outputTail);
   assert.deepEqual([outputTail.endsWith(`z\n${DIAG}`), big.endsWith(kept), kept[0], size <= MAX_CHECK_TAIL_BYTES, size > MAX_CHECK_TAIL_BYTES - 3],
     [true, true, '€', true, true]);
+});
+
+// task-e444f6ae: `--stop-file <absolute path>`, moe-agent.ps1's Windows stop. The file appearing aborts like SIGINT/SIGTERM.
+const stopDir = async t => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'moe-stop-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+};
+const abortOf = signal => new Promise((resolve, reject) => {
+  if (signal.aborted) return resolve();
+  const timer = setTimeout(() => reject(new Error('no abort within 3 s')), 3_000);
+  signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+const INFRA = { outcome: 'infra-failure', exitCode: null, signal: null, outputTail: '' };
+
+test('S1: --stop-file <absolute path> is an optional last pair; every other shape is refused before anything opens', async t => {
+  const ARGS = ['--project', '/srv/project', '--task', TASK, '--commit', TREE], absent = path.join(await stopDir(t), 'never.stop');
+  const cli = async argv => {
+    const [lines, state] = [[], { opened: 0, loaded: 0 }];
+    const exit = await runDispatchCli(argv, { write: text => lines.push(text), exportSnapshot: async () => SNAP, pollMs: 20,
+      loadRunCheck: async () => { state.loaded += 1; return harness(null).runCheck; },
+      open: async () => { state.opened += 1; return { call: harness(context()).call, close() {} }; } });
+    assert.equal(lines.length, 1);
+    return [exit, JSON.parse(lines[0]), state];
+  };
+  const shape = ([exit, report, state]) => [exit, state, { ...report, results: report.results.map(r => ({ ...r, dispatchId: typeof r.dispatchId })) }];
+  const plain = shape(await cli(ARGS));
+  assert.deepEqual([plain[0], plain[1], plain[2].results.map(r => r.outcome)], [0, { opened: 1, loaded: 1 }, ['passed', 'passed']]);
+  assert.deepEqual(shape(await cli([...ARGS, '--stop-file', absent])), plain);
+  for (const argv of [[...ARGS, '--stop-file'], [...ARGS, '--stop-file', 'relative.stop'], [...ARGS, '--stop-file', ''],
+    [...ARGS, '--stop-file', `${absent}\n`], [...ARGS, '--stop-file', `${absent}\x7f`], [...ARGS, '--stopfile', absent],
+    [...ARGS, '--stop-file', absent, 'x'], [...ARGS, '--stop-file', absent, '--stop-file', absent], ['--stop-file', absent, ...ARGS]]) {
+    assert.deepEqual(await cli(argv), [2, { code: 'RUNNER_CLI_INPUT_INVALID' }, { opened: 0, loaded: 0 }], JSON.stringify(argv));
+  }
+});
+
+test('S2: a stop mid-run, by the file or the entry\'s signal, deletes the VM before the CLI resolves and launches no later check', async t => {
+  const dir = await stopDir(t);
+  for (const [label, injected, byFile] of [['file, with the entry signal', true, true], ['file alone', false, true], ['entry signal', true, false]]) {
+    const [log, stopFile, controller] = [[], path.join(dir, `${label.replace(/\W+/g, '-')}.stop`), new AbortController()];
+    const session = async ({ signal }) => {
+      await new Promise(resolve => setTimeout(resolve, 120)); // six 20 ms polls with the file still absent
+      log.push(`aborted:${signal.aborted}`);
+      if (byFile) await writeFile(stopFile, ''); else controller.abort();
+      await abortOf(signal);
+      return INFRA;
+    };
+    const { exit, report, h } = await dispatchCli(await landedSeam(t, log, { session }), log, { stopFile, ...(injected ? { signal: controller.signal } : {}) });
+    assert.deepEqual([exit, log, report.stopped], [2, [...RAN.slice(0, 4), 'aborted:false', ...RAN.slice(4)], { code: 'RUNNER_ABORTED' }], label);
+    assert.deepEqual(report.results, [{ checkId: 'unit', command: 'npm test', dispatchId: h.of('moe.record_check_dispatch')[0].id,
+      outcome: 'infra-failure', ...DELETED }], label);
+  }
+});
+
+test('S3: a stop file that already exists at start launches no VM', async t => {
+  const [log, stopFile] = [[], path.join(await stopDir(t), 'early.stop')];
+  await writeFile(stopFile, '');
+  const { exit, report } = await dispatchCli(await landedSeam(t, log, {}), log, { stopFile });
+  assert.deepEqual([exit, log, report], [2, ['get_context'], { taskId: TASK, candidateId: 'cand-1', results: [], stopped: { code: 'RUNNER_ABORTED' } }]);
+});
+
+test('S4: the real entry, its stop file never created, exits by itself with one fixed-code line: the watch never holds the process', async t => {
+  const root = await stopDir(t);
+  await mkdir(path.join(root, 'project'));
+  const env = { PATH: process.env.PATH, MOE_RUNNER_STATE_DIR: path.join(root, 'state'), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) };
+  const entry = spawnSync(process.execPath, [fileURLToPath(new URL('../local-runner/check-dispatch.mjs', import.meta.url)), '--project', path.join(root, 'project'),
+    '--task', TASK, '--commit', TREE, '--stop-file', path.join(root, 'never.stop')], { encoding: 'utf8', timeout: 20_000, env });
+  assert.deepEqual([entry.error, entry.signal, entry.status, entry.stderr], [undefined, null, 2, '']);
+  assert.match(entry.stdout, /^\{"code":"[A-Z][A-Z0-9_]*"\}\n$/);
+});
+
+// task-2acbdbdd: the entry keeps both signal listeners, so a later SIGINT or SIGTERM during the VM delete is ignored, never Node's
+// default exit. The child runs the exported entry over fakes. Its VM holds the process from create to removed (signal listeners
+// never do), and its delete lasts until the test closes the child's stdin, which happens only after the later signals are sent.
+const ENTRY_DRIVER = `import { runDispatchEntry } from ${JSON.stringify(new URL('../local-runner/check-dispatch.mjs', import.meta.url).href)};
+const say = line => process.stderr.write(line + '\\n');
+const call = async tool => (tool === 'moe.get_context' ? ${JSON.stringify(context())} : { success: true });
+const runCheck = async ({ onReady, onCleanup, signal }) => {
+  say('create');
+  const vm = setInterval(() => {}, 1_000);
+  try {
+    await onReady(${JSON.stringify(ENV)});
+    say('session');
+    await new Promise(resolve => (signal.aborted ? resolve() : signal.addEventListener('abort', resolve, { once: true })));
+    return { outcome: 'infra-failure', exitCode: null, outputTail: '', workspace: 'unverified' };
+  } finally {
+    say('remove');
+    await new Promise(resolve => process.stdin.on('end', resolve).resume());
+    clearInterval(vm);
+    onCleanup({ vm: 'deleted', failure: null });
+    say('removed');
+  }
+};
+runDispatchEntry(${JSON.stringify(['--project', '/srv/project', '--task', TASK, '--commit', TREE])},
+  { open: async () => ({ call, close() {} }), exportSnapshot: async () => ({ tree: ${JSON.stringify(TREE)} }), loadRunCheck: async () => runCheck });`;
+// signals[0] once the session runs, the rest once the delete started; then stdin closes, which ends the delete.
+function interruptedEntry(t, signals) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', ENTRY_DRIVER], { env: { PATH: process.env.PATH } });
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+  child.stdin.on('error', () => {}); // a child the repeated signal killed never reads it
+  const end = { stdout: '', stderr: '', sent: [] };
+  child.stdout.on('data', chunk => { end.stdout += chunk; });
+  child.stderr.on('data', chunk => {
+    const before = end.stderr;
+    end.stderr += chunk;
+    const reached = line => !before.includes(`${line}\n`) && end.stderr.includes(`${line}\n`);
+    if (reached('session')) end.sent.push(child.kill(signals[0]));
+    if (reached('remove')) { for (const name of signals.slice(1)) end.sent.push(child.kill(name)); child.stdin.end(); }
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`no exit within 15 s: ${JSON.stringify(end)}`)); }, 15_000);
+    child.on('close', (code, signal) => { clearTimeout(timer); resolve({ ...end, code, signal }); });
+  });
+}
+
+test('S5: a second SIGINT or SIGTERM during the VM delete is ignored: the delete completes and the entry exits 2 with its one report line',
+  { skip: process.platform === 'win32' && 'POSIX signals: on Windows child.kill() terminates the child, and node cannot send one console Ctrl+C' }, async t => {
+  for (const signals of [['SIGINT', 'SIGINT'], ['SIGTERM', 'SIGTERM'], ['SIGTERM', 'SIGINT', 'SIGTERM']]) {
+    const end = await interruptedEntry(t, signals);
+    assert.deepEqual([end.code, end.signal, end.stderr, end.sent, end.stdout.split('\n').length],
+      [2, null, 'create\nsession\nremove\nremoved\n', signals.map(() => true), 2], signals.join());
+    const report = JSON.parse(end.stdout);
+    assert.deepEqual({ ...report, results: report.results.map(({ dispatchId, ...rest }) => ({ dispatchId: typeof dispatchId, ...rest })) },
+      { taskId: TASK, candidateId: 'cand-1', stopped: { code: 'RUNNER_ABORTED' },
+        results: [{ dispatchId: 'string', checkId: 'unit', command: 'npm test', outcome: 'infra-failure', vm: 'deleted', failure: null }] }, signals.join());
+  }
 });

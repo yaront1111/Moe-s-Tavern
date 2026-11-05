@@ -152,7 +152,7 @@ function createHarness(options = {}) {
         currentState: { tasks: [] },
         approveTask(...args) { h.approveCalls.push(args); return h.approveResult; },
         rejectTask(...args) { h.rejectCalls.push(args); return true; },
-        addTaskComment(...args) { h.commentCalls.push(args); },
+        addTaskComment(...args) { h.commentCalls.push(args); return true; }, // sent, as a connected client reports
         onStateChanged: stateEmitter.event,
         onConnectionChanged: connectionEmitter.event,
         onError: errorEmitter.event

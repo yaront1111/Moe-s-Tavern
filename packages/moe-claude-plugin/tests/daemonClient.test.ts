@@ -167,6 +167,92 @@ describe('findDaemonInfo', () => {
     );
     expect(() => findDaemonInfo({ projectPath: tmp })).toThrow(/not running/i);
   });
+
+  function errorCode(fn: () => unknown): string | undefined {
+    try {
+      fn();
+    } catch (err) {
+      expect(err).toBeInstanceOf(DaemonError);
+      return (err as DaemonError).code;
+    }
+    return undefined;
+  }
+
+  it('throws DAEMON_PROJECT_MISMATCH for a daemon.json naming another project, never walking on to a parent', () => {
+    const parent = makeProjectWithDaemon(54321);
+    const child = path.join(parent, 'sub');
+    fs.mkdirSync(path.join(child, '.moe'), { recursive: true });
+    fs.writeFileSync(path.join(child, '.moe', 'daemon.json'), JSON.stringify({
+      port: 54322, pid: 1, startedAt: 'now', projectPath: path.join(os.tmpdir(), 'another-moe-project'),
+    }));
+    expect(errorCode(() => findDaemonInfo({ projectPath: child }))).toBe('DAEMON_PROJECT_MISMATCH');
+  });
+
+  it('accepts a daemon.json naming its own directory in another spelling', () => {
+    const project = makeProjectWithDaemonFields(54321, {});
+    const file = path.join(project, '.moe', 'daemon.json');
+    const respelled = `${project}${path.sep}.${path.sep}`;
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf-8')), projectPath: respelled }));
+    expect(findDaemonInfo({ projectPath: project })).toMatchObject({ port: 54321, projectPath: respelled });
+  });
+});
+
+describe('daemon identity on send', () => {
+  let server: Server;
+  let wss: WebSocketServer;
+  let port: number;
+  let served: string | undefined;
+  let frames: string[];
+
+  beforeEach(async () => {
+    frames = [];
+    served = undefined;
+    // Like the daemon: /health names the served project, any other GET is 426.
+    server = createServer((req, res) => {
+      if (req.url !== '/health') {
+        res.writeHead(426);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy', projectPath: served }));
+    });
+    wss = new WebSocketServer({ server });
+    wss.on('connection', (ws) => {
+      ws.on('message', (data) => {
+        frames.push(data.toString());
+        const request = JSON.parse(data.toString()) as { id?: number };
+        ws.send(JSON.stringify({ jsonrpc: '2.0', id: request.id ?? null, result: { ok: true } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('refuses callTool and postEvent when /health names another project, sending nothing', async () => {
+    const project = makeProjectWithDaemon(port);
+    served = path.join(os.tmpdir(), 'another-moe-project');
+    await expect(callTool('moe.list_tasks', {}, { projectPath: project }))
+      .rejects.toMatchObject({ code: 'DAEMON_PROJECT_MISMATCH' });
+    await expect(postEvent({ type: 'AGENT_TOOL_EVENT', payload: {} }, { projectPath: project }))
+      .rejects.toMatchObject({ code: 'DAEMON_PROJECT_MISMATCH' });
+    expect(frames).toEqual([]);
+  });
+
+  it.each([
+    ['names this project', (project: string) => project],
+    ['names no project (an older daemon)', () => undefined],
+  ])('sends when /health %s', async (_label, servedFor) => {
+    const project = makeProjectWithDaemon(port);
+    served = servedFor(project);
+    await expect(callTool('moe.list_tasks', {}, { projectPath: project })).resolves.toEqual({ ok: true });
+    expect(frames).toHaveLength(1);
+  });
 });
 
 describe('daemon.json size cap', () => {

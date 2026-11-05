@@ -1,6 +1,6 @@
 # Moe's Tavern
 
-An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, Gemini CLI and Grok Build through a shared Kanban board with human plan approval.
+An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, agy and Grok Build through a shared Kanban board with human plan approval.
 
 JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary interface to the same daemon and `.moe/` project state. Full documentation lives in the [repository](https://github.com/yaront1111/Moe-s-Tavern).
 
@@ -22,7 +22,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 ## Requirements
 
 - Node.js 22.22+ on PATH (24 LTS recommended; the extension bundles the Moe daemon and MCP proxy and starts them for you)
-- One coding CLI installed and signed in: Claude Code, Codex, Gemini CLI or Grok Build
+- One coding CLI installed and signed in: Claude Code, Codex, Antigravity or Grok Build
 
 ## Getting started
 
@@ -38,7 +38,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 | `moe.daemon.host` | `127.0.0.1` | Daemon host address |
 | `moe.daemon.port` | `0` | Daemon port (0 = auto-detect from `.moe/daemon.json`) |
 | `moe.daemon.autoStart` | `true` | Start the daemon when needed |
-| `moe.autoConnect` | `true` | Connect when the workspace contains `.moe` |
+| `moe.autoConnect` | `true` | Connect when the workspace contains `.moe`, and keep retrying (5 s, 10 s, 20 s, then every 30 s, up to 10 tries) while no daemon answers or after it restarts |
 | `moe.chat.notifications.enabled` | `true` | Show notifications for agent chat messages |
 | `moe.chat.notifications.mutedChannels` | `[]` | Channel IDs to mute |
 
@@ -78,6 +78,7 @@ The extension does not define default keyboard shortcuts.
 - Per-task worktrees are excluded from file watching and search; a deleted chat channel leaves the chat view
 - The packaged extension ships only the bundled `dist/extension.js`
 - The unused `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings are removed
+- Reconnects on its own after a daemon restart, with backoff; actions taken while disconnected say so and keep their forms; an open Settings form follows changes made elsewhere; POSIX launch lines run in any default shell
 
 ### 0.8.0
 

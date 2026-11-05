@@ -37,7 +37,7 @@ const BLOCKABLE_STATUSES = new Set(['PLANNING', 'WORKING', 'REVIEW']);
 export function reportBlockedTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.report_blocked',
-    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold; a governor parking an unassigned task keeps its own session and status). Always pass blockedOnTaskIds explicitly (including [] for no task dependencies): the list wins and reason ids are not parsed. Only when omitted are reason ids auto-parsed as a legacy fallback — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded; a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). If EVERY selected dependency already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a byte-identical repeat pages nobody and answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
+    description: 'Report a task as blocked. Flips the task to BLOCKED (wrapper stops relaunching sessions against the wall) and pages an architect. Non-resource blocks reported by the ASSIGNEE (or on an unassigned task) FREE YOUR SEAT: the task parks unassigned and you go IDLE. End the current session so its wrapper can checkpoint this task; claim other work only after a fresh wrapper preflight, never inside the same CLI (a third-party/workerId-less block on an assigned task keeps the hold; a governor parking an unassigned task keeps its own session and status). Always pass blockedOnTaskIds explicitly (including [] for no task dependencies): the list wins and reason ids are not parsed. Only when omitted are reason ids auto-parsed as a legacy fallback — the daemon auto-unblocks the task when they are all DONE/ARCHIVED (under a strict settings.deliveryPolicy a DONE task counts only once its required check is recorded; a verified-local task needs each one\'s retained verified delivery instead, and a missing id never satisfies it). If EVERY selected dependency already counts that way the task is NOT blocked (dependenciesSatisfied:true — there is nothing to wait on; continue); an id that would close a dependency cycle is dropped with a warning. With resourceId: first tries to acquire the shared resource — if free you get the lease and the task is NOT blocked; if busy the task parks (seat KEPT — the grant returns it to you) and is auto-unblocked when the lease is granted. A repeat call on an already-BLOCKED task OVERWRITES blockedReason and unions new blockedOnTaskIds (keeping the original blockedFromStatus/blockedAt) and answers alreadyBlocked:true with reasonUpdated:true; a retried call (same reason and resource, adding only ids that already landed) pages nobody, and when it records nothing new answers reasonUpdated:false. An assignee repeat also frees a still-assigned non-resource hold (even with an identical reason), preserving block provenance and task-keyed leases; otherwise an identical repeat writes nothing. Only PLANNING/WORKING/REVIEW rows can be parked and only a BLOCKED row updated: a human-gated row (BACKLOG, AWAITING_APPROVAL, DONE, ARCHIVED) is refused with INVALID_STATE before any write or page — record a hold there with moe.add_comment or a task rail, or move the row with moe.set_task_status first.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -203,10 +203,21 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       }
       const blockedOnIdsChanged = mergedBlockedOnIds.length !== storedBlockedOnIds.length;
 
+      // A retried call is not a new block: the row is already BLOCKED with this
+      // exact reason and resource, and every id the call adds has already landed
+      // (a fresh flip filters exactly those out, so re-sending the original call
+      // re-merges them). It alerts and pages nobody and re-marks no seat; only a
+      // new block, or a changed reason, resource or unmet id, does.
+      const addedBlockedOnIds = mergedBlockedOnIds.slice(storedBlockedOnIds.length);
+      const retried = task.status === 'BLOCKED' && task.blockedReason === params.reason
+        && (params.resourceId === undefined || (task.blockedResourceId ?? null) === params.resourceId)
+        && addedBlockedOnIds.every((id) => isDependencySatisfied(state, id, task));
+
       // A cycle attempt is a fleet-level signal (two rows about to wedge each
-      // other) — alert #governors even when nothing else is written below.
+      // other) — alert #governors even when nothing else is written below, but
+      // once: a retried call does not re-alert.
       // Best-effort: chat must never fail report_blocked.
-      if (droppedCycleBlockedOnIds.length > 0) {
+      if (droppedCycleBlockedOnIds.length > 0 && !retried) {
         try {
           await state.postToRoleChannel(
             'governors',
@@ -332,10 +343,11 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // would stamp blockedFromStatus:'BLOCKED' -- task.status IS 'BLOCKED' by
       // now -- and unblock_worker would then "restore" the task to BLOCKED
       // forever, trading a stale string for a permanent wedge.
-      const identicalRepeat = alreadyBlocked
-        && task.blockedReason === params.reason
-        && !blockedOnIdsChanged
-        && (params.resourceId === undefined || (task.blockedResourceId ?? null) === params.resourceId);
+      // An identical repeat is a retried call that records nothing new: it adds
+      // no id, or adds only landed ids to a wait that already has ids. Landed ids
+      // on a dep-less row are still written (no page): that is the backfill the
+      // next dependency scan restores the row by.
+      const identicalRepeat = retried && (addedBlockedOnIds.length === 0 || storedBlockedOnIds.length > 0);
       const reasonUpdated = flipped || (alreadyBlocked && !identicalRepeat);
 
       if (flipped) {
@@ -367,8 +379,8 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // Seat handling. Non-resource hand-back: the seat was freed above — put the
       // prior owner back in the claim pool (IDLE, no task pointer) instead of
       // parking it BLOCKED against its own task. Resource flip / legacy holds:
-      // the parked worker is marked BLOCKED as before. An identical repeat
-      // without a seat hand-back writes nothing; neither case re-pages.
+      // the parked worker is marked BLOCKED as before. A retried call without a
+      // seat hand-back re-marks no seat; neither case re-pages.
       // workerMarkedBlocked records what was WRITTEN to a seat, so the response
       // can only say "Worker marked as blocked" / workerStatus:"BLOCKED" about
       // a seat this call actually flipped — never as a literal on a path that
@@ -385,7 +397,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
         if (prevWorker && (prevWorker.currentTaskId === task.id || prevWorker.currentTaskId == null)) {
           await state.touchWorker(prevAssignee, { status: 'IDLE', currentTaskId: null });
         }
-      } else if (task.assignedWorkerId && !identicalRepeat) {
+      } else if (task.assignedWorkerId && !retried) {
         await state.updateWorker(task.assignedWorkerId, { status: 'BLOCKED', lastError: params.reason }, 'WORKER_BLOCKED');
         workerMarkedBlocked = true;
       }
@@ -420,7 +432,7 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
       // lands in #general, so an extra unprefixed copy would only repeat it).
       // Every post keeps its own try/catch: chat is best-effort and must never
       // fail report_blocked or skip the BLOCKED update.
-      if (!identicalRepeat) {
+      if (!retried) {
         try { await state.postToGeneral(mentionPrefix + blockedMsg); } catch { /* never block tool */ }
         if (architect) {
           try { await state.postToRoleChannel('architects', mentionPrefix + blockedMsg); } catch { /* never block tool */ }
@@ -581,15 +593,17 @@ export function reportBlockedTool(_state: StateManager): ToolDefinition {
               : 'IDLE',
         // Who was actually paged — assertable, and readable by a human eyeing
         // the tool output instead of the chat channels.
-        notified: identicalRepeat
+        notified: retried
           ? { target: null, via: 'suppressed-identical-repeat' as const }
           : architect
             ? { target: architect.id, via: 'freshest-live-architect' as const }
             : { target: '@governors', via: 'governors-fallback' as const },
         message: alreadyBlocked && freeSeat
-          ? `Task remains BLOCKED; seat freed — this response does not start another task session. ${identicalRepeat ? 'Reason unchanged; nobody was re-paged.' : 'Block reason updated; escalation sent.'}`
+          ? `Task remains BLOCKED; seat freed — this response does not start another task session. ${retried ? 'Reason unchanged; nobody was re-paged.' : 'Block reason updated; escalation sent.'}`
           : identicalRepeat
           ? 'Task was already BLOCKED with this exact reason -- nothing was written and nobody was re-paged. Use moe.add_comment to add detail.'
+          : retried
+          ? 'Task was already BLOCKED with this exact reason; its already-landed prerequisites were recorded, so the next dependency scan restores it. Nobody was re-paged.'
           : alreadyBlocked
             ? (architect
                 ? `Block reason updated. Pinged ${architect.id} (freshest live architect).`

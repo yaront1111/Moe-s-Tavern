@@ -14,7 +14,8 @@
 // byte-identical re-record, which returns the stored candidate and writes
 // nothing, so a runner retrying after a crash makes progress instead of failing;
 // nothing changes, so it is not a mutation. Readers hand out copies, so no
-// caller can edit a stored candidate in memory either.
+// caller can edit a stored candidate in memory either. A candidate leaves only
+// with its task: deleteTask (taskStore.ts) drops a deleted task's records.
 //
 // Never checked against git: baseRevision, treeSha and protectedEntries are
 // recorded exactly as the runner reported them and validated for shape only —
@@ -36,6 +37,7 @@ import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/e
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { getAttempt } from './attemptStore.js';
+import { recordsWhere } from './recordIndex.js';
 import { normalizeAffectedFile } from '../util/affectedFiles.js';
 
 // SHA_RE and REVISION_RE are SHA-1 only BY RULE: a 64-hex (sha256) object id is
@@ -211,8 +213,8 @@ function byCreatedAtThenId(a: Candidate, b: Candidate): number {
   return 0;
 }
 
-function listWhere(state: StateManager, keep: (candidate: Candidate) => boolean): Candidate[] {
-  return Array.from(state.candidates.values()).filter(keep).sort(byCreatedAtThenId).map(copy);
+function listWhere(state: StateManager, field: 'taskId' | 'attemptId', key: string): Candidate[] {
+  return recordsWhere(state, state.candidates, field, key).sort(byCreatedAtThenId).map(copy);
 }
 
 export function getCandidate(state: StateManager, candidateId: string): Candidate | null {
@@ -221,11 +223,11 @@ export function getCandidate(state: StateManager, candidateId: string): Candidat
 }
 
 export function listCandidatesForTask(state: StateManager, taskId: string): Candidate[] {
-  return listWhere(state, (candidate) => candidate.taskId === taskId);
+  return listWhere(state, 'taskId', taskId);
 }
 
 export function listCandidatesForAttempt(state: StateManager, attemptId: string): Candidate[] {
-  return listWhere(state, (candidate) => candidate.attemptId === attemptId);
+  return listWhere(state, 'attemptId', attemptId);
 }
 
 /**

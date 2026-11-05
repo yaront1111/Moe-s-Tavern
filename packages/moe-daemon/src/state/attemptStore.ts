@@ -61,6 +61,7 @@ import { validateEnumValue, validateStringValue } from './validators.js';
 import { MoeError, MoeErrorCode, invalidInput, notAllowed } from '../util/errors.js';
 import { generateId } from '../util/ids.js';
 import { logger } from '../util/logger.js';
+import { recordsWhere } from './recordIndex.js';
 
 /** Shared with the Kotlin/JSON clients' Long; an allocation past this fails closed. */
 export const MAX_ATTEMPT_GENERATION = Number.MAX_SAFE_INTEGER;
@@ -136,8 +137,7 @@ export function getAttempt(state: StateManager, attemptId: string): ExecutionAtt
 
 /** The stored records in generation order, for this store's own bookkeeping only. */
 function storedAttempts(state: StateManager, taskId?: string): ExecutionAttempt[] {
-  const all = Array.from(state.attempts.values());
-  const scoped = taskId === undefined ? all : all.filter((a) => a.taskId === taskId);
+  const scoped = taskId === undefined ? Array.from(state.attempts.values()) : recordsWhere(state, state.attempts, 'taskId', taskId);
   return scoped.sort((a, b) => a.generation - b.generation);
 }
 

@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isSameProjectPath, probeDaemonIdentity } from './daemonIdentity.js';
 
 export interface DaemonInfo {
   port: number;
@@ -45,6 +46,8 @@ const DEFAULT_TIMEOUT_MS = 3000;
  *
  * The daemon writes `.moe/daemon.json` inside the project — NOT in the user
  * home directory. ~/.moe/projects.json is the cross-project registry.
+ * A daemon.json whose projectPath names another project ends the search with
+ * DAEMON_PROJECT_MISMATCH.
  */
 export function findDaemonInfo(options: DaemonClientOptions = {}): DaemonInfo {
   const explicit = options.projectPath ?? process.env.MOE_PROJECT_PATH;
@@ -140,8 +143,14 @@ function readDaemonJson(projectPath: string): DaemonInfo | null {
   const obj = parsed as Partial<DaemonInfo>;
   if (typeof obj.port !== 'number' || !Number.isInteger(obj.port)) return null;
   if (obj.port < 1 || obj.port > 65535) return null;
-  if (typeof obj.projectPath !== 'string') return null;
+  if (typeof obj.projectPath !== 'string' || !obj.projectPath.trim()) return null;
   if (typeof obj.startedAt !== 'string') return null;
+  // A daemon.json naming another project (copied, committed, or the project
+  // moved) points at that project's port. Stop here, as moe-proxy does,
+  // rather than walk on to some other project's daemon.
+  if (!isSameProjectPath(obj.projectPath, projectPath)) {
+    throw new DaemonError('DAEMON_PROJECT_MISMATCH', `daemon.json in ${projectPath} belongs to a different project`);
+  }
   return {
     port: obj.port,
     pid: typeof obj.pid === 'number' ? obj.pid : undefined,
@@ -181,6 +190,27 @@ function readRecentProject(): string | null {
   }
 }
 
+/** /health is local and answers in milliseconds; the hook has 5s in all. */
+const HEALTH_PROBE_TIMEOUT_MS = 1000;
+
+/**
+ * findDaemonInfo, then ask the daemon itself which project it serves:
+ * daemon.json only proves which project wrote it, and once that daemon dies
+ * another project's daemon can take its port. A foreign answer is refused;
+ * no usable answer ('unknown') proceeds, as in moe-proxy.
+ */
+async function findServingDaemon(options: DaemonClientOptions, timeoutMs: number): Promise<DaemonInfo> {
+  const info = findDaemonInfo(options);
+  const probeMs = Math.min(HEALTH_PROBE_TIMEOUT_MS, timeoutMs);
+  if (await probeDaemonIdentity(info.host || '127.0.0.1', info.port, info.projectPath, probeMs) === 'foreign') {
+    throw new DaemonError(
+      'DAEMON_PROJECT_MISMATCH',
+      `The daemon on port ${info.port} serves another project, not ${info.projectPath}: this project's .moe/daemon.json is stale`
+    );
+  }
+  return info;
+}
+
 interface JsonRpcResponse {
   jsonrpc: '2.0';
   id: number | string | null;
@@ -197,8 +227,8 @@ export async function callTool(
   args: Record<string, unknown> = {},
   options: DaemonClientOptions = {}
 ): Promise<unknown> {
-  const info = findDaemonInfo(options);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const info = await findServingDaemon(options, timeoutMs);
   const request = {
     jsonrpc: '2.0' as const,
     id: 1,
@@ -227,8 +257,8 @@ export async function postEvent(
   payload: Record<string, unknown>,
   options: DaemonClientOptions = {}
 ): Promise<void> {
-  const info = findDaemonInfo(options);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const info = await findServingDaemon(options, timeoutMs);
   await sendOnce(info, JSON.stringify(payload), timeoutMs, '/ws', /* awaitReply */ false);
 }
 

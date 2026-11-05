@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { notFound, invalidState, notAllowed } from '../util/errors.js';
+import { notFound, invalidState, notAllowed, missingRequired } from '../util/errors.js';
 import { assertWorkerHoldsTask, assertContextFetched } from '../util/enforcement.js';
 import { assertExecutionAuthorized } from '../util/executionAuthorization.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
@@ -24,9 +24,11 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as {
+      // A tools/call that omits `arguments` hands us undefined: refuse it coded.
+      const params = (args || {}) as {
         taskId: string; stepId: string; workerId?: string; attemptId?: unknown; generation?: unknown; sessionId?: unknown;
       };
+      if (!params.taskId) throw missingRequired('taskId');
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 

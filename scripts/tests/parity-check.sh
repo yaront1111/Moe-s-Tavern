@@ -218,6 +218,12 @@ for banner in 'Grok MCP config written to:' 'Grok mode: headless' 'Grok mode: in
   'tool_timeouts = { moe_wait_for_task = 720, moe_chat_wait = 720, moe_wait_for_resource = 720 }'; do
   require_both "grok banner" "$banner"
 done
+# Gemini mode runs Antigravity (agy) only: both wrappers read MOE_AGY_COMMAND and
+# stop with the same not-found message, never a fallback to the Gemini CLI.
+for agy_lit in MOE_AGY_COMMAND 'Antigravity CLI (agy) not found:' \
+  'Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).'; do
+  require_both "gemini mode (Antigravity)" "$agy_lit"
+done
 # Per-task launch tier (claim_next_task launch hint).
 require_both "launch tier banner" 'Task tier:'
 require_both "codex per-task hint" 'Per-task model/effort (launch.codex hint)'

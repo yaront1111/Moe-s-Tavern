@@ -74,6 +74,8 @@ function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readi
     [IO.File]::WriteAllText((Join-Path $project '.moe\daemon.json'), ('{"port":9876,"projectPath":' + (ConvertTo-Json $project) + '}'))
     $env:FAKE_READINESS = $Readiness; $env:FAKE_CALL_LOG = $calls; $env:MOE_PROXY_PATH = $fakeProxy
     $env:MOE_DISABLE_HEARTBEAT = '1'; $env:MOE_TASKLESS_WAIT_SEC = '5'
+    # A gemini seat would run agy: MOE_AGY_COMMAND points it at the fake, never the machine's real Antigravity.
+    $env:MOE_AGY_COMMAND = Join-Path $tempRoot 'gemini.cmd'
     $env:USERPROFILE = $homeDir; $env:TEMP = $runTmp; $env:TMP = $runTmp
     if ($script:VmrSetup) { & $script:VmrSetup }
     Push-Location $project
@@ -867,8 +869,9 @@ function Invoke-VmcSections {
 # VMs: R's fake dispatch CLI on the frozen candidate commit (tree M, sole parent B),
 # never the qualityGate on this host, whose canary writes $sgWitness. SGV, SGU, SG8
 # and G run the wrapper's functions in process. The port's Windows deviation: the
-# wrapper never signals the dispatch, so where sh expects one check-dispatch-term row
-# these rows expect none, and a dead fake. Runs in Invoke-SgSections' scope.
+# wrapper never signals the dispatch; it stops it by creating its --stop-file (task-e444f6ae),
+# so where sh expects one check-dispatch-term row these rows expect one check-dispatch-stop
+# row, no term row, and a dead fake. Runs in Invoke-SgSections' scope.
 function Initialize-SgFixture {
     Initialize-VmjFixture; Remove-Item Env:\FAKE_CTX_LANDING
     $p = Get-Content -Raw "$project\.moe\project.json" | ConvertFrom-Json
@@ -876,6 +879,19 @@ function Initialize-SgFixture {
     [IO.File]::WriteAllText("$project\.moe\project.json", ($p | ConvertTo-Json -Depth 8))
     Remove-Item -LiteralPath $sgWitness -ErrorAction SilentlyContinue
     $env:FAKE_TASK_STATUS = 'REVIEW'
+}
+# Initialize-PeFixture: Initialize-SgFixture plus the protected-entries files (task-ee10405f)
+# on moe/control and main; $script:PeGitlink adds a gitlink under tests/. The U+00E9 name is
+# built from [char]0xE9, never a literal.
+function Initialize-PeFixture {
+    Initialize-SgFixture; $seed = $script:VmjBase
+    New-Item -ItemType Directory -Force -Path "$project\scripts", "$project\tests\sub" | Out-Null
+    foreach ($f in @('package-lock.json', 'scripts/lint.sh', 'scripts/other.sh', 'tests/B.txt', 'tests/a b.txt', 'tests/a.txt', 'tests/sub/c.txt', "tests/$([char]0xE9).txt", 'unprotected.txt')) {
+        [IO.File]::WriteAllText((Join-Path $project $f), "$f`n"); Invoke-VmcGit $project @('add', '--', $f) | Out-Null
+    }
+    if ($script:PeGitlink) { Invoke-VmcGit $project @('update-index', '--add', '--cacheinfo', "160000,$seed,tests/mod") | Out-Null }
+    Invoke-VmcGit $project @('commit', '-qm', 'protected') | Out-Null; Invoke-VmcGit $project @('branch', '-f', 'main', 'HEAD') | Out-Null
+    $script:VmjBase = Invoke-VmcGit $project @('rev-parse', 'HEAD')
 }
 function Assert-Sg($R, [bool]$Ok, [string]$Why) { if (-not $Ok) { Stop-Vmr $R $Why } }
 # A probe only, it never kills: no handle holds the logged pid, so Windows may have reused it. A fake that survives ends itself after 300 s.
@@ -886,7 +902,11 @@ function Assert-SgDead([string]$Row, [int]$Id) {
 # Assert-SgRow R KIND [CODE [ENV]] -- sg_check: KIND pass (the check VMs passed, main
 # moved to C), host (legacy, observe: the host qualityGate ran, no dispatch) or refused
 # (the line names CODE, plus ' environment=ENV' for a well-formed stop id; nothing published).
-function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = '') {
+# PAYLOAD (task-ee10405f), the record_candidate args: today (today's 8 names, no protected-entries
+# WARN), unmeasured (today's names, one 'non-blob entry' WARN) or entries (protectedEntries names
+# exactly PATHS, in order; none for []). A hashtable's key order is not stable in pwsh 7, so the
+# names are compared as a set.
+function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = '', [string]$Payload = 'today', [string[]]$Paths = @()) {
     $ev = "$project\.moe\evidence-rpcs.jsonl"; $raw = if (Test-Path -LiteralPath $ev) { [IO.File]::ReadAllText($ev) } else { '' }
     $rows = @(Read-VmeJsonl $ev); $tools = @(Read-VmeJsonl $calls | ForEach-Object { $_.tool })
     $text = $R.Text -replace '\x1b\[[0-9;]*m', ''; $lines = @($text -split '\r?\n')
@@ -897,8 +917,26 @@ function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = ''
     Assert-Sg $R ($R.Code -eq 0 -and -not $R.Ran) "exit $($R.Code), host CLI ran=$($R.Ran)"
     Assert-Sg $R (-not $raw.Contains('DISPATCH-CANARY') -and -not $text.Contains('DISPATCH-CANARY')) 'the dispatch reply or stderr leaked'
     Assert-Sg $R (-not $text.Contains('MOE_CHECK_DISPATCH_PATH_IGNORED')) 'an unprotected override was ignored'
-    Assert-Sg $R ($cand.Count -eq 1 -and $cand[0].args.baseRevision -ceq $B -and @(& $of record_delivery_receipt).Count -eq 0) 'not one record_candidate on B, or a receipt was recorded'
+    Assert-Sg $R ($cand.Count -eq 1 -and $cand[0].args.baseRevision -ceq $B -and @(& $of record_delivery_receipt).Count -eq $(if ($Kind -eq 'pass') { 1 } else { 0 })) 'not one record_candidate on B, or not the record_delivery_receipt rows of this kind'
     $M = $cand[0].args.treeSha
+    # Read as UTF-8: 5.1's Get-Content (Read-VmeJsonl) would decode the U+00E9 path as ANSI.
+    $ca = @([IO.File]::ReadAllLines($ev) | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tool -ceq 'record_candidate' })[0].args
+    [string[]]$names = @($ca.PSObject.Properties.Name | Where-Object { $_ -cne 'protectedEntries' }); [Array]::Sort($names, [StringComparer]::Ordinal)
+    $pe = $ca.PSObject.Properties['protectedEntries']; $warn = @($lines | Where-Object { $_.Contains('record_candidate: the protected check files') })
+    Assert-Sg $R (($names -join ',') -ceq 'attemptId,baseRevision,deliveryTarget,generation,id,taskId,treeSha,workerId' -and $ca.taskId -ceq 'task-postflight' -and
+        $ca.attemptId -ceq 'attempt-postflight' -and $ca.generation -eq 7 -and $ca.workerId -ceq 'worker-vmr' -and $ca.id -cmatch '^\S+$' -and
+        $ca.baseRevision -ceq $B -and $ca.treeSha -ceq $M -and $ca.deliveryTarget -ceq 'refs/heads/main') "record_candidate args: $($ca | ConvertTo-Json -Compress -Depth 4)"
+    if ($Payload -ceq 'entries') {
+        $got = @($pe.Value)
+        Assert-Sg $R ($pe -and $pe.Value -is [array] -and $got.Count -eq $Paths.Count -and $warn.Count -eq 0) "protectedEntries: $($ca | ConvertTo-Json -Compress -Depth 4), expected $($Paths.Count) entries, or a WARN: $($warn -join ' | ')"
+        for ($i = 0; $i -lt $Paths.Count; $i++) {
+            $e = $got[$i]; $oid = Invoke-VmcGit $project @('rev-parse', "${M}:$($Paths[$i])")
+            Assert-Sg $R ((@($e.PSObject.Properties.Name) -join ',') -ceq 'path,oid' -and $e.path -ceq $Paths[$i] -and $e.oid -ceq $oid) "protectedEntries[$i]: $($e | ConvertTo-Json -Compress), expected $($Paths[$i]) $oid"
+        }
+    } else {
+        $want = if ($Payload -ceq 'unmeasured') { "[WARN] record_candidate: the protected check files of task task-postflight were not measured on tree $M (non-blob entry); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured." } else { '' }
+        Assert-Sg $R (-not $pe -and ($warn -join "`n") -ceq $want) "protectedEntries sent, or protected-entries WARN lines: $($warn -join ' | ')"
+    }
     if ($Kind -eq 'host') {
         $runs = @(& $of record_check_run)
         Assert-Sg $R ($d.Count -eq 0 -and (Test-Path -LiteralPath $sgWitness) -and [IO.File]::ReadAllText($sgWitness).Trim() -ceq 'ran') 'the dispatch ran, or the host qualityGate did not'
@@ -908,8 +946,11 @@ function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = ''
         if ($Code -ceq 'MOE_CHECK_DISPATCH_UNAVAILABLE') { Assert-Sg $R ($d.Count -eq 0) 'a missing CLI ran' }
         else {
             Assert-Sg $R ($d.Count -eq 1) "$($d.Count) check-dispatch rows"
-            $x = $d[0].args; $cx = "$($x.argv[5])"   # PowerShell names are case-blind: never $X beside $x
-            Assert-Sg $R ($cx -cmatch '^[0-9a-f]{40}$' -and ($x.argv -join "`n") -ceq (@('--project', $project, '--task', 'task-postflight', '--commit', $cx) -join "`n")) "dispatch argv: $($x.argv -join ' ')"
+            $x = $d[0].args; $cx = "$($x.argv[5])"; $sf = "$($x.argv[7])"   # PowerShell names are case-blind: never $X beside $x
+            Assert-Sg $R ($cx -cmatch '^[0-9a-f]{40}$' -and ($x.argv -join "`n") -ceq (@('--project', $project, '--task', 'task-postflight', '--commit', $cx, '--stop-file', $sf) -join "`n")) "dispatch argv: $($x.argv -join ' ')"
+            Assert-Sg $R ([IO.Path]::IsPathRooted($sf) -and -not (Test-Path -LiteralPath $sf) -and $x.stopAtStart -is [bool] -and -not $x.stopAtStart) "the stop file '$sf' is not rooted, outlived the row, or existed at the start ($($x.stopAtStart))"
+            $stops = @(& $of check-dispatch-stop | ForEach-Object { "$($_.args.pid)" }) -join ','; $want = if ($Code -ceq 'MOE_CHECK_DISPATCH_TIMEOUT') { "$($x.pid)" } else { '' }
+            Assert-Sg $R ($stops -ceq $want) "stop rows '$stops', expected '$want'"
             Assert-Sg $R ($x.entry -ceq $sgFake -and $x.tree -ceq $M -and (@($x.parents) -join ' ') -ceq $B -and $x.heads.'refs/heads/main' -ceq $B) 'dispatch entry, tree, parents or main'
             Assert-Sg $R ($x.candidateId -ceq $cand[0].args.id -and @($x.credentials).Count -eq 0) 'dispatch candidate, or a credential reached it'
             Assert-Sg $R (-not (Invoke-VmcGit $project @('for-each-ref', '--contains', $cx)) -and @(& $of check-dispatch-term).Count -eq 0) 'a ref holds the frozen candidate commit, or the wrapper signalled the dispatch'
@@ -947,8 +988,20 @@ function Invoke-SgRows {
     Write-Host '[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs'
     Assert-SgRow (Invoke-SgRow SG-pass ($strong + @{ FAKE_CHECK_DISPATCH = 'pass' })) pass
     Write-Host '[strong gate] SG-legacy, SG-observe: the host qualityGate runs (Invoke-MoeFrozenGate -WorktreeMode), the override unused'
-    Assert-SgRow (Invoke-SgRow SG-legacy @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
-    Assert-SgRow (Invoke-SgRow SG-observe @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
+    # The protected-entries contract (task-ee10405f): served to SG-legacy and SG-observe, whose
+    # record_candidate must still send today's 8 names, and to PE-pass and PE-unmeasured below.
+    $pe = '{"requiredChecks":[{"id":"gate","command":"npm test","configs":["package-lock.json","vm-job.txt"],"assertionRoots":["tests"]},{"id":"lint","command":"npm run lint","configs":["package-lock.json"],"scripts":["scripts/lint.sh","scripts/gone.sh"]}]}'
+    Assert-SgRow (Invoke-SgRow SG-legacy @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe }) host
+    Assert-SgRow (Invoke-SgRow SG-observe @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe }) host
+    Write-Host "[strong gate] PE-pass, PE-empty, PE-unmeasured: a strong record_candidate carries the candidate tree's protected entries"
+    $script:VmrSetup = { Initialize-PeFixture }
+    try {
+        $want = @('package-lock.json', 'scripts/lint.sh', 'tests/B.txt', 'tests/a b.txt', 'tests/a.txt', 'tests/sub/c.txt', "tests/$([char]0xE9).txt", 'vm-job.txt')
+        Assert-SgRow (Invoke-SgRow PE-pass ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe })) pass '' '' entries $want
+        $script:PeGitlink = $true
+        Assert-SgRow (Invoke-SgRow PE-unmeasured ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe })) pass '' '' unmeasured
+    } finally { $script:PeGitlink = $false; $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SgRow (Invoke-SgRow PE-empty ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = '{"requiredChecks":[{"id":"gate","command":"true"}]}' })) pass '' '' entries
     Write-Host '[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line'
     $stop = { param($c, $e) $h = @{ FAKE_CHECK_DISPATCH = 'stopped'; FAKE_CHECK_DISPATCH_CODE = $c }; if ($e) { $h.FAKE_CHECK_DISPATCH_ENVIRONMENT = $e }; $h }
     foreach ($c in @(@('SG-nonzero', 'MOE_CHECK_DISPATCH_NOT_PASSED', '', @{ FAKE_CHECK_DISPATCH = 'not-passed' }),
@@ -969,7 +1022,162 @@ function Invoke-SgRows {
     $r = Invoke-SgRow SG-protected @{ MOE_RUNTIME_PROTECTED = '1'; MOE_DAEMON_PATH = "$tempRoot\daemon.cjs"; MOE_CHECK_DISPATCH_PATH = $sgFake } claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}'
     Assert-Sg $r ($r.Code -eq 1 -and [regex]::Matches($r.Text, 'MOE_CHECK_DISPATCH_PATH_IGNORED').Count -eq 1 -and @($r.Text -split '\r?\n' | Where-Object { $_ -ceq $sgIgnored }).Count -eq 1) 'the override was not ignored with one warning'
     Assert-Sg $r (-not $r.Text.Contains($sgFake)) 'the override value was printed'
-    Write-Host '[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected'
+    Write-Host '[strong gate] ok SG-pass, legacy, observe, PE-pass, PE-unmeasured, PE-empty, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected'
+}
+# --- [strong receipt] CQ-M07t: twin of postflight-vm-route.sh's [strong receipt]. A strong
+# worktree landing sends its delivery receipt after the publish and before finalize_attempt;
+# an unanswered one defers the finalize to the next pre-flight replay. The port's one
+# deviation: a hashtable's key order is not stable across pwsh processes, so the replay's
+# receipt is compared field by field in sorted-key form, not as wire bytes.
+# Assert-SrRow R KIND -- sr_check: KIND pass (T1), conflict (T3), deferred (T2's landing,
+# the receipt refused), replay (T2's next pre-flight, run 1's RPC rows first), legacy
+# (T4: finalize_attempt refused, so the journal it wrote today stays to be read), lost
+# (T5: a conflict, then every finalize lost), lost-replay (T5's next pre-flight), or
+# refused / running (T2's next pre-flight with the replayed finalize refused, or the kept
+# attempt read as running; the journal stays either way).
+function Assert-SrRow($R, [string]$Kind) {
+    $rows = @(Read-VmeJsonl "$project\.moe\evidence-rpcs.jsonl"); $lines = @(($R.Text -replace '\x1b\[[0-9;]*m', '') -split '\r?\n')
+    $i = 0; foreach ($x in $rows) { $x | Add-Member -NotePropertyName ix -NotePropertyValue $i; $i++ }
+    $of = { param($t) @($rows | Where-Object { $_.tool -ceq $t }) }; $n = { param($f) @($lines | Where-Object $f).Count }
+    $canon = { param($a) @($a.PSObject.Properties | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ';' }
+    $B = $script:VmjBase; $C = Invoke-VmcGit $project @('rev-parse', 'refs/heads/main'); $jf = "$project\.git\moe\receipt\task-postflight.json"
+    $phase = (Get-Content -Raw -LiteralPath "$project\.moe\attempts\attempt-postflight.json" | ConvertFrom-Json).phase
+    $cand = @(& $of record_candidate); $rec = @(& $of record_delivery_receipt); $fin = @(& $of finalize_attempt); $done = @(& $of record_commit | Where-Object { $_.args.kind -ceq 'completion' })
+    $today = @('taskId', 'workerId', 'attemptId', 'generation', 'sessionId', 'workspaceMode', 'publicationMode', 'target', 'targetBefore', 'targetAfter', 'landedRevision', 'worktree', 'taskBranch', 'ledger')
+    Assert-Sg $R ($R.Code -eq 0 -and $cand.Count -eq 1 -and $C -cne $B -and $done.Count -gt 0 -and $done[0].args.outcome -ceq 'committed' -and $done[0].args.sha -ceq $C) "exit $($R.Code), or not one candidate landed as main"
+    $deferred = & $n { $_.Contains('MOE_FINALIZE_DEFERRED_RECEIPT') }; $kept = & $n { $_.StartsWith('[WARN] receipt journal ') -and $_.Contains(' kept: ') }
+    if ($Kind -eq 'legacy') {
+        Assert-Sg $R ($rec.Count -eq 0 -and $fin.Count -gt 0 -and @($fin | Where-Object { $_.args.outcome -cne 'landed' }).Count -eq 0 -and $deferred -eq 0) 'a non-strong landing sent a receipt, or did not finalize landed'
+        Assert-Sg $R ((& $n { $_.StartsWith('[WARN] receipt journal ') -and $_.EndsWith(' kept: the completion row or finalize_attempt got no answer; the next pre-flight replays it.') }) -eq 1) 'not one legacy journal-kept line'
+        $keys = @((Get-Content -Raw -LiteralPath $jf | ConvertFrom-Json).PSObject.Properties.Name) -join ','
+        Assert-Sg $R ($keys -ceq ($today -join ',')) "the legacy journal keys: $keys"
+        return
+    }
+    $id = [string]$cand[0].args.id
+    $want = [pscustomobject]@{ candidateId = $id; target = 'refs/heads/main'; targetBefore = $B; targetAfter = $C; landedRevision = $C; workerId = 'worker-vmr' }
+    Assert-Sg $R ($rec.Count -gt 0 -and (& $canon $rec[0].args) -ceq (& $canon $want) -and $done[0].ix -lt $rec[0].ix) "the receipt, or it precedes the completion row: $(& $canon $rec[0].args)"
+    $conflict = "[WARN] candidate $id already has a delivery receipt that differs from this report; keeping the recorded one, not retrying."
+    Assert-Sg $R ((& $n { $_ -ceq $conflict }) -eq $(if ($Kind -in @('conflict', 'lost', 'lost-replay')) { 1 } else { 0 })) 'conflict lines'
+    $strongJournal = {
+        $j = Get-Content -Raw -LiteralPath $jf | ConvertFrom-Json; $keys = @($j.PSObject.Properties.Name) -join ','
+        Assert-Sg $R ($keys -ceq (($today + @('candidateId', 'treeSha', 'baseRevision', 'planRevision', 'profile')) -join ',')) "the strong journal keys: $keys"
+        Assert-Sg $R ($j.candidateId -ceq $id -and $j.treeSha -ceq $cand[0].args.treeSha -and $j.baseRevision -ceq $B -and ($j.planRevision -is [int] -or $j.planRevision -is [long]) -and $j.planRevision -eq 1 -and
+            $j.profile -ceq 'verified-local' -and $j.targetBefore -ceq $B -and $j.targetAfter -ceq $C -and $j.landedRevision -ceq $C -and $j.target -ceq 'refs/heads/main') 'the strong journal fields'
+    }
+    if ($Kind -eq 'deferred') {
+        Assert-Sg $R ($rec.Count -eq 1 -and $fin.Count -eq 0 -and $phase -ceq 'finalizing' -and $deferred -eq 1 -and $kept -eq 1) "receipts $($rec.Count), finalizes $($fin.Count), phase $phase, deferral lines $deferred, kept lines $kept"
+        Assert-Sg $R ((& $n { $_ -ceq "[WARN] MOE_FINALIZE_DEFERRED_RECEIPT: task task-postflight -- the delivery receipt of $C is not recorded; the attempt stays finalizing until a pre-flight replay records it, then finalizes." }) -eq 1) 'not one exact MOE_FINALIZE_DEFERRED_RECEIPT line'
+        Assert-Sg $R ((& $n { $_.StartsWith("[WARN] delivery receipt not recorded for candidate $id; journal kept at ") }) -eq 1) 'not one receipt-not-recorded line'
+        & $strongJournal
+        return
+    }
+    # refused / running (task-9194f182): T2's next pre-flight with the replayed finalize refused, or the kept
+    # attempt read as running. The receipt is re-sent and the strong journal stays byte for byte.
+    if ($Kind -eq 'refused' -or $Kind -eq 'running') {
+        $jKeep = [IO.File]::ReadAllText("$tempRoot\sr-keep\.git\moe\receipt\task-postflight.json")
+        $lost = '[WARN] attempt attempt-postflight is still finalizing after its replayed receipt; its finalizing holds stay until it closes.'
+        $open = & $n { $_.StartsWith('[WARN] receipt journal ') -and $_.EndsWith(' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.') }
+        Assert-Sg $R ($rec.Count -eq 2 -and (& $canon $rec[1].args) -ceq (& $canon $rec[0].args)) "receipts $($rec.Count), or the replay did not re-send the journaled receipt"
+        Assert-Sg $R (@(& $of check-dispatch).Count -eq 1 -and $deferred -eq 0) 'the replay dispatched again, or deferred'
+        Assert-Sg $R ((& $n { $_.StartsWith('[receipt] replaying the delivery receipt of task task-postflight from ') }) -eq 1) 'not one replay line'
+        Assert-Sg $R ((Test-Path -LiteralPath $jf) -and [IO.File]::ReadAllText($jf) -ceq $jKeep) 'the strong journal was not kept byte for byte'
+        if ($Kind -eq 'refused') {
+            Assert-Sg $R ($fin.Count -eq 3 -and @($fin | Where-Object { $_.args.outcome -cne 'landed' -or $_.args.landedRevision -cne $C }).Count -eq 0) "finalize tries $($fin.Count), or not all landed"
+            Assert-Sg $R ($phase -ceq 'finalizing' -and (& $n { $_ -ceq $lost }) -eq 1 -and (& $n { $_.Contains(' not closed; nothing finalized.') }) -eq 0 -and $kept -eq 0) "phase $phase, or not one still-finalizing line and no not-closed line"
+        } else {
+            Assert-Sg $R ($fin.Count -eq 0 -and $phase -ceq 'running' -and $open -eq 1 -and $kept -eq 1 -and (& $n { $_ -ceq $lost }) -eq 0) "finalizes $($fin.Count), phase $phase, not-closed lines $open, kept lines $kept"
+        }
+        return
+    }
+    # lost (T5): a receipt conflict, then every finalize lost; the strong journal stays (task-a1f3723f).
+    if ($Kind -eq 'lost') {
+        Assert-Sg $R ($rec.Count -eq 1 -and $fin.Count -eq 3 -and @($fin | Where-Object { $_.args.outcome -cne 'landed' -or $_.args.landedRevision -cne $C }).Count -eq 0 -and $rec[0].ix -lt $fin[0].ix) "receipts $($rec.Count), finalizes $($fin.Count), or not three landed finalizes after the receipt"
+        Assert-Sg $R ($phase -ceq 'finalizing' -and $deferred -eq 0) "phase $phase, deferral lines $deferred"
+        Assert-Sg $R ((& $n { $_.StartsWith('[WARN] receipt journal ') -and $_.EndsWith(' kept: its completion row, delivery receipt or closed attempt is not recorded yet; the next pre-flight replays it.') }) -eq 1) 'not one strong journal-kept line'
+        Assert-Sg $R ((& $n { $_ -ceq '[WARN] finalize_attempt acknowledgement exhausted; stopping new-task loop (no repeated Git effect).' }) -eq 1) 'not one exhausted-finalize line'
+        & $strongJournal
+        Assert-Sg $R (-not (Test-Path -LiteralPath "$project\.moe\receipts\$id.json")) 'a conflict stored a receipt'
+        return
+    }
+    # lost-replay (T5's next pre-flight): the conflict again, the finalize answered; the attempt closes and the journal goes.
+    if ($Kind -eq 'lost-replay') {
+        Assert-Sg $R ($rec.Count -eq 2 -and (& $canon $rec[1].args) -ceq (& $canon $rec[0].args)) "receipts $($rec.Count), or the replay did not re-send the journaled receipt"
+        Assert-Sg $R ((& $n { $_.StartsWith('[receipt] replaying the delivery receipt of task task-postflight from ') }) -eq 1) 'not one replay line'
+        $first = $fin[0].args; $last = $fin[-1].args
+        Assert-Sg $R ($fin.Count -eq 4 -and $last.outcome -ceq 'landed' -and $last.landedRevision -ceq $C -and $last.attemptId -ceq $first.attemptId -and $last.generation -eq $first.generation -and
+            $last.workerId -ceq $first.workerId -and $rec[-1].ix -lt $fin[-1].ix) "finalizes $($fin.Count), or the last is not the attempt's landed finalize after the last receipt"
+        Assert-Sg $R ($phase -ceq 'closed' -and -not (Test-Path -LiteralPath $jf) -and $deferred -eq 0 -and $kept -eq 0 -and @(& $of check-dispatch).Count -eq 1) "phase $phase, the journal stayed, a deferral or kept line, or the replay dispatched again"
+        Assert-Sg $R (-not (Test-Path -LiteralPath "$project\.moe\receipts\$id.json")) 'a conflict stored a receipt'
+        return
+    }
+    Assert-Sg $R ($rec.Count -eq $(if ($Kind -eq 'replay') { 2 } else { 1 }) -and $fin.Count -eq 1 -and $fin[0].args.outcome -ceq 'landed' -and $fin[0].args.landedRevision -ceq $C -and $rec[-1].ix -lt $fin[0].ix) "receipts $($rec.Count), or not one landed finalize after the last"
+    Assert-Sg $R ($phase -ceq 'closed' -and -not (Test-Path -LiteralPath $jf) -and $deferred -eq 0 -and $kept -eq 0) "phase $phase, the journal stayed, or a deferral or kept line"
+    if ($Kind -eq 'replay') {
+        Assert-Sg $R ((& $canon $rec[1].args) -ceq (& $canon $rec[0].args) -and @(& $of check-dispatch).Count -eq 1) 'the replay did not re-send the journaled receipt, or dispatched again'
+        Assert-Sg $R ((& $n { $_.StartsWith('[receipt] replaying the delivery receipt of task task-postflight from ') }) -eq 1) 'not one replay line'
+    }
+    $sf = "$project\.moe\receipts\$id.json"
+    if ($Kind -ne 'conflict') { Assert-Sg $R ((Test-Path -LiteralPath $sf) -and $null -eq (Get-Content -Raw -LiteralPath $sf | ConvertFrom-Json).pushResult) 'no stored receipt, or it carries a pushResult' }
+}
+function Invoke-SrRows {
+    $strong = @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }
+    Write-Host '[strong receipt] T1-T5: the receipt between the completion row and finalize_attempt, the deferral and its replay, the replay with its finalize refused or its attempt running, a conflict, the legacy control, a conflict with every finalize lost and its replay'
+    Assert-SrRow (Invoke-SgRow SR-T1 $strong) pass
+    Assert-SrRow (Invoke-SgRow SR-T2 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-refused' })) deferred
+    # The replay is the same seat's next run on the same project: its claim is refused
+    # while the attempt is finalizing, and its pre-flight replays the kept journal.
+    $keep = "$tempRoot\sr-keep"; Remove-Item -LiteralPath $keep -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $project -Destination $keep -Recurse -Force
+    $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force }
+    try { $r = Invoke-SgRow SR-T2-replay @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' } }
+    finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SrRow $r replay
+    # SR-T2-refuse and SR-T2-running (task-9194f182): the same kept project replayed with the
+    # finalize lost. Refused: the replay warns 'still finalizing' and continues. Running: the kept
+    # attempt reads running, so the replay reaches the CQ-V08b keep and sends no finalize.
+    $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force }
+    try { $r = Invoke-SgRow SR-T2-refuse @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'finalize_attempt-refuse' } }
+    finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SrRow $r refused
+    $script:VmrSetup = {
+        Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force
+        $af = "$project\.moe\attempts\attempt-postflight.json"; $t = [IO.File]::ReadAllText($af)
+        if ([regex]::Matches($t, '"phase":"finalizing"').Count -ne 1) { throw "the kept attempt is not finalizing: $t" }
+        [IO.File]::WriteAllText($af, $t.Replace('"phase":"finalizing"', '"phase":"running"'))
+    }
+    try { $r = Invoke-SgRow SR-T2-running @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' } }
+    finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SrRow $r running
+    Assert-SrRow (Invoke-SgRow SR-T3 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-conflict' })) conflict
+    Assert-SrRow (Invoke-SgRow SR-T4 @{ FAKE_EVIDENCE_MODE = 'finalize_attempt-refuse' }) legacy
+    Assert-SrRow (Invoke-SgRow SR-T5 ($strong + @{ FAKE_EVIDENCE_MODE = 'receipt-conflict-finalize-lost' })) lost
+    Remove-Item -LiteralPath $keep -Recurse -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $project -Destination $keep -Recurse -Force
+    $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force }
+    try { $r = Invoke-SgRow SR-T5-replay @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'receipt-conflict' } }
+    finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SrRow $r lost-replay
+    # M1-M2 (task-edf2162b): an observe pin whose task's newest attempt record ties at
+    # generation 7 as verified-local, so Test-MoeStrongLandingTask journals the landing strong.
+    # The finalize keys on that journal, not on the pin. The record is closed, so no
+    # open-attempt or finalizing scan reads it.
+    Write-Host '[strong receipt] M1, M1-replay, M2: an observe pin with a strong journal finalizes as a strong landing'
+    $mixed = @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }
+    $mixedSetup = {
+        Initialize-SgFixture; New-Item -ItemType Directory -Force -Path "$project\.moe\attempts" | Out-Null
+        [IO.File]::WriteAllText("$project\.moe\attempts\attempt-tie.json", '{"id":"attempt-tie","taskId":"task-postflight","generation":7,"workerId":"worker-old","phase":"closed","executionPolicySnapshot":{"version":2,"profile":"verified-local","planRevision":1}}')
+    }
+    $mKeep = "$tempRoot\sr-mkeep"; Remove-Item -LiteralPath $mKeep -Recurse -Force -ErrorAction SilentlyContinue
+    $script:VmrSetup = $mixedSetup
+    try {
+        Assert-SrRow (Invoke-SgRow SR-M1 ($mixed + @{ FAKE_EVIDENCE_MODE = 'receipt-refused' })) deferred
+        Copy-Item -LiteralPath $project -Destination $mKeep -Recurse -Force
+        $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $mKeep -Destination $project -Recurse -Force }
+        Assert-SrRow (Invoke-SgRow SR-M1-replay @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' }) replay
+        $script:VmrSetup = $mixedSetup
+        Assert-SrRow (Invoke-SgRow SR-M2 $mixed) pass
+    } finally { $script:VmrSetup = { Initialize-SgFixture } }
+    Write-Host '[strong receipt] ok T1, T2, T2-replay, T2-refuse, T2-running, T3, T4, T5, T5-replay, M1, M1-replay, M2'
 }
 function Test-SgvRow([string]$Row, [int]$Rc, [string]$Want, [byte[]]$Bytes) {
     $file = "$tempRoot\sgv.reply"; [IO.File]::WriteAllBytes($file, $Bytes)
@@ -1022,11 +1230,15 @@ function Invoke-SguRow([string]$Row, [string]$Want, [hashtable]$Set = @{}, [stri
     foreach ($n in $vmjCredentials) { if ([Environment]::GetEnvironmentVariable($n) -cne "outer-$n") { throw "VM ROUTE FAILED ([strong gate] $Row): $n not restored" } }
 }
 function Get-SguCount([string]$Line) { return @($script:SguOut | Where-Object { $_ -ceq $Line }).Count }
-# Assert-SguDispatch ROW ENTRY -- exactly one dispatch ran, from ENTRY, on the frozen commit, with no credential; its pid.
-function Assert-SguDispatch([string]$Row, [string]$Entry) {
-    $d = @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })
+# Assert-SguDispatch ROW ENTRY [STOPPED] -- exactly one dispatch ran, from ENTRY, on the frozen commit, with no credential and a
+# rooted --stop-file absent at its start and after; one stop row from it when STOPPED, else none, and never a term row; its pid.
+function Assert-SguDispatch([string]$Row, [string]$Entry, [bool]$Stopped = $false) {
+    $rows = @(Read-VmeJsonl $sguEv); $d = @($rows | Where-Object { $_.tool -ceq 'check-dispatch' }); $sf = if ($d.Count) { "$($d[0].args.argv[7])" } else { '' }
+    $stops = @($rows | Where-Object { $_.tool -ceq 'check-dispatch-stop' } | ForEach-Object { "$($_.args.pid)" }) -join ','
     if ($d.Count -ne 1 -or $d[0].args.entry -cne $Entry -or @($d[0].args.credentials).Count -or $d[0].args.candidateId -cne 'cand-sgu' -or
-        ($d[0].args.argv -join "`n") -cne (@('--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC) -join "`n")) { throw "VM ROUTE FAILED ([strong gate] $Row): dispatch rows $(ConvertTo-Json $d -Compress -Depth 5)" }
+        ($d[0].args.argv -join "`n") -cne (@('--project', $sguProject, '--task', 'task-sgu', '--commit', $sguC, '--stop-file', $sf) -join "`n") -or
+        -not [IO.Path]::IsPathRooted($sf) -or (Test-Path -LiteralPath $sf) -or $d[0].args.stopAtStart -isnot [bool] -or $d[0].args.stopAtStart -or
+        $stops -cne $(if ($Stopped) { "$($d[0].args.pid)" } else { '' }) -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] $Row): stop rows '$stops', $(Get-SguTerms) TERMs, dispatch rows $(ConvertTo-Json $d -Compress -Depth 5)" }
     return (Get-SguPid)
 }
 function Get-SguPid { return [int]@(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch' })[0].args.pid }
@@ -1051,29 +1263,48 @@ function Invoke-SguRows {
     }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     Invoke-SguRow U5 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'; FAKE_CHECK_DISPATCH = 'hang-hard' } '' $false 1
-    Assert-SgDead U5 (Assert-SguDispatch U5 $sguStub)
+    Assert-SgDead U5 (Assert-SguDispatch U5 $sguStub $true)
     if ($clock.Elapsed.TotalSeconds -gt 15 -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U5): $([int]$clock.Elapsed.TotalSeconds)s and $(Get-SguTerms) TERMs, expected at most 15 s and none" }
+    # U8: a dispatch that honours the stop exits by itself: its stop row comes 1 s after it saw the file, so no kill came first, and well inside the 30 s grace.
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    Invoke-SguRow U8 'rc=1 code=MOE_CHECK_DISPATCH_TIMEOUT' @{ MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'; FAKE_CHECK_DISPATCH = 'hang' } '' $false 30
+    Assert-SgDead U8 (Assert-SguDispatch U8 $sguStub $true)
+    if ($clock.Elapsed.TotalSeconds -ge 15) { throw "VM ROUTE FAILED ([strong gate] U8): $([int]$clock.Elapsed.TotalSeconds)s, expected under 15 s (the wrapper waited out the grace)" }
     Invoke-SguRow U6 'rc=1 code=MOE_WORKTREE_PROJECT_NOT_TOP' @{ FAKE_CHECK_DISPATCH = 'pass' } 'sub'
     if ((Test-Path -LiteralPath $sguEv) -or (Get-SguCount '[WARN] MOE_WORKTREE_PROJECT_NOT_TOP: a worktree-mode qualityGate needs the project at the repository top; refusing branch commit.') -ne 1) { throw 'VM ROUTE FAILED ([strong gate] U6): the dispatch ran, or not one NOT_TOP line' }
     Invoke-SguStopRows
 }
 # U7: a runspace Stop() mid-dispatch, the PipelineStoppedException a Ctrl+C raises: the
-# invoker's finally waits the grace, ends the fake and clears the record. SG-interrupt: the outer
+# invoker's finally creates the stop file, waits the grace, ends the fake and clears the record.
+# U9: a Stop() inside the timeout's grace interrupts that stop before it clears the record,
+# so the invoker's finally stops the fake again. SG-interrupt: the outer
 # finally line (the twin of sh's EXIT-trap stop) sits right after Stop-MoeGateChild and
 # stops a still-recorded dispatch by itself.
 function Invoke-SguStopRows {
     Remove-Item -LiteralPath $sguEv -ErrorAction SilentlyContinue; $done = "$sgu\u7.done"; $env:FAKE_CHECK_DISPATCH = 'hang-hard'; $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC = '60'
+    $body = "param(`$P, `$F, `$Fz, `$Done, `$Grace)`n$sgDefs`n" + @'
+$projectPath = $P; $preflightTaskId = 'task-sgu'; $script:MoeNode = $null; $script:CheckDispatchCli = $F; $script:CheckDispatchGraceSec = $Grace; $script:CheckDispatchProcess = $null
+try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllText($Done, "record=$([bool]$script:CheckDispatchProcess)") }
+'@
     $ps = [powershell]::Create()
     try {
-        $null = $ps.AddScript("param(`$P, `$F, `$Fz, `$Done)`n$sgDefs`n" + @'
-$projectPath = $P; $preflightTaskId = 'task-sgu'; $script:MoeNode = $null; $script:CheckDispatchCli = $F; $script:CheckDispatchGraceSec = 3; $script:CheckDispatchProcess = $null
-try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllText($Done, "record=$([bool]$script:CheckDispatchProcess)") }
-'@).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done)
+        $null = $ps.AddScript($body).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done).AddArgument(3)
         $h = $ps.BeginInvoke(); Wait-SguDispatch U7
         $clock = [Diagnostics.Stopwatch]::StartNew(); $ps.Stop(); $took = $clock.Elapsed.TotalSeconds
-        Assert-SgDead U7 (Assert-SguDispatch U7 $sgFake)
+        Assert-SgDead U7 (Assert-SguDispatch U7 $sgFake $true)
         $rec = if (Test-Path -LiteralPath $done) { [IO.File]::ReadAllText($done) } else { 'no finally' }
         if ($took -lt 2.5 -or $took -gt 20 -or $rec -cne 'record=False' -or (Get-SguTerms) -ne 0) { throw "VM ROUTE FAILED ([strong gate] U7): stop took $([int]$took)s, $rec, $(Get-SguTerms) TERMs; expected the 3 s grace, record=False and none" }
+    } finally { $ps.Dispose() }
+    Remove-Item -LiteralPath $sguEv, $done -ErrorAction SilentlyContinue; $env:MOE_CHECK_DISPATCH_TIMEOUT_SEC = '1'
+    $ps = [powershell]::Create()
+    try {
+        $null = $ps.AddScript($body).AddArgument($sguProject).AddArgument($sgFake).AddArgument($sguFrozen).AddArgument($done).AddArgument(5)
+        $h = $ps.BeginInvoke()
+        for ($i = 0; $i -lt 300 -and -not @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch-stop' }).Count; $i++) { Start-Sleep -Milliseconds 100 }
+        $ps.Stop()
+        Assert-SgDead U9 (Assert-SguDispatch U9 $sgFake $true)
+        $rec = if (Test-Path -LiteralPath $done) { [IO.File]::ReadAllText($done) } else { 'no finally' }
+        if ($rec -cne 'record=False') { throw "VM ROUTE FAILED ([strong gate] U9): a Stop() in the timeout's grace left $rec, expected record=False" }
     } finally { $ps.Dispose() }
     $lines = [IO.File]::ReadAllLines($wrapper)
     $g = @('    try { Stop-MoeGateChild } catch {}', '    try { Stop-MoeCheckDispatch $script:CheckDispatchGraceSec } catch {}', '    try { Invoke-MoeTeardownRescue } catch {}', '    try { Complete-MoePostflight | Out-Null } catch {}')
@@ -1084,7 +1315,7 @@ try { Invoke-MoeCheckDispatch @{ Rel = '' } $Fz } finally { [IO.File]::WriteAllT
     $script:CheckDispatchGraceSec = 1; Wait-SguDispatch SG-interrupt
     & ([scriptblock]::Create($g[1].Trim()))
     Assert-SgDead SG-interrupt (Get-SguPid)
-    if ($script:CheckDispatchProcess) { throw 'VM ROUTE FAILED ([strong gate] SG-interrupt): the outer finally kept the record' }
+    if ($script:CheckDispatchProcess -or @(Read-VmeJsonl $sguEv | Where-Object { $_.tool -ceq 'check-dispatch-stop' }).Count) { throw 'VM ROUTE FAILED ([strong gate] SG-interrupt): the outer finally kept the record, or a dispatch with no stop file wrote a stop row' }
     Remove-Item Env:\FAKE_CHECK_DISPATCH, Env:\MOE_CHECK_DISPATCH_TIMEOUT_SEC
 }
 # SG8: L6 takes the check VMs only for the strong profile, and before the legacy gate and the intent rule.
@@ -1123,9 +1354,9 @@ function Invoke-SgSections {
         [IO.File]::WriteAllText($sguStub, "import { createRequire } from 'node:module';`ncreateRequire(import.meta.url)(process.env.SGU_FAKE);`n")
         $script:MoeScriptRoot = "$sgu\scripts"; $script:MoeNode = $null; $script:CheckDispatchProcess = $null; $projectPath = $sguProject; $preflightTaskId = 'task-sgu'
         Invoke-SgvRows; Invoke-SguRows; Test-Sg8
-        Write-Host '[strong gate] ok SGV, SGU U1-U7, SG8 and SG-interrupt'
+        Write-Host '[strong gate] ok SGV, SGU U1-U9, SG8 and SG-interrupt'
         $script:VmrSetup = { Initialize-SgFixture }; $script:VmjWorkspace = 'worktree'
-        Invoke-SgRows
+        Invoke-SgRows; Invoke-SrRows
     } finally {
         $script:VmrSetup = $null; $script:MoeScriptRoot = $null; $script:MoeRuntimeProtected = $false
         if ($script:CheckDispatchProcess) { try { & taskkill /T /F /PID $script:CheckDispatchProcess.Id 2>&1 | Out-Null } catch {}; $script:CheckDispatchProcess = $null }

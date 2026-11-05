@@ -106,7 +106,7 @@ export async function applyRepairDecision(state: StateManager, task: Task, decis
   }
   const line = `Repair attempt ${decision.attempt}, ${decision.remaining} remaining, under approved plan revision ${task.approvedPlanRevision}.`;
   if (task.status === 'REVIEW' && task.needsHumanReview !== true) {
-    await state.updateTask(task.id, { status: 'WORKING', reopenReason: `${header} ${line}`, contextFetchedBy: [],
+    await state.updateTask(task.id, { status: 'WORKING', reopenReason: `${header} ${line}`, reopenedAt: new Date().toISOString(), contextFetchedBy: [],
       implementationPlan: resetPlanStepsToPending(task.implementationPlan ?? []), stepsCompleted: [] }, 'TASK_REOPENED');
   }
   await comment(state, task.id, d, header, line);

@@ -16,7 +16,9 @@
 // refuses a same-id record that differs in any field (REVIEW_IMMUTABLE). Its one
 // exception is an identical re-record, which returns the stored review, its
 // createdAt included, and writes nothing, so a retry after a crash makes
-// progress instead of failing; nothing changes, so it is not a mutation.
+// progress instead of failing; nothing changes, so it is not a mutation. A
+// review leaves only with its task: deleteTask (taskStore.ts) drops a deleted
+// task's records.
 //
 // Follows the resourceStore / attemptStore / candidateStore pattern: stateless
 // functions taking the state handle first; every mutation assumes THE CALLER
@@ -35,6 +37,7 @@ import { MoeError, MoeErrorCode, invalidInput, missingRequired } from '../util/e
 import { generateId } from '../util/ids.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { caseVariantId, listCandidatesForTask, renderGot } from './candidateStore.js';
+import { recordsWhere } from './recordIndex.js';
 
 /** The only two decisions a review may carry. A third value is refused, never coerced. */
 const DECISIONS: readonly ReviewDecision[] = ['approve', 'reject'] as const;
@@ -113,8 +116,7 @@ export function getReview(state: StateManager, reviewId: string): Review | null 
 
 /** Every review recorded for a task, oldest first. Copies, so a caller cannot edit stored state. */
 export function listReviewsForTask(state: StateManager, taskId: string): Review[] {
-  return Array.from(state.reviews.values())
-    .filter((review) => review.taskId === taskId)
+  return recordsWhere(state, state.reviews, 'taskId', taskId)
     .sort(byCreatedAtThenId)
     .map(copy);
 }

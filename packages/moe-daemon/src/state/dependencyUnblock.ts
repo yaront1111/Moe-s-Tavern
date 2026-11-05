@@ -12,7 +12,9 @@
 // Two entry points, one scan:
 //   - event-driven: taskStore.updateTask calls runDependencyUnblock on any
 //     transition to DONE/ARCHIVED (covers qa_approve, set_task_status,
-//     archive_task/epic, board drags — every path funnels through updateTask);
+//     archive_task/epic, board drags — every path funnels through updateTask),
+//     and taskStore.deleteTask on every delete (a gone prerequisite is met for
+//     a legacy consumer);
 //   - sweep backstop: runBlockedTimeoutSweep calls the same scan each pass,
 //     which is what repairs rows that were blocked BEFORE their prerequisite
 //     landed (or before this feature existed, once the ids are backfilled).
@@ -200,6 +202,27 @@ export function formatDependencyCycle(taskId: string, pathFromDep: string[]): st
   return [taskId, ...pathFromDep].join(' → ');
 }
 
+/**
+ * A row leaving DONE/ARCHIVED revives every cycle through it: findDependencyPath
+ * walks no edge out of a DONE row, so the writers admitted those edges, and no
+ * guard looks at them again. Each live cycle through `task` is paged to
+ * #governors; breaking it is theirs (moe.set_task_dependencies). Best-effort and
+ * never throws: chat must not fail the reopen. updateTask calls it.
+ */
+export function alertReopenedDependencyCycles(state: StateManager, task: Task): void {
+  const cycles: string[] = [];
+  for (const dep of new Set(dependencyEdges(task))) {
+    const back = findDependencyPath(state, dep, task.id);
+    if (back) cycles.push(formatDependencyCycle(task.id, back));
+  }
+  if (cycles.length === 0) return;
+  state.postToRoleChannel(
+    'governors',
+    `⚠️ ${task.id} left DONE into a dependency cycle (${cycles.join('; ')}): each row waits on the other, so neither ` +
+      'can be claimed or auto-unblocked. One side of the loop needs a re-plan or moe.set_task_dependencies.'
+  ).catch(() => {});
+}
+
 /** Per-instance re-entrancy guard: a scan must not start another scan. */
 const scanning = new WeakSet<StateManager>();
 
@@ -249,7 +272,11 @@ export function parkedHoldOwner(state: StateManager, task: Pick<Task, 'id' | 'as
  * ids of the tasks that were unblocked. Never throws — one bad row must not
  * kill the DONE transition (or sweep pass) that triggered the scan.
  */
-export async function runDependencyUnblock(state: StateManager, triggerTaskId?: string): Promise<string[]> {
+export async function runDependencyUnblock(
+  state: StateManager,
+  triggerTaskId?: string,
+  trigger: 'landed' | 'deleted' = 'landed'
+): Promise<string[]> {
   if (scanning.has(state)) return [];
   scanning.add(state);
   const unblocked: string[] = [];
@@ -282,7 +309,7 @@ export async function runDependencyUnblock(state: StateManager, triggerTaskId?: 
         }, 'TASK_UNBLOCKED');
         unblocked.push(task.id);
         if (restoreTo) await repairParkedSeat(state, restoreTo, task.id);
-        const via = triggerTaskId ? ` (${triggerTaskId} landed)` : ' (dependency sweep)';
+        const via = triggerTaskId ? ` (${triggerTaskId} ${trigger})` : ' (dependency sweep)';
         const msg = `🟢 ${task.id} un-blocked → ${safeRestored}: all blockedOnTaskIds [${ids.join(', ')}] are DONE/ARCHIVED${via}.`;
         try { await state.postToGeneral(msg); } catch { /* best-effort */ }
       } catch (err) {

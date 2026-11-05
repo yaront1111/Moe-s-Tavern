@@ -5,6 +5,7 @@ import com.moe.model.HandoffNote
 import com.moe.model.MoeState
 import com.moe.model.PlanCritiqueResult
 import com.moe.model.Task
+import com.moe.model.TaskDelivery
 import com.moe.model.TaskVerification
 import com.moe.model.ImplementationStep
 import com.moe.services.MoeProjectService
@@ -54,6 +55,9 @@ class TaskDetailDialog(
     private var deliveryContainer: JPanel? = null
     private var stateListener: MoeStateListener? = null
     private val log = Logger.getInstance(TaskDetailDialog::class.java)
+    // What the live sections last rendered. The daemon republishes an unchanged board every 3 s, and a rebuild
+    // resets the plan's scroll and wipes a selection in the blocker text, so only a changed section is rebuilt.
+    @Volatile private var renderedSections = liveSections(task)
 
     init {
         title = MoeBundle.message("moe.dialog.taskDetail", task.title)
@@ -62,11 +66,14 @@ class TaskDetailDialog(
         stateListener = object : MoeStateListener {
             override fun onState(state: MoeState) {
                 val updated = state.tasks.find { it.id == task.id } ?: return
+                val sections = liveSections(updated)
+                val rendered = renderedSections
+                renderedSections = sections
                 // One listener for all live sections. No refresh may take the
                 // dialog down: log and leave the last good content standing.
-                safeRefresh("plan panel") { refreshPlanPanel(updated) }
-                safeRefresh("blocker section") { refreshBlockerSection(updated) }
-                safeRefresh("delivery section") { refreshDeliverySection(updated) }
+                if (sections.plan != rendered.plan) safeRefresh("plan panel") { refreshPlanPanel(updated) }
+                if (sections.blocker != rendered.blocker) safeRefresh("blocker section") { refreshBlockerSection(updated) }
+                if (sections.delivery != rendered.delivery) safeRefresh("delivery section") { refreshDeliverySection(updated) }
             }
             override fun onStatus(connected: Boolean, message: String) {}
         }
@@ -199,7 +206,7 @@ class TaskDetailDialog(
                     foreground = JBColor.GRAY
                     font = JBUI.Fonts.smallFont()
                 }
-                val body = JBLabel("<html>${comment.content.replace("\n", "<br>")}</html>")
+                val body = JBLabel(commentHtml(comment.content))
                 commentRow.add(header, BorderLayout.NORTH)
                 commentRow.add(body, BorderLayout.CENTER)
                 commentsPanel.add(commentRow)
@@ -816,6 +823,26 @@ class TaskDetailDialog(
     )
 
     companion object {
+        /** What the dialog's live sections show of a task: each is rebuilt only when its own part changes. */
+        internal data class LiveSections(
+            val plan: List<ImplementationStep>,
+            val blocker: TaskBlockerDetail?,
+            val delivery: TaskDelivery?
+        )
+
+        internal fun liveSections(task: Task) =
+            LiveSections(task.implementationPlan, TaskBlockerPresentation.detail(task), task.delivery)
+
+        /**
+         * A task comment as the HTML of a Swing label. Comments are agent, QA and human text: every `&`, `<`, `>` and
+         * `"` is escaped, so `List<String>` reads literally and no tag is interpreted (an `<img>` would fetch its URL
+         * when the dialog opens). Only line breaks become markup.
+         */
+        internal fun commentHtml(content: String): String {
+            val escaped = content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+            return "<html>${escaped.replace("\n", "<br>")}</html>"
+        }
+
         /**
          * Compute the detail dialog's metrics section, or null when there is nothing
          * to show. Pure: [now] is supplied by the caller and no platform bundle or

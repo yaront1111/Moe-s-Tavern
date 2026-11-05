@@ -22,6 +22,9 @@ import { decodeStoredPlanRevision, updateTask } from '../state/taskStore.js';
 import { definitionDigest, measureRequiredCheckSnapshot } from '../delivery/requiredChecks.js';
 import { readExecutionPolicySnapshot } from '../delivery/executionProfile.js';
 import { capturePlanSourceBasis } from '../context/planReuseState.js';
+import { isWorkerAlive } from '../util/workerLiveness.js';
+import { activeChatWaiters } from './chatWait.js';
+import { activeWaiters } from './waitForTask.js';
 
 /**
  * The affected-path refusal. `cachedRefMiss` says why the configured cached
@@ -577,8 +580,12 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             ...(recipeInstance ? { recipeInstance } : {}) });
         // Use the captured assignee because updateTask clears assignedWorkerId on
         // PLANNING -> AWAITING_APPROVAL handoff. touchWorker skips missing worker
-        // records and never blocks a successfully submitted plan.
-        await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });
+        // records and never blocks a successfully submitted plan. The seat goes
+        // IDLE only when its pointer is this task or nothing: a seat planning an
+        // unassigned row (or one that has since moved on) keeps its own task.
+        const handoffSeat = handoffWorkerId ? state.getWorker(handoffWorkerId) : null;
+        const seatOnThisTask = !handoffSeat?.currentTaskId || handoffSeat.currentTaskId === task.id;
+        await state.touchWorker(handoffWorkerId, seatOnThisTask ? { status: 'IDLE', currentTaskId: null } : {});
         // The revision this submission committed: the only one an automatic approval may stamp.
         const revision = decodeStoredPlanRevision(submitted);
 
@@ -629,17 +636,24 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
           } catch { /* never block tool */ }
           // Set pendingPlanCritique if at least one governor is online so
           // downstream consumers (UI, get_handoff_history, etc.) can see the
-          // task is parked awaiting critique. Active = registered with team
-          // role 'governor'. We use a separate update to avoid clobbering the
-          // status transition's worker-clearing logic.
+          // task is parked awaiting critique. Online = a member of a team with
+          // role 'governor' that is present by chat_who's rule: alive in the
+          // presence window (isWorkerAlive), or parked in chat_wait or
+          // wait_for_task, which refresh activity only on entry and timeout
+          // (up to 10 min apart); never a DEAD record. A registered but gone
+          // governor would park the critique on nobody and switch off the
+          // size critic below. We use a separate update to avoid clobbering
+          // the status transition's worker-clearing logic.
           let governorOnline = false;
           try {
             const governors: string[] = [];
+            const nowMs = Date.now();
             for (const team of state.teams.values()) {
               if (team.role !== 'governor') continue;
               for (const memberId of team.memberIds) {
                 const w = state.getWorker(memberId);
-                if (w) governors.push(memberId);
+                const parked = activeChatWaiters.has(memberId) || activeWaiters.has(memberId);
+                if (w && (isWorkerAlive(w, nowMs) || (parked && w.status !== 'DEAD'))) governors.push(memberId);
               }
             }
             governorOnline = governors.length > 0;

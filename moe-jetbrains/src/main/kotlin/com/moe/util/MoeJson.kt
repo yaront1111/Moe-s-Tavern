@@ -365,6 +365,8 @@ object MoeJson {
 
     private fun parseEpics(array: JsonArray): List<Epic> {
         return array.mapNotNull { element ->
+            // A null or non-object element is skipped, as every sibling parser does: one bad entry must not drop the board.
+            if (!element.isJsonObject) return@mapNotNull null
             val obj = element.asJsonObject
             val id = obj.getStringOrNull("id") ?: return@mapNotNull null
             val title = obj.getStringOrNull("title") ?: return@mapNotNull null
@@ -402,6 +404,7 @@ object MoeJson {
 
     private fun parseTasks(array: JsonArray): List<Task> {
         return array.mapNotNull { element ->
+            if (!element.isJsonObject) return@mapNotNull null
             val obj = element.asJsonObject
             val id = obj.getStringOrNull("id") ?: return@mapNotNull null
             val epicId = obj.getStringOrNull("epicId") ?: return@mapNotNull null
@@ -444,7 +447,10 @@ object MoeJson {
                 blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
                 blockedAt = obj.getStrictStringOrNull("blockedAt"),
                 planRevision = obj.getPlanRevisionOrNull("planRevision"),
-                delivery = parseDelivery(obj)
+                delivery = parseDelivery(obj),
+                createdAt = obj.getStringOrNull("createdAt"),
+                updatedAt = obj.getStringOrNull("updatedAt"),
+                completedAt = obj.getStringOrNull("completedAt")
             )
         }
     }
@@ -669,7 +675,10 @@ object MoeJson {
             blockedFromStatus = obj.getStrictStringOrNull("blockedFromStatus"),
             blockedAt = obj.getStrictStringOrNull("blockedAt"),
             planRevision = obj.getPlanRevisionOrNull("planRevision"),
-            delivery = parseDelivery(obj)
+            delivery = parseDelivery(obj),
+            createdAt = obj.getStringOrNull("createdAt"),
+            updatedAt = obj.getStringOrNull("updatedAt"),
+            completedAt = obj.getStringOrNull("completedAt")
         )
     }
 

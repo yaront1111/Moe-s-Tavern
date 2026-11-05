@@ -489,6 +489,7 @@ interface Task {
   // Reopening
   reopenCount: number;           // How many times sent back
   reopenReason: string | null;   // Why it was reopened
+  reopenedAt?: string;           // ISO time of the last reopen (set_task_status, the board, StateManager.reopenTask, a required-check repair; stamped by buildReopenClearingUpdates or the repair, daemon-owned, stripped from board UPDATE_TASK). A reopen opens a new work round: qa_approve and the strict delivery policies count completion commits from the later of this and the latest rejection
   rejectionDetails?: RejectionDetails;          // Latest structured QA feedback (cleared on next cycle)
   rejectionHistory?: RejectionHistoryEntry[];   // Newest-first; capped at 20 entries
   failedDodItems?: FailedDodItem[];             // Append-only DoD failure log; capped at last 100
@@ -620,7 +621,7 @@ interface Task {
   planApprovedAt?: string;       // Set with status WORKING by every approval: the board's (PLAN_APPROVED), SPEED/TURBO auto-approval (PLAN_AUTO_APPROVED) and a relaxed-mode set_task_status approval
   workStartedAt?: string;        // Set by the first moe.start_step and never overwritten; a reopen keeps it
   completedAt?: string;          // Set at DONE by moe.qa_approve, with reviewCompletedAt (complete_task stamps only reviewStartedAt); every reopen clears it
-  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the latest rejection, else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
+  reviewStartedAt?: string;      // Set on the WORKING → REVIEW flip; qa_approve counts completion commits from the current work round: at/after the later of the latest rejection and the latest reopen (`reopenedAt`), else the first step start (workStartedAt), else this (completionCommitsForReview in delivery/policy.ts)
   reviewCompletedAt?: string;
 }
 
@@ -1171,10 +1172,15 @@ interface Worker {
 type WorkerType =
   | 'CLAUDE'    // Claude Code CLI
   | 'CODEX'     // OpenAI Codex CLI
-  | 'GEMINI'    // Google Gemini CLI
+  | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)
   | 'GROK';     // xAI Grok Build CLI
-// NOTE: the daemon cannot see which CLI a worker runs — claim_next_task / join_team
-// record every worker as 'CLAUDE' today; CODEX / GEMINI / GROK are reserved values.
+// NOTE: worker.type is the CLI a seat reports; the daemon cannot check which CLI really runs.
+// The launchers (scripts/moe-agent.{sh,ps1}) export MOE_WORKER_TYPE from the CLI they start:
+// CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE). moe-proxy adds it as workerType
+// to claim_next_task and join_team unless the call sets its own. The daemon keeps an exact,
+// case-sensitive name and records any other value as 'CLAUDE'. An omitted workerType keeps an
+// existing record's type and makes a new record 'CLAUDE'. A governor record that
+// enter_governance rebuilds after a purge is 'CLAUDE' until the seat reports again.
 
 type WorkerStatus =
   | 'IDLE'              // Connected, no task
@@ -1284,7 +1290,9 @@ interface ResourceState {
 // respawns and the daemon-restart worker purge.
 interface ResourceLease {
   taskId: string;
-  workerId: string;              // Most recent worker acting for the task
+  workerId: string;              // Most recent worker acting for the task; it may release the
+                                 // lease only while no other seat holds the task (or by pinning
+                                 // taskId + acquiredAt), the assignee always (moe.release_resource)
   note?: string;                 // What the holder is running (≤500 chars)
   etaMs?: number;                // Holder's own wall-clock estimate; informational only
   acquiredAt: string;            // ISO 8601
@@ -1435,7 +1443,7 @@ interface Candidate {
 }
 ```
 
-**Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe.
+**Immutability.** A candidate is never edited. By design it has no `updatedAt` field, and the store has no update, patch or delete path. **A changed tree yields a new candidate with a new id.** Re-recording an existing id with any field different is refused with `CANDIDATE_IMMUTABLE`. The single exception is a byte-identical re-record: it returns the stored candidate unchanged and writes nothing, so a runner that retries after a crash is safe. A candidate is removed only with its task: `moe.delete_task` drops a deleted task's candidates, with their check runs and receipts, and its reviews; an archived task keeps them.
 
 **Ids are compared case-insensitively for existence.** A record is one file, `<id>.json`, and NTFS and a default APFS volume treat `Cand-1.json` and `cand-1.json` as the same file, so recording `cand-1` beside a stored `Cand-1` would silently overwrite it. Such an id is refused `-32002` / `CANDIDATE_ID_CASE_COLLISION`, with `context.candidateId` (the stored id) and `context.requestedId`, whatever its fields, and nothing is written. The rule holds on every filesystem, so a `.moe/` directory stays safe to open on any of them. A stored id keeps the case it was given, and reference fields such as a check run's `candidateId` are matched exactly. Check runs and reviews follow the same rule. Not covered: records that already collided before this rule (two files written on a case-sensitive filesystem) are left alone, and an operator resolves those by hand.
 
@@ -1480,7 +1488,7 @@ interface Review {
 }
 ```
 
-**Append-only.** A review is never edited and never deleted. The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. Nor can an id that differs from a stored one only by case: on NTFS and a default APFS volume it names the same file, so it is refused `-32002` / `REVIEW_ID_CASE_COLLISION`, with `context.reviewId` (the stored id) and `context.requestedId`, and nothing is written (the rule, and what it does not cover, is under [Candidate](#candidate)). A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
+**Append-only.** A review is never edited, and never deleted while its task exists (`moe.delete_task` drops a deleted task's reviews). The store has no update, patch or delete path, and that absence is the rule rather than a convention — a later caller cannot misuse a function that does not exist. **Reviewing a reopened task again appends a SECOND record**; it does not rewrite the first. Nor can a reused `id` rewrite one: a same-id record that differs in any caller-supplied field is refused `-32002` / `REVIEW_IMMUTABLE`, with `context.reviewId` and `context.differingFields`, and nothing is written. An identical same-id record is an idempotent no-op that returns the stored review, its `createdAt` included, and writes nothing, so a retry after a crash makes progress. Nor can an id that differs from a stored one only by case: on NTFS and a default APFS volume it names the same file, so it is refused `-32002` / `REVIEW_ID_CASE_COLLISION`, with `context.reviewId` (the stored id) and `context.requestedId`, and nothing is written (the rule, and what it does not cover, is under [Candidate](#candidate)). A task's review history is therefore the full ordered list of decisions ever made about it, including rejections that were later fixed.
 
 **Binding.** The `candidateId` is never taken on trust from the caller. `qa_approve`/`qa_reject` resolve the task's current candidate (the last by `createdAt`, then `id`) and refuse with `CANDIDATE_MISMATCH` when the caller names a different one, so a stored review can only ever name bytes that were current at the moment of the decision.
 
@@ -1548,7 +1556,7 @@ type CheckOutcome = 'passed' | 'code-failure' | 'infra-failure' | 'timeout' | 's
 
 **Many runs per candidate.** A candidate accumulates check runs. There is never one row per candidate that a later run overwrites: running a check again is a new record under a new id, and the history keeps every result, failures included.
 
-**Immutability.** A check run is never edited and never deleted; the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused. An id that differs from a stored run's id only by case is refused too (`CHECK_RUN_ID_CASE_COLLISION`, below): on NTFS and a default APFS volume it names the same file (the rule, and what it does not cover, is under [Candidate](#candidate)).
+**Immutability.** A check run is never edited, and never deleted while its task exists (`moe.delete_task` drops it with its candidate); the store has no update or delete path. Re-recording an existing id is compared field by field *after* normalization (the bounded tail, and `""` for an absent one). An identical report is an idempotent no-op that returns the stored run, `createdAt` included, and writes nothing, so a runner retrying after a crash makes progress. Any difference is refused. An id that differs from a stored run's id only by case is refused too (`CHECK_RUN_ID_CASE_COLLISION`, below): on NTFS and a default APFS volume it names the same file (the rule, and what it does not cover, is under [Candidate](#candidate)).
 
 **Refusals.** Checked in this order; every refusal writes nothing:
 
@@ -1657,7 +1665,7 @@ There is no `createdAt`: the seven fields above are the whole record, so a repea
 - **Identical:** an idempotent no-op. The stored receipt is returned, nothing is written, and its file keeps the same bytes.
 - **Any difference:** refused with `-32002` `DELIVERY_RECEIPT_CONFLICT`, carrying `context.candidateId`, `context.receiptId` and `context.differingFields`. Nothing is written. A second landing is exactly what a receipt exists to expose, so it is never overwritten.
 
-The store has no update and no delete path.
+The store has no update and no delete path. A receipt goes only with its task: `moe.delete_task` drops it with its candidate.
 
 **Refusals.** Checked in this order; every refusal writes nothing:
 
@@ -2287,7 +2295,7 @@ Example ids elsewhere in this document are short placeholders such as `proj-a1b2
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### Review
-- Append-only: no field changes after the record is written, and there is no delete path. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included. An `id` that differs from a stored review's id only by case is refused (`REVIEW_ID_CASE_COLLISION`)
+- Append-only: no field changes after the record is written, and no delete path besides `moe.delete_task` dropping a deleted task's reviews. A second review of the same task is a second record. A same-id record that differs in any field is refused (`REVIEW_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored review, `createdAt` included. An `id` that differs from a stored review's id only by case is refused (`REVIEW_ID_CASE_COLLISION`)
 - `taskId`, `candidateId` and the optional `id` must match `[A-Za-z0-9_-]{1,128}`
 - `reviewerId` and `summary` must be non-blank strings. Every caller-supplied field except `id` is required: an absent field (`undefined` or `null`) is refused `MISSING_REQUIRED`, and a present value that is blank or not a string is refused `INVALID_INPUT`, never coerced. A review that is not an object at all (a string or an array, for example) is refused `INVALID_INPUT`
 - `decision` must be exactly `approve` or `reject`
@@ -2295,7 +2303,7 @@ Example ids elsewhere in this document are short placeholders such as `proj-a1b2
 - `createdAt` is always the daemon's clock; a caller cannot set it
 
 ### CheckRun
-- Immutable: no field changes after the first record, and there is no delete path. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
+- Immutable: no field changes after the first record, and no delete path besides `moe.delete_task` dropping a deleted task's runs. A same-id record that differs in any field after normalization is refused (`CHECK_RUN_IMMUTABLE`); an identical one is an idempotent no-op that returns the stored run, `createdAt` included. An `id` that differs from a stored run's id only by case is refused (`CHECK_RUN_ID_CASE_COLLISION`)
 - `id` (optional), `candidateId` and `runnerId` must match `[A-Za-z0-9_-]{1,128}`, and `candidateId` must name an existing candidate (`CANDIDATE_NOT_FOUND`)
 - `treeSha` must be 7-40 hex characters and exactly equal to the candidate's `treeSha` (`CHECK_RUN_TREE_MISMATCH`). It is never prefix-matched, truncated or case-folded
 - `command` must be a non-blank string of at most 1000 UTF-16 code units, stored verbatim

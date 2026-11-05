@@ -24,6 +24,7 @@ import {
   statuslineSettingsJson,
   trustKeys,
   trustLine,
+  writeSample,
 } from '../moe-account-lease.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -260,6 +261,16 @@ test('statusline prints the account and usage, and writes the sample for the wra
   const badId = helper(['statusline'], { env: cleanEnv({ MOE_ACCOUNT_ID: 'bad id', MOE_ACCOUNT_SAMPLE_FILE: sample }), input });
   assert.equal(badId.stdout, 'Opus | no account | 5h 42% | 7d 63%\n');
   assert.equal(fs.existsSync(sample), false, 'no sample without a valid account id');
+});
+
+// The statusline runs once per refresh, each time a new process: a temp file a
+// failed rename left (the ps1 wrapper reading the sample) was never removed.
+test('writeSample leaves no temp file behind when the rename fails', (t) => {
+  const dir = tempDir(t);
+  const sample = path.join(dir, 'sample.json');
+  fs.mkdirSync(path.join(sample, 'held'), { recursive: true });
+  assert.throws(() => writeSample(sample, { accountId: 'acct-1', windows: {}, refused: false }));
+  assert.deepEqual(fs.readdirSync(dir), ['sample.json']);
 });
 
 test('statuslineSample keeps valid windows only, at most eight', () => {
@@ -535,6 +546,41 @@ test("trust: claude's lock held by someone else is waited on, then refused, and 
   assert.deepEqual(fs.readFileSync(file), before);
   fs.rmdirSync(lock);
   assert.equal(trustLine(configDir, project, project, { ...noGit, lockWaitMs: 200 }), 'granted');
+});
+
+// claude's lock library (proper-lockfile) refreshes a held lock's mtime every 5 s
+// and takes over one whose mtime is more than 10 s old: a killed holder's lock.
+test("trust: claude's lock left stale by a killed holder is taken over, by claude's own 10 s rule", (t) => {
+  const project = realTemp(t);
+  const configDir = tempDir(t);
+  const file = seedConfig(configDir, untrustedSeed(keyOf(project)));
+  const lock = path.join(configDir, '.claude.json.lock');
+  fs.mkdirSync(lock);
+  const age = (sec) => {
+    const when = new Date(Date.now() - sec * 1000);
+    fs.utimesSync(lock, when, when);
+  };
+  age(5);
+  assert.equal(trustLine(configDir, project, project, { ...noGit, env: {}, lockWaitMs: 100 }),
+    "refused\t300\tthe account's .claude.json is locked by another claude");
+  assert.ok(fs.statSync(lock).isDirectory(), 'a lock its holder still refreshes stays');
+  age(11);
+  assert.equal(trustLine(configDir, project, project, { ...noGit, env: {}, lockWaitMs: 100 }), 'granted');
+  assert.equal(fs.existsSync(lock), false, 'the lock taken over is released like this call\'s own');
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).projects[keyOf(project)].hasTrustDialogAccepted, true);
+});
+
+test('trust: a stale lock path that is not a folder is never removed', (t) => {
+  const project = realTemp(t);
+  const configDir = tempDir(t);
+  seedConfig(configDir, untrustedSeed(keyOf(project)));
+  const lock = path.join(configDir, '.claude.json.lock');
+  fs.writeFileSync(lock, '');
+  const when = new Date(Date.now() - 60_000);
+  fs.utimesSync(lock, when, when);
+  assert.equal(trustLine(configDir, project, project, { ...noGit, env: {}, lockWaitMs: 100 }),
+    "refused\t300\tthe account's .claude.json is locked by another claude");
+  assert.ok(fs.statSync(lock).isFile(), 'not a lock claude made: it stays');
 });
 
 test('trust: a config that does not parse unlocked is read again under the lock (claude may be mid-save)', (t) => {

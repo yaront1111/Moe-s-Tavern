@@ -2,11 +2,22 @@
     const vscode = acquireVsCodeApi();
     const prevState = vscode.getState() || {};
 
+    // JetBrains ChatPanel.maxMessagesPerChannel: no channel keeps more, here or in the saved view state.
+    const MAX_MESSAGES_PER_CHANNEL = 500;
+    function capMessages(list) {
+        if (!Array.isArray(list)) return [];
+        return list.length > MAX_MESSAGES_PER_CHANNEL ? list.slice(list.length - MAX_MESSAGES_PER_CHANNEL) : list;
+    }
+
     let currentChannel = prevState.currentChannel || null;
+    // A selection restored with the view state, or one that lived through a disconnect, shows messages that may be
+    // stale (or none at all): the next channel list re-selects it, which reloads it.
+    let selectionStale = currentChannel !== null;
     let channels = [];
     var workerMap = {};
     let unreadCounts = prevState.unreadCounts || {};
     let messageCache = prevState.messageCache || {};
+    Object.keys(messageCache).forEach(function(id) { messageCache[id] = capMessages(messageCache[id]); });
     let mentionIdx = -1;
     let mentionFilter = '';
     let pinCache = prevState.pinCache || {};
@@ -77,6 +88,7 @@
 
     function selectChannel(channelId) {
         currentChannel = channelId;
+        selectionStale = false;
         unreadCounts[channelId] = 0;
         chatInput.disabled = false;
         sendBtn.disabled = false;
@@ -104,6 +116,10 @@
     // With nothing selected, select what JetBrains ChatChannelSelection.choose picks: the first
     // general-type channel in list order, else the first listed channel. An empty list selects nothing.
     function autoSelectChannel() {
+        if (currentChannel && selectionStale && channels.some(function(ch) { return ch.id === currentChannel; })) {
+            selectChannel(currentChannel);
+            return;
+        }
         if (currentChannel || channels.length === 0) return;
         var general = channels.find(function(ch) { return ch.type === 'general'; });
         selectChannel((general || channels[0]).id);
@@ -112,10 +128,15 @@
     // =====================================================================
     // Message rendering
     // =====================================================================
+    // A pure string escape that also covers quotes: renderMarkdown puts escaped text inside href="...", so a quote
+    // left as-is would end the attribute and let message text add its own.
     function escapeHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
+        return String(str == null ? '' : str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
     }
 
     function renderMarkdown(text) {
@@ -347,7 +368,7 @@
 
         // Pin button (on hover)
         if (!isSystem) {
-            html += '<span class="pin-btn" data-msg-id="' + msg.id + '" title="Pin message">&#128204;</span>';
+            html += '<span class="pin-btn" data-msg-id="' + escapeHtml(msg.id) + '" title="Pin message">&#128204;</span>';
         }
 
         div.innerHTML = html;
@@ -374,6 +395,9 @@
         const isNearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 60;
         const allCached = messageCache[currentChannel] || [];
         messagesEl.appendChild(renderMessage(msg, allCached));
+        // The list shows no more than the cache keeps: drop the oldest rendered messages.
+        const shown = messagesEl.querySelectorAll('.message');
+        for (let i = 0; i < shown.length - MAX_MESSAGES_PER_CHANNEL; i++) { shown[i].remove(); }
         if (isNearBottom) {
             scrollToBottom(false);
         }
@@ -532,7 +556,7 @@
 
             case 'loadMessages':
                 if (data.channel === currentChannel) {
-                    messageCache[currentChannel] = data.messages || [];
+                    messageCache[currentChannel] = capMessages(data.messages || []);
                     renderMessages(messageCache[currentChannel]);
                     saveState();
                 }
@@ -544,6 +568,7 @@
                 // Add to cache
                 if (!messageCache[msg.channel]) messageCache[msg.channel] = [];
                 messageCache[msg.channel].push(msg);
+                messageCache[msg.channel] = capMessages(messageCache[msg.channel]);
                 // If viewing this channel, append
                 if (msg.channel === currentChannel) {
                     appendMessage(msg);
@@ -623,8 +648,12 @@
             case 'decisionResolved':
                 if (data.decision) {
                     decisionMap[data.decision.id] = data.decision;
-                    // Update the decision card in-place
-                    var card = messagesEl.querySelector('.decision-card[data-decision-id="' + data.decision.id + '"]');
+                    // Update the decision card in-place. Matched by its dataset, not a selector built from the id.
+                    var card = null;
+                    var cards = messagesEl.querySelectorAll('.decision-card');
+                    for (var ci = 0; ci < cards.length && !card; ci++) {
+                        if (cards[ci].dataset.decisionId === data.decision.id) card = cards[ci];
+                    }
                     if (card) {
                         var dec = data.decision;
                         var actionsEl = card.querySelector('.decision-actions');
@@ -650,6 +679,8 @@
                 if (data.status === 'connected') {
                     overlay.classList.remove('visible');
                 } else {
+                    // Messages sent while disconnected never reach this page: reload the selection once back.
+                    if (currentChannel) selectionStale = true;
                     overlay.classList.add('visible');
                     overlay.textContent = data.status === 'connecting' ? 'Connecting...' : 'Not connected to daemon';
                 }

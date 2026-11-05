@@ -170,6 +170,7 @@ function fixture(t, cli) {
   f.env[pathKey] = path.dirname(process.execPath) + path.delimiter + (f.env[pathKey] || '');
   if (cli === 'claude') f.env.MOE_DAEMON_PATH = source;
   f.cli = path.join(root, `${cli}.ps1`);
+  if (cli === 'gemini') f.env.MOE_AGY_COMMAND = f.cli; // gemini mode runs agy: point it at the fake, never the machine's real Antigravity
   write(f.cli, `\ufeff& ${psquote(process.execPath)} ${psquote(source)} cli @args\nexit $LASTEXITCODE\n`);
   return f;
 }

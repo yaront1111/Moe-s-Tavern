@@ -149,11 +149,10 @@ if [ "${MOE_RUNTIME_PROTECTED:-}" = 1 ]; then
     [ -n "$KEEP" ] || { echo "Error: node not found" >&2; exit 1; }
     export PATH="$KEEP"
 else
-    PYTHON_CMD=$(find_python)
-    if [ -z "$PYTHON_CMD" ]; then
-        echo "Error: python3 (or py -3) not found on PATH" >&2
-        exit 1
-    fi
+    # As above, only the legacy install-path fallback needs Python: without one
+    # that step is skipped. A bare assignment of the failing find_python would
+    # end the script here under set -e, silently.
+    PYTHON_CMD=$(find_python) || PYTHON_CMD=""
 fi
 
 # The protected wrapper prepends its pinned node directory. Standalone calls
@@ -204,9 +203,9 @@ find_proxy() {
         return
     fi
 
-    # 3. Global install config
+    # 3. Global install config (read with Python, so skipped without one)
     local config_file="$HOME/.moe/config.json"
-    if [ -f "$config_file" ]; then
+    if [ -n "$PYTHON_CMD" ] && [ -f "$config_file" ]; then
         local install_path
         install_path=$($PYTHON_CMD -c "import json; print(json.load(open('$config_file')).get('installPath',''))" 2>/dev/null || true)
         if [ -n "$install_path" ]; then

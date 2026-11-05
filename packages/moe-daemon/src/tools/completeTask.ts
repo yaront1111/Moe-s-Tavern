@@ -1,6 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
-import { MoeError, MoeErrorCode, notFound, invalidState } from '../util/errors.js';
+import { MoeError, MoeErrorCode, notFound, invalidState, missingRequired } from '../util/errors.js';
 import { assertWorkerHoldsTask, assertAllStepsCompleted, assertVerificationEvidence } from '../util/enforcement.js';
 import { describeBranchPolicyFailure, matchesBranchPattern } from '../util/branchPolicy.js';
 import { currentAttempt, setAttemptPhase } from '../state/attemptStore.js';
@@ -194,7 +194,8 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
       additionalProperties: false
     },
     handler: async (args, state) => {
-      const params = args as {
+      // A tools/call that omits `arguments` hands us undefined: refuse it coded.
+      const params = (args || {}) as {
         taskId: string;
         verification?: { command?: string; exitCode?: number; outputTail?: string };
         prLink?: string;
@@ -205,6 +206,7 @@ export function completeTaskTool(_state: StateManager): ToolDefinition {
         generation?: unknown;
         sessionId?: unknown;
       };
+      if (!params.taskId) throw missingRequired('taskId');
       const task = state.getTask(params.taskId);
       if (!task) throw notFound('Task', params.taskId);
 

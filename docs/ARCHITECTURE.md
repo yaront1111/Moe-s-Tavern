@@ -60,7 +60,7 @@ Swing tool window: epic-grouped 5-column board, task/epic/plan dialogs, chat / m
 Key behaviors:
 - Connects to daemon WebSocket at `/ws` (port from `.moe/daemon.json`).
 - Auto-initializes `.moe` on first connect if missing. On an existing `.moe` it only creates missing role docs/skills, and it upgrades stale marked copies only right before it starts the daemon itself (the daemon also rewrites them at every start), so a live daemon's newer docs are never downgraded.
-- Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills it on close if it is the last project using that PID.
+- Auto-starts the bundled daemon (or `MOE_DAEMON_COMMAND`/installer shims); kills its process tree on close if it is the last project using that PID.
 - UI is Swing-based; no JCEF/webview.
 
 A VS Code / Antigravity extension (`moe-vscode/`) is a secondary client speaking the same `/ws` protocol.
@@ -284,6 +284,17 @@ clone that wrote it:
   `<gitdir>/moe/receipt/<taskId>.json`, which never leaves the clone; the
   landing itself travels as the commit.
 
+A task's records live as long as the task: an archived task keeps them all, and
+`moe.delete_task` drops the deleted task's candidates, check runs, receipts and
+reviews (its closed attempts, and the runner's `dispatches/` and
+`observations/`, stay). A record file that will not unlink is skipped by every
+reload, which retries the unlink, so the record never comes back. The daemon
+reads the directories in full at start; a reload (any watched-file change)
+reads only a record file that is new or whose size or mtime changed since it
+was read. Per-task and per-candidate lookups go through an index
+(`state/recordIndex.ts`) that is rebuilt only after a write, so a board
+snapshot no longer scans every store once per task.
+
 ### Worktree mode
 
 An unset `settings.worktreeMode` resolves (`resolveWorktreeMode`) to `'on'` when
@@ -308,8 +319,10 @@ above. It then writes the receipt journal `<gitdir>/moe/receipt/<taskId>.json`
 on every completion before anything is published (a gate-less one has no
 Candidate). With no remote, a CAS `update-ref` publishes; in remote mode a
 non-forced push to origin is the only publication and the local target is a
-mirror. No DeliveryReceipt is sent: the `task.commits` row and the `landed`
-finalize are the landing evidence. A push whose outcome is unknown records no
+mirror. A legacy or observe landing sends no DeliveryReceipt: the
+`task.commits` row and the `landed` finalize are the landing evidence. A
+strong (verified-local) landing also sends one (**Strong local delivery**
+below). A push whose outcome is unknown records no
 row and sends no finalize, so the attempt stays `finalizing`, its journal kept,
 until a later pre-flight fetches and settles it.
 
@@ -340,12 +353,15 @@ mode** in `scripts/CLAUDE.md` and **Worktree Mode** in
 
 ### The verified-local path
 
-`verified-local` is unconditionally unavailable today: `assertExecutionProfileReady`
-(`delivery/executionProfile.ts`) refuses it with `EXECUTION_PROFILE_NOT_READY`
-until protected local isolation, trusted runner evidence and revision-bound
-delivery are certified, and nothing below enables it. Legacy and observe tasks
-keep the path above unchanged. The pieces below exist so that a strong task,
-once allowed, reaches DONE only on evidence its writer cannot mint.
+`verified-local` is refused until the daemon's own readiness evaluation passes:
+`assertExecutionProfileReady` (`delivery/executionProfile.ts`) refuses it with
+`EXECUTION_PROFILE_NOT_READY` while the held snapshot
+(`delivery/readinessHolder.ts`, evaluated at start and every five minutes) is
+not ready, and nothing below grants readiness. The capabilities and evidence
+ids are in the `executionProfile` row of `docs/CONFIGURATION.md`; the operator
+flow is **Activation** in `docs/CERTIFICATION.md`. Legacy and observe tasks
+keep the path above unchanged. The pieces below exist so that a strong task
+reaches DONE only on evidence its writer cannot mint.
 
 - **Runner channel** (`server/runnerChannel.ts`). `/runner` accepts only a
   loopback connection that presents exactly one `x-moe-runner-key` header equal
@@ -374,7 +390,13 @@ once allowed, reaches DONE only on evidence its writer cannot mint.
   run; a `moe.record_check_run` report has no marker and stays diagnostic. Both
   tools refuse `/mcp` with `RUNNER_CHANNEL_REQUIRED` and are hidden from agent
   roles. The host's runner client is `scripts/local-runner/check-dispatch.mjs`
-  (see **Local Runner Isolation**); nothing invokes it per candidate yet.
+  (see **Local Runner Isolation**). Under the strong profile a worktree
+  completion's gate step (L6) runs it on the frozen merged candidate (`commit-tree
+  M -p B`) instead of the `qualityGate`, so the host never runs the gate for that
+  task (`run_check_dispatch` in `moe-agent.sh`, `Invoke-MoeCheckDispatch` in
+  `moe-agent.ps1`). Only `PASS` lands. Any stop fails the landing as
+  `MOE_COMMIT_FAILED_GATE` after `[WARN] MOE_CHECK_DISPATCH_REFUSED: <code>`.
+  Legacy and observe completions still run the host gate.
 - **One pass rule** (`delivery/policy.ts`). `passedOn` (legacy and observe) and
   `trustedPassedOn` (verified-local) are the only pass matches, chosen in the
   same two places (the owed gate and the protected definitions). `qa_approve`,
@@ -433,9 +455,18 @@ once allowed, reaches DONE only on evidence its writer cannot mint.
   (`MOE_DELIVERY_PROOF_NOT_TRANSFERRED`; `MOE_PUSH_REBASE` is ignored). Every
   checkpoint landing, recoveries included, is refused
   (`MOE_COMMIT_REFUSED_STRONG_CHECKPOINT`), so only a verified completion moves
-  the target. The pre-flight replay settles a crash between the ref move, the
-  receipt and `finalize_attempt`, and drops a strong journal only once its
-  attempt is closed. Codes: `scripts/CLAUDE.md`, **Land on every exit**.
+  the target. In worktree mode the strong journal also carries the frozen
+  candidate, its tree M, its base B, the plan revision and the profile; once the
+  squash commit is published the wrapper sends the completion row, then
+  `moe.record_delivery_receipt` from that journal (only after the row is
+  acknowledged), then `finalize_attempt` (`wt_land_published`,
+  `Complete-MoeWorktreeLanding`). The receipt is candidate-bound and never
+  rewritten: an identical replay answers `duplicate: true`, and a contradicting
+  one is refused `DELIVERY_RECEIPT_CONFLICT`, which the wrapper warns about once
+  and does not retry. The pre-flight replay settles a crash between the ref move,
+  the receipt and `finalize_attempt`, in both modes, and drops a strong journal
+  only once its attempt is closed. Codes: `scripts/CLAUDE.md`, **Land on every
+  exit**.
 - **Architecture rules** (`commands/checkArchitecture.ts` over
   `delivery/architectureRules.ts`). `moe-daemon check-architecture --rules
   <repo path> [--base <rev>] [--tree <rev>]`, run from the repository root,
@@ -463,8 +494,11 @@ and the wrapper side (gate, rescue refs, receipts): `docs/CONFIGURATION.md`.
 ## Local Runner Isolation
 
 `scripts/local-runner/` runs agent and check jobs in Moe-owned local Multipass VMs (Ubuntu 24.04). Each module's header
-comment is the reference; this is the map. Nothing here is active yet: every result carries `executionReady: false`,
-and `verified-local` stays refused until certification and the client gates pass.
+comment is the reference; this is the map. Under `verified-local`, which the daemon admits only while its own readiness
+evaluation passes (**The verified-local path** above), worker and QA seats run their jobs in seat VMs (**Seat VM
+route** below) and a worktree completion's owed checks run in check VMs (**Check lifecycle**). Legacy and observe seats
+never use these modules. Every result still carries `executionReady: false`: no module claims isolation for itself, and
+only the daemon's evaluation of a certified report counts.
 
 - **Protected control plane.** Under the protected profile the JetBrains plugin (`util/RuntimeSelectionPolicy.kt`)
   runs only the daemon, proxy and wrapper installed with the plugin and an absolute node outside the project, never the
@@ -501,7 +535,9 @@ and `verified-local` stays refused until certification and the client gates pass
   owner-only ledger record (`~/.moe/runner-state/<project hash>/vms`, or under `MOE_RUNNER_STATE_DIR`), written before
   launch under a random `moe-vm-<20 hex>` name. Reconcile and cleanup touch recorded names only, delete by exact name,
   and preserve a record whose attempt or job lease is not proven closed. `vm-control.mjs status|reconcile|cleanup
-  --project <path>` is the IDE contract.
+  --project <path>` is the IDE contract. The pinned image, toolchain and agent caches sit beside the ledger in
+  `<state root>/<project hash>/images`; on Linux with no `MOE_RUNNER_STATE_DIR` they are in
+  `~/moe-runner-cache/<project hash>/images`, since the Multipass snap reads only non-hidden paths under home.
 - **Pinned bootstrap and readiness** (`guest-bootstrap.mjs`, `provision.mjs`, `guest-readiness.mjs`). The image is
   verified against its sha256 pin and launched as the verified local file (on Windows as `release:<pin sha256>`, whose
   reported `image_hash` must equal the pin, else `IMAGE_PROVIDER_HASH_MISMATCH`). The cloud-init user-data travels
@@ -536,6 +572,30 @@ and `verified-local` stays refused until certification and the client gates pass
     near 2 MiB (#5478).
   - Error handling: there is no fallback to `exec` stdio or to the host. An unusable route fails closed with a fixed
     code.
+- **Seat VM route.** (`agent-seat.mjs`, `seat-capacity.mjs`, and the VM route of both wrappers.) Under verified-local a
+  worker or QA seat gets one owned VM for its whole life, never one per job.
+  - Start: before it claims anything the wrapper runs `node scripts/local-runner/agent-seat.mjs seat-start --project
+    <abs> --worker <id> --runner <pid@token> --host <host>`, which first reclaims this seat's own leftover VM and a
+    dead previous incarnation's. The seat then claims with `executionRoute: 'vm'`.
+  - Per job: `seat-job` runs a verified sweep of earlier jobs, the root-only guest-supervisor `reset` mode (the
+    workspace, its manifest and old session homes), a fresh materialize of the task commit, the job, and the candidate
+    import. A worker's candidate is admitted and landed through the wrapper's candidate path; a QA job's must be
+    empty. Residue outside the workspace, such as `/tmp`, persists across one seat's jobs.
+  - Stop: `seat-stop` deletes the VM through the owned ledger when the seat exits, on every path. A crashed seat's VM
+    is reclaimed by cleanup once the daemon shows the seat gone (`moe.get_seat_liveness`).
+  - Cap: at most max(1, min(floor(CPUs / 2), floor((RAM - 8 GiB) / 4 GiB))) seat VMs run on the host at once, across
+    every project (`hostAgentVmCap`; check VMs never count). Over the cap, `seat-start` answers `SEAT_CAPACITY_FULL`
+    (or `SEAT_CAPACITY_LOCK_BUSY`) and exits 75. The seat waits and retries before claiming
+    (`MOE_SEAT_CAPACITY_WAIT`) and never falls back to the host.
+  - WSL: under verified-local, worker and QA seats run the native PowerShell wrapper with Windows Multipass. JetBrains
+    Start Agent picks it even with "Run Agents in WSL" on, and `moe-agent.sh` refuses verified-local inside WSL
+    (`MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED`). Architect and governor seats keep their usual launch, WSL included.
+  - Credentials: a claude seat sends the leased account's VM token (`accounts vm-token <id>`, read through
+    `moe-account-lease.mjs vm-credential <id>`) to `seat-job` on stdin only, and it reaches the guest only in the job
+    frame, as `CLAUDE_CODE_OAUTH_TOKEN`. Rotation stays on. A codex seat sends `OPENAI_API_KEY` or `CODEX_API_KEY` from
+    the wrapper's own environment, else it stops with `MOE_VM_CREDENTIAL_UNAVAILABLE` before claiming.
+  - Only claude and codex run in a seat VM: a gemini or grok worker or QA seat is refused
+    (`MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED`), and so is shared mode (`MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED`).
 - **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:
   provisioning and readiness; the pinned Node toolchain and an offline dependency tree, built on the host from the
   approved definition's lockfiles (`toolchain-cache.mjs`, `dependency-cache.mjs`); a copy-only materialization; an
@@ -612,12 +672,16 @@ and `verified-local` stays refused until certification and the client gates pass
 - **Restart Daemon on Windows** (`MoeDaemonSupervisor.stopWindowsRestart`, CQ-RF04). A pid that is absent, dead or
   0 is never signalled. Under the protected profile a daemon whose provenance does not verify is not stopped: "Restart
   Daemon did not stop pid N … this IDE did not start it from the installed Moe runtime." Otherwise the plugin runs
-  the installed `stop`. It then terminates the old process tree, roots first: the supervisor this IDE spawned and,
+  the installed `stop`. When that `stop` exits 1 (it could not verify the pid, so it signalled nothing) and the pid is
+  outside this IDE's spawn tree, the plugin signals and starts nothing: "the stop could not verify pid N, which
+  .moe/daemon.json names … so it left that process running". Otherwise it then terminates the old process tree, roots first: the supervisor this IDE spawned and,
   under protected, the daemon's genuine parent; under legacy a foreign parent is only watched. The descendants follow,
   within the same bounded wait. A process still running afterwards refuses the new start ("pid N is still running
   after the stop, and it could restart the old one"), and so does a tree a previous attempt could not resolve. A
-  second click while a stop is in flight is refused. On other hosts the protected restart destroys only a captured
-  handle whose provenance verifies.
+  second click while a stop is in flight is refused. On other hosts Restart Daemon sends SIGTERM to the daemon.json
+  pid (under protected, only to a captured handle whose provenance verifies) and waits up to 15 s for it to exit
+  before starting anything; a survivor in this IDE's own spawn tree is killed with that tree, and any other survivor
+  refuses ("pid N is still running after the stop…").
 - **The daemon CLI's `stop` and `status`** (`packages/moe-daemon/src/index.ts`, task-d6ebe4ab). Both flows above reach
   the old daemon through the installed CLI's `stop`. `stop`, `status` and the `start` gate find it through
   `.moe/daemon.json`, which is repository content, so the CLI dials its `bindHost` only when the literal it resolves to

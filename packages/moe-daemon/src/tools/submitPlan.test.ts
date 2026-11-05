@@ -14,7 +14,9 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { submitPlanTool } from './submitPlan.js';
-import type { Task, Epic, Project, WorkerStatus } from '../types/schema.js';
+import { activeChatWaiters } from './chatWait.js';
+import { activeWaiters } from './waitForTask.js';
+import type { Task, Epic, Project, Worker, WorkerStatus } from '../types/schema.js';
 
 describe('SPEED mode timeout cancellation', () => {
   let testDir: string;
@@ -422,6 +424,35 @@ describe('SPEED mode timeout cancellation', () => {
     expect(state.getWorker('architect-missing')).toBeNull();
   });
 
+  it('keeps the pointer of a seat that plans an unassigned row while it holds another task', async () => {
+    setupMoeFolder({
+      settings: {
+        approvalMode: 'CONTROL',
+        speedModeDelayMs: 5000,
+        autoCreateBranch: true,
+        branchPattern: 'moe/{epicId}/{taskId}',
+        commitPattern: 'feat({epicId}): {taskTitle}',
+        agentCommand: 'claude',
+        enableAgentTeams: false,
+      },
+    });
+    createEpic();
+    createTask({ id: 'task-held', status: 'PLANNING', assignedWorkerId: 'architect-a' });
+    createTask({ id: 'task-free', status: 'PLANNING', assignedWorkerId: null });
+    await state.load();
+    await createWorker('architect-a', 'PLANNING', 'task-held');
+
+    const result = await submitPlanTool(state).handler({
+      taskId: 'task-free',
+      workerId: 'architect-a',
+      steps: [{ description: 'Step 1' }],
+    }, state) as { status: string };
+
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(state.getWorker('architect-a')).toMatchObject({ status: 'PLANNING', currentTaskId: 'task-held' });
+    expect(state.getTask('task-held')).toMatchObject({ status: 'PLANNING', assignedWorkerId: 'architect-a' });
+  });
+
   it('accepts step descriptions longer than 2000 chars up to the cap', async () => {
     setupMoeFolder();
     createEpic();
@@ -706,6 +737,60 @@ describe('plan-size gate', () => {
     const task = state.getTask('task-size')!;
     expect(task.status).toBe('AWAITING_APPROVAL');
     expect(task.critiqueBlockCount).toBe(2);
+  });
+
+  describe('a governor counts as online only when present', () => {
+    const STALE = new Date(Date.now() - 10 * 60_000).toISOString();
+
+    /** A governor team whose seats are each registered, joined, then shaped by `updates`. */
+    async function governorTeam(seats: Record<string, Partial<Worker>>) {
+      setupMoeFolder({ approvalMode: 'CONTROL', taskSizing: { autoCritique: true } });
+      writeEpic();
+      writeTask();
+      await state.load();
+      const team = await state.createTeam({ name: 'Governors', role: 'governor' });
+      for (const [id, updates] of Object.entries(seats)) {
+        await state.createWorker({ id, type: 'CLAUDE', projectId: 'proj-test', epicId: 'epic-1', currentTaskId: null, status: 'IDLE' });
+        await state.addTeamMember(team.id, id);
+        await state.updateWorker(id, updates);
+      }
+    }
+
+    it('a DEAD or silent governor leaves the size critic on and parks no critique', async () => {
+      await governorTeam({ 'governor-dead': { status: 'DEAD' }, 'governor-gone': { lastActivityAt: STALE } });
+
+      const result = await submitPlanTool(state).handler({ taskId: 'task-size', steps: makeSteps(9) }, state) as { status: string };
+
+      expect(result.status).toBe('PLANNING');
+      const task = state.getTask('task-size')!;
+      expect(task.critiqueBlockCount).toBe(1);
+      expect(task.pendingPlanCritique).toBeFalsy();
+    });
+
+    it('a live governor parks the critique on itself', async () => {
+      await governorTeam({ 'governor-dead': { status: 'DEAD' }, 'governor-live': {} });
+
+      const result = await submitPlanTool(state).handler({ taskId: 'task-size', steps: makeSteps(9) }, state) as { status: string };
+
+      expect(result.status).toBe('AWAITING_APPROVAL');
+      expect(state.getTask('task-size')?.pendingPlanCritique?.criticWorkerId).toBe('governor-live');
+    });
+
+    it.each([
+      ['chat_wait', activeChatWaiters as Map<string, unknown>],
+      ['wait_for_task', activeWaiters as Map<string, unknown>],
+    ])('a governor parked in %s past the presence window still counts', async (_tool, waiters) => {
+      await governorTeam({ 'governor-parked': { lastActivityAt: STALE } });
+      waiters.set('governor-parked', { resolve: () => {}, unsubscribe: () => {}, timer: setTimeout(() => {}, 0), channels: null });
+      try {
+        const result = await submitPlanTool(state).handler({ taskId: 'task-size', steps: makeSteps(9) }, state) as { status: string };
+
+        expect(result.status).toBe('AWAITING_APPROVAL');
+        expect(state.getTask('task-size')?.pendingPlanCritique?.criticWorkerId).toBe('governor-parked');
+      } finally {
+        waiters.delete('governor-parked');
+      }
+    });
   });
 
   it('records plannedDistinctFileCount in metrics', async () => {

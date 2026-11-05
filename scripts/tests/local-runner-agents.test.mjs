@@ -578,6 +578,36 @@ test('AB10 concurrent calls both resolve the verified file and leave no .part', 
   assert.deepEqual([readdirSync(cacheDir), readFileSync(bin.file), calls.map(call => call.server.calls.length)], [[`${bin.sha256}.bin`], CLAUDE_BYTES, [1, 1]]);
 });
 
+// Windows refuses to rename over a file another process holds open without delete sharing, as a multipass transfer of
+// the pin a concurrent call has just kept does. POSIX replaces an open file.
+test('AB12 a rename refused over a target that holds the pin keeps that target; one that does not hold it fails', {
+  skip: process.platform !== 'win32' && 'only Windows refuses a rename over an open file', timeout: 30_000 }, async t => {
+  const holders = [];
+  t.after(() => holders.forEach(holder => holder.kill()));
+  const hold = async file => { // [System.IO.File]::Open with FileShare.Read: others may read it, never replace it
+    const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "$f = [IO.File]::Open($env:MOE_HELD, 'Open', 'Read', 'Read'); [Console]::Out.WriteLine('held'); [void][Console]::In.ReadLine(); $f.Close()"],
+    { env: { ...process.env, MOE_HELD: file }, stdio: ['pipe', 'pipe', 'inherit'] });
+    holders.push(holder);
+    await Promise.race([once(holder.stdout, 'data'), once(holder, 'exit').then(() => assert.fail('the holder exited'))]);
+  };
+  for (const [kept, outcome] of [[CLAUDE_BYTES, bin => bin], [CLAUDE_BYTES.subarray(1), () => 'AGENT_BINARY_DOWNLOAD_FAILED']]) {
+    const cacheDir = join(scratch(), 'agent cache');
+    const bin = binOf(cacheDir, CLAUDE_BYTES);
+    let held = false;
+    const body = new ReadableStream({ async pull(controller) {
+      if (held) return controller.close();
+      controller.enqueue(new Uint8Array(CLAUDE_BYTES));
+      writeFileSync(bin.file, kept); // a concurrent call's rename, after this call found no entry
+      await hold(bin.file);
+      held = true;
+    } }, { highWaterMark: 0 });
+    const fetch = async url => ({ ok: true, status: 200, url, headers: new Headers(), body });
+    const result = await fetchAgentBinary({ cli: 'claude', arch: 'x64', cacheDir }, { fetch, manifest: claudeAt('x64') }).catch(error => error.code);
+    assert.deepEqual([result, readdirSync(cacheDir), readFileSync(bin.file)], [outcome(bin), [`${bin.sha256}.bin`], kept]);
+  }
+});
+
 test('AB11 invalid requests are refused before any fetch or cache write', async () => {
   const cacheDir = join(scratch(), 'agent cache');
   const server = routes({});

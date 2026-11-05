@@ -327,6 +327,40 @@ jobs:
         if: runner.os == 'Windows'
         run: node --test scripts/tests/daemon-autostart-argv.test.mjs
 
+      - name: Test launcher helper suites
+        # Folder-trust docs, the Serena ignore override, the fake proxy's get_commit_scope knobs and
+        # moe-team.sh's background launch. Not macOS: these suites have not been run there.
+        if: runner.os != 'macOS'
+        run: node --test scripts/tests/account-trust-docs.test.mjs scripts/tests/postflight-owner-scope.test.mjs scripts/tests/serena-ignore.test.mjs scripts/tests/team-launch-sh.test.mjs
+
+      - name: Test PowerShell doctor and team launch arguments
+        # doctor.ps1's Run-Native and moe-team.ps1's Start-Process build native command lines (PowerShell 5.1 and 7).
+        if: runner.os == 'Windows'
+        run: node --test scripts/tests/doctor-ps1.test.mjs scripts/tests/team-launch-quoting.test.mjs
+
+      - name: Test agent Git-write guard and protected agent command
+        # About 2 min on ubuntu-latest (bash, plus pwsh 7 for the protected launch). Under Windows PowerShell 5.1
+        # and PowerShell 7 the pair takes about 5-6 min on windows-latest, so Windows runs it only in the nightly.
+        if: runner.os == 'Linux'
+        run: node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs
+
+      - name: Test agent Git-write guard and protected agent command (nightly)
+        # About 5-6 min on windows-latest: only the nightly runs it there.
+        if: inputs.full && runner.os == 'Windows'
+        run: node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs
+
+      - name: Test Bash routed-mention provenance
+        if: runner.os == 'Linux'
+        run: bash scripts/tests/mention-provenance.sh
+
+      - name: Test PowerShell routed-mention provenance
+        # -PowerShell picks the wrapper's host: Windows PowerShell 5.1, then PowerShell 7.
+        if: runner.os == 'Windows'
+        run: |
+          powershell -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell powershell
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/tests/mention-provenance.ps1 -PowerShell pwsh
+
       - name: Test Bash landing and postflight runner
         run: node --test scripts/tests/importee-guard-bash.test.mjs scripts/tests/hook-isolation-bash.test.mjs scripts/tests/postflight-safe.test.mjs
 

@@ -1020,6 +1020,63 @@ describe('moe.report_blocked', () => {
     expect(repeat.reasonUpdated).toBe(false);
   });
 
+  // The fresh flip records only the unmet ids, so re-sending the same call used
+  // to re-merge the landed one, read as a changed list, and re-page everyone.
+  it('a retried block whose list was partly landed writes nothing and re-pages nobody', async () => {
+    const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
+    const open = await state.createTask({ epicId: 'epic-1', title: 'Open', status: 'WORKING' });
+    const call = { reason: 'waiting on both', blockedOnTaskIds: [done.id, open.id] };
+    await report(call);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([open.id]);
+    await state.flushActivityLog();
+    const eventsBefore = state.getActivityLog(500).length;
+    const generalBefore = generalPosts.length;
+    const roleBefore = rolePosts.length;
+    const updatedAtBefore = state.getTask('task-1')!.updatedAt;
+
+    const retry = await report(call);
+
+    await state.flushActivityLog();
+    expect(state.getActivityLog(500)).toHaveLength(eventsBefore);
+    expect(generalPosts).toHaveLength(generalBefore);
+    expect(rolePosts).toHaveLength(roleBefore);
+    expect(state.getTask('task-1')!.updatedAt).toBe(updatedAtBefore);
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([open.id]);
+    expect(retry).toMatchObject({
+      alreadyBlocked: true, reasonUpdated: false, notified: { target: null, via: 'suppressed-identical-repeat' },
+    });
+  });
+
+  it('a same-reason repeat that backfills landed ids onto a dep-less row records them without a page', async () => {
+    const done = await state.createTask({ epicId: 'epic-1', title: 'Landed', status: 'DONE' });
+    const reason = `BUILD-ORDER BLOCK on ${done.id}`;
+    await report({ reason, blockedOnTaskIds: [] });
+    expect(state.getTask('task-1')!.blockedOnTaskIds ?? null).toBeNull();
+    const generalBefore = generalPosts.length;
+    const roleBefore = rolePosts.length;
+
+    const repeat = await report({ reason });
+
+    expect(state.getTask('task-1')!.blockedOnTaskIds).toEqual([done.id]);
+    expect(repeat).toMatchObject({ reasonUpdated: true, notified: { target: null, via: 'suppressed-identical-repeat' } });
+    expect(generalPosts).toHaveLength(generalBefore);
+    expect(rolePosts).toHaveLength(roleBefore);
+    expect(await runDependencyUnblock(state)).toEqual(['task-1']);
+  });
+
+  it('a retried block naming a cycle id does not re-alert #governors', async () => {
+    const waiter = await state.createTask({ epicId: 'epic-1', title: 'Waits on task-1', status: 'WORKING', dependsOn: ['task-1'] });
+    const call = { reason: `needs ${waiter.id}`, blockedOnTaskIds: [waiter.id] };
+    const cycleAlerts = () => rolePosts.filter(([role, msg]) => role === 'governors' && msg.includes('dependency cycle')).length;
+
+    await report(call);
+    expect(cycleAlerts()).toBe(1);
+    const retry = await report(call);
+
+    expect(retry.droppedCycleBlockedOnTaskIds).toEqual([waiter.id]);
+    expect(cycleAlerts()).toBe(1);
+  });
+
   it('a correction records blockedResourceId only when the repeat supplies one', async () => {
     const now = new Date().toISOString();
     const holderTask = {

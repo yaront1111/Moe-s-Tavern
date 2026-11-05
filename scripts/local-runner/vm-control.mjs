@@ -28,9 +28,8 @@ const controlError = (code, fallback = 'VM_CONTROL_FAILED') =>
 const unreachable = () => controlError('DAEMON_UNREACHABLE');
 export { canonicalProjectPath }; // its home is guest-session.mjs, which this module imports
 
-/** <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/<first 32 hex of sha256(canonical project)>/vms, created 0700.
- * Mirrors runnerKeyPath (packages/moe-daemon/src/server/runnerChannel.ts); never inside the project or its .moe/. */
-export function ownedLedgerDir(projectPath) {
+/** <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/<first 32 hex of sha256(canonical project)>/vms, validated, not created. */
+function ledgerPath(projectPath) {
   if (typeof projectPath !== 'string' || projectPath.trim() === '' || CONTROL.test(projectPath)) throw controlError('VM_CONTROL_INPUT_INVALID');
   const configured = process.env.MOE_RUNNER_STATE_DIR?.trim();
   const root = configured ? path.resolve(configured) : path.join(os.homedir(), '.moe', 'runner-state');
@@ -38,13 +37,31 @@ export function ownedLedgerDir(projectPath) {
   const dir = path.join(root, createHash('sha256').update(project).digest('hex').slice(0, 32), 'vms');
   const canonical = canonicalProjectPath(dir);
   if (canonical === project || canonical.startsWith(`${project}/`)) throw controlError('VM_CONTROL_STATE_DIR_INVALID');
+  return dir;
+}
+
+/** <MOE_RUNNER_STATE_DIR | ~/.moe/runner-state>/<first 32 hex of sha256(canonical project)>/vms, created 0700.
+ * Mirrors runnerKeyPath (packages/moe-daemon/src/server/runnerChannel.ts); never inside the project or its .moe/. */
+export function ownedLedgerDir(projectPath) {
+  const dir = ledgerPath(projectPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 }); // every directory it creates, not only the leaf
   return dir;
 }
 
-async function providerReadiness(prerequisites) {
+/** The pinned image, toolchain and agent cache that the check jobs and the seats share: <state root>/<project hash>/images,
+ * beside the ledger. The Linux Multipass snap reads only non-hidden paths under home (platform-linux.mjs cacheReadable), so
+ * there the default root's ~/.moe gives way to ~/moe-runner-cache/<project hash>/images. A MOE_RUNNER_STATE_DIR is kept
+ * as set: the prerequisites name a hidden one. Nothing is created here. */
+export function imageCacheDir(projectPath, { platform = process.platform, homedir = os.homedir } = {}) {
+  const project = path.dirname(ledgerPath(projectPath));
+  if (platform !== 'linux' || process.env.MOE_RUNNER_STATE_DIR?.trim()) return path.join(project, 'images');
+  return path.posix.join(homedir(), 'moe-runner-cache', path.basename(project), 'images');
+}
+
+// The image cache the jobs use is one of the prerequisites (on Linux it must be snap-readable): without it, never ready.
+async function providerReadiness(prerequisites, cacheDir) {
   try {
-    const report = await prerequisites({});
+    const report = await prerequisites({ cacheDir });
     return { ready: report?.ready === true, ...fixed('code', report?.code ?? report?.providerCode, CODE), ...fixed('platform', report?.platform, /^[a-z0-9]{1,16}$/) };
   } catch { return { ready: false, code: 'PREREQUISITES_UNAVAILABLE' }; }
 }
@@ -62,7 +79,7 @@ async function ledgerReport(schema, run, unreadable = {}) {
 }
 
 /** Ledger records only, each queried by its own name ('Unknown' on any failure); there is no provider list call. */
-export const statusReport = ({ ledger, provider = {}, prerequisites = hostPrerequisites }) => ledgerReport('moe-vm-status-v1', async () => {
+export const statusReport = ({ ledger, provider = {}, prerequisites = hostPrerequisites, cacheDir }) => ledgerReport('moe-vm-status-v1', async () => {
   const { records, invalid } = await ledger.list();
   const [instances, seatInstances] = [[], []];
   for (const record of records) {
@@ -72,13 +89,16 @@ export const statusReport = ({ ledger, provider = {}, prerequisites = hostPrereq
     if (isSeatRecord(record)) seatInstances.push({ instance, phase, state, launchTries, ownerKind: 'seat', workerId: record.workerId });
     else instances.push({ instance, phase, state, launchTries, taskId: record.taskId });
   }
-  return { provider: await providerReadiness(prerequisites), executionReady: false, verified: false, instances, seatInstances, invalid };
+  return { provider: await providerReadiness(prerequisites, cacheDir), executionReady: false, verified: false, instances, seatInstances, invalid };
 }, { instances: [], seatInstances: [], executionReady: false, verified: false });
 
 /** This host's name as the wrappers spell it: win32 COMPUTERNAME lowercased (moe-agent.ps1 Get-MoeLiveMarkerHost),
- * elsewhere the hostname lowercased without whitespace (moe-agent.sh live_marker_host). */
+ * elsewhere the hostname lowercased without whitespace (moe-agent.sh live_marker_host). A win32 process without
+ * COMPUTERNAME (the ps1 then has no runner identity) takes the hostname too: an empty host is never provable, so a
+ * seat capacity lock such a process left behind could never be recovered. */
 export function localRunnerHost({ platform = process.platform, env = process.env, hostname = os.hostname } = {}) {
-  return platform === 'win32' ? String(env.COMPUTERNAME ?? '').toLowerCase() : String(hostname()).toLowerCase().replace(/\s/g, '');
+  if (platform === 'win32' && env.COMPUTERNAME) return String(env.COMPUTERNAME).toLowerCase();
+  return String(hostname()).toLowerCase().replace(/\s/g, '');
 }
 
 /** Whether a seat record's runner is alive: true, false, or undefined when unprovable (another host or platform, a
@@ -205,7 +225,7 @@ export async function runVmControl(argv, { write = text => process.stdout.write(
     if (pinned.executable === undefined) throw controlError('VM_CONTROL_FAILED');
     const ledger = deps.ledger ?? createLedger(ownedLedgerDir(project));
     const proof = { ledger, provider: pinned, call: deps.call ?? mcpCaller(project), runnerAlive: deps.runnerAlive }; // the caller is lazy
-    const report = command === 'status' ? await statusReport({ ledger, provider: pinned, prerequisites: deps.prerequisites })
+    const report = command === 'status' ? await statusReport({ ledger, provider: pinned, prerequisites: deps.prerequisites, cacheDir: imageCacheDir(project) })
       : command === 'reconcile' ? await reconcileReport(proof) : await cleanupReport(proof);
     line = JSON.stringify(report);
     if (Buffer.byteLength(line, 'utf8') >= MAX_REPORT_BYTES) line = JSON.stringify({ code: 'VM_CONTROL_REPORT_TOO_LARGE' });

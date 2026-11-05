@@ -319,6 +319,10 @@
             latched = true;
             setApproveEnabled(false);
             setNotice('This task is no longer on the board. Approve is disabled.');
+        } else if (msg.type === 'commentNotSent') {
+            // The comment never left the extension: give it back unless something new was typed since.
+            var commentInput = document.getElementById('commentInput');
+            if (commentInput && !commentInput.value) { commentInput.value = msg.content; }
         }
     });
 

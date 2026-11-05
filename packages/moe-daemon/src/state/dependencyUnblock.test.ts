@@ -289,6 +289,27 @@ describe('dependencyUnblock', () => {
     });
   });
 
+  describe('a row leaving DONE into a dependency cycle', () => {
+    it('alerts #governors with the revived loop, and says nothing for a reopen that closes none', async () => {
+      // The writers admitted task-B -> task-A while task-A was DONE: no walk follows an edge out of a DONE row.
+      h.createTask({ id: 'task-A', status: 'DONE', dependsOn: ['task-B'] });
+      h.createTask({ id: 'task-B', status: 'BACKLOG', dependsOn: ['task-A'] });
+      h.createTask({ id: 'task-X', status: 'DONE', dependsOn: ['task-B'] });
+      await h.state.load();
+      const alerts: string[] = [];
+      vi.spyOn(h.state, 'postToRoleChannel').mockImplementation(async (role: string, msg: string) => {
+        if (role === 'governors' && msg.includes('dependency cycle')) alerts.push(msg);
+      });
+
+      await h.state.updateTask('task-X', { status: 'WORKING' });
+      expect(alerts).toEqual([]);
+
+      await h.state.updateTask('task-A', { status: 'WORKING' });
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toContain('task-A left DONE into a dependency cycle (task-A → task-B → task-A)');
+    });
+  });
+
   describe('sweep backstop (runBlockedTimeoutSweep)', () => {
     it('repairs an UNASSIGNED pre-existing BLOCKED row whose deps are already DONE', async () => {
       // The prerequisite was DONE before anything watched for it — the

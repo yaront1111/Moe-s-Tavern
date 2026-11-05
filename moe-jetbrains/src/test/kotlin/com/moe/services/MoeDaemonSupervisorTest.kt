@@ -418,7 +418,12 @@ class MoeDaemonSupervisorTest {
             val lookups = mutableListOf<Long>()
             var destroys = 0
             val handle = Proxy.newProxyInstance(ProcessHandle::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { _, method, _ ->
-                if (method.name == "destroy") { destroys++; true } else error("unexpected ${method.name}")
+                when (method.name) {
+                    "destroy" -> { destroys++; true }
+                    // The restart waits for the signalled process to exit.
+                    "isAlive" -> destroys == 0
+                    else -> error("unexpected ${method.name}")
+                }
             } as ProcessHandle
             val service = MoeDaemonSupervisor(root.canonicalPath, "Test", profile = { profile },
                 processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle }, windowsRestart = { windows })
@@ -497,7 +502,12 @@ class MoeDaemonSupervisorTest {
             val lookups = mutableListOf<Long>()
             var destroys = 0
             val handle = Proxy.newProxyInstance(ProcessHandle::class.java.classLoader, arrayOf(ProcessHandle::class.java)) { _, method, _ ->
-                if (method.name == "destroy") { destroys++; true } else error("unexpected ${method.name}")
+                when (method.name) {
+                    "destroy" -> { destroys++; true }
+                    // The restart waits for the signalled process to exit.
+                    "isAlive" -> destroys == 0
+                    else -> error("unexpected ${method.name}")
+                }
             } as ProcessHandle
             val service = MoeDaemonSupervisor(root.canonicalPath, "Test", profile = { profile },
                 processAliveProbe = { probes += it; true }, processLookup = { lookups += it; handle }, windowsRestart = { windows },
@@ -634,6 +644,59 @@ class MoeDaemonSupervisorTest {
 
         assertEquals(1, process.destroyCalls)
         assertFalse(process.isAlive)
+    }
+
+    @Test
+    fun `killSpawnedDaemon also stops the processes below the spawned root`() {
+        val events = mutableListOf<String>()
+        val s = TreeHandle(S, T0, events)
+        val r = TreeHandle(R, T0.plusSeconds(1), events).also { it.parentHandle = s; s.kids += it }
+        val process = FakeProcess(s)
+        val supervisor = supervisor(initializedRoot("kill-tree"), processStarter = { process })
+        assertTrue(supervisor.ensureDaemonRunning())
+
+        supervisor.killSpawnedDaemon()
+
+        assertEquals(1, process.destroyCalls)
+        assertFalse("a `cmd /c` or shell root forwards no signal to its daemon", r.alive)
+        assertEquals("the tree is read before the root goes", listOf("read:$S", "read:$R", "kill:$R"), events)
+    }
+
+    @Test
+    fun `a respawn kills the previous daemon's whole tree`() {
+        val events = mutableListOf<String>()
+        val s = TreeHandle(S, T0, events)
+        val r = TreeHandle(R, T0.plusSeconds(1), events).also { it.parentHandle = s; s.kids += it }
+        val first = FakeProcess(s)
+        val spawns = listOf(first, FakeProcess()).iterator()
+        val supervisor = supervisor(initializedRoot("respawn-tree"), processStarter = { spawns.next() })
+        assertTrue(supervisor.ensureDaemonRunning())
+        supervisor.resetSpawnBackoff()
+
+        assertTrue(supervisor.ensureDaemonRunning())
+
+        assertEquals(1, first.destroyCalls)
+        assertFalse(r.alive)
+        assertEquals(listOf("read:$S", "read:$R", "kill:$R"), events)
+        supervisor.killSpawnedDaemon()
+    }
+
+    @Test
+    fun `a service disposed while its daemon spawns kills that daemon`() {
+        val root = initializedRoot("dispose-during-spawn")
+        val project = Proxy.newProxyInstance(IdeaProject::class.java.classLoader, arrayOf(IdeaProject::class.java)) { _, method, _ ->
+            when (method.name) { "getName" -> "Dispose Test"; "getBasePath" -> root.path; "isDisposed" -> false; else -> null }
+        } as IdeaProject
+        val service = MoeProjectService(project) { it() }
+        val spawned = FakeProcess()
+        // dispose() runs while the spawn is in flight, so it finds no daemon of its own to kill.
+        MoeProjectService::class.java.getDeclaredField("daemonSupervisor").apply { isAccessible = true }
+            .set(service, supervisor(root, processStarter = { service.dispose(); spawned }))
+
+        service.connect()
+
+        assertEquals(1, spawned.destroyCalls)
+        assertFalse(spawned.isAlive)
     }
 
     @Test
@@ -1103,7 +1166,7 @@ class MoeDaemonSupervisorTest {
         for (exits in listOf(true, false)) WinRestart().use { f ->
             val p = f.proc(P, startSec = -1)
             val r = f.proc(f.self, p, 1)
-            f.stop = { if (exits) { r.alive = false; p.alive = false; 0 } else 1 }
+            f.stop = { if (exits) { r.alive = false; p.alive = false; 0 } else 0 }
             assertEquals("exits=$exits", if (exits) null else survivor(P), f.restart(f.self))
             assertEquals("exits=$exits", 0, p.kills)
             assertEquals("exits=$exits", if (exits) listOf("stop") else listOf("stop", "kill:${f.self}"), f.signals())
@@ -1264,6 +1327,48 @@ class MoeDaemonSupervisorTest {
         }
 
     @Test
+    fun `N3 off Windows the restart waits for the signalled daemon to exit`() = WinRestart(windows = false).use { f ->
+        val r = f.proc(f.self, survives = true)
+        f.onSleep = { if (f.polls == 2) r.alive = false }
+        assertNull(f.restart(f.self))
+        assertEquals("the start waits until the old daemon is gone", 2, f.polls)
+        assertEquals(listOf("kill:${f.self}"), f.signals())
+    }
+
+    @Test
+    fun `N4 off Windows a daemon that outlives the bound refuses the restart`() = WinRestart(windows = false).use { f ->
+        val r = f.proc(f.self, survives = true)
+        assertEquals(survivor(f.self), f.restart(f.self))
+        assertEquals("a 1 s bound polled every 250 ms", 4, f.polls)
+        assertEquals("a process outside this IDE's tree gets one signal", listOf("kill:${f.self}"), f.signals())
+        assertTrue(r.alive)
+    }
+
+    @Test
+    fun `N5 off Windows a daemon of this IDE's own tree that outlives the bound is killed with that tree`() =
+        WinRestart(windows = false).use { f ->
+            val s = f.proc(S)
+            val r = f.proc(f.self, s, 1, survives = true)
+            r.onKill = { if (r.kills >= 2) r.alive = false }
+            f.own(s)
+            assertNull(f.restart(f.self))
+            assertEquals(listOf("kill:${f.self}", "kill:${f.self}"), f.signals())
+            assertFalse(r.alive)
+        }
+
+    @Test
+    fun `W41 a stop that exits 1 leaves a process outside this IDE's tree running and refuses the restart`() = WinRestart().use { f ->
+        val p = f.proc(P, startSec = -1)
+        val r = f.proc(f.self, p, 1)
+        f.stop = { 1 }
+        assertEquals(unresponsive(f.self), f.restart(f.self))
+        assertEquals("nothing is signalled", listOf("stop"), f.signals())
+        assertTrue(r.alive)
+        assertFalse("the refusal gates starts", f.service.ensureDaemonRunning())
+        assertEquals(0, f.starts)
+    }
+
+    @Test
     fun `W15 legacy refuses failed child enumeration`() = incompleteTree(RuntimeProfile.LEGACY, "children")
 
     @Test
@@ -1410,6 +1515,7 @@ class MoeDaemonSupervisorTest {
         for (watched in listOf(false, true)) WinRestart().use { f ->
             val parent = if (watched) f.proc(P, startSec = -1, survives = true) else null
             val run = f.proc(f.self, parent, 1, survives = !watched)
+            f.stop = { 0 }
             val survivor = parent ?: run
             assertEquals(survivor(survivor.pid()), f.restart(f.self))
             assertEquals(survivor(survivor.pid()), f.restart(null))
@@ -1749,6 +1855,10 @@ class MoeDaemonSupervisorTest {
 
     private fun survivor(pid: Long) = "Restart Daemon did not start a new Moe daemon: pid $pid is still running after the stop, " +
         "and it could restart the old one. Check what that process is and stop it yourself, then use Restart Daemon."
+
+    private fun unresponsive(pid: Long) = "Restart Daemon did not start a new Moe daemon: the stop could not verify pid $pid, " +
+        "which .moe/daemon.json names (usually: alive, but its /health check never answered), so it left that process running. " +
+        "Check what that process is and stop it yourself, then use Restart Daemon."
 
     private inner class ReplacementFixture : AutoCloseable {
         val root = temporaryFolder.newFolder().also { File(it, ".moe").mkdirs() }

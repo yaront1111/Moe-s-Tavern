@@ -3,6 +3,7 @@
 import http from 'http';
 import { isIPv4, type AddressInfo, type Socket } from 'net';
 import type os from 'os';
+import { logger } from '../util/logger.js';
 
 export const WSL_BIND_HOST = 'wsl';
 
@@ -50,6 +51,9 @@ export async function listenOnHosts(
       servers.push(server);
       server.on('connection', track);
       await listen(server, host, port);
+      // The primary's runtime errors reach the WSS's logged 'error'. An extra listener has no other listener,
+      // and an unheard 'error' is an uncaught exception that would shut the whole daemon down.
+      if (index > 0) server.on('error', (error) => logger.error({ error, host }, 'Extra bind listener error'));
       port = (primary.address() as AddressInfo).port;
     }
     return servers;

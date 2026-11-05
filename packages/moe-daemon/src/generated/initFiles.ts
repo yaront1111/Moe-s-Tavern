@@ -62,7 +62,7 @@ You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handli
 
 ## Self-improvement: fix Moe itself
 Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.`,
-  'architect.reference.md': `<!-- moe-generated: sha=168bfad12f83 -->
+  'architect.reference.md': `<!-- moe-generated: sha=c342299c94ea -->
 
 # Architect — Reference
 
@@ -117,6 +117,14 @@ One self-contained deliverable per task — a function, a test file, a review; o
 - **Declare build-order deps structurally**: \`moe.create_task { dependsOn: ["task-…"] }\` when task B needs task A landed first. \`dependsOn\` gates WORKING-status claims only — the row can still be planned, it just isn't offered for execution until every target is DONE/ARCHIVED (missing/deleted ids count as satisfied). Prose in the description explains *why*; the field is what actually holds the claim. A mis-declared list is fixed with \`moe.set_task_dependencies { taskId, dependsOn }\` (architect/governor) — never by deleting the prerequisite. To add or drop ids on a row other seats also edit (registering on a verification batch), pass \`addDependsOn\`/\`removeDependsOn\` instead: they apply to the list in force when the call runs, while a read-then-replace drops whatever another seat added in between. Both writers cap the list at 20 (\`create_task\` names the ids it dropped past the cap — split the task instead) and refuse a cycle: \`set_task_dependencies\` rejects an id from which the task is already reachable (over \`dependsOn ∪ blockedOnTaskIds\`), naming the path; \`create_task\` drops such ids with a warning.
 - **Workers read prerequisites from the board**: every \`dependsOn\` target rides in the dependent's \`get_context.epicSiblings\` with \`landed\`, \`verification\`, \`reviewSummary\` and \`completionSummary\` — so never write DoD items that grep HEAD for a sibling's output or "verify-or-block" on another task's code.
 - **No per-slice evidence rows**: security/evidence/verification/hardening rows per slice are the "by evidence type" anti-seam (\`moe-epic-breakdown\`) — each task proves its own slice, the epic's ONE final hardening task owns the concentrated pass. \`create_task\` warns on meta-titled duplicates and past the epic ceiling but never fails; treat the warnings as a re-slice signal, not noise.
+
+## Verified-local plans
+
+In a project whose \`executionProfile\` is \`verified-local\`, only an approved check delivers (\`owedChecks\` in \`scripts/local-runner/check-dispatch.mjs\`, the rules in \`packages/moe-daemon/src/delivery/policy.ts\`):
+- **Declare every owed check** in \`executionContract.requiredChecks\`. A task owes each declared entry, plus the \`qualityGate\` when it is set, \`autoCommit\` is not \`false\`, and the task owes it (\`qualityGateScope\` \`everyTask\`, or the epic's final task).
+- **Declare the owed gate as an entry**: one entry's \`command\` must equal the trimmed \`qualityGate\`, with \`configs\` naming its \`package-lock.json\` files (their directories become the check VM's dependency installs) and \`assertionRoots\` naming the test roots it asserts. A gate owed with no matching entry has no dependency choice, and check-dispatch stops the whole set before any VM with \`RUNNER_DEPENDENCIES_UNDECLARED\`.
+- **A task that owes nothing** never delivers: its landing stops with \`MOE_CHECK_DISPATCH_REFUSED: RUNNER_NOTHING_OWED\`, and \`moe.qa_approve\` reports \`required-checks-undeclared\`.
+- **An architecture check** counts only as the installed \`moe-daemon check-architecture\`; any other form runs code the candidate builds and never delivers (\`required-check-untrusted-checker\`).
 
 ## Rail Proposals (escape hatch)
 
@@ -597,7 +605,7 @@ Reuse what Moe supplied instead of re-reading it: the claimed context and every 
 Memory lives in Serena. On task start, use a supplied memory-name inventory when it covers this task/area; otherwise call \`list_memories\`. Then \`read_memory\` for the relevant prior knowledge. When you hit a non-obvious gotcha or convention worth keeping, \`write_memory\` named \`gotcha-<area>\` / \`convention-<area>\` (prefer \`edit_memory\` on an existing topic over a near-duplicate). Before you finish, \`write_memory\` a \`task-<id>-handoff\` note for the next agent.
 
 Use \`moe.report_blocked\` when rails conflict, prerequisites are missing, requirements are ambiguous, or a safe implementation cannot be verified. Always pass \`blockedOnTaskIds\` explicitly: the list wins over reason text (including \`[]\` for no task dependencies); only omission enables legacy reason parsing. Blocking on another task landing? List only its id(s) — the daemon auto-unblocks when they are all DONE, and your seat is freed to claim other work meanwhile; if they are ALL already DONE the call answers \`dependenciesSatisfied:true\` and does not block — continue. BLOCKED is a wait state, never a terminal — delivered, green work goes through \`complete_task\`, not \`report_blocked\`.`,
-  'worker.reference.md': `<!-- moe-generated: sha=51eab04ce01a -->
+  'worker.reference.md': `<!-- moe-generated: sha=766ecf9aea21 -->
 
 # Worker — Reference
 
@@ -707,7 +715,7 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 
 1. **Acquire before you touch it**: \`moe.acquire_resource { resourceId, taskId, workerId, note }\`. Granted → do the work. Undeclared ids auto-create (capacity 1, 24h lease cap); leases are keyed by task, so a CLI respawn or daemon restart doesn't lose yours — re-acquiring just renews it.
 2. **Busy → park, never poll**: follow the returned \`nextAction\` — \`moe.report_blocked\` with the same \`resourceId\`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling \`acquire_resource\`. For a short wait inside a live session, \`moe.wait_for_resource\` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
-3. **Release when done**: \`moe.release_resource { resourceId, workerId }\` — the next waiter unparks immediately. The 24h \`maxLeaseMs\` auto-expiry is a crash bound, not a substitute for releasing.
+3. **Release when done**: \`moe.release_resource { resourceId, workerId, taskId }\`, while the task is still yours. The next waiter unparks immediately. Once the row has passed to another seat (QA claimed it), the lease is that seat's to release. The 24h \`maxLeaseMs\` auto-expiry is a crash bound, not a substitute for releasing.
 
 ## Claude account switch
 
@@ -749,13 +757,13 @@ only you can.
  */
 const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'architect.md': ['005701cf18c9', '02fbfb6da557', '042af6bd58fb', '0716645bd848', '0f3a3788e50c', '0f8484b44ff2', '10f85ae26bfe', '1196d0c3f677', '1eb2a6b8ae47', '2a2e5b1b46d8', '334a9268175f', '34f5914e26d6', '36c12e0f6b86', '38d016858dca', '3b8022e8b9eb', '5095739efdb8', '78f381a0ed75', '93b0a870d380', '9baf82c2cea5', '9ef88be32dd8', 'a7b918e76e42', 'b0c0bbe4188c', 'b3cbfdd18adf', 'b4a63b0579ba', 'da51e10b1521', 'e7d9ec2dbdab', 'efd88ce46ea5', 'f1d9a58427c9', 'f4f5d55cee56', 'fbdb940cb978', 'fe151bcb0a86', 'ff1e6da9fd65'],
-  'architect.reference.md': ['08b07943437a', '168bfad12f83', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '4e6e159ba84b', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
+  'architect.reference.md': ['08b07943437a', '168bfad12f83', '1d66722f1763', '28353487e190', '399590c0e5e5', '4b268f5ee405', '4cc7254d0592', '4e6e159ba84b', '64a50f8344b8', 'b94904ea606a', 'bbb60a02bce5', 'c016fd59a81e', 'c16de6533b52', 'c342299c94ea', 'c540e2042420', 'da49d54ff8fe', 'e2a8f3f9711d'],
   'governor.md': ['2556278c295b', '3aa528c96f55', '51008a3c3b0f', '5d0001f387ef', '669f916cafc6', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'b1c15c152e75', 'c9d4b13ad50b', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c4d8411512a0', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'a6f9de8de220', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
   'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'e8b6300b7f5b', 'e9cd45cbf530'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '231c9f69ff5b', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '4351f8a02fb9', '4c65ffa9e027', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '8775c3536190', '91be315a1190', '9e4aab4ea7e2', 'a5557290ca4a', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
-  'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '51eab04ce01a', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
+  'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '51eab04ce01a', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '766ecf9aea21', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };
 
 /**

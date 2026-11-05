@@ -975,6 +975,16 @@ export interface Task {
   prLink: string | null;
   reopenCount: number;
   reopenReason: string | null;
+  /**
+   * When the task was last reopened (ISO). Daemon-owned: stamped by
+   * buildReopenClearingUpdates (util/reopen.ts), so set_task_status's reopen
+   * branch, StateManager.reopenTask and the board's reopen drag all write it (the
+   * required-check repair's REVIEW -> WORKING in delivery/repairActivation.ts
+   * stamps it directly), and stripped from board UPDATE_TASK payloads. A reopen opens a new work round, so
+   * completionCommitsForReview (delivery/policy.ts) anchors on the later of this
+   * and the newest rejection. qa_reject does not write it; its rejection anchors.
+   */
+  reopenedAt?: string;
   rejectionDetails?: RejectionDetails;
   /**
    * Accumulated history of QA rejections for this task. Newest entry first.
@@ -1081,9 +1091,10 @@ export interface Task {
    * Git landings recorded for this task by moe.record_commit (newest last,
    * capped at MAX_COMMITS_PER_TASK). Survives qa_reject reopens — it is
    * history, not completion evidence; qa_approve looks for a completion
-   * commit recorded in the current work round: at or after the most recent
-   * rejection, else the first step start (`workStartedAt`), else
-   * `reviewStartedAt` (completionCommitsForReview in delivery/policy.ts).
+   * commit recorded in the current work round: at or after the later of the
+   * most recent rejection and the most recent reopen (`reopenedAt`), else the
+   * first step start (`workStartedAt`), else `reviewStartedAt`
+   * (completionCommitsForReview in delivery/policy.ts).
    */
   commits?: TaskCommit[];
   /** Paths explicitly declared via moe.declare_files (ASSERTED tier; governor/worker lever). */
