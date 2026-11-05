@@ -1054,11 +1054,13 @@ echo "[strong gate] ok SGV, SGU U1-U7 and SG8"
 # --- [strong receipt] CQ-M07t: a strong worktree landing sends its delivery receipt
 # after the publish and before finalize_attempt; an unanswered one defers the
 # finalize to the next pre-flight replay. Same fixture as [strong gate].
-echo '[strong receipt] T1-T5: the receipt between the completion row and finalize_attempt, the deferral and its replay, a conflict, the legacy control, a conflict with every finalize lost and its replay'
+echo '[strong receipt] T1-T5: the receipt between the completion row and finalize_attempt, the deferral and its replay, the replay with its finalize refused or its attempt running, a conflict, the legacy control, a conflict with every finalize lost and its replay'
 # sr_check ROW KIND -- KIND pass (T1), conflict (T3), deferred (T2's landing: the receipt
 # refused), replay (T2's next pre-flight, run 1's RPC rows first), legacy (T4:
 # finalize_attempt refused, so the journal it wrote today stays to be read), lost (T5:
-# a conflict, then every finalize lost) or lost-replay (T5's next pre-flight).
+# a conflict, then every finalize lost), lost-replay (T5's next pre-flight), or
+# refused / running (T2's next pre-flight with the replayed finalize refused, or the kept
+# attempt read as running; the journal stays either way).
 sr_check() {
   "$NODE" - "$PROJECT" "$OUT" "$TMP_DIR/sg-base" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$1" 'see the assertion above'
 const fs=require('node:fs'),a=require('node:assert/strict'),cp=require('node:child_process'),[p,out,baseFile,rc,row,kind]=process.argv.slice(2);
@@ -1115,6 +1117,24 @@ if(kind==='lost-replay'){
   a.equal(fs.existsSync(p+'/.moe/receipts/'+id+'.json'),false,'a conflict stored a receipt');
   process.exit(0);
 }
+// refused / running (T2's next pre-flight with the finalize refused, or the attempt read as running): the
+// receipt is re-sent and the strong journal stays byte for byte (task-9194f182).
+if(kind==='refused'||kind==='running'){
+  const keep=fs.readFileSync(require('node:path').dirname(baseFile)+'/sr-keep/.git/moe/receipt/task-postflight.json','utf8');
+  const lost='[WARN] attempt attempt-postflight is still finalizing after its replayed receipt; its finalizing holds stay until it closes.';
+  const open=count(l=>l.startsWith('[WARN] receipt journal ')&&l.endsWith(' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.'));
+  a.equal(rec.length,2,'record_delivery_receipt rows'); a.equal(JSON.stringify(rec[1].args),JSON.stringify(rec[0].args),'the replay did not re-send the journaled receipt');
+  a.equal(of('check-dispatch').length,1,'the replay dispatched again'); a.equal(deferred,0);
+  a.equal(count(l=>l.startsWith('[receipt] replaying the delivery receipt of task task-postflight from ')),1);
+  a.equal(fs.existsSync(jf)&&fs.readFileSync(jf,'utf8'),keep,'the strong journal was not kept byte for byte');
+  if(kind==='refused'){
+    a.equal(fin.length,3,'finalize_attempt tries'); a.ok(fin.every(r=>r.args.outcome==='landed'&&r.args.landedRevision===C));
+    a.equal(phase,'finalizing'); a.equal(count(l=>l===lost),1); a.equal(count(l=>l.includes(' not closed; nothing finalized.')),0); a.equal(kept,0);
+  } else {
+    a.equal(fin.length,0,'finalized an attempt that is not finalizing'); a.equal(phase,'running'); a.equal(open,1); a.equal(kept,1); a.equal(count(l=>l===lost),0);
+  }
+  process.exit(0);
+}
 a.equal(rec.length,kind==='replay'?2:1,'record_delivery_receipt rows'); a.equal(fin.length,1); a.equal(fin[0].args.outcome,'landed'); a.equal(fin[0].args.landedRevision,C);
 a.ok(at(rec.at(-1))<at(fin[0]),'finalize_attempt precedes the receipt'); a.equal(phase,'closed'); a.equal(fs.existsSync(jf),false,'the receipt journal stayed');
 a.equal(deferred,0); a.equal(kept,0);
@@ -1138,6 +1158,18 @@ VMR_SETUP=sr_restore
 vmr_run SR-T2-replay worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CLAIM_MODE=finalizing
 VMR_SETUP=sg_fixture
 sr_check SR-T2-replay replay
+# SR-T2-refuse and SR-T2-running (task-9194f182): the same kept project replayed with
+# the finalize lost. Refused: the replay warns 'still finalizing' and continues, so the
+# strong journal stays by that path. Running: the kept attempt reads running, so the
+# replay reaches the CQ-V08b keep ('not closed; nothing finalized.') and sends no finalize.
+sr_running() { sr_restore; "$NODE" -e 'const fs=require("fs"),f=process.argv[1],a=JSON.parse(fs.readFileSync(f,"utf8"));if(a.phase!=="finalizing")throw new Error("the kept attempt is "+a.phase);a.phase="running";fs.writeFileSync(f,JSON.stringify(a))' "$PROJECT/.moe/attempts/attempt-postflight.json"; }
+VMR_SETUP=sr_restore
+vmr_run SR-T2-refuse worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CLAIM_MODE=finalizing FAKE_EVIDENCE_MODE=finalize_attempt-refuse
+sr_check SR-T2-refuse refused
+VMR_SETUP=sr_running
+vmr_run SR-T2-running worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CLAIM_MODE=finalizing
+sr_check SR-T2-running running
+VMR_SETUP=sg_fixture
 vmr_run SR-T3 worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass FAKE_EVIDENCE_MODE=receipt-conflict
 sr_check SR-T3 conflict
 vmr_run SR-T4 worker codex "$SG_READY" on 0 FAKE_EVIDENCE_MODE=finalize_attempt-refuse
@@ -1170,7 +1202,7 @@ sr_check SR-M1-replay replay
 vmr_run SR-M2 worker codex "$SG_READY" on 0 "${SR_MIXED[@]}" FAKE_CHECK_DISPATCH=pass
 sr_check SR-M2 pass
 VMR_SETUP=sg_fixture
-echo "[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2"
+echo "[strong receipt] ok T1, T2, T2-replay, T2-refuse, T2-running, T3, T4, T5, T5-replay, M1, M1-replay, M2"
 )
 
 echo "PASS postflight-vm-route.sh"

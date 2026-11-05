@@ -117,7 +117,7 @@ const modes=['dirty-helper','pass','race-fail','race-pass','shared-mutation','tr
 'receipt-ledger-replay','receipt-rebase-replay','receipt-push-rejected','receipt-foreign-replay',
 'intent-strong','intent-strong-cas','intent-strong-unwritable','intent-strong-nocandidate','intent-legacy-unwritable',
 'reconcile-strong-receipt-lost','reconcile-strong-unreconciled','reconcile-strong-target-moved','reconcile-strong-rewrite','reconcile-strong-rewrite-same-tree','reconcile-strong-no-rebase',
-'reconcile-strong-finalize-lost','reconcile-strong-conflict-finalize-lost','strong-checkpoint-held','strong-checkpoint-held-env','strong-checkpoint-held-forged','strong-checkpoint-held-journal',
+'reconcile-strong-finalize-lost','reconcile-strong-replay-running','reconcile-strong-conflict-finalize-lost','strong-checkpoint-held','strong-checkpoint-held-env','strong-checkpoint-held-forged','strong-checkpoint-held-journal',
 'strong-recovery-held','strong-recovery-held-gate',
 'identity-claim','reattach-sidecar','reattach-refused','reattach-postflight','reattach-preflight','reattach-none','reattach-session',
 ...(win?['integrity-batch']:[]),'interrupt-int',...(win?[]:['interrupt-term']),
@@ -490,7 +490,7 @@ if(/^teardown-(finalizing|manual|no-git|sha256|no-baseline|recovered|running|pro
   // CQ-V08 arms reuse the fake daemon's receipt knobs: a refused receipt, or a crash at the held ledger row.
   env.FAKE_EVIDENCE_MODE={'reconcile-strong-receipt-lost':'receipt-refused','reconcile-strong-unreconciled':'receipt-refused',
     'reconcile-strong-rewrite':'receipt-ledger-replay','reconcile-strong-rewrite-same-tree':'receipt-ledger-replay',
-    'reconcile-strong-finalize-lost':'finalize_attempt-null','reconcile-strong-conflict-finalize-lost':'receipt-conflict-finalize-lost'}[mode]||mode;
+    'reconcile-strong-finalize-lost':'finalize_attempt-null','reconcile-strong-replay-running':'finalize_attempt-null','reconcile-strong-conflict-finalize-lost':'receipt-conflict-finalize-lost'}[mode]||mode;
   if(mode.startsWith('race-')||mode==='reconcile-strong-target-moved')env.MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF='node "'+race.replaceAll('\\','/')+'"';
   // A peer lands an EMPTY commit before the CAS: new base, identical rebuilt tree.
   if(mode==='receipt-same-tree-race'||mode==='intent-strong-cas'){write(race,"require('child_process').execFileSync('git',['commit','--allow-empty','-qm','peer-empty']);");
@@ -843,6 +843,25 @@ exit "$rc"
         rows:ledgerRows().length,evidence:evidence(rpc2)},
         {tail:['record_delivery_receipt','finalize_attempt'],resent:receipts[0].args,final:['attempt-postflight',7,'worker-frozen','landed',after],
         head:after,reflog,journal:false,phase:'closed',completions:[after],rows:1,evidence:candidates.length+checks.length},log2);
+    }else if(mode==='reconcile-strong-replay-running'){
+      // CQ-V08b, a shared strong journal (task-9194f182): run 1 is finalize-lost's. The replay then reads the
+      // attempt as running, neither finalizing nor closed: it re-sends the receipt, sends no finalize and keeps
+      // the journal byte for byte, with one 'not closed; nothing finalized.' line.
+      const att=path.join(nested,'.moe','attempts','attempt-postflight.json'),at0=JSON.parse(read(att));
+      assert.deepEqual({phase:at0.phase,journal:fs.existsSync(journal),receipts:receipts.length,rows:ledgerRows().length},
+        {phase:'finalizing',journal:true,receipts:1,rows:1},log);
+      write(att,JSON.stringify({...at0,phase:'running'}));
+      const j1=read(journal),n=rpc.length,reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;
+      const {log2,rpc2}=replay(args),run2=log2.slice(log.length),n2=s=>run2.split(s).length-1,
+        tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool));
+      assert.deepEqual({tail:tail.map(r=>r.tool),resent:tail[0]?.args,
+        kept:n2(' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.'),
+        closed:n2(' not closed; nothing finalized.'),lost:n2('still finalizing after its replayed receipt'),
+        journal:fs.existsSync(journal)&&read(journal),phase:JSON.parse(read(att)).phase,head:git(repo,'rev-parse','moe/frozen'),
+        reflog:reflogOf(),completions:completions(),rows:ledgerRows().length,
+        evidence:rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length},
+        {tail:['record_delivery_receipt'],resent:receipts[0].args,kept:1,closed:1,lost:0,journal:j1,phase:'running',head:after,
+        reflog,completions:[after],rows:1,evidence:candidates.length+checks.length},log2);
     }else{
       // DoD3: run 1 died at its ledger row; the branch then carries the landing's
       // trailers on a copy. A copy of another tree gets nothing; the same tree is that landing.
