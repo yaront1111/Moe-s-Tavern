@@ -129,6 +129,7 @@ function Get-VmrNormalized {
 function Initialize-VmjFixture {
     New-Item -ItemType Directory -Force -Path "$tempRoot\accounts\claude-vm-tokens", "$tempRoot\accounts\acct-1" | Out-Null
     [IO.File]::WriteAllText("$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken)
+    Remove-Item -LiteralPath "$tempRoot\accounts\acct-1\.credentials.json" -Force -ErrorAction SilentlyContinue
     [IO.File]::WriteAllText("$project\.gitignore", ".moe/`n.worktrees/`n.mcp.json`n")
     [IO.File]::WriteAllText("$project\seed.txt", "seed`n")
     Invoke-VmcGit $project @('init', '-q', '-b', 'main') | Out-Null
@@ -250,20 +251,117 @@ function Invoke-VmeSignalRow([string]$Row, [string]$Cmd, [int]$Count, [string]$T
     if ($r.Code -notin @(0, 130) -or $r.Ran) { Stop-Vmr $r "interrupt exit $($r.Code), CLI ran=$($r.Ran)" }
     return $r
 }
-# A background poller that writes the token once FILE holds N MOE_VM_CREDENTIAL_UNAVAILABLE lines.
-function Start-VmeTokenRestore([int]$N) {
-    Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
-    Start-Job -ArgumentList $out, "$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken, $N -ScriptBlock {
-        param($o, $f, $t, $n)
+# A background poller that writes CONTENT to FILE (the minted token by default) once the
+# wrapper output holds N MOE_VM_CREDENTIAL_UNAVAILABLE matches, or N whole lines equal to
+# LINE. It replaces FILE in one rename, and writes $tempRoot\restore.state:
+# 'seat-job-before-credential' when the seat had already run a job by then, else 'restored'
+# (a file, not job output: 5.1's Receive-Job throws 'The Persistence Path does not exist.'
+# once USERPROFILE points at the run's home).
+function Start-VmeTokenRestore([int]$N, [string]$File = "$tempRoot\accounts\claude-vm-tokens\acct-1.token", [string]$Content = $vmjToken, [string]$Line = '') {
+    Remove-Item -LiteralPath $out, "$tempRoot\restore.state" -ErrorAction SilentlyContinue
+    $pattern = if ($Line) { '(?m)^' + [regex]::Escape($Line) + '\r?$' } else { 'MOE_VM_CREDENTIAL_UNAVAILABLE' }
+    Start-Job -ArgumentList $out, $File, $Content, $N, $pattern, "$project\.moe\evidence-rpcs.jsonl", "$tempRoot\restore.state" -ScriptBlock {
+        param($o, $f, $t, $n, $p, $ev, $st)
+        function Read-Shared([string]$Path) {
+            try { $s = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite'); try { return (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() } } catch { return '' }
+        }
         for ($i = 0; $i -lt 3000; $i++) {
-            $text = ''; try { $s = [IO.File]::Open($o, 'Open', 'Read', 'ReadWrite'); try { $text = (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() } } catch {}
-            if ([regex]::Matches($text, 'MOE_VM_CREDENTIAL_UNAVAILABLE').Count -ge $n) { [IO.File]::WriteAllText($f, $t); return }
+            if ([regex]::Matches((Read-Shared $o), $p).Count -ge $n) {
+                $early = (Read-Shared $ev).Contains('"cmd":"seat-job"')
+                [IO.File]::WriteAllText("$f.tmp", $t)
+                try { if (Test-Path -LiteralPath $f) { [IO.File]::Replace("$f.tmp", $f, $null) } else { [IO.File]::Move("$f.tmp", $f) } } catch { [IO.File]::WriteAllText($f, $t) }
+                [IO.File]::WriteAllText($st, $(if ($early) { 'seat-job-before-credential' } else { 'restored' })); return
+            }
             Start-Sleep -Milliseconds 100
         }
     }
 }
+# --- [seat sign-in] task-98053b89, the twin of postflight-vm-route.sh: no minted token, so
+# the job runs on the leased account's own sign-in (slice A's real helper), renewed only by
+# the host claude. Canaries live in files, never in an environment variable (seats log env).
+# Get-SiJson ACCESS REFRESH SECONDS-LEFT: claude's sign-in file shape.
+function Get-SiJson([string]$Access, [string]$Refresh, [int]$Seconds) {
+    $exp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + [long]1000 * $Seconds
+    return '{"claudeAiOauth":{"accessToken":"' + $Access + '","refreshToken":"' + $Refresh + '","expiresAt":' + $exp + ',"scopes":["user:inference"],"subscriptionType":"max"}}'
+}
+# Test-SiClean ROW CANARY...: no canary in the wrapper output, the RPC, seat and chat records,
+# the project, the run's temp or home. It names the file, never the value, and runs before
+# any Stop-Vmr, which prints the output.
+function Test-SiClean([string]$Row, [string[]]$Canary) {
+    $files = @($out, $calls, "$tempRoot\renew.jsonl") + @(Get-ChildItem -LiteralPath $project, $runTmp, $homeDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $hits = @(foreach ($f in $files) {
+        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+        $text = [IO.File]::ReadAllText($f)
+        if (@($Canary | Where-Object { $text.Contains($_) }).Count) { $f }
+    })
+    if ($hits.Count) { throw "VM ROUTE FAILED ($Row): a credential canary appears in: $($hits -join ' ')" }
+}
+# Assert-SiWait R STATE LINE NEEDLE: LINE at least twice and no seat-job before the credential
+# came (STATE from Start-VmeTokenRestore), then the job; one escalation holding NEEDLE and the
+# remedy, one claim, a re-lease per wait.
+function Assert-SiWait($R, [string]$State, [string]$Line, [string]$Needle) {
+    if ($R.Code -ne 0) { Stop-Vmr $R "retry failed: exit $($R.Code)" }
+    if ($State -cne 'restored') { Stop-Vmr $R "credential restore: '$State'" }
+    if ([regex]::Matches($R.Text, '(?m)^' + [regex]::Escape($Line) + '\r?$').Count -lt 2) { Stop-Vmr $R "fewer than two lines '$Line'" }
+    Assert-VmjRows $R happy; $c = Read-VmeJsonl $calls
+    $sent = @($c | Where-Object { $_.tool -ceq 'chat_send' -and "$($_.args.content)".Contains('MOE_VM_CREDENTIAL_UNAVAILABLE') })
+    if ($sent.Count -ne 1 -or -not $sent[0].args.content.Contains($Needle) -or -not $sent[0].args.content.Contains('sign the account in again') -or
+        (Get-VmeCount $c claim_next_task) -ne 1 -or (Get-VmeCount $c lease_account) -lt 3) { Stop-Vmr $R 'escalation, claim or re-lease count' }
+}
+function Invoke-SiRows {
+    Write-Host '[seat sign-in] a claude VM seat with no minted token uses the leased account sign-in'
+    $siRefresh = 'sk-ant-ort01-vmRefreshCanaryNeverLeavesTheFile0123'
+    $siOld = 'sk-ant-oat01-vmOldAccessCanaryNeverReachesAJob01234'
+    $siRefresh2 = 'sk-ant-ort01-vmRenewedRefreshCanaryNeverLeaves012'
+    $siFile = "$tempRoot\accounts\acct-1\.credentials.json"; $renewLog = "$tempRoot\renew.jsonl"; $renewPair = "$tempRoot\renew-pair.json"
+    # $siSeed = @(ACCESS, SECONDS-LEFT) seeds a sign-in file holding $siRefresh too; $null seeds none.
+    $script:VmrSetup = {
+        Initialize-VmjFixture; Remove-Item -LiteralPath "$tempRoot\accounts\claude-vm-tokens\acct-1.token", $renewLog -ErrorAction SilentlyContinue
+        if ($siSeed) { [IO.File]::WriteAllText($siFile, (Get-SiJson $siSeed[0] $siRefresh $siSeed[1])); $script:SiSha = Get-VmcSha256 $siFile }
+    }
+    try {
+        Write-Host '[seat sign-in] SI-signin: the job gets the sign-in access token; no host claude, file unchanged'
+        $siSeed = @($vmjToken, 7200)
+        $r = Invoke-VmrRow SI-signin worker claude $ready on
+        Test-SiClean SI-signin @($vmjToken, $siRefresh)
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy
+        if ((Get-VmcSha256 $siFile) -cne $script:SiSha) { Stop-Vmr $r 'the sign-in file changed' }
+        if ($r.Text -cnotmatch '(?m)^\[seat\] VM credential account=acct-1 source=signin expires=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\.[0-9]{3}Z\r?$') { Stop-Vmr $r 'no source=signin line' }
+        if (Test-Path -LiteralPath $renewLog) { Stop-Vmr $r 'a renewal ran' }
+
+        Write-Host '[seat sign-in] SI-renew: a token 60 s from expiry is renewed by one host claude run first'
+        [IO.File]::WriteAllText($renewPair, ('{"accessToken":"' + $vmjToken + '","refreshToken":"' + $siRefresh2 + '"}'))
+        $siSeed = @($siOld, 60); $env:FAKE_RENEW_FILE = $renewPair
+        try { $r = Invoke-VmrRow SI-renew worker claude $ready on } finally { Remove-Item Env:\FAKE_RENEW_FILE }
+        Test-SiClean SI-renew @($vmjToken, $siOld, $siRefresh, $siRefresh2)
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy
+        $renew = @(Read-VmeJsonl $renewLog); $argv = if ($renew.Count) { @($renew[0].argv) } else { @() }; $t = [Array]::IndexOf($argv, '--tools')
+        $cwd = if ($renew.Count) { [IO.Path]::GetFullPath($renew[0].cwd).TrimEnd('\') } else { $project }
+        if ($renew.Count -ne 1 -or -not ($argv -ccontains '-p') -or $t -lt 0 -or $argv.Count -le $t + 1 -or "$($argv[$t + 1])" -cne '' -or
+            @($argv | Where-Object { "$_".Contains('task-postflight') }).Count -or $cwd -ieq $project -or $cwd.StartsWith("$project\", [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFullPath($renew[0].configDir).TrimEnd('\') -ine "$tempRoot\accounts\acct-1" -or $renew[0].hasMoeWorkerId -ne $false -or $renew[0].hasPluginDirs -ne $false) {
+            Stop-Vmr $r 'not one renewal run with the renewal argv, cwd and env'
+        }
+
+        $env:MOE_ACCOUNT_RETRY_SEC = '1'
+        foreach ($c in @('SI-none|no-signin-file|', "SI-short|short-life|600")) {
+            $a = $c -split '\|'
+            Write-Host $(if ($a[0] -ceq 'SI-none') { '[seat sign-in] SI-none: no credential holds the task with one escalation; a sign-in then runs it' }
+                else { '[seat sign-in] SI-short: under an hour left waits; no renewal at 10 minutes, the job never gets it' })
+            $siSeed = if ($a[2]) { @($siOld, [int]$a[2]) } else { $null }
+            $warn = "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=$($a[1]); retrying in 1s (Ctrl+C to stop)"
+            $job = Start-VmeTokenRestore 2 $siFile (Get-SiJson $vmjToken $siRefresh 7200) $warn
+            try { $r = Invoke-VmrRow $a[0] worker claude $ready on } finally { Stop-Job $job; Remove-Job $job -Force }
+            $state = if (Test-Path -LiteralPath "$tempRoot\restore.state") { [IO.File]::ReadAllText("$tempRoot\restore.state") } else { 'never restored' }
+            Test-SiClean $a[0] @($vmjToken, $siOld, $siRefresh)
+            Assert-SiWait $r $state $warn "reason=$($a[1])"
+            if (Test-Path -LiteralPath $renewLog) { Stop-Vmr $r 'a renewal ran' }
+        }
+        Write-Host '[seat sign-in] ok SI-signin, SI-renew, SI-none, SI-short'
+    } finally { Remove-Item Env:\MOE_ACCOUNT_RETRY_SEC, Env:\FAKE_RENEW_FILE -ErrorAction SilentlyContinue; $script:VmrSetup = { Initialize-VmjFixture } }
+}
 function Invoke-VmeRows {
-    $noToken = { Initialize-VmjFixture; Remove-Item "$tempRoot\accounts\claude-vm-tokens\acct-1.token" }
+    $noToken ={ Initialize-VmjFixture; Remove-Item "$tempRoot\accounts\claude-vm-tokens\acct-1.token" }
     $script:VmrLoop = @('-NoLoop', '-PollInterval', '1')
     foreach ($c in @('capacity|[{"exit":75,"code":"SEAT_CAPACITY_FULL"},{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]|', 'failure|[{"exit":1,"code":"SEAT_PROVISION_FAILED"}]|SEAT_PROVISION_FAILED',
         'usage|[{"exit":2,"code":"SEAT_USAGE"}]|SEAT_USAGE', 'unreadable|[{"exit":1,"code":"never echo arbitrary text"}]|exit 1')) {
@@ -293,13 +391,8 @@ function Invoke-VmeRows {
     if ($r.Code -ne 1 -or (Get-VmeCount (Read-VmeJsonl $calls) chat_send) -ne 1 -or
         -not $r.Text.Contains("[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment")) { Stop-Vmr $r 'codex no-key refusal' }
     $env:OPENAI_API_KEY = 'outer-OPENAI_API_KEY'; $env:CODEX_API_KEY = 'outer-CODEX_API_KEY'
-    $script:VmrSetup = $noToken; $env:MOE_ACCOUNT_RETRY_SEC = '1'; $job = Start-VmeTokenRestore 2
-    try { $r = Invoke-VmrRow VE-missing worker claude $ready on } finally { Stop-Job $job; Remove-Job $job -Force; $script:VmrSetup = { Initialize-VmjFixture } }
-    if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy; $c = Read-VmeJsonl $calls
-    if ((Get-VmeCount $c chat_send 'MOE_VM_CREDENTIAL_UNAVAILABLE') -ne 1 -or (Get-VmeCount $c claim_next_task) -ne 1 -or (Get-VmeCount $c lease_account) -lt 3 -or
-        [regex]::Matches($r.Text, [regex]::Escape('[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1; retrying in 1s (Ctrl+C to stop)')).Count -lt 2) { Stop-Vmr $r 'missing-token wait' }
-    Remove-Item Env:\MOE_ACCOUNT_RETRY_SEC
-    Write-Host '[seat credentials] ok OPENAI_API_KEY and CODEX_API_KEY canaries, no-key, missing token'
+    Write-Host '[seat credentials] ok OPENAI_API_KEY and CODEX_API_KEY canaries, no-key'
+    Invoke-SiRows
     $script:VmrLoop = @('-Loop', '-PollInterval', '1'); $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
     $fail = '{"exit":1,"outcome":{"seatJob":1,"ok":false,"code":"SEAT_JOB_SESSION_FAILED","vm":"kept"}}'
     foreach ($c in @("failed|[$fail]", 'missing|[{"exit":0}]', ('false|[' + $fail.Replace('"exit":1', '"exit":0') + ']'), "stop-failed|[$fail]", 'streak|[{"exit":1},{"exit":1},{"exit":1}]')) {
@@ -1376,7 +1469,17 @@ try {
     $body = @'
 const fs = require('node:fs');
 const [cli, ...argv] = process.argv.slice(2);
-if (cli !== 'normalize') {
+const e = process.env;
+if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.includes('--tools')) {
+  // [seat sign-in] renewal: rewrite the account's .credentials.json from that file's
+  // {accessToken, refreshToken}, 8 h left, as claude's refresh would; log renew.jsonl
+  // beside the record and never write the record (no task CLI ran).
+  const d = e.CLAUDE_CONFIG_DIR;
+  fs.writeFileSync(d + '/.credentials.json', JSON.stringify({claudeAiOauth: {...JSON.parse(fs.readFileSync(e.FAKE_RENEW_FILE, 'utf8')),
+    expiresAt: Date.now() + 288e5, scopes: ['user:inference'], subscriptionType: 'max'}}));
+  fs.appendFileSync(require('node:path').dirname(RECORD) + '/renew.jsonl', JSON.stringify({argv, cwd: process.cwd(), configDir: d,
+    hasMoeWorkerId: 'MOE_WORKER_ID' in e, hasPluginDirs: 'CLAUDE_CODE_PLUGIN_DIRS' in e}) + '\n');
+} else if (cli !== 'normalize') {
   fs.writeFileSync(RECORD, JSON.stringify({cli, argv, cwd:process.cwd(), env:process.env}));
   // PS 5.1 routes a quoted prompt through a private context file, not argv.
   const pointer = argv.join(' ').match(/First read the private session context file at (.+?)\. It contains/);

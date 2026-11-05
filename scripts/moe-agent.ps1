@@ -9803,17 +9803,47 @@ function Send-MoeVmCredentialAnnounce([string]$Detail) {
     $channel = if ($generalChannelId) { $generalChannelId } else { 'general' }
     try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $channel; workerId = $WorkerId; content = "@governors ${WorkerId}: MOE_VM_CREDENTIAL_UNAVAILABLE - $Detail" } 6>$null | Out-Null } catch {}
 }
+# The claude words the signin-state probe passes after a failed run ("$COMMAND_BIN"
+# "${COMMAND_ARGV[@]}" in the sh twin). A protected CLI probes extensionless, so
+# the helper resolves PATHEXT in the trusted dir only.
+function Get-MoeClaudeProbeWords {
+    if ($script:MoeProtectedCli) { return @([IO.Path]::Combine([IO.Path]::GetDirectoryName($Command), [IO.Path]::GetFileNameWithoutExtension($Command))) }
+    return @($Command) + @($CommandArgs | Where-Object { $null -ne $_ })
+}
+# A VM job gets only the access token, never the refresh token, so the job
+# cannot outlive that token. Claude renews only in the token's last 5 minutes,
+# so a token with less than an hour left waits for that window instead of
+# starting a job that would die partway.
+$script:VmJobMinTokenSec = 3600
 # Twin: seat_wait_credential. Wait outside launch timing. Re-lease and recheck the
 # pinned attempt after each wait, like the account loop: a released task never
 # launches stale. $false: launch nothing; the caller re-runs pre-flight.
+# vm-credential-state never prints a credential, so its reply may be logged.
 function Wait-MoeVmCredential {
     $sec = 0
     if (-not [int]::TryParse("$(Invoke-MoeAccountHelper -HelperArgs @('retry-sec'))", [ref]$sec) -or $sec -lt 1) { $sec = 300 }
     $escalated = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    while (-not ($script:AccountLeasedId -and (Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId)))) {
+    while ($true) {
+        $reason = 'no-lease'
+        if ($script:AccountLeasedId) {
+            $state = Invoke-MoeAccountHelper -HelperArgs (@('vm-credential-state', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))
+            if ($state -ceq 'minted') { Write-Host "[seat] VM credential account=$($script:AccountLeasedId) source=minted"; return $true }
+            if ($state -cmatch '^signin\t(.*)\z') {
+                $iso = $Matches[1]; $reason = 'unknown'; $t = [datetime]::MinValue
+                if ($iso -cmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z\z' -and [datetime]::TryParseExact($iso, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+                        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AssumeUniversal, AdjustToUniversal', [ref]$t)) {
+                    if ([long][Math]::Floor(($t - [datetime]::UtcNow).TotalSeconds) -ge $script:VmJobMinTokenSec) {
+                        Write-Host "[seat] VM credential account=$($script:AccountLeasedId) source=signin expires=$iso"; return $true
+                    }
+                    $reason = 'short-life'
+                }
+            } elseif ($state -cmatch '^unavailable\t(.*)\z') { $reason = $Matches[1] }
+            else { $reason = 'unknown' }
+        }
+        if ($reason -cnotmatch '^[a-z][a-z-]{0,31}\z') { $reason = 'unknown' }
         $account = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
-        Write-Host "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
-        if ($escalated.Add($account)) { Send-MoeVmCredentialAnnounce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." }
+        Write-Host "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account reason=$reason; retrying in ${sec}s (Ctrl+C to stop)"
+        if ($escalated.Add($account)) { Send-MoeVmCredentialAnnounce "account=$account reason=$reason; sign the account in again on this host (Accounts tab, or 'accounts login <id>'), or set an optional VM token ('accounts vm-token <id>'). The task stays held." }
         Start-Sleep -Seconds $sec
         $script:AccountLeaseWaited = $true
         if (-not (Test-MoeAccountWaitAttempt)) { return $false }
@@ -9852,10 +9882,12 @@ function Invoke-MoeVmJob {
         if ($cliType -eq 'codex') {
             $name = if ($env:OPENAI_API_KEY) { 'OPENAI_API_KEY' } else { 'CODEX_API_KEY' }
             $token = [Environment]::GetEnvironmentVariable($name)
-        } elseif ($script:AccountLeasedId) { $token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId) }
+        } elseif ($script:AccountLeasedId) {
+            $token = Invoke-MoeAccountHelper -HelperArgs (@('vm-credential', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))
+        }
         if (-not $token) {
             $id = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
-            Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "account $id has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab)."
+            Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "account $id gave no VM credential (no VM token, and its sign-in gave none); see MOE_VM_CREDENTIAL_UNAVAILABLE in TROUBLESHOOTING."
         }
         if (-not $script:MoeAttemptId -or -not $script:MoeAttemptGeneration) { Stop-MoeVerifiedLocalSeat MOE_SEAT_JOB_INPUT_MISSING 'attempt identity' }
         if ($Role -eq 'worker') {

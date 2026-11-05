@@ -9959,7 +9959,8 @@ seat_credential_stream() {
             builtin printf %s "$OPENAI_API_KEY" | seat_credential_json OPENAI_API_KEY
         else builtin printf %s "${CODEX_API_KEY:-}" | seat_credential_json CODEX_API_KEY; fi
     else
-        (set -o pipefail; "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN)
+        (set -o pipefail; "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null \
+            | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN)
     fi
 }
 seat_credential_announce() {
@@ -9968,19 +9969,46 @@ seat_credential_announce() {
         "${GENERAL_CHANNEL_ID:-general}" "$WORKER_ID" "@governors $WORKER_ID: MOE_VM_CREDENTIAL_UNAVAILABLE - $1" 2>/dev/null) || return 0
     moe_rpc chat_send "$args" >/dev/null 2>&1 || true
 }
+# A VM job gets only the access token, never the refresh token, so the job
+# cannot outlive that token. Claude renews only in the token's last 5 minutes,
+# so a token with less than an hour left waits for that window instead of
+# starting a job that would die partway.
+VM_JOB_MIN_TOKEN_SEC=3600
 # Wait outside launch timing. Re-lease and recheck the pinned attempt after each
 # wait, just like the account loop: a released task must never launch stale.
+# vm-credential-state never prints a credential, so its reply may be logged.
 seat_wait_credential() {
-    local escalated=' ' account sec
+    local escalated=' ' account sec state reason iso left
     sec=$("$NODE_CMD" "$ACCOUNT_HELPER" retry-sec 2>/dev/null) || sec=300
     case "$sec" in ''|*[!0-9]*) sec=300 ;; esac
     [ "$sec" -ge 1 ] || sec=300
-    while ! { [ -n "$ACCOUNT_LEASED_ID" ] && "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" >/dev/null 2>&1; }; do
+    while :; do
+        reason=no-lease
+        if [ -n "$ACCOUNT_LEASED_ID" ]; then
+            state=$("$NODE_CMD" "$ACCOUNT_HELPER" vm-credential-state "$ACCOUNT_LEASED_ID" "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null) || state=""
+            case "$state" in
+                minted) echo "[seat] VM credential account=$ACCOUNT_LEASED_ID source=minted"; return 0 ;;
+                signin$'\t'*)
+                    iso="${state#signin$'\t'}"; left=""; reason=unknown
+                    if [[ $iso =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$ ]]; then
+                        left=$($PYTHON_CMD -c 'import sys,datetime as d; u=d.timezone.utc; print(int((d.datetime.strptime(sys.argv[1],"%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=u)-d.datetime.now(u)).total_seconds()))' "$iso" 2>/dev/null) || left=""
+                    fi
+                    if [[ $left =~ ^-?[0-9]+$ ]]; then
+                        if [ "$left" -ge "$VM_JOB_MIN_TOKEN_SEC" ]; then
+                            echo "[seat] VM credential account=$ACCOUNT_LEASED_ID source=signin expires=$iso"; return 0
+                        fi
+                        reason=short-life
+                    fi ;;
+                unavailable$'\t'*) reason="${state#unavailable$'\t'}" ;;
+                *) reason=unknown ;;
+            esac
+        fi
+        [[ $reason =~ ^[a-z][a-z-]{0,31}$ ]] || reason=unknown
         account="${ACCOUNT_LEASED_ID:-none}"
-        echo "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
+        echo "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account reason=$reason; retrying in ${sec}s (Ctrl+C to stop)"
         case "$escalated" in *" $account "*) ;; *)
             escalated="$escalated$account "
-            seat_credential_announce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." ;;
+            seat_credential_announce "account=$account reason=$reason; sign the account in again on this host (Accounts tab, or 'accounts login <id>'), or set an optional VM token ('accounts vm-token <id>'). The task stays held." ;;
         esac
         idle_wait "$sec"
         ACCOUNT_LEASE_WAITED=true; account_wait_recheck || return 1

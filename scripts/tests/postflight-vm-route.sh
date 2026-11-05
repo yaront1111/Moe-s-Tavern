@@ -33,9 +33,13 @@ cp "$ROOT_DIR/scripts/tests/postflight-fake-proxy.js" "$FAKE_PROXY"
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$NODE" > "$SHIM/node"
 printf '%s\n' "require('fs').appendFileSync('$TMP_DIR/daemon-ran','ran\\n');process.exit(1);" > "$TMP_DIR/fake-daemon.js"
 # Each fake CLI writes {cli, argv, cwd, env} to the one record file baked in here.
+# With FAKE_RENEW_FILE set, a claude `-p … --tools` run is instead the sign-in
+# renewal ([seat sign-in]): it rewrites the account's .credentials.json from that
+# file's {accessToken, refreshToken}, 8 h left, as claude's refresh would, logs
+# renew.jsonl beside the record, and never writes the record (no task CLI ran).
 for cli in claude codex gemini grok; do
   printf '#!/usr/bin/env bash\nexec %q -e %q %q %q "$@"\n' "$NODE" \
-    'const [rec,cli,...argv]=process.argv.slice(1);require("fs").writeFileSync(rec,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env}));' \
+    'const [rec,cli,...argv]=process.argv.slice(1),fs=require("fs"),e=process.env;if(cli==="claude"&&e.FAKE_RENEW_FILE&&argv.includes("-p")&&argv.includes("--tools")){const d=e.CLAUDE_CONFIG_DIR;fs.writeFileSync(d+"/.credentials.json",JSON.stringify({claudeAiOauth:{...JSON.parse(fs.readFileSync(e.FAKE_RENEW_FILE,"utf8")),expiresAt:Date.now()+288e5,scopes:["user:inference"],subscriptionType:"max"}}));fs.appendFileSync(require("path").dirname(rec)+"/renew.jsonl",JSON.stringify({argv,cwd:process.cwd(),configDir:d,hasMoeWorkerId:"MOE_WORKER_ID" in e,hasPluginDirs:"CLAUDE_CODE_PLUGIN_DIRS" in e})+"\n")}else fs.writeFileSync(rec,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env}));' \
     "$REC" "$cli" > "$BIN/$cli"
   chmod +x "$BIN/$cli"
 done
@@ -278,6 +282,7 @@ export ANTHROPIC_API_KEY=outer-a ANTHROPIC_AUTH_TOKEN=outer-b CLAUDE_CODE_OAUTH_
 vmj_fixture() {
   mkdir -p "$TMP_DIR/accounts/claude-vm-tokens" "$TMP_DIR/accounts/acct-1"
   printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
+  rm -f "$TMP_DIR/accounts/acct-1/.credentials.json" # only [seat sign-in] seeds one
   printf '.moe/\n.worktrees/\n.mcp.json\n' > "$PROJECT/.gitignore"
   printf 'seed\n' > "$PROJECT/seed.txt"
   git -C "$PROJECT" init -q -b main
@@ -381,23 +386,100 @@ vmr_run VE-no-key worker codex "$READY" on 0 OPENAI_API_KEY= CODEX_API_KEY=
 [ "$VMR_CODE" = 1 ] && grep -q MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || vmr_fail VE-no-key 'not refused'
 vmj_rows none
 [ "$(vmr_calls | grep -cx chat_send)" = 1 ] || vmr_fail VE-no-key 'not one escalation'
-echo '[seat credentials] claude waits holding the task; one escalation across repeated missing tokens'
 vmj_missing_fixture() { vmj_fixture; rm -f "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"; }
-VMR_SETUP=vmj_missing_fixture
-vmj_background VE-missing worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
-for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do
-  [ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" 2>/dev/null || true)" -ge 2 ] 2>/dev/null && break
-  sleep 1
-done
-[ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || true)" -ge 2 ] || vmr_fail VE-missing 'did not retry'
-printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
-wait "$VMJ_PID"
-[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail VE-missing 'retry failed'; vmj_rows happy
-"$NODE" - "$CALLS" <<'JS'
-const fs=require('fs'),a=require('node:assert/strict'),r=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.parse);
-a.equal(r.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_VM_CREDENTIAL_UNAVAILABLE')).length,1);
-a.equal(r.filter(x=>x.tool==='claim_next_task').length,1); a.ok(r.filter(x=>x.tool==='lease_account').length>=3);
+
+# --- [seat sign-in] task-98053b89: no minted token, so the job runs on the leased
+# account's own sign-in (slice A's real helper), renewed only by the host claude.
+echo '[seat sign-in] a claude VM seat with no minted token uses the leased account sign-in'
+REFRESH=sk-ant-ort01-vmRefreshCanaryNeverLeavesTheFile0123
+OLD=sk-ant-oat01-vmOldAccessCanaryNeverReachesAJob01234
+REFRESH2=sk-ant-ort01-vmRenewedRefreshCanaryNeverLeaves012
+SIGNIN="$TMP_DIR/accounts/acct-1/.credentials.json"; RENEW_LOG="$TMP_DIR/renew.jsonl"; RENEW_PAIR="$TMP_DIR/renew-pair.json"
+# si_write ACCESS REFRESH SECONDS-LEFT: claude's sign-in file shape, replaced in one rename.
+si_write() {
+  "$NODE" -e 'const fs=require("fs"),[f,a,r,s]=process.argv.slice(1);fs.writeFileSync(f+".tmp",JSON.stringify({claudeAiOauth:{accessToken:a,refreshToken:r,expiresAt:Date.now()+Number(s)*1000,scopes:["user:inference"],subscriptionType:"max"}}));fs.renameSync(f+".tmp",f)' "$SIGNIN" "$@"
+}
+si_sha() { "$NODE" -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$SIGNIN"; }
+# SI_FILE="ACCESS SECONDS-LEFT" seeds a sign-in file holding REFRESH too; empty seeds none.
+si_fixture() {
+  vmj_missing_fixture; rm -f "$RENEW_LOG"
+  if [ -n "$SI_FILE" ]; then si_write "${SI_FILE% *}" "$REFRESH" "${SI_FILE#* }"; si_sha > "$TMP_DIR/si.sha"; fi
+}
+# si_clean ROW CANARY...: no canary in the wrapper output, the RPC, seat and chat
+# records, the project, the run's temp or home. It names the file, never the value,
+# and runs before any vmr_fail, which prints OUT.
+si_clean() {
+  local row="$1" c hits pats=(); shift
+  for c in "$@"; do pats+=(-e "$c"); done
+  hits=$(grep -rlF "${pats[@]}" -- "$OUT" "$CALLS" "$PROJECT" "$RUN_TMP" "$TMP_DIR/home" "$RENEW_LOG" 2>/dev/null || true)
+  [ -z "$hits" ] || { echo "VM ROUTE FAILED ($row): a credential canary appears in: $(echo $hits)" >&2; exit 1; }
+}
+# si_wait_warn ROW LINE: at least two exact WARN lines, and no seat-job yet.
+si_wait_warn() {
+  local n
+  for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do
+    [ "$(grep -Fxc -- "$2" "$OUT" 2>/dev/null || true)" -ge 2 ] 2>/dev/null && break
+    sleep 1
+  done
+  [ "$(grep -Fxc -- "$2" "$OUT" || true)" -ge 2 ] || vmr_fail "$1" "fewer than two lines '$2'"
+  ! grep -q '"cmd":"seat-job"' "$PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null || vmr_fail "$1" 'a seat-job ran with no credential'
+}
+# si_calls NEEDLE...: one escalation holding every needle, one claim, a re-lease per wait.
+si_calls() {
+  "$NODE" - "$CALLS" "$@" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),[f,...needles]=process.argv.slice(2),r=fs.readFileSync(f,'utf8').trim().split('\n').map(JSON.parse);
+const sent=r.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_VM_CREDENTIAL_UNAVAILABLE'));
+a.equal(sent.length,1,'not one escalation'); for(const n of needles) a.ok(sent[0].args.content.includes(n),'escalation lacks '+n);
+a.equal(r.filter(x=>x.tool==='claim_next_task').length,1); a.ok(r.filter(x=>x.tool==='lease_account').length>=3,'no re-lease per wait');
 JS
+}
+VMR_SETUP=si_fixture
+
+echo '[seat sign-in] SI-signin: the job gets the sign-in access token; no host claude, file unchanged'
+SI_FILE="$TOKEN 7200"
+vmr_run SI-signin worker claude "$READY" on 0
+si_clean SI-signin "$TOKEN" "$REFRESH"
+[ "$VMR_CODE" = 0 ] || vmr_fail SI-signin "exit $VMR_CODE"; vmj_rows happy
+[ "$(si_sha)" = "$(cat "$TMP_DIR/si.sha")" ] || vmr_fail SI-signin 'the sign-in file changed'
+grep -Eq '^\[seat\] VM credential account=acct-1 source=signin expires=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\.[0-9]{3}Z$' "$OUT" \
+  || vmr_fail SI-signin 'no source=signin line'
+[ ! -e "$RENEW_LOG" ] || vmr_fail SI-signin 'a renewal ran'
+
+echo '[seat sign-in] SI-renew: a token 60 s from expiry is renewed by one host claude run first'
+"$NODE" -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({accessToken:process.argv[2],refreshToken:process.argv[3]}))' "$RENEW_PAIR" "$TOKEN" "$REFRESH2"
+SI_FILE="$OLD 60"
+vmr_run SI-renew worker claude "$READY" on 0 FAKE_RENEW_FILE="$RENEW_PAIR"
+si_clean SI-renew "$TOKEN" "$OLD" "$REFRESH" "$REFRESH2"
+[ "$VMR_CODE" = 0 ] || vmr_fail SI-renew "exit $VMR_CODE"; vmj_rows happy
+"$NODE" - "$RENEW_LOG" "$PROJECT" "$TMP_DIR/accounts/acct-1" <<'JS' || vmr_fail SI-renew 'not one renewal run with the renewal argv, cwd and env'
+const fs=require('fs'),path=require('path'),a=require('node:assert/strict'),[log,project,dir]=process.argv.slice(2);
+const rows=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse); a.equal(rows.length,1);
+const r=rows[0],t=r.argv.indexOf('--tools'); a.ok(r.argv.includes('-p')&&t>=0&&r.argv[t+1]==='');
+a.ok(!r.argv.some(x=>x.includes('task-postflight'))); const rel=path.relative(project,r.cwd); a.ok(rel.startsWith('..')||path.isAbsolute(rel));
+a.equal(r.configDir,dir); a.equal(r.hasMoeWorkerId,false); a.equal(r.hasPluginDirs,false);
+JS
+
+echo '[seat sign-in] SI-none: no credential holds the task with one escalation; a sign-in then runs it'
+SI_FILE=""
+vmj_background SI-none worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
+si_wait_warn SI-none '[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=no-signin-file; retrying in 1s (Ctrl+C to stop)'
+si_write "$TOKEN" "$REFRESH" 7200
+wait "$VMJ_PID"
+si_clean SI-none "$TOKEN" "$REFRESH"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail SI-none 'retry failed'; vmj_rows happy
+si_calls 'reason=no-signin-file' 'sign the account in again' || vmr_fail SI-none 'escalation, claim or re-lease count'
+
+echo '[seat sign-in] SI-short: under an hour left waits; no renewal at 10 minutes, the job never gets it'
+SI_FILE="$OLD 600"
+vmj_background SI-short worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
+si_wait_warn SI-short '[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=short-life; retrying in 1s (Ctrl+C to stop)'
+si_write "$TOKEN" "$REFRESH" 7200
+wait "$VMJ_PID"
+si_clean SI-short "$TOKEN" "$OLD" "$REFRESH"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail SI-short 'retry failed'; vmj_rows happy
+[ ! -e "$RENEW_LOG" ] || vmr_fail SI-short 'a renewal ran at 10 minutes'
+si_calls 'reason=short-life' 'sign the account in again' || vmr_fail SI-short 'escalation, claim or re-lease count'
+echo '[seat sign-in] ok SI-signin, SI-renew, SI-none, SI-short'
 VMR_SETUP=vmj_fixture
 
 echo '[seat failures] failed or missing outcome stops VM, then resumes with a fresh instance'
