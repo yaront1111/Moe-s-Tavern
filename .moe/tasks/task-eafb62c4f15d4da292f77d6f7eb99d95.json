@@ -75,12 +75,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor promotion, 23:19Z. A real verified-local delivery defect found in edf2162b's self-review: the recovered landing path reuses a leftover strong journal from an earlier attempt, so this attempt can be stranded in finalizing and the seat's claims refused. edf2162b widened its reach to observe and legacy pins. It must be fixed before task-1a8f1d0e turns verified-local on.",
+  "reopenReason": "MOE_CONTROL_CHECKOUT_BEHIND cleared by the governor at 07:04Z with the human's approval. A commit made outside Moe (1f1913db, 06:36Z) had split moe/control from the work branch. It was uncommitted with the working tree kept (backup ref refs/backup/governor/control-1f1913db), its corrupted scripts/moe-agent.sh leftover was dropped, and control fast-forwarded to 7a48aa92. 7a48aa92 is now in control HEAD, so QA can review the landed bytes.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
@@ -98,7 +98,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T22:53:01.132Z",
-  "updatedAt": "2026-11-05T00:18:10.288Z",
+  "updatedAt": "2026-11-05T07:22:02.353Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T23:17:15.306Z",
@@ -108,11 +108,15 @@
     "firstClaimAt": "2026-11-04T23:17:17.306Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-05T07:21:37.804Z",
+    "wallClockMs": 29060498
   },
   "contextFetchedBy": [
     "architect-cd0ac706",
-    "worker-593560ee"
+    "worker-593560ee",
+    "qa-96811257",
+    "qa-a22d53a1"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -200,10 +204,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-04T23:58:05.714Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-593560ee@2026-11-04T23:57:12Z",
-    "at": "2026-11-05T00:18:10.288Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a22d53a1@2026-11-05T07:07:35Z",
+    "at": "2026-11-05T07:22:02.353Z"
   },
   "reviewStartedAt": "2026-11-05T00:17:19.216Z",
   "verification": {
@@ -237,5 +242,15 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-eafb62c4f15d4da292f77d6f7eb99d95: completion 7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2 is not in the control HEAD 2e9682f97224fb8e189e78f6c98384f89a46c76f (git merge-base --is-ancestor exited 1); QA reviews landed bytes only",
+  "completedAt": "2026-11-05T07:21:37.804Z",
+  "reviewCompletedAt": "2026-11-05T07:21:37.804Z",
+  "reviewSummary": "APPROVED. Reviewed the recorded completion 7a48aa92 (kind completion, pushed, contained in control HEAD and moe/work-2026-10-24; tree 20298c10 equals currentCandidate cand-7ae3d507). Diff +107/-2 over exactly the 3 approved files (moe-agent.sh, moe-agent.ps1, postflight-worktree.cjs), well under 400 LOC.\nRe-ran checkRefs[0] verbatim (993 chars, confirmed identical) from a clean shared-clone snapshot of 7a48aa92 on D: (not the dirty tree): CHAIN_EXIT=0 in ~13 min. Per leg (sh, 5.1, 7): bash -n / ParseFile OK; [strong receipt] ok T1,T2,T2-replay,T2-refuse,T2-running,T3,T4,T5,T5-replay,M1,M1-replay,M2; [strong gate] rows; PASS postflight-vm-route; worktree-landing; wt-completion, wt-replay, wt-remote-rejected and wt-recover-strong ok (4 ok, 0 failed); PASS parity-check; sh also npm run lint OK. The 6 '@' / 'wt-recover-strong ok' lines matched.\nOwn mutants (scratch snapshot, sh): no rebind call and no fallback blanking each turn wt-recover-strong red (0 ok, 1 failed).\nCode audit: the sh helper writes its own fsynced tmp and os.replace, removes the tmp on failure and returns 1 with the journal untouched (it avoids intent_journal_write's unlink and receipt_journal_write's silent success). ps1 Set-MoeJournalAttempt uses Write-MoeIntentJournal (returns $false, journal untouched), never throws, BOM kept (ef bb bf). Only attemptId, generation (int type kept, strict assert) and workerId change. A journal already naming this attempt is not rewritten. A rebound journal with an unacknowledged receipt still defers (one MOE_FINALIZE_DEFERRED_RECEIPT) and the replay closes THIS attempt and drops the journal; an unrebindable journal blanks the journal var, prints one WARN and finalizes at once. Rebind line and WARN are identical in both wrappers; no new MOE_ code; the non-strong branch, finalize_postflight, receipt_send and replay are unchanged.\nNot widened (pre-existing): a crash between complete_task and the rebind still leaves the old identity.",
+  "requiredCheckAtDone": null
 }
