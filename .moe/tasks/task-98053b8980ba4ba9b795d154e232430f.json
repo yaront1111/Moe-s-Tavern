@@ -1,0 +1,185 @@
+{
+  "id": "task-98053b8980ba4ba9b795d154e232430f",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "feat(wrappers): moe-agent.sh and moe-agent.ps1 send a claude VM seat the leased account's sign-in credential through slice A's helper, and fail closed with a coded reason (slice B of task-a200486f)",
+  "description": "Slice B of task-a200486f. The human's directive (2026-11-05): VM seats use the rotation accounts' existing sign-ins automatically, with no `accounts vm-token` mint. This slice needs slice A (task-fbd2a42f), which provides:\n- `vm-credential <id> <configDir> <claude…>`: the credential on stdout.\n- `vm-credential-state <id> <configDir> <claude…>`: prints `minted`, `signin<TAB><ISO expiry>` or `unavailable<TAB><reason>`.\n- The reasons no-signin-file, signed-out, expired and no-claude.\n- Renewal by the host's own claude when 5 minutes or less are left.\n\nChange both wrappers, kept in string parity:\n\n1. The credential wait (seat_wait_credential / Wait-MoeVmCredential) calls `vm-credential-state` with:\n   - the leased folder (ACCOUNT_LEASED_DIR / $script:AccountLeasedDir);\n   - the same claude command words the wrapper's signin-state probe passes: sh `\"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\"`, ps1 the `$moeProbeWords` rule, including its protected-CLI extensionless form.\n   On `minted` or `signin…` it prints one line, `[seat] VM credential account=<id> source=minted` or `... source=signin expires=<iso>`, never a value, and proceeds.\n   On anything else it prints `[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=<id> reason=<reason>; retrying in <sec>s (Ctrl+C to stop)`.\n   - The reason is printed only when it matches ^[a-z][a-z-]{0,31}$, else `unknown`. With no lease, account=none.\n   - It posts the existing one #governors message per account per wait, with a new remedy: sign the account in again on this host (Accounts tab, or `accounts login <id>`), or set an optional VM token (`accounts vm-token <id>`); the task stays held.\n   - Then it waits, re-leases and re-checks exactly as today.\n   - It never launches a host CLI for the task and never falls back to the host.\n2. The job fetch (seat_credential_stream / Invoke-MoeVmJob) passes the same folder and words to `vm-credential`. The credential stays in the stdin pipe (sh) or in memory (ps1), as today. The ps1 failure detail no longer names minting as the only remedy.\n3. scripts/CLAUDE.md, Claude account rotation bullet: replace \"`.credentials.json` is never opened\" with the new rule.\n   - For a verified-local VM seat, the helper reads only the access token, read-only.\n   - The refresh token is never used or passed.\n   - Renewal is left to the host's claude.\n   - Cite the human directive of 2026-11-05.\n\nHarness rows, twins in scripts/tests/postflight-vm-route.sh and .ps1:\n- SI-signin. No minted token; `<accounts>/acct-1/.credentials.json` holds an access canary valid for 2 h and a refresh canary.\n  - The job's stdin is CLAUDE_CODE_OAUTH_TOKEN with the access canary's sha256, and no host CLI ran.\n  - Neither canary appears in the wrapper output, the RPC logs, chat or any seat record's argv/env.\n  - The file is byte-identical after the run, and the output names source=signin.\n- SI-renew. The access canary expires in 60 s. A fake host claude records its run and rewrites the file with a second canary valid for 8 h, as claude's refresh would.\n  - Exactly one host claude run: the renewal argv (-p and --tools, no task prompt), CLAUDE_CONFIG_DIR = the leased folder, cwd outside the project.\n  - The job's stdin hash is the second canary's, and no canary appears in any output.\n- SI-none. No minted token and no sign-in file.\n  - At least two `MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=no-signin-file` lines, and one #governors message with the new remedy.\n  - No seat-job and no host CLI.\n  - Once a valid file appears, the seat runs its job.\n- Update the existing VE-missing pins to the new WARN text.",
+  "definitionOfDone": [
+    "In both wrappers, a claude VM seat with no minted token runs its job with the leased account's sign-in access token, delivered only in the job frame (SI-signin). A near-expiry token is first renewed by one host claude run (SI-renew). Tested in postflight-vm-route.sh and postflight-vm-route.ps1.",
+    "No refresh token and no account-folder content appears in any seat argv or env, RPC log, chat message or wrapper output, and the wrapper leaves the sign-in file unchanged (SI-signin, SI-renew). Tested in both harnesses.",
+    "With no usable credential, the seat prints `MOE_VM_CREDENTIAL_UNAVAILABLE account=<id> reason=<reason>` and posts one #governors message with the new remedy. It holds the task and runs neither seat-job nor any host CLI for it (SI-none). Tested in both harnesses.",
+    "scripts/CLAUDE.md states the new .credentials.json rule, and both wrappers keep string parity.",
+    "postflight-vm-route passes on bash, Windows PowerShell 5.1 and pwsh 7, and parity-check.sh and npm run lint pass."
+  ],
+  "taskRails": [
+    "No host or WSL fallback for a VM seat's task: a missing credential waits with the task held.",
+    "No credential value in any log, comment, chat or test output. Tests use temp folders and fakes only.",
+    "Launches off the VM route stay byte-for-byte unchanged."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "moe-agent.sh. Edit it in place in this task's worktree with this seat's own editor, then run `bash -n`. The atomic-save rule in scripts/CLAUDE.md Hot reload applies only to the shared or control copy. Use slice A's landed interface (task-fbd2a42f): read its USAGE and tests first, and if they differ from this step, follow the landed code and say so in the summary.\n- seat_wait_credential (about line 9973): replace the presence probe `vm-credential \"$ACCOUNT_LEASED_ID\" >/dev/null 2>&1` with\n  `state=$(\"$NODE_CMD\" \"$ACCOUNT_HELPER\" vm-credential-state \"$ACCOUNT_LEASED_ID\" \"$ACCOUNT_LEASED_DIR\" \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" 2>/dev/null)`.\n  These are the same claude words account_after_exit's signin-state probe passes. Call it only while ACCOUNT_LEASED_ID is set; with no lease, the reason is `no-lease`.\n  Map the answer:\n  - `minted`: print `[seat] VM credential account=<id> source=minted` and proceed.\n  - `signin<TAB><iso>`: print `[seat] VM credential account=<id> source=signin expires=<iso>`, with `expires=` only when the value matches ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$. Proceed.\n  - `unavailable<TAB><reason>`: that reason.\n  - Anything else (helper failed or empty): reason `unknown`.\n  - Any reason not matching ^[a-z][a-z-]{0,31}$ becomes `unknown`.\n- On a miss, print `[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=<id|none> reason=<reason>; retrying in ${sec}s (Ctrl+C to stop)`. Post the existing one-per-account announce with this content after the code: `account=<id> reason=<reason>; sign the account in again on this host (Accounts tab, or 'accounts login <id>'), or set an optional VM token ('accounts vm-token <id>'). The task stays held.`\n- The wait, ACCOUNT_LEASE_WAITED, account_wait_recheck, clear_account_lease and get_account_lease stay exactly as today.\n- seat_credential_stream: the claude branch passes \"$ACCOUNT_LEASED_DIR\" \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" after the id. The codex branch, `2>/dev/null` and the pipe into seat_credential_json are unchanged, so the credential exists only in the pipe.\n- Nothing else changes. Launches off the VM route stay byte-for-byte unchanged.\nError handling: a helper that cannot run (node missing, crash, non-zero exit) maps to reason `unknown` and the same wait, never a host launch. A job-time fetch failure still fails the pipe into seat-job, which is the existing MOE_SEAT_JOB_FAILED route, with no host fallback.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "postflight-vm-route.sh: a new `[seat sign-in]` block after the `[seat credentials]` VE-missing row, inside the same `[seat job]` subshell and fixtures. It ends by printing exactly `[seat sign-in] ok SI-signin, SI-renew, SI-none`, which the gate counts.\nTest data and rules:\n- Write sign-in files only into the temp tree, at `$TMP_DIR/accounts/acct-1/.credentials.json`, as `{\"claudeAiOauth\":{\"accessToken\":…,\"refreshToken\":…,\"expiresAt\":<ms>,\"scopes\":[\"user:inference\"],\"subscriptionType\":\"max\"}}` written with node.\n- Use the existing TOKEN canary as the access token, so vmj_rows' stdin-hash check stays valid, plus new canaries REFRESH, OLD (an sk-ant-oat01 token) and REFRESH2.\n- A fixture variant removes the minted token.\n- The fake host claude gets a renewal branch. When FAKE_RENEW_TOKEN is set and argv holds '-p' and '--tools', it:\n  - rewrites $CLAUDE_CONFIG_DIR/.credentials.json the way claude's refresh does (accessToken FAKE_RENEW_TOKEN, REFRESH2, expiresAt now + 8 h);\n  - appends {argv, cwd, configDir, hasMoeWorkerId, hasPluginDirs} to `$TMP_DIR/renew.jsonl`;\n  - exits 0 WITHOUT writing REC, so vmj_rows' 'host CLI ran' check keeps meaning no task CLI on the host.\nRows:\n- SI-signin: no minted token, and a sign-in file with TOKEN valid for 2 h.\n  - `vmj_rows happy` passes: the job's stdin is CLAUDE_CODE_OAUTH_TOKEN = sha256(TOKEN), no host CLI ran, and no TOKEN leaked.\n  - REFRESH appears in neither OUT, the evidence-rpcs and CALLS logs, nor any `.moe/messages` file.\n  - The file's sha256 is unchanged.\n  - OUT has `[seat] VM credential account=acct-1 source=signin expires=`.\n  - renew.jsonl is absent.\n- SI-renew: OLD expires in 60 s, and FAKE_RENEW_TOKEN=$TOKEN.\n  - renew.jsonl has exactly one row. Its argv contains '-p', then '--tools' followed by '', and never 'task-postflight'. Its cwd is not under $PROJECT, its configDir is $TMP_DIR/accounts/acct-1, and both has* flags are false.\n  - `vmj_rows happy` passes, so the job got TOKEN.\n  - OLD, REFRESH and REFRESH2 appear in no output or log.\n- SI-none: rework VE-missing; keep its background and wait mechanics. No minted token and no sign-in file.\n  - Wait for at least 2 `MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=no-signin-file` lines.\n  - Then write a valid sign-in file (TOKEN, 2 h) instead of the token. The run then exits 0 and `vmj_rows happy` passes.\n  - CALLS shows exactly one chat_send containing both MOE_VM_CREDENTIAL_UNAVAILABLE and 'sign the account in again', one claim_next_task, and at least 3 lease_account.\n  - No seat-job ran before the file appeared.\nError handling in the harness: each row fails through vmr_fail with the row name. A canary found anywhere fails the row and names the file, never the value.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "moe-agent.ps1, the twin of step 1, in string parity. Edit it in place in the worktree with this seat's editor. Keep the file UTF-8 with BOM, as the parity check enforces. Then run ParseFile with `$x=$null` first (mem:decision-mid-epic-launcher-gate-narrow).\n- Add a small `Get-MoeClaudeProbeWords` that returns exactly the words the signin-state call builds (about line 11877):\n  - `@($Command) + @($CommandArgs | Where-Object { $null -ne $_ })`;\n  - under `$script:MoeProtectedCli`, the extensionless trusted path that line 11880 builds.\n  The existing signin-state call may switch to it only if its behavior stays identical; otherwise leave that call alone.\n- Wait-MoeVmCredential: call `Invoke-MoeAccountHelper -HelperArgs (@('vm-credential-state', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))`, only while AccountLeasedId is set (else reason `no-lease`).\n  - Map minted, signin, unavailable and anything else exactly as step 1 does, with the same regexes, Write-Host lines, WARN text and announce content (through Send-MoeVmCredentialAnnounce).\n  - The retry-sec wait, AccountLeaseWaited, Test-MoeAccountWaitAttempt, Clear-MoeAccountLease and Get-MoeAccountLease stay exactly as today.\n- Invoke-MoeVmJob: the claude fetch becomes `Invoke-MoeAccountHelper -HelperArgs (@('vm-credential', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))`.\n  - The Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE detail drops the mint-only instruction, e.g. \"account $id gave no VM credential (no VM token, and its sign-in gave none); see MOE_VM_CREDENTIAL_UNAVAILABLE in TROUBLESHOOTING.\"\n  - The token stays in the in-memory JSON frame and is cleared in finally, as today.\n- The codex branch is unchanged.\nError handling: Invoke-MoeAccountHelper already returns $null on a helper failure, and that maps to reason `unknown`. Nothing new may throw outside the existing try/finally.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "postflight-vm-route.ps1, the twin rows of step 2, in Invoke-VmeRows next to VE-missing, sharing $vmjToken/$vmjHash and Initialize-VmjFixture.\n- Sign-in files go under `$tempRoot\\accounts\\acct-1\\.credentials.json`.\n- The fake claude.cmd's node script gets the same FAKE_RENEW_TOKEN renewal branch, which writes `$tempRoot\\renew.jsonl` and no $rec.\n- Generalize Start-VmeTokenRestore so it can write a given file and content; SI-none restores a sign-in file.\n- Rows: SI-signin, SI-renew and SI-none, with the same assertions as step 2, using Assert-VmjRows, Read-VmeJsonl and Get-VmeCount. The SI-renew cwd check: not under $project. The renewal run's cwd is os.tmpdir() of the helper's node, which is $runTmp here.\n- Update the exact WARN pin in VE-missing/SI-none to `[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=no-signin-file; retrying in 1s (Ctrl+C to stop)`.\n- Print exactly `[seat sign-in] ok SI-signin, SI-renew, SI-none` with Write-Host.\nError handling in the harness: each row fails through Stop-Vmr with the row name. A canary check names the file, never the value.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "scripts/CLAUDE.md, the **Claude account rotation** bullet (line 42, one long line). Edit with this seat's editor; no shell write, and never Serena for docs.\n- Make 'The wrapper opens one file inside a config directory, and only for an interactive seat' true again. For example: 'Besides the VM credential read below, the wrapper opens one file inside a config directory, and only for an interactive seat'.\n- Replace '`.credentials.json` is never opened' with a sentence saying:\n  - a verified-local VM seat's job credential is the one other read: `moe-account-lease.mjs vm-credential` and `vm-credential-state` read `.credentials.json` read-only and take only its short-lived access token;\n  - never the refresh token, and nothing is written;\n  - renewal is left to the host's own claude, one `-p` run with no tools, only when 5 minutes or less are left;\n  - a stored `accounts vm-token` token is used first;\n  - without either, the seat waits with `MOE_VM_CREDENTIAL_UNAVAILABLE` and a reason, per the human's directive of 2026-11-05 (task-a200486f).\n- Keep the 2026-10-26 sign-off citation for the trust step.\nError handling: packages/moe-daemon/src/util/daemonGitDocs.test.ts scans this file and fails any line matching /never (runs|executes|touches) git|runs no git|does not run git/i. Do not write such a phrase.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verify, once. Run checkRefs[0] exactly as stored, from this task's worktree; its output is the complete_task evidence. It runs three legs in parallel:\n- postflight-vm-route.ps1 on Windows PowerShell 5.1, through pwsh then cmd, which keeps PSModulePath;\n- postflight-vm-route.ps1 plus parity-check.ps1 on pwsh 7;\n- in bash: postflight-vm-route.sh, A's moe-account-lease.test.mjs, parity-check.sh and npm run lint.\nIt passes only when all three legs print GATE_OK AND each vm-route log carries `[seat sign-in] ok SI-signin, SI-renew, SI-none`, six matches in all. That takes about 5-10 minutes; start it in the background and poll.\nError handling for a red run: read the leg's tail in $L.\n- A WSL interop failure (UtilAcceptVsock) is rerun once.\n- For a ps1 leg failure, rerun that leg on the parent revision before blaming this diff (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A failure inside slice A's helper behavior is reported with moe.report_blocked naming task-fbd2a42f, never patched here.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this diff, once, before complete_task. Name each check in the completion summary.\n- Can any path launch a host CLI for the task, or fall back to the host, when the credential is missing or the helper fails?\n- Can a credential value or the refresh token reach stdout, stderr, the announce, a log, argv or env? The fetch is a pipe (sh) or in-memory JSON (ps1) only.\n- Are the two wrappers' new strings byte-identical: the info line, WARN, announce and reasons? parity-check.sh and .ps1 pass.\n- Do the claude words match the signin-state probe in both, including the ps1 protected-CLI form?\n- Does a hot reload or a re-lease mid-wait keep the existing semantics?\n- Is `expires=` printed only for a well-formed ISO?\n- Are launches off the VM route byte-for-byte unchanged? Diff every hunk against the VM-only functions.\nFix what you find, with a test row for it.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-fbd2a42f10904fd78684f16f88374e73"
+  ],
+  "priority": "HIGH",
+  "order": 538.65,
+  "comments": [
+    {
+      "id": "comment-8231aee4b5d5427cbe2a8f51ab13398d",
+      "author": "governor-913c7930",
+      "content": "@architect-fe831cde Governor heads-up, for slice B's plan (and a200486f): neither slice says what happens when the access token expires during a VM job. Slice A hands over a token with as little as about 5 minutes left, because claude renews only inside that window. The VM never gets the refresh token. So a job that starts with, say, 10 minutes of token life left dies partway through. a200486f's description asks the plan to answer this.\nSome options, your call:\n- The wait step reads `signin<TAB><expiry>` from vm-credential-state. If less than a job budget is left (a constant or setting), it waits for the renewal window and renews before it fetches.\n- It leases a different account whose token has enough life left.\n- It bounds the job by the token's remaining life and stops with a coded reason.\nWhichever you pick, a harness row should pin it, for example SI-short: 10 minutes left, so the job does not start on that token. If slice A needs to expose anything more, amend its PENDING steps now. worker-b3b3db54 holds slice A.",
+      "timestamp": "2026-11-05T18:58:23.351Z"
+    },
+    {
+      "id": "comment-4caedaac83e2486684b3614149cae365",
+      "author": "governor-913c7930",
+      "content": "Governor, 19:11Z. I checked the 1 h rule's assumption on the real host without printing any token value. In all six rotation accounts (C:\\Users\\Yaron\\.moe\\claude-accounts\\acct-N\\.credentials.json), expiresAt minus the file's mtime is exactly 8.00 h, so the access token lives 8 h. The 1 h minimum leaves a 7 h usable window per token.\nAlso: acct-3, acct-5 and acct-6 currently hold access tokens that expired 11 to 56 h ago. All three still have their refresh token. So the first VM wait on any of them exercises slice A's renewal (5 minutes or less left, expired included). A failed renewal is the `expired` reason.",
+      "timestamp": "2026-11-05T19:11:02.864Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T18:47:52.066Z",
+  "updatedAt": "2026-11-05T19:11:02.864Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T18:57:36.242Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 5
+  },
+  "contextFetchedBy": [
+    "architect-fe831cde"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T19:00:26.535Z",
+  "executionContract": {
+    "intendedBehavior": "Under verified-local, a claude seat's credential wait and its job fetch both go through slice A's helper with the leased account's folder and the host claude words. The job gets the minted VM token if one is stored, else the account's sign-in access token, renewed by the host's own claude when nearly expired. It is delivered only in the seat-job stdin frame. When no credential can be produced, the seat prints MOE_VM_CREDENTIAL_UNAVAILABLE with account and reason, posts one #governors message with the sign-in/VM-token remedy, holds the task and waits. It never launches a host CLI for the task.",
+    "acceptanceCriteria": [
+      "SI-signin passes in both harnesses: the job stdin hash is the sign-in token's; there is no host CLI; no refresh canary appears anywhere; the sign-in file is unchanged; the source=signin line is printed.",
+      "SI-renew passes in both harnesses: exactly one renewal run with the asserted argv, cwd and configDir; the job gets the renewed token; no canary appears anywhere.",
+      "SI-none passes in both harnesses: at least 2 WARN lines with reason=no-signin-file, one #governors message with the new remedy, no seat-job before the file exists, then the job runs.",
+      "The new strings are identical in moe-agent.sh and moe-agent.ps1, and parity-check.sh, parity-check.ps1 and npm run lint pass.",
+      "scripts/CLAUDE.md states the new .credentials.json rule.",
+      "checkRefs[0] passes with 3 GATE_OK and 3 `[seat sign-in] ok` lines."
+    ],
+    "invariants": [
+      "No host CLI runs for the task on the VM route; the only host claude run is slice A's renewal (no tools, no MCP, no task prompt).",
+      "No credential or refresh token is printed, logged, posted, or placed in argv or env.",
+      "A missing credential holds the task and waits; it never falls back to the host."
+    ],
+    "compatibility": [
+      "Every launch off the VM route (legacy, observe, host or WSL seats, architect and governor) is byte-for-byte unchanged.",
+      "The codex VM credential path (OPENAI_API_KEY/CODEX_API_KEY, refusal on a missing key) is unchanged.",
+      "The wait loop's sleep, re-lease, attempt re-check and once-per-account announce are unchanged.",
+      "Existing vm-route rows keep passing; only the VE-missing WARN pin text changes."
+    ],
+    "approvedScope": [
+      "moe-agent.sh: seat_wait_credential and seat_credential_stream only",
+      "moe-agent.ps1: Wait-MoeVmCredential, Invoke-MoeVmJob's claude fetch and failure detail, and a new Get-MoeClaudeProbeWords",
+      "postflight-vm-route.sh and .ps1: the fake claude's FAKE_RENEW_TOKEN branch, the `[seat sign-in]` rows SI-signin, SI-renew and SI-none (VE-missing reworked) and the WARN pin updates",
+      "scripts/CLAUDE.md: the Claude account rotation bullet's two config-folder sentences"
+    ],
+    "reuse": [
+      "The existing wait loop, announce helpers and Invoke-MoeAccountHelper; the signin-state probe's claude words.",
+      "The harness fixtures vmj_fixture/Initialize-VmjFixture, vmj_rows/Assert-VmjRows, vmj_background/Start-VmeTokenRestore (generalized), and the existing TOKEN canary and its sha256."
+    ],
+    "sourceAssumptions": [
+      "Slice A (task-fbd2a42f, planned, not landed at planning) provides `vm-credential <id> <configDir> <claude…>` (token on stdout; else stderr `MOE_VM_CREDENTIAL_UNAVAILABLE reason=<r>`, exit 3) and `vm-credential-state <id> <configDir> <claude…>` (exit 0: `minted` | `signin\\t<ISO>` | `unavailable\\t<r>`). Reasons: no-signin-file, signed-out, expired, no-claude. Renewal is one `claude -p … --tools \"\"` run, cwd os.tmpdir(), only when 5 minutes or less are left.",
+      "moe-agent.sh: seat_wait_credential ~:9973, seat_credential_stream ~:9955, seat_credential_announce ~:9965, account_after_exit's signin-state probe words ~:9761, ACCOUNT_LEASED_DIR set in get_account_lease ~:9545.",
+      "moe-agent.ps1: Wait-MoeVmCredential ~:9809, Invoke-MoeVmJob ~:9849, Send-MoeVmCredentialAnnounce ~:9802, Invoke-MoeAccountHelper ~:9294 (first stdout line, $null on a non-zero exit), $moeProbeWords ~:11877-11880, $script:AccountLeasedDir set in Get-MoeAccountLease ~:9341.",
+      "Harnesses: sh fake lease configDir = $FAKE_ACCOUNT_HOME/<id> = $TMP_DIR/accounts/acct-1; the wrapper runs with TMPDIR=$RUN_TMP and --command $BIN/claude. ps1: $tempRoot\\accounts\\acct-1, TEMP=$runTmp, -Command $tempRoot\\claude.cmd. Both fake CLIs write the REC record (cli-record.json) that vmj_rows/Assert-VmjRows require absent."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)/scripts/tests\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC;L=$(mktemp -d);B='-nop -ep Bypass -f';(pwsh.exe -nop -c \"cmd /c powershell.exe $B postflight-vm-route.ps1\"&&echo GATE_OK)>$L/5 2>&1 &(pwsh.exe $B postflight-vm-route.ps1&&pwsh.exe $B parity-check.ps1&&echo GATE_OK)>$L/7 2>&1 &(bash postflight-vm-route.sh&&node --test moe-account-lease.test.mjs&&bash parity-check.sh&&npm run lint&&echo GATE_OK)>$L/s 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -cE '^GATE_OK|seat sign-in\\] ok SI-signin, SI-renew, SI-none') = 6 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A separate `vm-credential-state` call for the wait, rather than capturing `vm-credential`'s stderr: ps1's Invoke-MoeAccountHelper drops stderr and returns $null on a non-zero exit, and capturing native stderr without the token is fragile in PowerShell 5.1. The state command never prints a credential, so the wait never holds one.\n- The job fetch still calls `vm-credential` with the words, so a token that crossed the 5-minute line between the wait and the fetch is renewed there too.\n- Kept as one row for both wrappers: parity-check fails the qualityGate on new strings present in only one wrapper.\n- No new MOE_ code: the reason travels as `reason=` on the existing MOE_VM_CREDENTIAL_UNAVAILABLE line, so the parity check's code sets do not change.",
+    "codebaseInsights": "- The sh job path pipes `vm-credential` into seat_credential_json, then seat-job. A fetch failure fails the pipe, giving MOE_SEAT_JOB_FAILED, seat_vm_stop and the existing failed-job budgets.\n- The ps1 job path holds the token in a variable and stops the seat with MOE_VM_CREDENTIAL_UNAVAILABLE when it is empty. This sh/ps1 divergence predates this row; keep it.\n- vmj_rows asserts REC is absent ('host CLI ran'), so a renewal fake must record elsewhere.\n- The existing TOKEN canary has the VM_TOKEN_RE shape, so it can serve as the sign-in access token, and vmj_rows' stdin-hash check stays valid.",
+    "risks": "- The fake renewal branch runs inside the shared fake CLI script. Gate it on FAKE_RENEW_TOKEN plus the '-p'/'--tools' argv, and unset FAKE_RENEW_TOKEN after the row, so no other row changes.\n- On Windows the helper finds claude.cmd by full path, so the renewal goes through cmd.exe. The empty `--tools` argument must arrive as ''; slice A's win32 test covers it, and SI-renew's argv check confirms it end to end.\n- The 5.1 leg must keep its pwsh to cmd to powershell hop. Get-FileHash is not found otherwise, which was task-fa0fea1a's lesson.\n- The ps1 harness runs with USERPROFILE and TEMP redirected, so the helper's os.tmpdir() is $runTmp.\n- Gate budget: the three legs run in parallel in about 5-10 minutes at normal load.",
+    "keyFiles": [
+      "scripts/moe-agent.sh (~:9955-9990 credential stream/announce/wait; ~:9761 signin-state words; ~:10017 run_vm_job)",
+      "scripts/moe-agent.ps1 (~:9294 Invoke-MoeAccountHelper; ~:9802-9822 announce and Wait-MoeVmCredential; ~:9849-9870 Invoke-MoeVmJob; ~:11877-11881 probe words)",
+      "scripts/tests/postflight-vm-route.sh (~:268-400 [seat job] fixtures and [seat credentials])",
+      "scripts/tests/postflight-vm-route.ps1 (~:240-302 Invoke-VmeRows and Start-VmeTokenRestore; ~:441-452 canary and env)",
+      "scripts/CLAUDE.md (line 42)",
+      "scripts/moe-account-lease.mjs (slice A's landed vm-credential and vm-credential-state)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4f0280c3dc749df22721d0b76ba17211b79e15db",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T19:00:26.573Z",
+  "approvedPlanRevision": 1
+}
