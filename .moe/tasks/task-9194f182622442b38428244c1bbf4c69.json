@@ -13,44 +13,75 @@
     {
       "stepId": "step-1",
       "description": "postflight-vm-route.sh: the two replay rows. Test files only: no byte of scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight-fake-proxy.js or packages/ changes in this task.\n\nFirst, read the bytes this worktree was cut from, finding each anchor by name, not by line. dependsOn holds the WORKING claim until two tasks are DONE, and both touch receipt_send, receipt_replay and these harnesses:\n- task-a1f3723f: DELIVERY_RECEIPT_CONFLICT keeps a strong journal.\n- task-edf2162b: the finalize deferral keys on the journal's own profile.\nRe-read:\n- receipt_replay's finalize block and its CQ-V08b check in scripts/moe-agent.sh (:6690-6707 at d35f2bc3);\n- Invoke-MoeReceiptReplay's twin in moe-agent.ps1 (:2521-2536);\n- every [strong receipt] row and reconcile-strong-* frozen mode those tasks added.\nIf a landed row already pins one of this plan's rows (same journal kind, same setup, same assertions, both wrappers), do not duplicate it. Name it in the completion summary, and still run its mutant in step 4. If they changed the text the replay prints on these two paths, assert the landed text verbatim and say so. The receipt, finalize-count, phase and journal assertions stay as written.\n\nWhy two rows: the human decided in the planning REPL on 2026-11-04 (see the architect's task comment). In both wrappers, a refused replayed finalize_attempt prints '[WARN] attempt <aid> is still finalizing after its replayed receipt; its finalizing holds stay until it closes.' and continues before the CQ-V08b check. So DoD 1's own setup never prints 'not closed; nothing finalized.' and cannot kill DoD 2's mutant. That check runs only when the pinned phase is neither finalizing nor closed. SR-T2-refuse pins DoD 1's setup; SR-T2-running reaches the CQ-V08b check.\n\nEdit the [strong receipt] section of scripts/tests/postflight-vm-route.sh. The code below was dry-run on d35f2bc3: the trimmed section passed in 35 s.\n(a) Put the rows right after `sr_check SR-T2-replay replay`, before SR-T3: SR-T3's sg_fixture rewrites $TMP_DIR/sg-base, which sr_check reads as B. Add a 3-line comment above sr_running saying what each row pins.\nsr_running() { sr_restore; \"$NODE\" -e 'const fs=require(\"fs\"),f=process.argv[1],a=JSON.parse(fs.readFileSync(f,\"utf8\"));if(a.phase!==\"finalizing\")throw new Error(\"the kept attempt is \"+a.phase);a.phase=\"running\";fs.writeFileSync(f,JSON.stringify(a))' \"$PROJECT/.moe/attempts/attempt-postflight.json\"; }\nVMR_SETUP=sr_restore\nvmr_run SR-T2-refuse worker codex \"$SG_READY\" on 0 \"${SG_STRONG[@]}\" FAKE_CLAIM_MODE=finalizing FAKE_EVIDENCE_MODE=finalize_attempt-refuse\nsr_check SR-T2-refuse refused\nVMR_SETUP=sr_running\nvmr_run SR-T2-running worker codex \"$SG_READY\" on 0 \"${SG_STRONG[@]}\" FAKE_CLAIM_MODE=finalizing\nsr_check SR-T2-running running\nVMR_SETUP=sg_fixture\n(b) In sr_check's JS, insert one branch for both kinds just before the common line `a.equal(rec.length,kind==='replay'?2:1,'record_delivery_receipt rows');`, after the deferred branch. The common prefix already checks rc 0, one candidate, main at C and the committed completion row.\nif(kind==='refused'||kind==='running'){\n  const keep=fs.readFileSync(require('node:path').dirname(baseFile)+'/sr-keep/.git/moe/receipt/task-postflight.json','utf8');\n  const lost='[WARN] attempt attempt-postflight is still finalizing after its replayed receipt; its finalizing holds stay until it closes.';\n  const open=count(l=>l.startsWith('[WARN] receipt journal ')&&l.endsWith(' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.'));\n  a.equal(rec.length,2,'record_delivery_receipt rows'); a.equal(JSON.stringify(rec[1].args),JSON.stringify(rec[0].args),'the replay did not re-send the journaled receipt');\n  a.equal(of('check-dispatch').length,1,'the replay dispatched again'); a.equal(deferred,0);\n  a.equal(count(l=>l.startsWith('[receipt] replaying the delivery receipt of task task-postflight from ')),1);\n  a.equal(fs.existsSync(jf)&&fs.readFileSync(jf,'utf8'),keep,'the strong journal was not kept byte for byte');\n  if(kind==='refused'){\n    a.equal(fin.length,3,'finalize_attempt tries'); a.ok(fin.every(r=>r.args.outcome==='landed'&&r.args.landedRevision===C));\n    a.equal(phase,'finalizing'); a.equal(count(l=>l===lost),1); a.equal(count(l=>l.includes(' not closed; nothing finalized.')),0); a.equal(kept,0);\n  } else {\n    a.equal(fin.length,0,'finalized an attempt that is not finalizing'); a.equal(phase,'running'); a.equal(open,1); a.equal(kept,1); a.equal(count(l=>l===lost),0);\n  }\n  process.exit(0);\n}\nThe 3 refused finalize rows are moe_evidence_rpc's 3 tries.\n(c) Update three texts: sr_check's header comment (the two new kinds), the section's opening echo, and the closing echo, which becomes `[strong receipt] ok T1, T2, T2-replay, T2-refuse, T2-running, T3, T4`.\n\nError handling: the fixture rewrite throws when the kept attempt is not finalizing, and every assertion fails its row through vmr_fail. A drifted fixture or a wrong expectation therefore stops the harness at the named row. Never loosen an assertion to make a row pass: a mismatch means re-reading the landed replay bytes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "SR-T2-refuse and SR-T2-running added; vm-route.sh passes on bash (6 min).",
+      "startedAt": "2026-11-04T23:20:53.627Z",
+      "completedAt": "2026-11-04T23:44:07.104Z"
     },
     {
       "stepId": "step-2",
       "description": "postflight-vm-route.ps1: the twin of step 1. Same two rows, same assertions, byte-identical expected lines. Constraints:\n- Keep the file ASCII; it holds no non-ASCII byte today.\n- PS 5.1 syntax only: no ??, no ternary, no && or || chains.\n- Avoid the traps in mem:gotcha-ps1-harness-syntax-traps. Wrap scriptblock calls in @(...) so a single result keeps .Count on 5.1. Pick no variable whose name differs only by case from one Assert-SrRow already uses ($B, $C, $n, $of, $j, $kept, $keys and so on).\n\n(a) Invoke-SrRows: add the rows right after `Assert-SrRow $r replay`, before SR-T3. Each uses the existing try { $r = Invoke-SgRow ... } finally { $script:VmrSetup = { Initialize-SgFixture } } shape. Sketch, not yet dry-run:\n    $script:VmrSetup = { Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force }\n    try { $r = Invoke-SgRow SR-T2-refuse @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing'; FAKE_EVIDENCE_MODE = 'finalize_attempt-refuse' } }\n    finally { $script:VmrSetup = { Initialize-SgFixture } }\n    Assert-SrRow $r refused\n    $script:VmrSetup = {\n        Remove-Item -LiteralPath $project -Recurse -Force; Copy-Item -LiteralPath $keep -Destination $project -Recurse -Force\n        $af = Join-Path $project '.moe/attempts/attempt-postflight.json'; $t = [IO.File]::ReadAllText($af)\n        if ([regex]::Matches($t, '\"phase\":\"finalizing\"').Count -ne 1) { throw \"the kept attempt is not finalizing: $t\" }\n        [IO.File]::WriteAllText($af, $t.Replace('\"phase\":\"finalizing\"', '\"phase\":\"running\"'))\n    }\n    try { $r = Invoke-SgRow SR-T2-running @{ FAKE_ATTEMPT_PROFILE = 'verified-local'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' } }\n    finally { $script:VmrSetup = { Initialize-SgFixture } }\n    Assert-SrRow $r running\nThe fake proxy writes the attempt record with JSON.stringify, so the compact '\"phase\":\"finalizing\"' occurs exactly once. WriteAllText writes UTF-8 with no BOM. Do not round-trip the record through ConvertFrom-Json and ConvertTo-Json: pwsh 7 turns its ISO timestamps into DateTime.\n(b) Assert-SrRow: add one branch for both kinds after the deferred branch, ending in `return`, with step 1 (b)'s assertions:\n- $lost holds the exact still-finalizing line.\n- $open counts lines that StartsWith '[WARN] receipt journal ' and EndsWith ' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.'.\n- The kept-copy journal is [IO.File]::ReadAllText((Join-Path $tempRoot 'sr-keep/.git/moe/receipt/task-postflight.json')).\n- Both kinds: $rec.Count is 2 and (& $canon $rec[1].args) -ceq (& $canon $rec[0].args), compared in the port's sorted-key form as the replay kind does. Exactly one check-dispatch row, one '[receipt] replaying the delivery receipt of task task-postflight from ' line, no deferral line, and Test-Path $jf with [IO.File]::ReadAllText($jf) -ceq the kept copy.\n- refused: $fin.Count is 3 (Send-MoeEvidence's 3 tries), all outcome landed with landedRevision $C. $phase is 'finalizing', one $lost line, no line containing ' not closed; nothing finalized.', and $kept is 0.\n- running: $fin.Count is 0, $phase is 'running', $open is 1, $kept is 1, and no $lost line.\n(c) Update the section's header comment and its two Write-Host lines to match step 1 (c).\n\nError handling: a throw in a setup scriptblock fails the row through the existing try/finally. An Assert-Sg failure names the row and prints the wrapper output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Twin rows added; ASCII kept. Executed under 5.1/7 in the step-4 gate.",
+      "startedAt": "2026-11-04T23:44:07.949Z",
+      "completedAt": "2026-11-04T23:44:11.288Z"
     },
     {
       "stepId": "step-3",
       "description": "The shared strong journal row: frozen mode 'reconcile-strong-replay-running', in postflight.sh and postflight.ps1. The human chose to include it in the planning REPL.\n\nThe frozen-candidate suite is embedded twice, byte-identical: postflight.sh's FROZENJS here-doc and postflight.ps1's @'...'@ here-string, 1136 lines each at d35f2bc3. Make the identical edit in both copies. Nothing else enforces their identity, so check it afterwards. This command, run from scripts/tests, must print nothing:\ndiff <(sed -n '/^cat > \"$FROZEN_SUITE\" <<.FROZENJS.$/,/^FROZENJS$/p' postflight.sh | sed '1d;$d') <(sed -n \"/WriteAllText(\\$frozenSuite, @'\\$/,/^'@, /p\" postflight.ps1 | sed '1d;$d')\npostflight.ps1 keeps its UTF-8 BOM (`head -c3` is ef bb bf). Its count of lines holding a non-ASCII byte (`grep -cP '[^\\x00-\\x7e]'`, 90 at d35f2bc3) must equal the base's; the new code is ASCII.\n\nThe edits below were dry-run on d35f2bc3 under bash: both filtered modes passed in 17 s.\n(a) modes: insert 'reconcile-strong-replay-running' right after 'reconcile-strong-finalize-lost'. The name alone gives it the strong attempt profile (/^((intent|reconcile)-)?strong/) and routes it into the mode.startsWith('reconcile-strong-') block.\n(b) In the env.FAKE_EVIDENCE_MODE map, add 'reconcile-strong-replay-running':'finalize_attempt-null'. Run 1 is then finalize-lost's: the receipt is accepted, every finalize is lost, the strong journal is kept, and the attempt stays finalizing.\n(c) Add a branch right after finalize-lost's, before the final `}else{` whose comment begins '// DoD3: run 1 died at its ledger row':\n    }else if(mode==='reconcile-strong-replay-running'){\n      // CQ-V08b, a shared strong journal (task-9194f182): run 1 is finalize-lost's. The replay then reads the\n      // attempt as running, neither finalizing nor closed: it re-sends the receipt, sends no finalize and keeps\n      // the journal byte for byte, with one 'not closed; nothing finalized.' line.\n      const att=path.join(nested,'.moe','attempts','attempt-postflight.json'),at0=JSON.parse(read(att));\n      assert.deepEqual({phase:at0.phase,journal:fs.existsSync(journal),receipts:receipts.length,rows:ledgerRows().length},\n        {phase:'finalizing',journal:true,receipts:1,rows:1},log);\n      write(att,JSON.stringify({...at0,phase:'running'}));\n      const j1=read(journal),n=rpc.length,reflog=reflogOf();env.FAKE_EVIDENCE_MODE=mode;\n      const {log2,rpc2}=replay(args),run2=log2.slice(log.length),n2=s=>run2.split(s).length-1,\n        tail=rpc2.slice(n).filter(r=>['record_commit','record_delivery_receipt','finalize_attempt'].includes(r.tool));\n      assert.deepEqual({tail:tail.map(r=>r.tool),resent:tail[0]?.args,\n        kept:n2(' kept: attempt attempt-postflight of task task-postflight is running, not closed; nothing finalized.'),\n        closed:n2(' not closed; nothing finalized.'),lost:n2('still finalizing after its replayed receipt'),\n        journal:fs.existsSync(journal)&&read(journal),phase:JSON.parse(read(att)).phase,head:git(repo,'rev-parse','moe/frozen'),\n        reflog:reflogOf(),completions:completions(),rows:ledgerRows().length,\n        evidence:rpc2.filter(r=>r.tool==='record_candidate'||r.tool==='record_check_run').length},\n        {tail:['record_delivery_receipt'],resent:receipts[0].args,kept:1,closed:1,lost:0,journal:j1,phase:'running',head:after,\n        reflog,completions:[after],rows:1,evidence:candidates.length+checks.length},log2);\nSubstring counts keep the expected text independent of the colour codes and of the journal path, which differs between sh and ps1.\n\nError handling: run 1's state is asserted before the rewrite, so a drifted fixture fails with run 1's log. replay() already asserts no signal and a non-null status.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Frozen mode added in both; embedded suites identical, BOM and 90 non-ASCII lines kept; bash run of both modes passed.",
+      "startedAt": "2026-11-04T23:44:12.082Z",
+      "completedAt": "2026-11-04T23:44:14.890Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification, once. Run checkRefs[0] exactly as written, from any cwd.\n\nWhat it does: it cds into this row's task worktree at scripts/tests, so every harness tests W's own wrapper, and unsets MOE_*, CLAUDE* and FAKE_*. Then it runs three legs in parallel:\n- powershell (5.1) and pwsh (7): each runs `pwsh.exe -nop -c \"cmd /c <e> -nop -ep Bypass -f postflight-vm-route.ps1&&<e> -nop -ep Bypass -f postflight.ps1\"`. The cmd hop keeps pwsh's PSModulePath for vm-route, as CI's node hop does; postflight.ps1 runs direct.\n- bash: postflight-vm-route.sh, postflight.sh, parity-check.sh, parity-check.ps1 under pwsh, and npm run lint.\nMOE_FROZEN_TEST_ONLY=reconcile-strong-finalize-lost,reconcile-strong-replay-running reaches Windows through WSLENV. It makes postflight.sh and postflight.ps1 run only those two frozen modes and exit. The ref passes only with three '@' legs and three 'scenarios: 2' lines, so a misspelled filter cannot go green by running nothing.\n\nTiming: on d35f2bc3, with the old one-mode filter, the same chain took 454 s at load ~5 (CHAIN_EXIT=0). The new rows add well under a minute per leg, inside the 20-minute rail. The full postflight.sh and postflight.ps1 run in no task gate (PR CI and the nightly run them). DoD 3 is checkRefs[0].\n\nThen the mutants: DoD 2, plus proof that each new row has teeth. Set each one up in its own scratch snapshot on D:, never in W:\n  S=/mnt/d/moe-scratch/9194-<m>-$(date +%s); mkdir -p $S && git -C <W> archive HEAD scripts packages/moe-daemon/src/state/validators.ts | tar -x -C $S\nChange ONE line of $S/scripts/moe-agent.sh or .ps1 with a sed or python replace. Check that the diff against W shows exactly that line: a replace that matched nothing makes a false survivor. Run only the named harness, from a /mnt/d cwd, with the same unset and exports as checkRefs[0]. Each must exit non-zero at the named row:\n- M1 (DoD 2, sh): CQ-M07t's revert. Restore `[ -z \"$wt\" ] && ` after `[ -n \"$strong\" ] && ` in receipt_replay's CQ-V08b check. bash $S/scripts/tests/postflight-vm-route.sh fails at SR-T2-running ('the strong journal was not kept byte for byte'), after SR-T2-refuse passed. Proven on d35f2bc3.\n- M2 (DoD 2, ps1): restore `-not $wt -and ` after `$strong -and ` in Invoke-MoeReceiptReplay's check. pwsh.exe -nop -ep Bypass -f <$S as a D: path>/scripts/tests/postflight-vm-route.ps1 fails at SR-T2-running.\n- M3 (sh, shared): in the same sh check, add `[ -n \"$wt\" ] && ` instead, so only worktree journals are kept. MOE_FROZEN_TEST_ONLY=reconcile-strong-replay-running bash $S/scripts/tests/postflight.sh fails in that mode (journal false, kept 0). Proven on d35f2bc3; M1 leaves this mode green, as it should.\n- M4 (ps1, shared): add `$wt -and ` after `$strong -and ` in the ps1 check. postflight.ps1 under the same filter (pwsh, with WSLENV) throws 'Frozen candidate scenarios failed'.\n- M5 (sh and ps1): drop the `continue` after the 'still finalizing after its replayed receipt' warning (sh: the line after that echo; ps1: the '; continue' inside that if). The vm-route harness fails at SR-T2-refuse, because the journal is then removed. The sh half was proven on d35f2bc3.\nRun the mutants in parallel from separate snapshots; each run uses its own temp dirs. Record each mutant's exit code and failing row in the completion summary.\n\nError handling for a red run:\n- Read $L/<leg>. Find that dir with `find /tmp -maxdepth 1 -name 'tmp.*' -newer <a file touched just before the run>`, not ls -t.\n- Rerun that harness alone in the same env, to tell a real failure from WSL interop (mem:gotcha-qa-ps1-postflight-from-wsl). A leg that printed only 'UtilAcceptVsock ... failed 110' never started; rerun the whole gate.\n- A row that is red on the parent revision's scripts too is not this task's: report it, do not fix it here.\n- Kill only PIDs this session started.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] GATE_EXIT=0. Mutants all killed: M1 sh SR-T2-running; M2 pwsh7 SR-T2-running; M3 sh frozen (journal false); M4 pwsh7 frozen (Frozen candidate scenarios failed); M5 sh and ps1 SR-T2-refuse.",
+      "startedAt": "2026-11-04T23:44:15.526Z",
+      "completedAt": "2026-11-05T00:05:53.310Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this diff, the final step: use the adversarial-self-review skill.\n(1) Test files only: `git diff --stat $(git merge-base HEAD ${MOE_LAND_TARGET:-HEAD})` lists exactly the four harness files.\n(2) No assertion passes when the code does nothing. Each new row has a killing mutant from step 4: M1 and M2 kill SR-T2-running, M5 kills SR-T2-refuse, M3 and M4 kill the frozen mode.\n(3) No existing row is weakened. Every pre-existing sr_check and Assert-SrRow assertion, and every other frozen mode, is byte-unchanged; T1-T4 and finalize-lost still pass.\n(4) sh/ps1 parity: same rows and same expected lines in both. The two embedded suites are identical (step 3's diff). postflight.ps1 keeps its BOM and its non-ASCII line count, and postflight-vm-route.ps1 stays ASCII.\n(5) Determinism: no row depends on timing or on directory order, and the fixture rewrites fail loudly on drift.\n(6) Wrong assumptions: if task-a1f3723f or task-edf2162b changed the replay, the rows assert the landed text, and the summary says so.\nEnd the completion summary with the DoD map:\n- DoD 1: SR-T2-refuse plus SR-T2-running on both harnesses. This is the human's 2026-11-04 decision, because a refused replayed finalize never reaches the CQ-V08b line.\n- DoD 2: M1 and M2.\n- DoD 3: checkRefs[0].",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Self-review: diff = exactly the 4 harness files; removed lines are only comments, echo texts, the modes list and the env map (each extended); embedded suites identical; BOM + 90 non-ASCII lines kept in postflight.ps1; vm-route.ps1 ASCII; landed text asserted verbatim (no text changed by a1f3723f/edf2162b on these two paths).",
+      "startedAt": "2026-11-05T00:05:54.208Z",
+      "completedAt": "2026-11-05T00:06:12.287Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-d2c84c0e",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -75,7 +106,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-04T20:47:17.963Z",
-  "updatedAt": "2026-11-04T23:20:12.959Z",
+  "updatedAt": "2026-11-05T00:07:19.654Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-04T20:47:49.250Z",
@@ -88,7 +119,8 @@
   "metrics": {
     "firstClaimAt": "2026-11-04T20:48:16.098Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-2a219562",
@@ -99,7 +131,13 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-04T21:39:24.872Z",
   "executionContract": {
@@ -171,10 +209,45 @@
   "planApprovedAt": "2026-11-04T21:39:24.899Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-2a219562@2026-11-04T20:48:13Z",
-    "at": "2026-11-04T21:40:41.324Z"
-  }
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-d2c84c0e@2026-11-04T23:19:57Z",
+    "at": "2026-11-05T00:07:19.654Z"
+  },
+  "workStartedAt": "2026-11-04T23:20:53.627Z",
+  "reviewStartedAt": "2026-11-05T00:06:25.020Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-9194f182622442b38428244c1bbf4c69/scripts/tests||exit 1;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=reconcile-strong-finalize-lost,reconcile-strong-replay-running;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do(pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B postflight.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash postflight-vm-route.sh&&bash postflight.sh&&bash parity-check.sh&&pwsh.exe $B parity-check.ps1&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c ^@$) = 3 ]&&[ $(cat $L/*|grep -c 'scenarios: 2') = 3 ]",
+    "exitCode": 0,
+    "outputTail": "GATE_EXIT=0: all three legs (powershell 5.1, pwsh 7, bash) printed '@' and 'PASS frozen candidate scenarios: 2'; bash leg ran vm-route, postflight, parity-check.sh, parity-check.ps1 and 'OK: docs/roles/qa.md has 36 lines (max 40)'.",
+    "reportedAt": "2026-11-05T00:06:25.020Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1"
+  ],
+  "completionSummary": "Tests only (4 harness files, +116/-10; no wrapper, fake-proxy or package bytes). \n- postflight-vm-route.{sh,ps1}: SR-T2-refuse (replayed finalize refused: receipt re-sent, 3 finalize tries, one 'still finalizing' line, no 'not closed' line, attempt stays finalizing, journal kept byte for byte) and SR-T2-running (kept attempt rewritten to running: receipt re-sent, no finalize, one 'not closed; nothing finalized.' line, journal kept byte for byte), between SR-T2-replay and SR-T3.\n- postflight.{sh,ps1} frozen suite: reconcile-strong-replay-running, the same CQ-V08b keep for a shared strong journal. Embedded suites identical; BOM and 90 non-ASCII lines kept; vm-route.ps1 ASCII.\nLanded text from a1f3723f/edf2162b did not change on these paths; asserted verbatim.\nMutants (scratch snapshots): M1 sh and M2 pwsh7 (restore [ -z $wt ] / -not $wt) fail SR-T2-running; M3 sh and M4 pwsh7 (keep only worktree journals) fail the frozen mode; M5 sh and ps1 (drop continue after refused finalize) fail SR-T2-refuse. All exit 1.\nGate: checkRefs[0] EXIT 0.\nDoD map: DoD1 = SR-T2-refuse + SR-T2-running on both harnesses (a refused replayed finalize never reaches the CQ-V08b line, per the human's 2026-11-04 decision); DoD2 = M1, M2; DoD3 = checkRefs[0].",
+  "commits": [
+    {
+      "sha": "2e9682f97224fb8e189e78f6c98384f89a46c76f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d2c84c0e@2026-11-04T23:19:57Z",
+      "paths": [
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-d2c84c0e",
+      "recordedAt": "2026-11-05T00:07:19.654Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
