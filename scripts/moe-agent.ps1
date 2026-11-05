@@ -2161,17 +2161,72 @@ function Send-MoeEvidence([string]$Tool, [hashtable]$Payload, [int]$Tries = 1) {
     }
     return $false
 }
+# @{ Entries = <protectedEntries> } only on a strong landing (Test-MoeStrongLandingTask) whose
+# pre-flight context declares a non-empty task.executionContract.requiredChecks, else $null. The
+# entries are $Tree's blobs under every definition's configs, scripts and assertionRoots, exact
+# {path, oid} in UTF-8 byte order, listed the way the daemon's measureRequiredCheckSnapshot lists
+# them (@() for no path, with no git call: ls-tree without a pathspec lists the whole tree). A
+# tree it cannot measure faithfully gives $null and one [WARN] line: the field is omitted, never
+# invented, so qa_approve fails closed (protected-checks-unmeasured). Twin: protected_entries_json.
+function Get-MoeProtectedEntries($Git, [string]$TaskId, [string]$Tree) {
+    if (-not (Test-MoeStrongLandingTask $TaskId $Git.GitDir)) { return $null }
+    # The raw property value, never unrolled: a one-item list stays a list, a bare string is no list.
+    $prop = { param($o, [string]$n) if ($o -is [Management.Automation.PSCustomObject] -and $o.PSObject.Properties[$n]) { ,$o.PSObject.Properties[$n].Value } }
+    $task = & $prop $preflightContext 'task'; $id = & $prop $task 'id'
+    if ($id -isnot [string] -or $id -cne $TaskId) { return $null }
+    $defs = & $prop (& $prop $task 'executionContract') 'requiredChecks'
+    if ($defs -isnot [array] -or $defs.Count -eq 0) { return $null }
+    $reason = ''; $paths = New-Object 'Collections.Generic.List[string]'; $keyed = New-Object 'Collections.Generic.List[object]'
+    foreach ($d in $defs) {
+        if ($d -isnot [Management.Automation.PSCustomObject]) { $reason = 'requiredChecks unreadable'; break }
+        foreach ($k in @('configs', 'scripts', 'assertionRoots')) {
+            $v = & $prop $d $k
+            if ($null -eq $v) { continue }
+            if ($v -isnot [array] -or @($v | Where-Object { $_ -isnot [string] -or $_ -ceq '' }).Count) { $reason = 'requiredChecks unreadable'; break }
+            foreach ($p in $v) { if (-not $paths.Contains($p)) { $paths.Add($p) } }
+        }
+        if ($reason) { break }
+    }
+    if (-not $reason -and $paths.Count) {
+        try {
+            $r = Invoke-MoeGit -Top $Git.Top -GitArgs (@('--literal-pathspecs', 'ls-tree', '-r', '-z', '--full-tree', $Tree, '--') + $paths.ToArray())
+            $text = ($r.Out -join "`n")
+            if ($r.Rc -ne 0 -or ($text -and -not $text.EndsWith([string][char]0, [StringComparison]::Ordinal))) { $reason = 'git ls-tree failed' }
+            $recs = $text.Split([char]0)
+            for ($i = 0; -not $reason -and $i -lt $recs.Count - 1; $i++) {
+                $m = [regex]::Match($recs[$i], '^(100644|100755|120000) blob ([0-9a-f]{40})\t([\s\S]+)$')
+                if (-not $m.Success) { $reason = 'non-blob entry'; break }
+                $p = $m.Groups[3].Value
+                if ($p -cne $p.Trim() -or $p[0] -eq [char]0xFEFF -or $p[-1] -eq [char]0xFEFF -or $p.Contains('\') -or $p.Contains([string][char]0xFFFD) -or
+                    $p.Length -gt 500 -or $p -match '[\x00-\x1f\x7f]' -or $p[0] -eq '/' -or $p -match '^[A-Za-z]:/' -or
+                    @($p.Split('/') | Where-Object { $_ -ceq '' -or $_ -ceq '.' -or $_ -ceq '..' }).Count) { $reason = 'unsupported path'; break }
+                # Sorted by the hex of the UTF-8 bytes: Sort-Object is culture-aware and case-blind.
+                $keyed.Add(@{ Key = [BitConverter]::ToString([Text.Encoding]::UTF8.GetBytes($p)); Entry = [ordered]@{ path = $p; oid = $m.Groups[2].Value } })
+            }
+            if (-not $reason -and $keyed.Count -gt 2000) { $reason = 'more than 2000 entries' }
+        } catch { $reason = 'git ls-tree failed' }
+    }
+    if ($reason) {
+        Write-Host "[WARN] record_candidate: the protected check files of task $TaskId were not measured on tree $Tree ($reason); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured." -ForegroundColor Yellow
+        return $null
+    }
+    $keyed.Sort([Comparison[object]] { param($x, $y) [string]::CompareOrdinal($x.Key, $y.Key) })
+    return @{ Entries = @(foreach ($e in $keyed) { $e.Entry }) }
+}
 # Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
 # missing, closed or superseded by another claim, or parked, no gate result can
 # be bound to it: MoeEvidenceUnavailable tells the landing to park the frozen
 # bytes without running the gate and without announcing a gate failure.
-function Send-MoeCandidate([string]$TaskId, [hashtable]$Frozen, [string]$Branch) {
+function Send-MoeCandidate([string]$TaskId, [hashtable]$Frozen, [string]$Branch, $Git) {
     $script:MoeEvidenceUnavailable = ''
     if (-not $script:MoeAttemptId -or $null -eq $script:MoeAttemptGeneration) { $script:MoeEvidenceUnavailable = 'no pinned attempt identity'; return $false }
     if (-not (Read-MoeAttempt $TaskId $script:MoeAttemptId $script:MoeAttemptGeneration)) { $script:MoeEvidenceUnavailable = $script:MoeAttemptReadError; return $false }
     $payload = @{ taskId=$TaskId; attemptId=$script:MoeAttemptId; generation=$script:MoeAttemptGeneration
         workerId=$WorkerId; id=$Frozen.CandidateId; baseRevision=$Frozen.BaseRevision
         treeSha=$Frozen.Tree; deliveryTarget="refs/heads/$Branch" }
+    # The strong profile's protected check files (task-ee10405f); every other landing keeps the payload.
+    $measured = if ($Git) { Get-MoeProtectedEntries $Git $TaskId $Frozen.Tree } else { $null }
+    if ($null -ne $measured) { $payload.protectedEntries = @($measured.Entries) }
     if (Send-MoeEvidence 'record_candidate' $payload) { return $true }
     # A claim can supersede the attempt between the read above and the RPC.
     if (-not (Read-MoeAttempt $TaskId $script:MoeAttemptId $script:MoeAttemptGeneration)) { $script:MoeEvidenceUnavailable = $script:MoeAttemptReadError }
@@ -6198,7 +6253,7 @@ function Invoke-MoeLanding {
                     $snapshot.TaskId=$TaskId; $snapshot.Landed=@($built.Landed)
                     $script:MoeFrozen=$snapshot
                 }
-                if (-not $reuse -and (-not (Send-MoeCandidate $TaskId $script:MoeFrozen $branch) -or
+                if (-not $reuse -and (-not (Send-MoeCandidate $TaskId $script:MoeFrozen $branch $Git) -or
                     -not (Invoke-MoeFrozenGate $Git $script:MoeFrozen $gate))) {
                     $res.Outcome='failed'; $res.Code='MOE_COMMIT_FAILED_GATE'
                     $rescue=Invoke-MoeRescueRef -Git $Git -TaskId $TaskId -Reason 'gate-failed' -Title $Title -Status $Status -Sid $Sid -Attr $attr
@@ -7448,7 +7503,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
             # CQ-M07s: under the strong profile the owed checks run in check VMs on the frozen candidate, never on this host.
             $frozen = $null; $script:CheckDispatchCode = ''
             try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
-            if (-not ($frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -and (Invoke-MoeCheckDispatch $Git $frozen))) {
+            if (-not ($frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch $Git) -and (Invoke-MoeCheckDispatch $Git $frozen))) {
                 $code = if ($script:CheckDispatchCode) { $script:CheckDispatchCode } else { 'no dispatch' }
                 $Res.Code = 'MOE_COMMIT_FAILED_GATE'; $L.Msg = "the merged tree $m on $b was not frozen, recorded and passed by the check VMs ($code)"; return $false
             }
@@ -7456,7 +7511,7 @@ function Invoke-MoeWorktreeRounds([hashtable]$Git, [string]$Ref, [hashtable]$Res
             $frozen = $null; $gated = $false
             try {
                 try { $frozen = New-MoeFrozenCandidate $Git $m $b } catch {}
-                $gated = $frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch) -and (Invoke-MoeFrozenGate $Git $frozen $Settings.configuredGate -WorktreeMode)
+                $gated = $frozen -and (Send-MoeCandidate $preflightTaskId $frozen $Res.Branch $Git) -and (Invoke-MoeFrozenGate $Git $frozen $Settings.configuredGate -WorktreeMode)
             } finally {
                 # Twin: finish_gate_observation. An interrupted gate was never verified: no pass, whatever its exit code.
                 if ($frozen -and $script:MoeGate -and $script:MoeGate.Started -and -not $script:MoeGate.Recorded) {

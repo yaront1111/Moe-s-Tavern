@@ -797,14 +797,30 @@ sg_fixture() {
   git -C "$PROJECT" rev-parse HEAD > "$TMP_DIR/sg-base"
   export FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_CTX_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_TASK_STATUS=REVIEW
 }
+# pe_fixture: sg_fixture plus the protected-entries files (task-ee10405f) on moe/control and
+# main; PE_GITLINK=1 adds a gitlink under tests/. The U+00E9 name is built from its bytes.
+pe_fixture() {
+  local seed f
+  sg_fixture; seed="$(git -C "$PROJECT" rev-parse HEAD)"
+  mkdir -p "$PROJECT/scripts" "$PROJECT/tests/sub"
+  for f in package-lock.json scripts/lint.sh scripts/other.sh tests/B.txt 'tests/a b.txt' tests/a.txt tests/sub/c.txt "$(printf 'tests/\303\251.txt')" unprotected.txt; do
+    printf '%s\n' "$f" > "$PROJECT/$f"; git -C "$PROJECT" add -- "$f"
+  done
+  [ -z "${PE_GITLINK:-}" ] || git -C "$PROJECT" update-index --add --cacheinfo "160000,$seed,tests/mod"
+  git -C "$PROJECT" commit -qm protected; git -C "$PROJECT" branch -f main HEAD
+  git -C "$PROJECT" rev-parse HEAD > "$TMP_DIR/sg-base"
+}
 VMR_SETUP=sg_fixture
 # sg_check ROW KIND CODE [ENV] -- KIND pass (the check VMs passed: main moved to C),
 # host (legacy, observe: the host qualityGate ran, no dispatch) or refused (the line
 # names CODE, plus ` environment=ENV` for a well-formed stop id; nothing published).
+# SG_PAYLOAD (task-ee10405f), the record_candidate args: today (default: today's 8 keys and
+# no protected-entries WARN), empty (protectedEntries []), unmeasured (today's keys and one
+# 'non-blob entry' WARN) or a JSON list of the paths protectedEntries names, in order.
 sg_check() {
-  "$NODE" - "$PROJECT" "$OUT" "$REC" "$CALLS" "$SG_WITNESS" "$TMP_DIR/sg-base" "$SG_FAKE" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$1" 'see the assertion above'
+  "$NODE" - "$PROJECT" "$OUT" "$REC" "$CALLS" "$SG_WITNESS" "$TMP_DIR/sg-base" "$SG_FAKE" "${SG_PAYLOAD:-today}" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$1" 'see the assertion above'
 const fs=require('node:fs'),a=require('node:assert/strict'),cp=require('node:child_process');
-const [p,out,rec,calls,witness,baseFile,fake,rc,row,kind,code,env]=process.argv.slice(2);
+const [p,out,rec,calls,witness,baseFile,fake,payload,rc,row,kind,code,env]=process.argv.slice(2);
 const read=f=>fs.existsSync(f)?fs.readFileSync(f,'utf8').trim().split('\n').filter(Boolean).map(JSON.parse):[];
 const ev=p+'/.moe/evidence-rpcs.jsonl',raw=fs.existsSync(ev)?fs.readFileSync(ev,'utf8'):'',rows=read(ev),tools=read(calls).map(r=>r.tool);
 const text=fs.readFileSync(out,'utf8').replace(/\x1b\[[0-9;]*m/g,''),lines=text.split('\n'),count=l=>lines.filter(x=>x===l).length;
@@ -816,6 +832,18 @@ a.ok(!text.includes('MOE_CHECK_DISPATCH_PATH_IGNORED'),'an unprotected override 
 const cand=of('record_candidate'),d=of('check-dispatch'),done=of('record_commit').filter(r=>r.args.kind==='completion'),fin=of('finalize_attempt');
 a.equal(cand.length,1,'record_candidate rows'); const M=cand[0].args.treeSha; a.equal(cand[0].args.baseRevision,B);
 a.equal(of('record_delivery_receipt').length,kind==='pass'?1:0,'record_delivery_receipt rows');
+const ca=cand[0].args,today=['taskId','attemptId','generation','workerId','id','baseRevision','treeSha','deliveryTarget'];
+const warn=lines.filter(l=>l.includes('record_candidate: the protected check files'));
+a.deepEqual(today.map(k=>ca[k]),['task-postflight','attempt-postflight',7,'worker-vmr',ca.id,B,M,'refs/heads/main'],'record_candidate values');
+a.match(ca.id,/^\S+$/,'record_candidate id');
+if(payload==='today'||payload==='unmeasured'){
+  a.deepEqual(Object.keys(ca),today,'record_candidate keys');
+  a.deepEqual(warn,payload==='today'?[]:[`[WARN] record_candidate: the protected check files of task task-postflight were not measured on tree ${M} (non-blob entry); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured.`]);
+} else {
+  a.deepEqual(Object.keys(ca),[...today,'protectedEntries'],'record_candidate keys'); a.deepEqual(warn,[],'a protected-entries WARN');
+  const want=payload==='empty'?[]:JSON.parse(payload);
+  a.deepEqual(ca.protectedEntries.map(e=>JSON.stringify(e)),want.map(f=>JSON.stringify({path:f,oid:git('rev-parse',M+':'+f)})),'protectedEntries');
+}
 if(kind==='host'){
   a.equal(d.length,0,'the dispatch ran'); a.equal(fs.readFileSync(witness,'utf8'),'ran');
   const runs=of('record_check_run'); a.equal(runs.length,1); a.equal(runs[0].args.outcome,'passed'); a.equal(count('[OK] qualityGate passed.'),1);
@@ -861,10 +889,24 @@ echo '[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves
 vmr_run SG-pass worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass
 sg_check SG-pass pass
 echo '[strong gate] SG-legacy, SG-observe: the host qualityGate runs (run_frozen_gate worktree), the override unused'
-vmr_run SG-legacy worker codex "$SG_READY" on 0 MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+# The protected-entries contract (task-ee10405f): served to SG-legacy and SG-observe, whose
+# record_candidate must still send today's 8 keys, and to PE-pass and PE-unmeasured below.
+PE='{"requiredChecks":[{"id":"gate","command":"npm test","configs":["package-lock.json","vm-job.txt"],"assertionRoots":["tests"]},{"id":"lint","command":"npm run lint","configs":["package-lock.json"],"scripts":["scripts/lint.sh","scripts/gone.sh"]}]}'
+vmr_run SG-legacy worker codex "$SG_READY" on 0 MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass FAKE_CTX_CONTRACT="$PE"
 sg_check SG-legacy host
-vmr_run SG-observe worker codex "$SG_READY" on 0 FAKE_ATTEMPT_PROFILE=observe MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass
+vmr_run SG-observe worker codex "$SG_READY" on 0 FAKE_ATTEMPT_PROFILE=observe MOE_CHECK_DISPATCH_PATH="$SG_FAKE" FAKE_CHECK_DISPATCH=pass FAKE_CTX_CONTRACT="$PE"
 sg_check SG-observe host
+echo '[strong gate] PE-pass, PE-empty, PE-unmeasured: a strong record_candidate carries the candidate tree'"'"'s protected entries'
+VMR_SETUP=pe_fixture
+vmr_run PE-pass worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass FAKE_CTX_CONTRACT="$PE"
+SG_PAYLOAD='["package-lock.json","scripts/lint.sh","tests/B.txt","tests/a b.txt","tests/a.txt","tests/sub/c.txt","tests/é.txt","vm-job.txt"]' \
+  sg_check PE-pass pass
+PE_GITLINK=1
+vmr_run PE-unmeasured worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass FAKE_CTX_CONTRACT="$PE"
+SG_PAYLOAD=unmeasured sg_check PE-unmeasured pass
+PE_GITLINK=""; VMR_SETUP=sg_fixture
+vmr_run PE-empty worker codex "$SG_READY" on 0 "${SG_STRONG[@]}" FAKE_CHECK_DISPATCH=pass FAKE_CTX_CONTRACT='{"requiredChecks":[{"id":"gate","command":"true"}]}'
+SG_PAYLOAD=empty sg_check PE-empty pass
 echo '[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line'
 SG_HEX=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 SG_ENV="moe-local-vm-v1:$SG_HEX"; SG_ENV_UPPER="moe-local-vm-v1:$(printf %s "$SG_HEX" | tr a-f A-F)"
@@ -896,7 +938,7 @@ vmr_run SG-protected worker claude '{"profile":"verified-local","ready":false,"m
   && [ "$(grep -Fxc '[WARN] MOE_CHECK_DISPATCH_PATH_IGNORED: MOE_CHECK_DISPATCH_PATH is ignored under MOE_RUNTIME_PROTECTED=1; only the bundled local-runner/check-dispatch.mjs runs.' "$OUT")" = 1 ] \
   || vmr_fail SG-protected 'the override was not ignored with one warning'
 ! grep -Fq "$SG_FAKE" "$OUT" || vmr_fail SG-protected 'the override value was printed'
-echo "[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected"
+echo "[strong gate] ok SG-pass, legacy, observe, PE-pass, PE-unmeasured, PE-empty, nonzero, stopped, nothing-owed, undeclared, missing, crash, unparsable, env, env-malformed, timeout, protected"
 echo '[strong gate] SG-interrupt: a wrapper TERMed mid-dispatch stops the dispatch from its EXIT trap (cleanup_temp), before finalize'
 # The dispatch entry runs the hang fake, then TERMs its own parent, the wrapper,
 # once and only while that is still the parent that spawned it (never a reaper).

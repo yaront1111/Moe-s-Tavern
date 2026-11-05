@@ -2717,12 +2717,73 @@ PY
     return 1
 }
 
+# protected_entries_json ARGS -- ARGS (today's record_candidate JSON) with protectedEntries
+# appended, printed only on a strong landing (strong_landing_task) whose pre-flight context
+# declares a non-empty task.executionContract.requiredChecks. The entries are the candidate
+# tree's (FROZEN_TREE's) blobs under every definition's configs, scripts and assertionRoots,
+# exact {path, oid} in UTF-8 byte order, listed the way the daemon's
+# measureRequiredCheckSnapshot lists them ([] for no path, with no git call: ls-tree without
+# a pathspec lists the whole tree). Prints nothing and returns 1 otherwise. A tree it cannot
+# measure faithfully also prints one [WARN] line: the field is omitted, never invented, so
+# qa_approve fails closed (protected-checks-unmeasured). Twin: Get-MoeProtectedEntries.
+protected_entries_json() {
+    local out rc=0 reason
+    strong_landing_task "$LAND_TASK_ID" || return 1
+    out=$($PYTHON_CMD -c '
+import json,re,subprocess,sys
+task,tree,top,args=sys.argv[1:]
+try:
+    t=json.loads(sys.stdin.buffer.read().decode("utf-8"))["task"]
+    assert t["id"]==task
+    defs=t["executionContract"]["requiredChecks"]
+    assert isinstance(defs,list) and defs
+except Exception:
+    sys.exit(3)
+def unmeasured(reason):
+    print(reason); sys.exit(4)
+def unsupported(p):
+    return (not p or p!=p.strip() or p[0]==chr(0xfeff) or p[-1]==chr(0xfeff) or "\\" in p or chr(0xfffd) in p
+            or len(p.encode("utf-16-le"))>1000 or re.search("[\x00-\x1f\x7f]",p) or p[0]=="/"
+            or re.match("[A-Za-z]:/",p) or any(s in ("",".","..") for s in p.split("/")))
+paths=[]
+for d in defs:
+    if not isinstance(d,dict): unmeasured("requiredChecks unreadable")
+    for k in ("configs","scripts","assertionRoots"):
+        v=d.get(k)
+        v=[] if v is None else v
+        if not isinstance(v,list) or not all(isinstance(p,str) and p for p in v): unmeasured("requiredChecks unreadable")
+        for p in v:
+            if p not in paths: paths.append(p)
+entries=[]
+if paths:
+    r=subprocess.run(["git","-C",top,"--literal-pathspecs","ls-tree","-r","-z","--full-tree",tree,"--"]+paths,
+                     stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    if r.returncode or not r.stdout.endswith(b"\0") and r.stdout: unmeasured("git ls-tree failed")
+    for rec in r.stdout.split(b"\0")[:-1]:
+        m=re.fullmatch(rb"(100644|100755|120000) blob ([0-9a-f]{40})\t(.+)",rec,re.S)
+        if not m: unmeasured("non-blob entry")
+        try: p=m.group(3).decode("utf-8")
+        except UnicodeDecodeError: unmeasured("unsupported path")
+        if unsupported(p): unmeasured("unsupported path")
+        entries.append({"path":p,"oid":m.group(2).decode("ascii")})
+    if len(entries)>2000: unmeasured("more than 2000 entries")
+entries.sort(key=lambda e:e["path"].encode("utf-8"))
+a=json.loads(args); a["protectedEntries"]=entries
+print(json.dumps(a))
+' "$LAND_TASK_ID" "$FROZEN_TREE" "$MOE_TOP" "$1" 2>/dev/null <<< "${PREFLIGHT_CONTEXT:-}") || rc=$?
+    if [ "$rc" = 0 ] && [ -n "$out" ]; then printf '%s\n' "$out"; return 0; fi
+    [ "$rc" != 3 ] || return 1
+    reason="git ls-tree failed"; [ "$rc" != 4 ] || [ -z "$out" ] || reason="$out"
+    printf '%b[WARN]%b %s\n' "$YELLOW" "$NC" "record_candidate: the protected check files of task $LAND_TASK_ID were not measured on tree $FROZEN_TREE ($reason); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured." >&2
+    return 1
+}
+
 # Candidate evidence needs this seat's CURRENT attempt. When the pinned attempt is
 # missing, closed or superseded by another claim, or parked, no gate result can
 # be bound to it: GATE_EVIDENCE_UNAVAILABLE tells the landing to park the frozen
 # bytes without running the gate and without announcing a gate failure.
 record_candidate_rpc() {
-    local args detail
+    local args detail measured
     GATE_EVIDENCE_UNAVAILABLE=false; GATE_EVIDENCE_DETAIL=""
     if [ -z "$MOE_ATTEMPT_ID" ] || [ -z "$MOE_ATTEMPT_GENERATION" ]; then
         GATE_EVIDENCE_UNAVAILABLE=true; GATE_EVIDENCE_DETAIL="no pinned attempt identity"; return 1
@@ -2735,6 +2796,8 @@ import json,sys
 t,a,g,w,c,b,s,r=sys.argv[1:]
 print(json.dumps(dict(taskId=t,attemptId=a,generation=int(g),workerId=w,id=c,baseRevision=b,treeSha=s,deliveryTarget=r)))
 ' "$LAND_TASK_ID" "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" "$WORKER_ID" "$FROZEN_CANDIDATE_ID" "$FROZEN_BASE_REVISION" "$FROZEN_TREE" "refs/heads/$LAND_BRANCH") || return 1
+    # The strong profile's protected check files (task-ee10405f); every other landing keeps args.
+    measured=$(protected_entries_json "$args") && args="$measured"
     moe_evidence_rpc record_candidate "$args" && return 0
     # A claim can supersede the attempt between the read above and the RPC.
     if ! detail=$(moe_attempt_read "$MOE_ATTEMPT_ID" "$MOE_ATTEMPT_GENERATION" 2>&1 >/dev/null); then

@@ -878,6 +878,19 @@ function Initialize-SgFixture {
     Remove-Item -LiteralPath $sgWitness -ErrorAction SilentlyContinue
     $env:FAKE_TASK_STATUS = 'REVIEW'
 }
+# Initialize-PeFixture: Initialize-SgFixture plus the protected-entries files (task-ee10405f)
+# on moe/control and main; $script:PeGitlink adds a gitlink under tests/. The U+00E9 name is
+# built from [char]0xE9, never a literal.
+function Initialize-PeFixture {
+    Initialize-SgFixture; $seed = $script:VmjBase
+    New-Item -ItemType Directory -Force -Path "$project\scripts", "$project\tests\sub" | Out-Null
+    foreach ($f in @('package-lock.json', 'scripts/lint.sh', 'scripts/other.sh', 'tests/B.txt', 'tests/a b.txt', 'tests/a.txt', 'tests/sub/c.txt', "tests/$([char]0xE9).txt", 'unprotected.txt')) {
+        [IO.File]::WriteAllText((Join-Path $project $f), "$f`n"); Invoke-VmcGit $project @('add', '--', $f) | Out-Null
+    }
+    if ($script:PeGitlink) { Invoke-VmcGit $project @('update-index', '--add', '--cacheinfo', "160000,$seed,tests/mod") | Out-Null }
+    Invoke-VmcGit $project @('commit', '-qm', 'protected') | Out-Null; Invoke-VmcGit $project @('branch', '-f', 'main', 'HEAD') | Out-Null
+    $script:VmjBase = Invoke-VmcGit $project @('rev-parse', 'HEAD')
+}
 function Assert-Sg($R, [bool]$Ok, [string]$Why) { if (-not $Ok) { Stop-Vmr $R $Why } }
 # A probe only, it never kills: no handle holds the logged pid, so Windows may have reused it. A fake that survives ends itself after 300 s.
 function Assert-SgDead([string]$Row, [int]$Id) {
@@ -887,7 +900,11 @@ function Assert-SgDead([string]$Row, [int]$Id) {
 # Assert-SgRow R KIND [CODE [ENV]] -- sg_check: KIND pass (the check VMs passed, main
 # moved to C), host (legacy, observe: the host qualityGate ran, no dispatch) or refused
 # (the line names CODE, plus ' environment=ENV' for a well-formed stop id; nothing published).
-function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = '') {
+# PAYLOAD (task-ee10405f), the record_candidate args: today (today's 8 names, no protected-entries
+# WARN), unmeasured (today's names, one 'non-blob entry' WARN) or entries (protectedEntries names
+# exactly PATHS, in order; none for []). A hashtable's key order is not stable in pwsh 7, so the
+# names are compared as a set.
+function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = '', [string]$Payload = 'today', [string[]]$Paths = @()) {
     $ev = "$project\.moe\evidence-rpcs.jsonl"; $raw = if (Test-Path -LiteralPath $ev) { [IO.File]::ReadAllText($ev) } else { '' }
     $rows = @(Read-VmeJsonl $ev); $tools = @(Read-VmeJsonl $calls | ForEach-Object { $_.tool })
     $text = $R.Text -replace '\x1b\[[0-9;]*m', ''; $lines = @($text -split '\r?\n')
@@ -900,6 +917,24 @@ function Assert-SgRow($R, [string]$Kind, [string]$Code = '', [string]$EnvId = ''
     Assert-Sg $R (-not $text.Contains('MOE_CHECK_DISPATCH_PATH_IGNORED')) 'an unprotected override was ignored'
     Assert-Sg $R ($cand.Count -eq 1 -and $cand[0].args.baseRevision -ceq $B -and @(& $of record_delivery_receipt).Count -eq $(if ($Kind -eq 'pass') { 1 } else { 0 })) 'not one record_candidate on B, or not the record_delivery_receipt rows of this kind'
     $M = $cand[0].args.treeSha
+    # Read as UTF-8: 5.1's Get-Content (Read-VmeJsonl) would decode the U+00E9 path as ANSI.
+    $ca = @([IO.File]::ReadAllLines($ev) | Where-Object { $_.Trim() } | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object { $_.tool -ceq 'record_candidate' })[0].args
+    [string[]]$names = @($ca.PSObject.Properties.Name | Where-Object { $_ -cne 'protectedEntries' }); [Array]::Sort($names, [StringComparer]::Ordinal)
+    $pe = $ca.PSObject.Properties['protectedEntries']; $warn = @($lines | Where-Object { $_.Contains('record_candidate: the protected check files') })
+    Assert-Sg $R (($names -join ',') -ceq 'attemptId,baseRevision,deliveryTarget,generation,id,taskId,treeSha,workerId' -and $ca.taskId -ceq 'task-postflight' -and
+        $ca.attemptId -ceq 'attempt-postflight' -and $ca.generation -eq 7 -and $ca.workerId -ceq 'worker-vmr' -and $ca.id -cmatch '^\S+$' -and
+        $ca.baseRevision -ceq $B -and $ca.treeSha -ceq $M -and $ca.deliveryTarget -ceq 'refs/heads/main') "record_candidate args: $($ca | ConvertTo-Json -Compress -Depth 4)"
+    if ($Payload -ceq 'entries') {
+        $got = @($pe.Value)
+        Assert-Sg $R ($pe -and $pe.Value -is [array] -and $got.Count -eq $Paths.Count -and $warn.Count -eq 0) "protectedEntries: $($ca | ConvertTo-Json -Compress -Depth 4), expected $($Paths.Count) entries, or a WARN: $($warn -join ' | ')"
+        for ($i = 0; $i -lt $Paths.Count; $i++) {
+            $e = $got[$i]; $oid = Invoke-VmcGit $project @('rev-parse', "${M}:$($Paths[$i])")
+            Assert-Sg $R ((@($e.PSObject.Properties.Name) -join ',') -ceq 'path,oid' -and $e.path -ceq $Paths[$i] -and $e.oid -ceq $oid) "protectedEntries[$i]: $($e | ConvertTo-Json -Compress), expected $($Paths[$i]) $oid"
+        }
+    } else {
+        $want = if ($Payload -ceq 'unmeasured') { "[WARN] record_candidate: the protected check files of task task-postflight were not measured on tree $M (non-blob entry); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured." } else { '' }
+        Assert-Sg $R (-not $pe -and ($warn -join "`n") -ceq $want) "protectedEntries sent, or protected-entries WARN lines: $($warn -join ' | ')"
+    }
     if ($Kind -eq 'host') {
         $runs = @(& $of record_check_run)
         Assert-Sg $R ($d.Count -eq 0 -and (Test-Path -LiteralPath $sgWitness) -and [IO.File]::ReadAllText($sgWitness).Trim() -ceq 'ran') 'the dispatch ran, or the host qualityGate did not'
@@ -951,8 +986,20 @@ function Invoke-SgRows {
     Write-Host '[strong gate] SG-pass: the check VMs pass the frozen candidate; main moves to C; the host qualityGate never runs'
     Assert-SgRow (Invoke-SgRow SG-pass ($strong + @{ FAKE_CHECK_DISPATCH = 'pass' })) pass
     Write-Host '[strong gate] SG-legacy, SG-observe: the host qualityGate runs (Invoke-MoeFrozenGate -WorktreeMode), the override unused'
-    Assert-SgRow (Invoke-SgRow SG-legacy @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
-    Assert-SgRow (Invoke-SgRow SG-observe @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }) host
+    # The protected-entries contract (task-ee10405f): served to SG-legacy and SG-observe, whose
+    # record_candidate must still send today's 8 names, and to PE-pass and PE-unmeasured below.
+    $pe = '{"requiredChecks":[{"id":"gate","command":"npm test","configs":["package-lock.json","vm-job.txt"],"assertionRoots":["tests"]},{"id":"lint","command":"npm run lint","configs":["package-lock.json"],"scripts":["scripts/lint.sh","scripts/gone.sh"]}]}'
+    Assert-SgRow (Invoke-SgRow SG-legacy @{ MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe }) host
+    Assert-SgRow (Invoke-SgRow SG-observe @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe }) host
+    Write-Host "[strong gate] PE-pass, PE-empty, PE-unmeasured: a strong record_candidate carries the candidate tree's protected entries"
+    $script:VmrSetup = { Initialize-PeFixture }
+    try {
+        $want = @('package-lock.json', 'scripts/lint.sh', 'tests/B.txt', 'tests/a b.txt', 'tests/a.txt', 'tests/sub/c.txt', "tests/$([char]0xE9).txt", 'vm-job.txt')
+        Assert-SgRow (Invoke-SgRow PE-pass ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe })) pass '' '' entries $want
+        $script:PeGitlink = $true
+        Assert-SgRow (Invoke-SgRow PE-unmeasured ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = $pe })) pass '' '' unmeasured
+    } finally { $script:PeGitlink = $false; $script:VmrSetup = { Initialize-SgFixture } }
+    Assert-SgRow (Invoke-SgRow PE-empty ($strong + @{ FAKE_CHECK_DISPATCH = 'pass'; FAKE_CTX_CONTRACT = '{"requiredChecks":[{"id":"gate","command":"true"}]}' })) pass '' '' entries
     Write-Host '[strong gate] every non-pass fails the round as MOE_COMMIT_FAILED_GATE: main stays at B, one fixed-code line'
     $stop = { param($c, $e) $h = @{ FAKE_CHECK_DISPATCH = 'stopped'; FAKE_CHECK_DISPATCH_CODE = $c }; if ($e) { $h.FAKE_CHECK_DISPATCH_ENVIRONMENT = $e }; $h }
     foreach ($c in @(@('SG-nonzero', 'MOE_CHECK_DISPATCH_NOT_PASSED', '', @{ FAKE_CHECK_DISPATCH = 'not-passed' }),
@@ -973,7 +1020,7 @@ function Invoke-SgRows {
     $r = Invoke-SgRow SG-protected @{ MOE_RUNTIME_PROTECTED = '1'; MOE_DAEMON_PATH = "$tempRoot\daemon.cjs"; MOE_CHECK_DISPATCH_PATH = $sgFake } claude '{"profile":"verified-local","ready":false,"missingCapabilities":[]}'
     Assert-Sg $r ($r.Code -eq 1 -and [regex]::Matches($r.Text, 'MOE_CHECK_DISPATCH_PATH_IGNORED').Count -eq 1 -and @($r.Text -split '\r?\n' | Where-Object { $_ -ceq $sgIgnored }).Count -eq 1) 'the override was not ignored with one warning'
     Assert-Sg $r (-not $r.Text.Contains($sgFake)) 'the override value was printed'
-    Write-Host '[strong gate] ok SG-pass, legacy, observe, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected'
+    Write-Host '[strong gate] ok SG-pass, legacy, observe, PE-pass, PE-unmeasured, PE-empty, nonzero, stopped, nothing-owed, undeclared, crash, unparsable, env, env-malformed, missing, timeout, protected'
 }
 # --- [strong receipt] CQ-M07t: twin of postflight-vm-route.sh's [strong receipt]. A strong
 # worktree landing sends its delivery receipt after the publish and before finalize_attempt;
