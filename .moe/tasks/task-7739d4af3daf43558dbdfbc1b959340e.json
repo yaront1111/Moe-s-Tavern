@@ -1,0 +1,33 @@
+{
+  "id": "task-7739d4af3daf43558dbdfbc1b959340e",
+  "epicId": "epic-be924fb8",
+  "title": "feat(vscode): the provider picker and agentCommand setting offer Copilot (provider 'copilot')",
+  "description": "Slice 5 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider): VS Code parity with the JetBrains slice. dependsOn task-ab323f85: the wrappers run copilot for -Command copilot / --command copilot.\n\nDELIVERABLE:\n- 'copilot' in AgentProvider (moe-vscode/src/util/AgentLauncher.ts). A copilot launch passes -Command 'copilot' / --command 'copilot' like the other providers.\n- pickProvider in moe-vscode/src/extension.ts lists { label: 'Copilot', provider: 'copilot' } before Custom...\n- The agentCommands datalist in moe-vscode/src/panels/SettingsPanel.ts offers copilot.\n- 'COPILOT' in WorkerType (moe-vscode/src/types/moe.ts).\n- Tests: moe-vscode/tests/verified-local-launch.test.cjs V5 refuses 'copilot' worker and QA VM seats by name before any readiness request (vmSeatsMayLaunch allows only claude and codex), plus a check that the picker and the datalist offer copilot.\n\nNOT IN SCOPE: isAgentAuthor's name heuristics (worker ids are <role>-<hex>, never the CLI name); the VS Code listing text (package.json description, README: the docs slice); JetBrains.\n\nVERIFICATION (global rail: never npm ci/install/test in the live checkout): in a snapshot outside the repo, moe-vscode's npm ci, npm test and npm run compile all pass (the plan names any daemon or proxy build the startup tests need).",
+  "definitionOfDone": [
+    "AgentProvider in moe-vscode/src/util/AgentLauncher.ts includes 'copilot', and a copilot launch line passes -Command 'copilot' (PowerShell) / --command 'copilot' (bash), proven by a test",
+    "The provider picker lists Copilot before Custom... and the Settings agentCommand datalist offers copilot, proven by a test",
+    "verified-local-launch.test.cjs V5 refuses copilot worker and QA VM seats by name before any readiness request",
+    "WorkerType in moe-vscode/src/types/moe.ts includes 'COPILOT'",
+    "In a snapshot outside the live checkout, moe-vscode's npm test and npm run compile exit 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ab323f8520b2414cb41b3b13c9355489"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:42.193Z",
+  "updatedAt": "2026-11-05T21:53:42.193Z"
+}

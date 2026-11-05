@@ -1,0 +1,53 @@
+{
+  "id": "task-59e1d1502a7b488387d6a6d2a10ff43a",
+  "epicId": "epic-be924fb8",
+  "title": "feat: GitHub Copilot CLI (`copilot`) as a fifth agent provider: Agents menu and settings, both wrappers, the moe and Serena MCP servers",
+  "description": "The human asked at about 19:25Z on 2026-11-05: \"can we use copilot as agents? (like a V in config ui use co pilot)\".\n\nToday the providers are claude, codex, gemini (Antigravity agy) and grok. moe-agent.sh:632-643 types any other command as claude, and the ps1 twin does the same. So \"Custom…\" with `copilot` gets claude's argv and cannot run. Copilot shows up only in docs/PRD.md:240, as \"Autocomplete only\".\n\nWant: GitHub's agentic Copilot CLI (`copilot`, npm @github/copilot) as a selectable provider:\n- in the JetBrains Agents menu, AgentProvider in TerminalAgentLauncher.kt, and agentCommand settings, with VS Code parity;\n- launched by both wrappers one-shot and headless per task, with the moe proxy and Serena MCP servers written in the CLI's own MCP config format;\n- with worker.type COPILOT end to end (MOE_WORKER_TYPE, the daemon, the board).\n\nThe plan must settle these against the INSTALLED CLI (verify the flags, as for grok and agy). `copilot` is NOT installed on this host, in Windows or in WSL, so the human installs it and signs in (a GitHub Copilot subscription) before any real-CLI smoke:\n- the headless prompt and permission flags, and how MCP servers and env reach it;\n- an argv probe like codex's (MOE_CLI_ARGV_REJECTED, never a relaunch loop);\n- auth detection;\n- whether its output gives a TOOL witness for landing attribution (else it lands like Gemini and Grok);\n- the model and effort settings.\nKnown limits:\n- Verified-local VM seats run only claude and codex, so a copilot worker or QA seat is refused there (MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED) unless the plan says otherwise.\n- Claude account rotation does not apply.\n- Keep sh and ps1 in string parity.\n\nEdges: dependsOn slice B (task-98053b89), which also edits moe-agent.{sh,ps1}. Size: split with moe-epic-breakdown if the wrappers, plugins and docs exceed one task.",
+  "definitionOfDone": [
+    "Choosing Copilot in the JetBrains Agents menu, or agentCommand `copilot`, launches a copilot seat through both wrappers, one-shot and headless per task, with the moe and Serena MCP servers. A recorded real-CLI smoke on Windows and in WSL claims, works and completes a scratch task.",
+    "worker.type is COPILOT end to end: the proxy's MOE_WORKER_TYPE, the daemon record and the board. VS Code offers the same provider.",
+    "A flag the installed copilot rejects stops the seat with MOE_CLI_ARGV_REJECTED, not a relaunch loop, and a missing CLI or sign-in gives one coded line. Tested in both wrappers.",
+    "Under executionProfile verified-local, a copilot worker or QA seat is refused (MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED), unless the plan documents and tests another behavior.",
+    "scripts/tests/parity-check.sh passes. Postflight harness rows cover copilot in both wrappers. ./gradlew test and the VS Code tests pass.",
+    "Docs updated: the per-CLI launch section of scripts/CLAUDE.md, CONFIGURATION.md (agentCommand), the README provider list and the docs/PRD.md row."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-98053b8980ba4ba9b795d154e232430f",
+    "task-bfadf5334c1a42538dbcf73ebd6ef532",
+    "task-ab323f8520b2414cb41b3b13c9355489",
+    "task-e266a1501d534ac99b8e556f1f89cbff",
+    "task-d609eae395894045ad025c65bc114ee0",
+    "task-7739d4af3daf43558dbdfbc1b959340e",
+    "task-1c580985bedd496a82c20f72881a6f7d"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.7,
+  "comments": [
+    {
+      "id": "comment-73f7a6c75535412695bf46642e545974",
+      "author": "governor-913c7930",
+      "content": "Governor note for the next architect, 22:00Z. architect-fe831cde's terminal closed at 21:59Z (terminal_closed), after it had finished this row's breakdown. The six slices are filed and wired, all PLANNING with no plan yet:\n- bfadf533: daemon, COPILOT worker.type. No deps.\n- ab323f85: wrappers, the launch. After slice B 98053b89.\n- e266a150: wrappers, the guards. After ab323f85.\n- d609eae3: JetBrains. After ab323f85.\n- 7739d4af: VS Code. After ab323f85.\n- 1c580985: docs. After d609eae3 and 7739d4af.\nThis row is the integration row, and its dependsOn lists all six plus 98053b89. Plan the slices first (bfadf533 can start at once), then this row. The `copilot` CLI is still not installed on this host; the human installs it and signs in before any real-CLI smoke.",
+      "timestamp": "2026-11-05T21:59:45.134Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T19:28:29.466Z",
+  "updatedAt": "2026-11-05T21:59:45.135Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T19:29:03.136Z"
+  },
+  "contextFetchedBy": [
+    "architect-fe831cde"
+  ]
+}

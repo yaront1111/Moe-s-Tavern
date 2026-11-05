@@ -1,0 +1,41 @@
+{
+  "id": "task-ab323f8520b2414cb41b3b13c9355489",
+  "epicId": "epic-be924fb8",
+  "title": "feat(wrappers): agentCommand copilot launches GitHub Copilot CLI seats (headless stdin prompt, per-launch MCP config, TUI for architect/governor)",
+  "description": "Slice 2 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider; that row is the closing integration row with the signed-in smoke). Human request, 2026-11-05 ~19:25Z: \"can we use copilot as agents?\". dependsOn task-98053b89 (slice B of task-a200486f) because it also edits moe-agent.{sh,ps1} (the governor's edge).\n\nOBJECTIVE. agentCommand `copilot` (the base name of any path, .exe/.cmd stripped) runs GitHub Copilot CLI (npm @github/copilot, binary `copilot`). Today moe-agent.sh about :632-647 and its ps1 twin type every other command as claude, so copilot gets claude's argv and cannot run.\n\nFACTS measured 2026-11-05 on copilot 1.0.105 (scratch install, not signed in; the closing row re-checks them signed in):\n- Non-interactive mode takes the prompt on stdin when -p is absent. With stdin at the null device it says \"No prompt provided. Run in an interactive terminal or provide a prompt with -p or via standard in.\" So the prompt never rides argv (Windows caps a command line at 32 KB).\n- These flags parse: -C <dir>, --allow-all (= --allow-all-tools --allow-all-paths --allow-all-urls; --allow-all-tools is required for non-interactive), --no-ask-user, --no-auto-update, --disable-builtin-mcps (github-mcp-server, githubiq), --additional-mcp-config @<file> (repeatable; augments ~/.copilot/mcp-config.json for one session), -i <prompt> (TUI that runs the prompt first).\n- MCP JSON shape (copilot mcp add --json): {\"mcpServers\":{\"<name>\":{\"type\":\"local\",\"command\":\"...\",\"args\":[...],\"env\":{...},\"tools\":[\"*\"],\"timeout\":<ms>}}}.\n- A workspace .mcp.json or .github/mcp.json loads only in a trusted folder; untrusted, `copilot mcp list` shows only user servers.\n\nDELIVERABLE, in both wrappers with identical strings:\n1. Detection: CLI type copilot; MOE_WORKER_TYPE=COPILOT exported like the other four.\n2. Protected runtime (MOE_RUNTIME_PROTECTED=1): the allowlist and its refusal line become claude, codex, gemini, grok, copilot. protected_resolve_cli / Resolve-MoeProtectedCli already resolve a bare name. JetBrains' enum-derived PROTECTED_AGENT_COMMANDS gains copilot in the JetBrains slice.\n3. Role polarity as claude and grok: architect/governor open the TUI, worker/qa run headless; --interactive / --no-interactive (ps1 -Interactive / -Interactive:$false) override it. No new exec flag. A copilot TUI disables polling like grok's.\n4. Per-launch MCP config: one JSON file in the wrapper's secure temp dir (never in the project, so no DENY or .gitignore entry), passed as --additional-mcp-config @<file>. Server `moe` = the proxy, env MOE_TOOL_NAME_STYLE=underscore plus every seat and identity key that is set, as codex_moe_server_override lists them (MOE_PROJECT_PATH, MOE_WORKER_ID, MOE_WORKER_TYPE, MOE_SESSION_ID, the MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION pair both or neither, MOE_RUNNER_PROCESS_STARTED_AT, MOE_RUNNER_HOST, MOE_DAEMON_HOST), because whether copilot hands its own env to MCP servers cannot be measured signed out; \"timeout\" 780000 (the moe long-polls block up to 720 s). Server `serena` = start-mcp-server --context agent --project <Serena root> as write_gemini_config builds it, only when Serena resolves.\n5. Headless: copilot <argv> -C <CLI root> --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config @<file>, with grok's prompt-file content (SYSTEM_APPEND + per-iteration session context) on stdin. PowerShell must hand it over as UTF-8 (PS 5.1 pipes ASCII by default; reuse the global OutputEncoding save/restore at about moe-agent.ps1:1884). TUI: the same minus --allow-all and --no-ask-user (the operator approves, as in the claude and grok TUIs), plus -i <short quote-free pointer at the prompt file>. The CLI runs in CLI_ROOT (the task worktree in worktree mode).\n6. A missing CLI prints one line `[ERROR] MOE_COPILOT_NOT_FOUND: ...` naming the command and the fix (npm install -g @github/copilot, then copilot login) and exits 1.\n7. Under verified-local, the existing catch-all refuses a copilot worker or QA seat (MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED ... this seat runs copilot ...).\n\nTESTS. scripts/tests/postflight-vm-route.{sh,ps1} already run every CLI to its launch with recording fakes (vmr_run). Add a fake copilot that also records stdin and the @file's JSON, plus rows: headless worker, architect TUI, --no-interactive architect, C3 verified-local refusal, not found. scripts/tests/protected-agent-command.test.mjs: the refused line with five names, plus a copilot bare-name row.\n\nNOT IN SCOPE: the argv probe, the sign-in line, --model/--reasoning-effort, --log-dir and the parity-check pins (the guards slice); JetBrains and VS Code (their slices); docs (the docs slice and task-59e1d150); a TOOL witness (copilot lands like Gemini and Grok); Claude account rotation (claude only); an installer -AgentCommand copilot.\n\nVERIFICATION (gate budget 20 min; recipe in mem:decision-mid-epic-launcher-gate-narrow): bash scripts/tests/postflight-vm-route.sh; postflight-vm-route.ps1 on Windows PowerShell 5.1 and pwsh 7; node --test scripts/tests/protected-agent-command.test.mjs; bash -n and ParseFile on both wrappers; bash scripts/tests/parity-check.sh; npm run lint.",
+  "definitionOfDone": [
+    "With --command <dir>/copilot (also copilot.exe or copilot.cmd), moe-agent.sh and moe-agent.ps1 launch copilot, never claude's argv, with MOE_WORKER_TYPE=COPILOT in the CLI's env, proven by postflight-vm-route.{sh,ps1} rows on bash, Windows PowerShell 5.1 and pwsh 7",
+    "A worker seat runs headless: argv has -C <CLI root> --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config @<file>, the prompt arrives on stdin, and <file> is JSON whose moe server env holds MOE_TOOL_NAME_STYLE=underscore, MOE_WORKER_ID and MOE_WORKER_TYPE=COPILOT and whose serena server runs --context agent; same rows",
+    "An architect seat opens the TUI with -i <pointer prompt> and without --allow-all, with polling disabled; with --no-interactive (-Interactive:$false) it runs headless; same rows",
+    "A missing copilot prints exactly one MOE_COPILOT_NOT_FOUND line and exits 1, and under verified-local a copilot worker seat is refused with MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED (row C3); same harnesses",
+    "Under MOE_RUNTIME_PROTECTED=1 copilot runs by bare name and the refusal line lists claude, codex, gemini, grok, copilot, proven by scripts/tests/protected-agent-command.test.mjs on bash and pwsh",
+    "The gate passes: postflight-vm-route.sh on bash, postflight-vm-route.ps1 on 5.1 and pwsh 7, protected-agent-command.test.mjs, bash -n and ParseFile on both wrappers, bash scripts/tests/parity-check.sh and npm run lint"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-32d0a5be",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-98053b8980ba4ba9b795d154e232430f"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.2,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:07.016Z",
+  "updatedAt": "2026-11-05T22:01:36.392Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T21:59:39.338Z"
+  },
+  "contextFetchedBy": [
+    "architect-32d0a5be",
+    "architect-a3d9076e"
+  ]
+}

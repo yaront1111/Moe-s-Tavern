@@ -59,12 +59,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": "worker-b3b3db54",
+  "status": "DONE",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 1,
-  "reopenReason": "Held by the governor for the human's approval of size-exception proposal prop-550014df (EPIC ADD_RAIL; QA comment-e594586f found the substance passes and no code change is needed). Do not claim this row or change its bytes. After the approval the governor sets it to REVIEW for a size-only QA re-check.",
+  "reopenReason": "The human APPROVED size-exception prop-550014df at 21:49:44Z. It is an EPIC rail on epic-b8c6bbda that waives size only, for completion 9c2129d4's 5 files. QA round 1 (comment-e594586f) passed the substance, so QA round 2 checks the approved rail and the size against it. No code changed since 9c2129d4.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "HIGH",
@@ -75,18 +75,26 @@
       "author": "qa-a196fc69",
       "content": "QA round 1 (qa-a196fc69): size-only reject. Substance passes. No DoD item failed and no code change is required.\n\nEvidence, so the next QA round can re-check quickly:\n- checkRefs[0], run verbatim in a clean clone at 9c2129d4 (/mnt/d/moe-scratch): EXIT 0 in 24 s.\n  - Linux node: 62 pass, 2 skip. node.exe: 76 pass, 2 skip.\n  - Real-claude smoke against an empty temp config folder: 'Not logged in' on both.\n- registry.ts is comment-only against 4f0280c3. I checked it by hand, because the checkRef's base resolves to HEAD.\n- The one-argument `vm-credential` output is byte-identical at 4f0280c3 and 9c2129d4, for both a missing token and a stored one.\n- A bare `claude` missing from PATH gives `reason=no-claude` with exit 3, and state prints `unavailable<TAB>no-claude` with exit 0.\n- 12 scratch mutants: 10 killed.\n  - M11 (drop the lstat isFile check) is equivalent on Linux, because O_NOFOLLOW plus fstat still refuse.\n  - M1 (renewSignIn returns true on ENOENT) survives. No row runs a non-.js claude that is missing from PATH. This is optional; it would grow the diff.\n- Test files: 0 deletions.\n\nSize: +579/-25, net 554 (`git show --numstat --format=`), against QA's 400 cap. No project or epic rail waives it.\n\nProposed EPIC ADD_RAIL text for epic-b8c6bbda4def46cbb8d1b351f8ea3eeb:\n\"Slice A size exception: task-fbd2a42f10904fd78684f16f88374e73 (vm-credential from the account's host sign-in), as landed in completion 9c2129d4 on moe/work-2026-10-24, may retain 604 changed lines (+579/-25, net 554, by git show --numstat --format=) across exactly these 5 files: scripts/moe-account-lease.mjs +199/-20, packages/moe-daemon/src/accounts/registry.ts +8/-4 (comments only) and docs/SCHEMA.md +1/-1 (runtime and docs net 183), plus scripts/tests/moe-account-lease.test.mjs +348 and scripts/tests/account-trust-docs.test.mjs +23 (tests 371). Waives size only; grow only by QA-required fixes. Do not re-slice, rewrite or re-land the landed bytes. Every DoD item, the rails, substantive QA and fresh verification still apply.\"",
       "timestamp": "2026-11-05T19:18:36.222Z"
+    },
+    {
+      "id": "comment-18ab6e10f539454f8139ed8d48c35084",
+      "author": "qa-a196fc69",
+      "content": "QA round 2 (qa-a196fc69): approved. The NO-COMPLETION-COMMIT warning is expected, so nothing needs to land.\n- The daemon anchors the commit check on the round-1 reject (19:18:45Z). The task's only completion, 9c2129d4 (recorded 19:11:33Z), predates it.\n- The approved rail prop-550014df forbids re-landing those bytes.\n- 9c2129d4 is the tip of both the local and the remote moe/work-2026-10-24, and its tree equals the candidate's treeSha.",
+      "timestamp": "2026-11-05T22:02:30.660Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:47:33.504Z",
-  "updatedAt": "2026-11-05T19:19:25.721Z",
+  "updatedAt": "2026-11-05T22:02:59.457Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:53:19.366Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
     "executedStepCount": 5,
     "rejectCount": 1,
-    "reopenCount": 1
+    "reopenCount": 1,
+    "doneAt": "2026-11-05T22:02:15.676Z",
+    "wallClockMs": 11336310
   },
   "contextFetchedBy": [
     "worker-b3b3db54",
@@ -212,10 +220,10 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "qa-a196fc69@2026-11-05T19:11:59Z",
-    "at": "2026-11-05T19:19:22.624Z"
+    "sessionId": "qa-a196fc69@2026-11-05T21:50:16Z",
+    "at": "2026-11-05T22:02:59.457Z"
   },
-  "reviewCompletedAt": "2026-11-05T19:18:45.635Z",
+  "reviewCompletedAt": "2026-11-05T22:02:15.676Z",
   "rejectionDetails": {
     "issues": [
       {
@@ -237,7 +245,13 @@
       ]
     }
   ],
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-05T19:19:25.721Z",
-  "blockedReason": "Held by the governor for the human's approval of size-exception proposal prop-550014df (EPIC ADD_RAIL; QA comment-e594586f found the substance passes and no code change is needed). Do not claim this row or change its bytes. After the approval the governor sets it to REVIEW for a size-only QA re-check."
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Held by the governor for the human's approval of size-exception proposal prop-550014df (EPIC ADD_RAIL; QA comment-e594586f found the substance passes and no code change is needed). Do not claim this row or change its bytes. After the approval the governor sets it to REVIEW for a size-only QA re-check.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-05T22:02:15.676Z",
+  "reviewSummary": "QA round 2 (size re-check): the human APPROVED prop-550014df at 21:49:44Z.\nSize: 604 changed lines, net 554, waived by the approved epic rail. The epic-b8c6bbda \"Slice A size exception\" rail matches `git show --numstat --format= 9c2129d4` file by file: lease.mjs +199/-20, registry.ts +8/-4, SCHEMA.md +1/-1, lease test +348/-0, trust-docs test +23/-0 (runtime and docs 183, tests 371).\nNo byte change since round 1:\n- The local and remote (ls-remote) moe/work-2026-10-24 tips both equal 9c2129d4.\n- No later commit touches the 5 paths.\n- Candidate cand-2ba38c61's treeSha equals 9c2129d4^{tree}.\nFresh gate: checkRefs[0] run verbatim in a clone --shared at 9c2129d4, EXIT 0 in 22 s.\n- The real-claude smoke answered \"Not logged in\" on node and node.exe.\n- Linux node: 64 tests, 62 pass, 0 fail, 2 skip (Windows-only).\n- node.exe: 78 tests, 76 pass, 0 fail, 2 skip. The claude.cmd renewal row ran and passed.\n- registry.ts is comment-only against 4f0280c3, checked by hand because the checkRef's base resolves to HEAD.\nSubstance re-read:\n- DoD1: the minted token wins, and a sign-in with more than 5 minutes left prints with no claude run and bytes and mtime unchanged.\n- DoD2: one renewal run; argv, stdin, a tmpdir cwd outside the account, CLAUDE_CONFIG_DIR and the scrubbed env are asserted, and the file's sha equals claude's own write.\n- DoD3: one row per cause, on both commands.\n- DoD4: canary checks on every row.\n- DoD5: the new account-trust-docs test pins all 3 places.\n- DoD6: the gate above.\nExtra checks:\n- A bare claude missing from PATH gives exit 3 with reason=no-claude; state prints unavailable<TAB>no-claude with exit 0; the canary file is unchanged.\n- The one-argument form is still MOE_VM_TOKEN_UNAVAILABLE, exit 3.\n- The test diff has 0 deletions.\nComplexity pass: nothing to cut.\nHandoff: folded into decision-vm-credential-from-signin and 2 more memories, then moved to _archive.",
+  "requiredCheckAtDone": null
 }

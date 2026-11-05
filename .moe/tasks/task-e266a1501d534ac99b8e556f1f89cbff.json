@@ -1,0 +1,39 @@
+{
+  "id": "task-e266a1501d534ac99b8e556f1f89cbff",
+  "epicId": "epic-be924fb8",
+  "title": "feat(wrappers): copilot seat guards: argv probe (MOE_CLI_ARGV_REJECTED), sign-in line (MOE_COPILOT_SIGNED_OUT), routed --reasoning-effort",
+  "description": "Slice 3 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider). Builds on task-ab323f85's copilot launch block in moe-agent.sh and moe-agent.ps1 (dependsOn).\n\nOBJECTIVE. A copilot seat that cannot run stops with one coded line instead of relaunch-looping, and runs at the effort its task was routed at. Model decision (the human, 2026-11-05): copilot's own default model, --model only when pinned, effort from each task's routing.\n\nFACTS measured 2026-11-05 on copilot 1.0.105:\n- The real argv plus --help exits 0 and prints usage without reading stdin or checking the sign-in.\n- A rejected flag exits 1 with clap's `error: unexpected argument '--x' found` or `error: invalid value 'ultra' for '--reasoning-effort <level>'`.\n- A signed-out run exits 1, prints `Error: No authentication information found.` on stderr and writes `[ERROR] No authentication information found.` to <--log-dir>/process-<ts>-<pid>.log, even at --log-level error.\n- --reasoning-effort takes none, minimal, low, medium, high, xhigh, max, so Moe's routed efforts pass 1:1. --model takes ids such as claude-opus-5.5 or gpt-6-astra.\n- Sign-in comes from COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN, else the token `copilot login` keeps in the OS credential store (the wrapper cannot read it), else gh's. So the sign-in is detected from the run's own log, never guessed beforehand.\n\nDELIVERABLE, in both wrappers with identical strings:\n1. Argv probe, once per wrapper process before the first headless copilot launch, as codex's (moe-agent.sh about :11697-11722): the real argv plus --help, stdin at the null device. A non-zero exit whose output matches unexpected argument|invalid value|unrecognized prints one `MOE_CLI_ARGV_REJECTED: the installed copilot (<copilot --version>) rejects the wrapper's launch argv -- <first error line>. ...` line, sends one #general escalation and exits 1 (the EXIT trap deregisters; the task returns to the queue). MOE_DISABLE_ARGV_PROBE=1 skips it.\n2. Sign-in: headless runs pass --log-dir <a per-launch dir in the secure temp>. After a non-zero exit, a `No authentication information found` line in that dir prints one `MOE_COPILOT_SIGNED_OUT: ...` line (copilot login, or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN; Windows and WSL sign in separately), sends one #general escalation and exits 1, never the launch-failure backoff relaunch.\n3. Effort: --reasoning-effort is MOE_COPILOT_EFFORT when set, else the claimed task's launch effort (TASK_LAUNCH_EFFORT / $taskLaunchEffort), else absent. It goes on the TUI argv, the headless argv and the probe alike.\n4. Model: --model only for an explicit model (-Model/--model, settings.models.<role>, else MOE_COPILOT_MODEL), never the claude-opus-5-5 fallback (grok's rule).\n5. scripts/tests/parity-check.sh and parity-check.ps1 pin the copilot vocabulary: MOE_COPILOT_ as a compared code family, the \"copilot\" cli type, MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT, the copilot banners and the copilot argv-rejected line.\n\nTESTS. postflight-vm-route.{sh,ps1} copilot rows: probe rejection (a fake copilot fails a --help argv: one line, exit 1, no headless run); MOE_DISABLE_ARGV_PROBE=1; signed out (the fake writes the log line and exits 1: one line, exit 1, one run even with polling on); effort from the claim's launch hint and from MOE_COPILOT_EFFORT; --model only when pinned.\n\nNOT IN SCOPE: a sign-in pre-check before the launch; the TUI's sign-in (the operator sees copilot's own /login); JetBrains, VS Code; docs (the docs slice and task-59e1d150).\n\nVERIFICATION (gate budget 20 min): task-ab323f85's gate (vm-route harnesses on bash, 5.1 and pwsh 7, bash -n and ParseFile on both wrappers, parity-check.sh, npm run lint) plus parity-check.ps1 on Windows PowerShell 5.1.",
+  "definitionOfDone": [
+    "A copilot that rejects the real argv plus --help stops the seat with exactly one MOE_CLI_ARGV_REJECTED line naming copilot and its version, one #general message and exit 1, with no headless run, and MOE_DISABLE_ARGV_PROBE=1 skips the probe; proven by postflight-vm-route.{sh,ps1} rows on bash, Windows PowerShell 5.1 and pwsh 7",
+    "A headless copilot run that exits non-zero with `No authentication information found` in its --log-dir prints exactly one MOE_COPILOT_SIGNED_OUT line and exits 1 after one CLI run, even with polling on; same rows",
+    "--reasoning-effort is MOE_COPILOT_EFFORT when set, else the claim's launch effort, and absent when neither is set; --model appears only for an explicit model and never as claude-opus-5-5; same rows",
+    "parity-check.sh and parity-check.ps1 require the copilot vocabulary in both wrappers, and each fails on a wrapper copy with one pinned copilot string removed",
+    "The gate passes: postflight-vm-route on bash, 5.1 and pwsh 7, bash -n and ParseFile on both wrappers, bash scripts/tests/parity-check.sh, parity-check.ps1 on 5.1 and npm run lint"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-a3d9076e",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ab323f8520b2414cb41b3b13c9355489"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.3,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:24.584Z",
+  "updatedAt": "2026-11-05T22:00:31.169Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:00:15.534Z"
+  },
+  "contextFetchedBy": [
+    "architect-a3d9076e"
+  ]
+}

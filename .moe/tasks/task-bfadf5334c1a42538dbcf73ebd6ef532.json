@@ -1,0 +1,36 @@
+{
+  "id": "task-bfadf5334c1a42538dbcf73ebd6ef532",
+  "epicId": "epic-be924fb8",
+  "title": "feat(daemon): COPILOT is a recognized worker.type",
+  "description": "Slice 1 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider; that row is the closing integration row). No dependency: it can land first.\n\nOBJECTIVE. A seat whose wrapper launched GitHub Copilot CLI registers as worker.type COPILOT. The wrappers export MOE_WORKER_TYPE=COPILOT (task-ab323f85), and moe-proxy already forwards that value verbatim as workerType on claim_next_task and join_team. But normalizeWorkerType in packages/moe-daemon/src/tools/joinTeam.ts maps anything outside CLAUDE, CODEX, GEMINI and GROK to CLAUDE.\n\nDELIVERABLE:\n- 'COPILOT' in WorkerType (packages/moe-daemon/src/types/schema.ts), in WORKER_TYPES and in WORKER_TYPE_SCHEMA's description (joinTeam.ts; claim_next_task reuses that schema). Record<WorkerType, true> makes tsc enforce the list.\n- New cases in packages/moe-daemon/src/tools/workerType.test.ts.\n- docs/MCP_SERVER.md (join_team and claim_next_task workerType) and docs/SCHEMA.md (WorkerType) name COPILOT.\nAdditive only: the exact, case-sensitive match and the CLAUDE default for any other value stay.\n\nNOT IN SCOPE: the wrappers (task-ab323f85); moe-proxy's comment listing the types (the docs slice); VS Code's WorkerType type (task-7739d4af); the board UI (JetBrains reads worker.type as a free string, MoeJson.kt:732).\n\nVERIFICATION (global rail: never npm ci/build/test in the live checkout): in a git-archive snapshot outside the repo, cd packages/moe-daemon && npm ci && npm run build && npx vitest run src/tools/workerType.test.ts.",
+  "definitionOfDone": [
+    "moe.join_team and moe.claim_next_task with workerType 'COPILOT' record worker.type COPILOT, and an existing CLAUDE record refreshes to COPILOT, proven by new cases in packages/moe-daemon/src/tools/workerType.test.ts",
+    "workerType 'copilot', 'Copilot' and ' COPILOT ' still record CLAUDE, proven by the same file",
+    "WorkerType in packages/moe-daemon/src/types/schema.ts and WORKER_TYPES and WORKER_TYPE_SCHEMA's description in joinTeam.ts include COPILOT, and npm run build passes in the snapshot",
+    "docs/MCP_SERVER.md (join_team, claim_next_task) and docs/SCHEMA.md (WorkerType) list COPILOT among the worker types",
+    "In a git-archive snapshot outside the live checkout, cd packages/moe-daemon && npm ci && npm run build && npx vitest run src/tools/workerType.test.ts exits 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-a8e13516",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 546.1,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:54:07.864Z",
+  "updatedAt": "2026-11-05T21:59:48.396Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T21:59:33.943Z"
+  },
+  "contextFetchedBy": [
+    "architect-a8e13516"
+  ]
+}

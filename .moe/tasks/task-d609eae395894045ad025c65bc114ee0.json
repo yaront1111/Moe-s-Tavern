@@ -1,0 +1,33 @@
+{
+  "id": "task-d609eae395894045ad025c65bc114ee0",
+  "epicId": "epic-be924fb8",
+  "title": "feat(jetbrains): the Agents menu and agentCommand setting offer Copilot (AgentProvider.COPILOT)",
+  "description": "Slice 4 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider). JetBrains is the primary IDE. dependsOn task-ab323f85: the wrappers run copilot for -Command copilot / --command copilot and accept it under the protected runtime.\n\nOBJECTIVE. Copilot appears in the Agents menu and the agentCommand setting (the popup and MoeSettingsDialog's combo iterate TerminalAgentLauncher.AgentProvider.entries) and launches through the wrappers.\n\nDELIVERABLE:\n- AgentProvider.COPILOT(\"Copilot\", \"copilot\") directly before CUSTOM in moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt. In moe-jetbrains/src/main/resources/messages/MoeBundle.properties: moe.panel.provider.copilot=Copilot, and moe.settings.agentCommandHint names copilot.\n- The headless override (codexExec) maps COPILOT to ` -Interactive:$false` (PowerShell) and ` --no-interactive` (bash), the wrappers' generic override (copilot has no -CopilotExec), never -CodexExec. shouldLaunchClaudeInteractive stays CLAUDE-only: the wrapper's role polarity opens copilot's TUI for architect and governor.\n- PROTECTED_AGENT_COMMANDS (derived from the enum) now includes copilot, matching task-ab323f85's wrapper allowlist. VerifiedLocalLaunch.agentRefusal keeps refusing copilot for VM seats (VM_AGENT_COMMANDS is claude, codex).\n- moe-jetbrains/src/main/resources/META-INF/plugin.xml names GitHub Copilot CLI in the description and the CLI feature line.\n- Tests in moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt.\n\nNOT IN SCOPE: the board's worker.type display (a free string already, MoeJson.kt:732); VS Code (its own slice); docs/ (the docs slice and task-59e1d150).\n\nVERIFICATION (global rail: Gradle under the jetbrains-gradle lease, or a snapshot of the exact commit): cd moe-jetbrains && ./gradlew test --tests 'com.moe.util.TerminalAgentLauncherTest' --tests 'com.moe.util.VerifiedLocalLaunchTest', then ./gradlew test.",
+  "definitionOfDone": [
+    "AgentProvider has COPILOT(\"Copilot\", \"copilot\") directly before CUSTOM, fromCommand(\"copilot\") returns COPILOT and MoeBundle.properties has moe.panel.provider.copilot=Copilot, proven by TerminalAgentLauncherTest",
+    "The PowerShell and bash launch lines for a copilot seat pass -Command 'copilot' / --command 'copilot', add no -Interactive for architect or governor, and with codexExec add -Interactive:$false / --no-interactive instead of -CodexExec, proven by TerminalAgentLauncherTest",
+    "Under the protected profile agentCommandFor runs copilot, and VerifiedLocalLaunch refuses a copilot VM seat, proven by tests",
+    "plugin.xml's description and CLI feature line name GitHub Copilot CLI",
+    "./gradlew test passes, with the focused TerminalAgentLauncherTest and VerifiedLocalLaunchTest run first"
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ab323f8520b2414cb41b3b13c9355489"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.4,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:34.737Z",
+  "updatedAt": "2026-11-05T21:53:34.737Z"
+}
