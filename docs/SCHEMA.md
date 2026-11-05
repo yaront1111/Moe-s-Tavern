@@ -1966,7 +1966,7 @@ interface ClaudeAccountRegistry {
 Any key not listed here makes the whole file invalid: rotation turns off and the view's `error` says why, so a stray `dir` or `token` cannot ride along unnoticed.
 
 **Folders next to the list:**
-- `claude-accounts/<id>/`: the account's Claude config folder, which Claude's own `claude auth login` fills. Moe creates it and passes its path as `CLAUDE_CONFIG_DIR`. The daemon and the `accounts` CLI never open a file inside it. The one exception is the wrapper helper `scripts/moe-account-lease.mjs`: for an interactive claude seat only, it sets `projects[<key>].hasTrustDialogAccepted` in that account's `.claude.json` (see `docs/MCP_SERVER.md`, **Claude Account Rotation**). Removing an account keeps the folder. A new account never reuses an id whose folder still exists.
+- `claude-accounts/<id>/`: the account's Claude config folder, which Claude's own `claude auth login` fills. Moe creates it and passes its path as `CLAUDE_CONFIG_DIR`. The daemon and the `accounts` CLI never open a file inside it. There are two exceptions, both in the wrapper helper `scripts/moe-account-lease.mjs`: for an interactive claude seat only, it sets `projects[<key>].hasTrustDialogAccepted` in that account's `.claude.json` (see `docs/MCP_SERVER.md`, **Claude Account Rotation**); and for a verified-local VM seat's job credential, `vm-credential` reads `.credentials.json` read-only and takes only the short-lived access token, never the refresh token, and writes nothing (renewal is left to the host's own claude; human directive 2026-11-05). Removing an account keeps the folder. A new account never reuses an id whose folder still exists.
 - `claude-usage/<id>.json`: usage numbers only, with no credential and no path.
 
 ```typescript

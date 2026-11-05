@@ -5,16 +5,22 @@
 // after a launch fails fast, pre-accepts an interactive seat's folder trust,
 // and turns an interactive seat's statusline input into a usage sample.
 // A Claude config directory is handed to claude as CLAUDE_CONFIG_DIR, and this
-// helper opens exactly one file inside one: `trust` sets
-// projects[<key>].hasTrustDialogAccepted in that account's .claude.json for an
-// interactive seat, under claude's own lock (human sign-off 2026-10-26,
-// task-7a0b1881). Nothing read from that file, no path from it and no env
-// value is ever printed; .credentials.json and every other file in the folder
-// are never opened. From `claude auth status --json` it reads the exit code
-// and authMethod; nothing else in that output is printed, stored or sent.
-// `vm-credential` also reads the account's VM token from
-// <accounts dir>/claude-vm-tokens/<id>.token, which `accounts vm-token` writes
-// outside every Claude config folder, and prints it only to stdout.
+// helper opens exactly two files inside one:
+// - `trust` sets projects[<key>].hasTrustDialogAccepted in that account's
+//   .claude.json for an interactive seat, under claude's own lock (human
+//   sign-off 2026-10-26, task-7a0b1881). Nothing read from that file, no path
+//   from it and no env value is ever printed.
+// - Only `vm-credential` and `vm-credential-state` open .credentials.json, and
+//   read-only, for a verified-local VM seat's job credential (human directive
+//   2026-11-05, task-a200486f). They take only the short-lived access token and
+//   its expiry. The refresh token is never printed, passed or used, and the
+//   file is never written: renewal is left to the host's own claude.
+// Every other file in the folder is never opened. From `claude auth status
+// --json` it reads the exit code and authMethod; nothing else in that output
+// is printed, stored or sent. `vm-credential` also reads the account's minted
+// VM token from <accounts dir>/claude-vm-tokens/<id>.token, which
+// `accounts vm-token` writes outside every Claude config folder; a minted token
+// still wins over the sign-in. A credential goes only to stdout.
 //
 //   gate                                         go | off | skip<TAB><note>
 //   retry-sec                                    configured account wait seconds (default 300)
@@ -24,7 +30,14 @@
 //   trust <configDir> <projectDir> [<launchDir>] trusted | granted | refused<TAB><sec><TAB><reason>
 //   statusline        claude's statusLine command: prints a line, writes MOE_ACCOUNT_SAMPLE_FILE
 //   statusline-settings <file>                   writes the --settings JSON that installs it
-//   vm-credential <id>                           the account's VM token on stdout (for a pipe), from <accounts dir>/claude-vm-tokens/
+//   vm-credential <id>                           the account's minted VM token on stdout (for a pipe), from <accounts dir>/claude-vm-tokens/;
+//                                                else exit 3 with MOE_VM_TOKEN_UNAVAILABLE
+//   vm-credential <id> <configDir> <claude command...>
+//                                                the minted token, else the sign-in's access token (renewed by claude
+//                                                when 5 minutes or less are left), on stdout with no newline;
+//                                                else exit 3 with MOE_VM_CREDENTIAL_UNAVAILABLE reason=<reason>
+//   vm-credential-state <id> <configDir> <claude command...>
+//                                                minted | signin<TAB><expiresAt ISO> | unavailable<TAB><reason>, never a credential
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,7 +62,8 @@ const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 const OFF_RE = /^(0|false|off|no)$/i;
 const UNREADABLE = 'unavailable\tunreadable reply from the daemon';
 const USAGE = 'usage: node moe-account-lease.mjs gate | pick | signin-state <configDir> <claude command...> '
-  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file> | vm-credential <id> | retry-sec';
+  + '| trust <configDir> <projectDir> [<launchDir>] | statusline | statusline-settings <file> | vm-credential <id> '
+  + '| vm-credential <id> <configDir> <claude command...> | vm-credential-state <id> <configDir> <claude command...> | retry-sec';
 const MAX_CONFIG_BYTES = 16 * 1024 * 1024;
 const TRUST_LOCK_WAIT_MS = 2000;
 const TRUST_POLL_MS = 50;
@@ -181,17 +195,17 @@ function quoteForCmd(word) {
 }
 
 /**
- * How to run `<command words> auth status --json`: { file, args, shell }, or
- * null when it cannot be run safely (the probe is then `unknown`). A .js/.mjs/
- * .cjs claude runs under this node. On Windows the command is resolved first
- * (findWindowsCommand); an .exe/.com runs directly and anything else (npm's
- * claude.cmd shim) through cmd.exe, which expands %VAR% even inside quotes and
- * has no escape for '"', so a word carrying either is not run at all.
+ * How to run `<command words> <tail...>`: { file, args, shell }, or null when
+ * it cannot be run safely. A .js/.mjs/.cjs claude runs under this node. On
+ * Windows the command is resolved first (findWindowsCommand); an .exe/.com runs
+ * directly and anything else (npm's claude.cmd shim) through cmd.exe, which
+ * expands %VAR% even inside quotes and has no escape for '"', so a word
+ * carrying either is not run at all.
  */
-export function probeCommand(words, env = process.env, platform = process.platform, exists = isFile) {
+export function claudeCommand(words, tail, env = process.env, platform = process.platform, exists = isFile) {
   const [bin, ...rest] = words;
   if (!bin) return null;
-  const args = [...rest, 'auth', 'status', '--json'];
+  const args = [...rest, ...tail];
   if (/\.[cm]?js$/i.test(bin)) return exists(bin) ? { file: process.execPath, args: [bin, ...args], shell: false } : null;
   if (platform !== 'win32') return { file: bin, args, shell: false };
   const found = findWindowsCommand(bin, env, exists);
@@ -200,6 +214,11 @@ export function probeCommand(words, env = process.env, platform = process.platfo
   const line = [found, ...args];
   if (line.some((word) => /["%!\r\n]/.test(word))) return null;
   return { file: line.map(quoteForCmd).join(' '), args: [], shell: true };
+}
+
+/** How to run `<command words> auth status --json` (claudeCommand's rules); null makes the probe `unknown`. */
+export function probeCommand(words, env = process.env, platform = process.platform, exists = isFile) {
+  return claudeCommand(words, ['auth', 'status', '--json'], env, platform, exists);
 }
 
 /**
@@ -543,6 +562,163 @@ export function readVmCredential(env, id) {
   }
 }
 
+// --- vm-credential from the account's own host sign-in (human directive
+// 2026-11-05, task-a200486f). Read-only: only claudeAiOauth.accessToken and
+// expiresAt leave readSignInCredential; the refresh token is never kept,
+// printed, passed or used, and the file is never written. Claude 2.1.318 renews
+// its sign-in when now + 300000 >= expiresAt (its bundled Ex()), so the helper
+// asks the host's own claude to renew only inside that same window. The task
+// docs read the exported reason list.
+export const VM_CREDENTIAL_REASONS = Object.freeze(['no-signin-file', 'signed-out', 'expired', 'no-claude']);
+const SIGNIN_FILE = '.credentials.json';
+const MAX_SIGNIN_BYTES = 65536;
+const RENEW_MARGIN_MS = 300_000;
+const MAX_DATE_MS = 8.64e15;
+
+/** The whole file, or null: a regular file of at most `max` bytes, opened read-only without following a symlink. */
+function readSmallFile(file, max) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > max) return null;
+    const buffer = Buffer.alloc(max + 1);
+    let size = 0;
+    let n;
+    while (size < buffer.length && (n = fs.readSync(fd, buffer, size, buffer.length - size, size)) > 0) size += n;
+    return size <= max ? buffer.toString('utf8', 0, size) : null;
+  } catch {
+    return null;
+  } finally {
+    try {
+      if (fd !== null) fs.closeSync(fd);
+    } catch {
+      /* already closed */
+    }
+  }
+}
+
+/** { token, expiresAt } from claudeAiOauth, or { reason: 'signed-out' }. Nothing else from the file leaves. */
+function signInFromText(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { reason: 'signed-out' };
+  }
+  const oauth = isPlainObject(parsed) ? parsed.claudeAiOauth : null;
+  if (!isPlainObject(oauth)) return { reason: 'signed-out' };
+  const { accessToken: token, expiresAt, scopes } = oauth;
+  const tokenOk = typeof token === 'string' && VM_TOKEN_RE.test(token);
+  const expiryOk = Number.isSafeInteger(expiresAt) && expiresAt > 0 && expiresAt < MAX_DATE_MS;
+  const scopeOk = Array.isArray(scopes) && scopes.includes('user:inference');
+  return tokenOk && expiryOk && scopeOk ? { token, expiresAt } : { reason: 'signed-out' };
+}
+
+/**
+ * The account's host sign-in, read-only: { token, expiresAt } or { reason }
+ * (no-signin-file | signed-out). configDir's last segment must be the id, so a
+ * wiring mistake never hands out another account's token. Never throws.
+ */
+export function readSignInCredential(configDir, id) {
+  try {
+    if (!ACCOUNT_ID_RE.test(id ?? '') || typeof configDir !== 'string' || !configDir) return { reason: 'no-signin-file' };
+    if (path.basename(path.resolve(configDir)) !== id || !fs.lstatSync(configDir).isDirectory()) return { reason: 'no-signin-file' };
+    const file = path.join(configDir, SIGNIN_FILE);
+    if (!fs.lstatSync(file).isFile()) return { reason: 'no-signin-file' };
+    const text = readSmallFile(file, MAX_SIGNIN_BYTES);
+    return text === null ? { reason: 'no-signin-file' } : signInFromText(text);
+  } catch {
+    return { reason: 'no-signin-file' };
+  }
+}
+
+// The renewal run: one prompt with no tools (the empty last word disables
+// every tool), no MCP servers and no saved session. `--tools` is variadic, so
+// the prompt goes on stdin, never as a positional. Verified 2026-11-05 against
+// an empty CLAUDE_CONFIG_DIR: WSL claude 2.1.318, Windows claude.exe and the
+// npm claude.cmd through cmd.exe all answer 'Not logged in · Please run
+// /login', and a bad flag answers 'error: unknown option'.
+export const RENEW_ARGS = Object.freeze(['-p', '--model', 'haiku', '--no-session-persistence', '--strict-mcp-config', '--tools', '']);
+export const RENEW_PROMPT = 'Reply with OK.';
+
+/** accountEnv without the seat's identity (every MOE_* name) or Moe's mods (CLAUDE_CODE_PLUGIN_DIRS). */
+export function renewEnv(env, dir, platform = process.platform) {
+  const next = accountEnv(env, dir, platform);
+  for (const name of Object.keys(next)) {
+    const key = platform === 'win32' ? name.toUpperCase() : name;
+    if (key.startsWith('MOE_') || key === 'CLAUDE_CODE_PLUGIN_DIRS') delete next[name];
+  }
+  return next;
+}
+
+/**
+ * Runs the host's own claude once under the account's folder, so claude
+ * renews its sign-in under its own cross-process refresh lock, exactly as a
+ * host seat starting on that account would. Moe never refreshes, calls an
+ * OAuth endpoint or writes the file itself. False only when claude cannot be
+ * run (no-claude); any exit or a timeout is true, because the re-read decides.
+ * claude's output is never read. Never throws.
+ */
+export function renewSignIn(configDir, words, env = process.env, platform = process.platform) {
+  const plan = claudeCommand(words, RENEW_ARGS, env, platform);
+  if (!plan) return false;
+  const options = {
+    env: renewEnv(env, configDir, platform),
+    input: RENEW_PROMPT,
+    stdio: ['pipe', 'ignore', 'ignore'],
+    cwd: os.tmpdir(),
+    windowsHide: true,
+    timeout: PROBE_TIMEOUT_MS,
+  };
+  try {
+    const result = plan.shell ? spawnSync(plan.file, { ...options, shell: true }) : spawnSync(plan.file, plan.args, options);
+    return result.error?.code !== 'ENOENT';
+  } catch {
+    return false; // spawnSync refused the arguments: claude never ran
+  }
+}
+
+/**
+ * A VM job credential: { source: 'minted', token } (a stored VM token still
+ * wins), { source: 'signin', token, expiresAt } (the host sign-in's access
+ * token, with more than 5 minutes left, renewed by claude first when needed),
+ * or { reason } from VM_CREDENTIAL_REASONS. Renews at most once. Never throws.
+ */
+export function resolveVmCredential(env, id, configDir, words, { now = Date.now, renew = renewSignIn } = {}) {
+  const minted = readVmCredential(env, id);
+  if (minted !== null) return { source: 'minted', token: minted };
+  const first = readSignInCredential(configDir, id);
+  if (first.reason) return first;
+  if (first.expiresAt - now() > RENEW_MARGIN_MS) return { source: 'signin', ...first };
+  if (!renew(configDir, words, env)) return { reason: 'no-claude' };
+  const after = readSignInCredential(configDir, id);
+  if (after.reason) return after;
+  return after.expiresAt - now() > RENEW_MARGIN_MS ? { source: 'signin', ...after } : { reason: 'expired' };
+}
+
+/** `vm-credential <id> <configDir> <claude...>` and `vm-credential-state`: see the header. */
+function vmCredentialCommand(command, args, env) {
+  const [id, configDir, ...words] = args;
+  if (!id || !configDir || !words[0]) {
+    console.error(USAGE);
+    return 2;
+  }
+  const result = resolveVmCredential(env, id, configDir, words);
+  if (command === 'vm-credential-state') {
+    // Never a credential here: the wrappers log this line.
+    if (result.reason) console.log(`unavailable\t${result.reason}`);
+    else console.log(result.source === 'minted' ? 'minted' : `signin\t${new Date(result.expiresAt).toISOString()}`);
+    return 0;
+  }
+  if (result.reason) {
+    console.error(`MOE_VM_CREDENTIAL_UNAVAILABLE reason=${result.reason}`);
+    return 3;
+  }
+  process.stdout.write(result.token); // stdout only, for a pipe into the VM job runner; never argv
+  return 0;
+}
+
 export function main(argv, env = process.env) {
   const [command, ...args] = argv;
   switch (command) {
@@ -590,11 +766,14 @@ export function main(argv, env = process.env) {
     case 'retry-sec':
       console.log(retryCapSec(env));
       return 0;
+    case 'vm-credential-state':
+      return vmCredentialCommand(command, args, env);
     case 'vm-credential': {
       if (!args[0]) {
         console.error(USAGE);
         return 2;
       }
+      if (args.length > 1) return vmCredentialCommand(command, args, env);
       const token = readVmCredential(env, args[0]);
       if (token === null) {
         console.error('MOE_VM_TOKEN_UNAVAILABLE');

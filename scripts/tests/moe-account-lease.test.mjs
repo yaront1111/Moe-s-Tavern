@@ -7,17 +7,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   PROVIDER_ENV,
+  RENEW_ARGS,
+  RENEW_PROMPT,
   TOKEN_ENV,
+  VM_CREDENTIAL_REASONS,
   accountEnv,
+  claudeCommand,
   findWindowsCommand,
   formatStatus,
   gateLine,
   localConfigDir,
   pickLine,
   probeCommand,
+  readSignInCredential,
+  renewEnv,
+  resolveVmCredential,
   launchInside,
   signInStateOf,
   statuslineSample,
@@ -910,4 +918,344 @@ test('vm-credential: exactly the stored token on stdout, else nothing and exit 3
   for (const id of ids) assert.deepEqual(run(['vm-credential', id]), unavailable, id);
   if (ids.includes('link')) assert.deepEqual(run(['vm-credential', 'acct-1'], linked), unavailable, 'symlinked store');
   assert.deepEqual([run(['vm-credential']).status, run(['vm-credential']).stdout], [2, '']);
+});
+
+// --- vm-credential from the account's host sign-in. Canaries only: no real
+// token, account folder or claude. Every folder is <tmp>/claude-accounts/<id>.
+const ACCESS = `sk-ant-oat01-ACCESSCANARY_${'a1B2'.repeat(6)}`;
+const REFRESH = `sk-ant-ort01-REFRESHCANARY_${'r9Z8'.repeat(6)}`;
+const RENEWED = `sk-ant-oat01-RENEWEDCANARY_${'n5M6'.repeat(6)}`;
+const RENEWED_REFRESH = `sk-ant-ort01-RENEWEDREFRESH_${'q3W4'.repeat(6)}`;
+const CANARIES = [ACCESS, REFRESH, RENEWED, RENEWED_REFRESH];
+const HOUR_MS = 3_600_000;
+
+/** claude's .credentials.json shape, with the fields Moe must never pass on. */
+function signInJson({ token = ACCESS, expiresAt = Date.now() + 2 * HOUR_MS, scopes = ['user:inference', 'user:profile'], refresh = REFRESH } = {}) {
+  return JSON.stringify({
+    claudeAiOauth: {
+      accessToken: token, refreshToken: refresh, expiresAt, refreshTokenExpiresAt: Date.now() + 720 * HOUR_MS, scopes,
+      subscriptionType: 'max', subscriptionTypeSource: 'canary', rateLimitTier: 'canary_tier',
+    },
+  });
+}
+
+/** An account folder holding `content` (string) as .credentials.json, or no file for null. */
+function accountFolder(t, id = 'acct-1', content = signInJson()) {
+  const home = tempDir(t);
+  const configDir = path.join(home, 'claude-accounts', id);
+  fs.mkdirSync(configDir, { recursive: true });
+  const file = path.join(configDir, '.credentials.json');
+  if (content !== null) fs.writeFileSync(file, content);
+  return { home, configDir, file };
+}
+
+/** The file's bytes and mtime, to prove the helper never wrote it. */
+function fileState(file) {
+  try {
+    return { bytes: fs.readFileSync(file, 'utf8'), mtimeMs: fs.statSync(file).mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+function assertNoRefresh(value, label) {
+  const text = JSON.stringify(value ?? null);
+  for (const canary of [REFRESH, RENEWED_REFRESH]) assert.ok(!text.includes(canary), `refresh token leaked: ${label}`);
+}
+
+test('readSignInCredential returns only the access token and its expiry, read-only', (t) => {
+  const expiresAt = Date.now() + 2 * HOUR_MS;
+  const { configDir, file } = accountFolder(t, 'acct-1', signInJson({ expiresAt }));
+  const before = fileState(file);
+  const result = readSignInCredential(configDir, 'acct-1');
+  assert.deepEqual(result, { token: ACCESS, expiresAt });
+  assert.deepEqual(fileState(file), before);
+  assertNoRefresh(result, 'valid');
+  // A trailing separator names the same folder; exactly 64 KiB is still read.
+  assert.deepEqual(readSignInCredential(configDir + path.sep, 'acct-1'), { token: ACCESS, expiresAt });
+  const padded = signInJson({ expiresAt });
+  fs.writeFileSync(file, padded + ' '.repeat(65536 - Buffer.byteLength(padded)));
+  assert.deepEqual(readSignInCredential(configDir, 'acct-1'), { token: ACCESS, expiresAt });
+});
+
+test('readSignInCredential: no-signin-file for every missing, foreign, odd or oversized file', (t) => {
+  const rows = [];
+  const missing = accountFolder(t, 'acct-1', null);
+  fs.rmSync(missing.configDir, { recursive: true });
+  rows.push(['missing folder', missing.configDir, 'acct-1', null]);
+  const empty = accountFolder(t, 'acct-1', null);
+  rows.push(['folder without the file', empty.configDir, 'acct-1', null]);
+  const other = accountFolder(t, 'acct-2');
+  rows.push(["another id's folder", other.configDir, 'acct-1', other.file]);
+  rows.push(['a bad id', other.configDir, '../acct-2', other.file]);
+  rows.push(['no folder', '', 'acct-1', null]);
+  const folderFile = accountFolder(t, 'acct-1', null);
+  fs.mkdirSync(folderFile.file);
+  rows.push(['the file is a directory', folderFile.configDir, 'acct-1', null]);
+  const big = signInJson();
+  const huge = accountFolder(t, 'acct-1', big + ' '.repeat(65537 - Buffer.byteLength(big)));
+  rows.push(['65537 bytes', huge.configDir, 'acct-1', huge.file]);
+  const linked = accountFolder(t, 'acct-1', null);
+  const target = path.join(linked.home, 'elsewhere.json');
+  fs.writeFileSync(target, signInJson());
+  try {
+    fs.symlinkSync(target, linked.file);
+    rows.push(['a symlinked file', linked.configDir, 'acct-1', target]);
+  } catch (error) {
+    if (error.code !== 'EPERM') throw error;
+    t.diagnostic('symlink rows skipped: creating a symlink needs a privilege here');
+  }
+  for (const [label, configDir, id, file] of rows) {
+    const before = file && fileState(file);
+    const result = readSignInCredential(configDir, id);
+    assert.deepEqual(result, { reason: 'no-signin-file' }, label);
+    if (file) assert.deepEqual(fileState(file), before, `${label}: file untouched`);
+  }
+  assert.deepEqual(readSignInCredential(undefined, 'acct-1'), { reason: 'no-signin-file' });
+});
+
+test('readSignInCredential: signed-out for anything but a usable claude.ai sign-in', (t) => {
+  const oauth = JSON.parse(signInJson()).claudeAiOauth;
+  const without = (key) => JSON.stringify({ claudeAiOauth: { ...oauth, [key]: undefined } });
+  const rows = [
+    ['not JSON', '{"claudeAiOauth": {'],
+    ['an empty object', '{}'],
+    ['a JSON array', '[]'],
+    ['claudeAiOauth not an object', JSON.stringify({ claudeAiOauth: [oauth] })],
+    ['no accessToken', without('accessToken')],
+    ['an API key', signInJson({ token: `sk-ant-api03-${'b'.repeat(40)}` })],
+    ['a token with a newline', signInJson({ token: `${ACCESS}\n` })],
+    ['expiresAt as a string', signInJson({ expiresAt: String(Date.now() + HOUR_MS) })],
+    ['expiresAt past a valid Date', signInJson({ expiresAt: 1e16 })],
+    ['expiresAt fractional', signInJson({ expiresAt: Date.now() + 0.5 })],
+    ['no expiresAt', without('expiresAt')],
+    ['scopes without user:inference', signInJson({ scopes: ['user:profile'] })],
+    ['scopes not an array', signInJson({ scopes: 'user:inference' })],
+  ];
+  for (const [label, content] of rows) {
+    const { configDir, file } = accountFolder(t, 'acct-1', content);
+    const before = fileState(file);
+    const result = readSignInCredential(configDir, 'acct-1');
+    assert.deepEqual(result, { reason: 'signed-out' }, label);
+    assert.deepEqual(fileState(file), before, `${label}: file untouched`);
+    assertNoRefresh(result, label);
+  }
+});
+
+const MINTED = `sk-ant-oat01-MINTEDCANARY_${'m7K8'.repeat(6)}`;
+// The seat's identity, Moe's mods and every credential the renewal run must not inherit (values are never logged).
+const SEAT_ENV = {
+  MOE_WORKER_ID: 'worker-canary', CLAUDE_CODE_PLUGIN_DIRS: '/moe/mods', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-not-real',
+  ANTHROPIC_API_KEY: 'sk-not-real', CLAUDE_CODE_USE_BEDROCK: '1',
+};
+
+// A fake claude for the renewal run, separate from fakeClaude (whose log shape
+// signin-state pins). It logs the argv, cwd, stdin, CLAUDE_CONFIG_DIR and only
+// the NAMES of the seat variables it can see. With FAKE_RENEW_TOKEN set it
+// rewrites the sign-in the way claude's refresh does and logs the sha256 of
+// what it wrote.
+function fakeRenewClaude(t) {
+  const dir = tempDir(t);
+  const bin = path.join(dir, 'fake-renew-claude.mjs');
+  const log = path.join(dir, 'renew.log');
+  fs.writeFileSync(bin, [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { createHash } from 'node:crypto';",
+    'const env = process.env;',
+    "const stdin = fs.readFileSync(0, 'utf8');",
+    `const watched = ${JSON.stringify(Object.keys(SEAT_ENV))};`,
+    'const seen = Object.keys(env).filter((name) => /^MOE_/i.test(name) || watched.includes(name.toUpperCase()));',
+    'let wrote = null;',
+    'if (env.FAKE_RENEW_TOKEN) {',
+    "  const text = JSON.stringify({ claudeAiOauth: { accessToken: env.FAKE_RENEW_TOKEN, refreshToken: env.FAKE_RENEW_REFRESH,",
+    "    expiresAt: Date.now() + Number(env.FAKE_RENEW_LEFT_MS || 8 * 3600000), scopes: ['user:inference', 'user:profile'], subscriptionType: 'max' } });",
+    "  const file = path.join(env.CLAUDE_CONFIG_DIR, '.credentials.json');",
+    "  fs.writeFileSync(file + '.tmp', text);",
+    '  fs.renameSync(file + \'.tmp\', file);',
+    "  wrote = createHash('sha256').update(text).digest('hex');",
+    '}',
+    'fs.appendFileSync(env.FAKE_RENEW_LOG, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), stdin,',
+    "  configDir: env.CLAUDE_CONFIG_DIR ?? null, seen, wrote }) + '\\n');",
+    'process.exit(Number(env.FAKE_EXIT ?? 0));',
+  ].join('\n'));
+  const entries = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []);
+  return { bin, log, entries };
+}
+
+/** Runs vm-credential / vm-credential-state against a temp accounts home (never the real ~/.moe). */
+function vmRun(command, account, words, extra = {}) {
+  const env = cleanEnv({ MOE_ACCOUNTS_FILE: path.join(account.home, 'claude-accounts.json'), ...SEAT_ENV, ...extra });
+  const { status, stdout, stderr } = helper([command, 'acct-1', account.configDir, ...words], { env });
+  return { status, stdout, stderr };
+}
+
+/** No credential in state output or either command's stderr, and never a refresh token in fetch stdout. */
+function assertNoCredential(label, fetch, state) {
+  for (const [name, text] of [['state stdout', state?.stdout], ['state stderr', state?.stderr], ['fetch stderr', fetch?.stderr]]) {
+    for (const canary of [...CANARIES, MINTED]) assert.ok(!String(text ?? '').includes(canary), `${label}: a credential in ${name}`);
+  }
+  assertNoRefresh(fetch?.stdout ?? '', `${label}: fetch stdout`);
+}
+
+const sha256 = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const realDir = (dir) => fs.realpathSync.native(dir);
+
+test('VM_CREDENTIAL_REASONS is the documented list', () => {
+  assert.deepEqual([...VM_CREDENTIAL_REASONS], ['no-signin-file', 'signed-out', 'expired', 'no-claude']);
+  assert.ok(Object.isFrozen(VM_CREDENTIAL_REASONS));
+});
+
+test('claudeCommand appends the tail under probeCommand rules, quoting the empty --tools word for cmd.exe', () => {
+  const exists = windowsFiles('C:\\n\\claude.exe', 'C:\\Program Files\\n\\claude.cmd');
+  assert.deepEqual(claudeCommand(['claude', '-x'], RENEW_ARGS, {}, 'linux', exists), { file: 'claude', args: ['-x', ...RENEW_ARGS], shell: false });
+  assert.deepEqual(claudeCommand(['claude'], RENEW_ARGS, { PATH: 'C:\\n' }, 'win32', exists), { file: 'C:\\n\\claude.EXE', args: [...RENEW_ARGS], shell: false });
+  assert.deepEqual(claudeCommand(['claude'], RENEW_ARGS, { PATH: 'C:\\Program Files\\n' }, 'win32', exists), {
+    file: '"C:\\Program Files\\n\\claude.CMD" -p --model haiku --no-session-persistence --strict-mcp-config --tools ""', args: [], shell: true,
+  });
+  assert.equal(claudeCommand(['claude', '%TEMP%'], RENEW_ARGS, { PATH: 'C:\\Program Files\\n' }, 'win32', exists), null);
+  assert.equal(claudeCommand(['/nowhere/claude.js'], RENEW_ARGS, {}, 'linux', exists), null);
+  assert.deepEqual(RENEW_ARGS.slice(-2), ['--tools', '']);
+});
+
+test('renewEnv drops the seat identity, Moe mods and every login override', () => {
+  const parent = { PATH: '/bin', MOE_WORKER_ID: 'w', MOE_SESSION_ID: 's', CLAUDE_CODE_PLUGIN_DIRS: '/mods', ANTHROPIC_API_KEY: 'k',
+    CLAUDE_CODE_USE_VERTEX: '1', CLAUDE_CONFIG_DIR: '/old', CLAUDE_CODE_OTHER: 'keep', moe_lower: 'keep' };
+  assert.deepEqual(renewEnv(parent, '/acct', 'linux'), { PATH: '/bin', CLAUDE_CODE_OTHER: 'keep', moe_lower: 'keep', CLAUDE_CONFIG_DIR: '/acct' });
+  assert.equal(parent.MOE_WORKER_ID, 'w');
+  assert.deepEqual(renewEnv({ Path: 'p', Moe_Worker_Id: 'w', claude_code_plugin_dirs: 'm', claude_code_oauth_token: 'o' }, 'C:\\acct', 'win32'),
+    { Path: 'p', CLAUDE_CONFIG_DIR: 'C:\\acct' });
+});
+
+test('vm-credential: a stored minted token wins over the sign-in, and no claude runs', (t) => {
+  const fake = fakeRenewClaude(t);
+  const account = accountFolder(t, 'acct-1', 'not json');
+  fs.mkdirSync(path.join(account.home, 'claude-vm-tokens'));
+  fs.writeFileSync(path.join(account.home, 'claude-vm-tokens', 'acct-1.token'), MINTED);
+  const fetch = vmRun('vm-credential', account, [fake.bin], { FAKE_RENEW_LOG: fake.log });
+  const state = vmRun('vm-credential-state', account, [fake.bin], { FAKE_RENEW_LOG: fake.log });
+  assert.deepEqual(fetch, { status: 0, stdout: MINTED, stderr: '' });
+  assert.deepEqual(state, { status: 0, stdout: 'minted\n', stderr: '' });
+  assert.deepEqual(fake.entries(), []);
+  assertNoCredential('minted', fetch, state);
+});
+
+test('vm-credential: a sign-in with more than 5 minutes left is printed as is, read-only, without running claude', (t) => {
+  const fake = fakeRenewClaude(t);
+  const expiresAt = Date.now() + 2 * HOUR_MS;
+  const account = accountFolder(t, 'acct-1', signInJson({ expiresAt }));
+  const before = fileState(account.file);
+  const fetch = vmRun('vm-credential', account, [fake.bin], { FAKE_RENEW_LOG: fake.log });
+  const state = vmRun('vm-credential-state', account, [fake.bin], { FAKE_RENEW_LOG: fake.log });
+  assert.deepEqual(fetch, { status: 0, stdout: ACCESS, stderr: '' });
+  assert.deepEqual(state, { status: 0, stdout: `signin\t${new Date(expiresAt).toISOString()}\n`, stderr: '' });
+  assert.deepEqual(fake.entries(), []);
+  assert.deepEqual(fileState(account.file), before);
+  assertNoCredential('valid', fetch, state);
+});
+
+test('vm-credential: 5 minutes or less left renews through exactly one scrubbed host claude run, then re-reads', (t) => {
+  for (const [label, left, command] of [['60 s left', 60_000, 'vm-credential'], ['already expired', -HOUR_MS, 'vm-credential'],
+    ['60 s left, state first', 60_000, 'vm-credential-state']]) {
+    const fake = fakeRenewClaude(t);
+    const account = accountFolder(t, 'acct-1', signInJson({ expiresAt: Date.now() + left }));
+    const extra = { FAKE_RENEW_LOG: fake.log, FAKE_RENEW_TOKEN: RENEWED, FAKE_RENEW_REFRESH: RENEWED_REFRESH };
+    const first = vmRun(command, account, [fake.bin, '--verbose'], extra);
+    const calls = fake.entries();
+    assert.equal(calls.length, 1, label);
+    const [call] = calls;
+    assert.deepEqual(call.args, ['--verbose', ...RENEW_ARGS], label);
+    assert.equal(call.stdin, RENEW_PROMPT, label);
+    assert.equal(realDir(call.cwd), realDir(os.tmpdir()), label);
+    assert.ok(launchInside(account.home, call.cwd) === false, `${label}: cwd outside the account folder`);
+    assert.equal(call.configDir, account.configDir, label);
+    assert.deepEqual(call.seen, [], `${label}: the run saw a seat or credential variable`);
+    assert.equal(sha256(account.file), call.wrote, `${label}: the file is exactly claude's own write`);
+    const renewedAt = JSON.parse(fs.readFileSync(account.file, 'utf8')).claudeAiOauth.expiresAt;
+    const state = vmRun('vm-credential-state', account, [fake.bin], extra);
+    const fetch = command === 'vm-credential' ? first : vmRun('vm-credential', account, [fake.bin], extra);
+    if (command === 'vm-credential-state') assert.deepEqual(first, state, label);
+    assert.deepEqual(fetch, { status: 0, stdout: RENEWED, stderr: '' }, label);
+    assert.deepEqual(state, { status: 0, stdout: `signin\t${new Date(renewedAt).toISOString()}\n`, stderr: '' }, label);
+    assert.equal(fake.entries().length, 1, `${label}: no second run once renewed`);
+    assertNoCredential(label, fetch, state);
+  }
+});
+
+test('vm-credential: every failure cause exits 3 with one coded line, and state prints it', (t) => {
+  const missingClaude = path.join(tempDir(t), 'no-such-claude.mjs');
+  const rows = [];
+  const noFile = accountFolder(t, 'acct-1', null);
+  rows.push(['no-signin-file', noFile, {}]);
+  rows.push(['signed-out', accountFolder(t, 'acct-1', signInJson({ scopes: ['user:profile'] })), {}]);
+  rows.push(['expired', accountFolder(t, 'acct-1', signInJson({ expiresAt: Date.now() + 60_000 })), { FAKE_EXIT: '1' }, 'claude fails, writes nothing']);
+  rows.push(['expired', accountFolder(t, 'acct-1', signInJson({ expiresAt: Date.now() + 60_000 })),
+    { FAKE_RENEW_TOKEN: RENEWED, FAKE_RENEW_REFRESH: RENEWED_REFRESH, FAKE_RENEW_LEFT_MS: '120000' }, 'claude writes 2 minutes']);
+  rows.push(['no-claude', accountFolder(t, 'acct-1', signInJson({ expiresAt: Date.now() + 60_000 })), {}, 'a missing .js claude', missingClaude]);
+  for (const [reason, account, extra, note = reason, bin] of rows) {
+    const fake = fakeRenewClaude(t);
+    const words = [bin ?? fake.bin];
+    const env = { FAKE_RENEW_LOG: fake.log, ...extra };
+    const before = extra.FAKE_RENEW_TOKEN ? null : fileState(account.file);
+    const fetch = vmRun('vm-credential', account, words, env);
+    const state = vmRun('vm-credential-state', account, words, env);
+    assert.deepEqual(fetch, { status: 3, stdout: '', stderr: `MOE_VM_CREDENTIAL_UNAVAILABLE reason=${reason}\n` }, note);
+    assert.deepEqual(state, { status: 0, stdout: `unavailable\t${reason}\n`, stderr: '' }, note);
+    const renews = reason === 'expired' ? 2 : 0; // each command renews once, then reads once
+    assert.equal(fake.entries().length, renews, note);
+    if (before) assert.deepEqual(fileState(account.file), before, `${note}: file untouched`);
+    assertNoCredential(note, fetch, state);
+  }
+});
+
+test('resolveVmCredential renews at exactly 300000 ms left, never at 300001, and at most once', (t) => {
+  const expiresAt = Date.now() + 2 * HOUR_MS;
+  const account = accountFolder(t, 'acct-1', signInJson({ expiresAt }));
+  const env = { MOE_ACCOUNTS_FILE: path.join(account.home, 'claude-accounts.json') };
+  const resolve = (left, result = true) => {
+    const calls = [];
+    const renew = (...args) => {
+      calls.push(args);
+      return result;
+    };
+    const out = resolveVmCredential(env, 'acct-1', account.configDir, ['claude'], { now: () => expiresAt - left, renew });
+    return { out, calls };
+  };
+  assert.deepEqual(resolve(300_001), { out: { source: 'signin', token: ACCESS, expiresAt }, calls: [] });
+  const edge = resolve(300_000);
+  assert.deepEqual(edge.out, { reason: 'expired' });
+  assert.deepEqual(edge.calls, [[account.configDir, ['claude'], env]]);
+  assert.deepEqual(resolve(300_000, false).out, { reason: 'no-claude' });
+  assert.deepEqual(resolve(-1).calls.length, 1);
+});
+
+test('vm-credential and vm-credential-state refuse missing arguments with usage, exit 2', (t) => {
+  const account = accountFolder(t);
+  const env = cleanEnv({ MOE_ACCOUNTS_FILE: path.join(account.home, 'claude-accounts.json') });
+  for (const args of [['vm-credential', 'acct-1', account.configDir], ['vm-credential-state'], ['vm-credential-state', 'acct-1'],
+    ['vm-credential-state', 'acct-1', account.configDir], ['vm-credential', '', account.configDir, 'claude']]) {
+    const out = helper(args, { env });
+    assert.equal(out.status, 2, args.join(' '));
+    assert.equal(out.stdout, '', args.join(' '));
+    assert.match(out.stderr, /^usage: .*vm-credential-state <id> <configDir> <claude command\.\.\.>/, args.join(' '));
+  }
+});
+
+test('vm-credential renews through an npm-style claude.cmd, keeping the empty --tools word', { skip: process.platform !== 'win32' && 'Windows only' }, (t) => {
+  const fake = fakeRenewClaude(t);
+  const bin = path.join(tempDir(t), 'npm global');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'claude.cmd'), `@echo off\r\n"${process.execPath}" "${fake.bin}" %*\r\n`);
+  const account = accountFolder(t, 'acct-1', signInJson({ expiresAt: Date.now() + 60_000 }));
+  const extra = { FAKE_RENEW_LOG: fake.log, FAKE_RENEW_TOKEN: RENEWED, FAKE_RENEW_REFRESH: RENEWED_REFRESH,
+    PATH: `${bin};${process.env.SystemRoot}\\System32` };
+  const fetch = vmRun('vm-credential', account, ['claude'], extra);
+  assert.deepEqual(fetch, { status: 0, stdout: RENEWED, stderr: '' });
+  const calls = fake.entries();
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, [...RENEW_ARGS]);
+  assert.deepEqual(calls[0].args.slice(-2), ['--tools', '']);
+  assert.equal(calls[0].stdin, RENEW_PROMPT);
+  assert.deepEqual(calls[0].seen, []);
+  assertNoCredential('claude.cmd', fetch, null);
 });

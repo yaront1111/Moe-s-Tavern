@@ -69,6 +69,29 @@ test('registry.ts header and accountConfigDir comments state the exception', () 
   assert.match(doc[0], /interactive seat/);
 });
 
+test('the read-only .credentials.json exception for vm-credential is stated wherever the folder rule is', () => {
+  const comment = (text) => text.replace(/^\s*\/\/ ?/gm, '').replace(/\s+/g, ' ');
+  const helperSrc = read('scripts/moe-account-lease.mjs');
+  const registrySrc = read('packages/moe-daemon/src/accounts/registry.ts');
+  const places = {
+    'docs/SCHEMA.md claude-accounts entry': slice(read('docs/SCHEMA.md'), '- `claude-accounts/<id>/`', '- '),
+    'registry.ts header': comment(registrySrc.slice(0, registrySrc.indexOf('import fs'))),
+    'moe-account-lease.mjs header': comment(helperSrc.slice(0, helperSrc.indexOf('import fs'))),
+  };
+  for (const [where, text] of Object.entries(places)) {
+    assert.match(text, /\.credentials\.json/, where);
+    assert.match(text, /vm-credential/, where);
+    assert.match(text, /read-only/, where);
+    assert.match(text, /refresh token/, where);
+    assert.doesNotMatch(text, /one exception/i, `${where}: the folder rule now has two exceptions`);
+    assert.doesNotMatch(text, /\.credentials\.json (and every other file in the folder )?(are|is) never opened/, where);
+  }
+  const doc = registrySrc.match(/\/\*\*[^\n]*\*\/\nexport function accountConfigDir/);
+  assert.ok(doc, 'accountConfigDir doc comment not found');
+  assert.match(doc[0], /\.credentials\.json read-only/);
+  assert.match(doc[0], /never the refresh token/);
+});
+
 test('daemon-only statements stay absolute', () => {
   for (const rel of ['docs/ARCHITECTURE.md', 'packages/moe-daemon/CLAUDE.md']) {
     assert.match(read(rel), /The daemon never runs claude and never opens a file inside a Claude config folder/, rel);
