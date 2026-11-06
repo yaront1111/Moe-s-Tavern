@@ -49,20 +49,31 @@
     {
       "stepId": "step-3",
       "description": "Verification — acquire the exact shared resource `jetbrains-gradle` via Moe before the run and release it in finally, including on failure. If unavailable, use the resource wait/block workflow, never start a competing build. From the task root run exactly: timeout 1200s bash -c 'cd moe-jetbrains && ./gradlew test --tests \"com.moe.util.TerminalAgentLauncherTest\" --tests \"com.moe.util.VerifiedLocalLaunchTest\" && ./gradlew test --rerun-tasks'. This is one gate: focused launcher/verified-local tests FIRST, then the full plugin regression as required by DoD and the enum/shared surface. --rerun-tasks makes the final full test execution fresh; record counts from build/test-results/test XML, exit code, output tail and elapsed wall time for complete_task. Gate must finish in <=20 minutes. In-place Gradle is allowed under that lease; an isolated exact-tree/commit snapshot is also allowed. If plugin preparation complains about daemon/proxy dist freshness, prepare dependencies only in an external snapshot, never run npm build/clean/install or package npm tests in the live checkout. Error handling for a red run: fix the declared implementation/test defect, rerun this same gate, and report unrelated environment failures rather than claiming a pass. Do not skip the full plugin test or run a real Copilot/sign-in session here.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-06T06:07:35.910Z"
+      "note": "Gate green under the jetbrains-gradle lease (released). WSL has no JDK, so the Windows equivalent ran via cmd.exe + gradlew.bat in this worktree: focused TerminalAgentLauncherTest (68 tests, 1 pre-existing A7 skip) + VerifiedLocalLaunchTest (8), then the full `test --rerun-tasks`: 51 suites, 745 tests, 6 skipped, 0 failures, 0 errors, all XML fresh; ~46s total wall. Mutant (COPILOT arms set to -CodexExec / --interactive) was killed by 'a headless copilot seat is the generic negative interactive override...'; restored and the gate re-run fresh.",
+      "startedAt": "2026-11-06T06:07:35.910Z",
+      "completedAt": "2026-11-06T06:11:23.317Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review — load adversarial-self-review and inspect this task's diff: does CUSTOM stay last, do settings and popup inherit exactly one Copilot entry, can the old default else arm accidentally still pass -CodexExec, is the Kotlin dollar sign escaped, does a test mistake the negative PS switch for the positive one, and do bash/WSL/Windows quoting paths agree? Confirm protected host acceptance does NOT widen the VM allowlist or custom-command acceptance; task routing/role polarity is delegated to the wrapper rather than duplicated here. Confirm both listing locations and localization resources are asserted, existing providers retain behavior, no generated files or live dist were edited, and no leases remain held. Address defects and rerun the single gate if changed; complete_task with fresh evidence. The existing Copilot final row owns the docs and signed-in integration sweep; no manual Git writes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+      ],
+      "note": "Self-review of the 4-file diff: (1) CUSTOM stays last and COPILOT is directly before it, asserted by index; popup and MoeSettingsDialog both iterate AgentProvider.entries (verified in MoeToolWindowPanel:235 and MoeSettingsDialog:33), so each shows exactly one Copilot entry via the moe.panel.provider.copilot key. (2) Both codexExec `when` arms have an explicit COPILOT branch, so COPILOT can never reach the historical else -CodexExec arm; a mutant sending it to -CodexExec / --interactive was killed by the headless-override test, then restored and the gate re-run green. (3) `$false` is escaped in the Kotlin string and the tests decode the typed line and compare whole tokens, so -Interactive:$false is never read as the positive -Interactive. (4) VerifiedLocalLaunch.kt is untouched; VM_AGENT_COMMANDS asserted == {claude, codex} and agentRefusal(\"copilot\") refuses; the protected host allowlist only gained the exact bare name, and copilot --flag, paths, .exe and case variants are asserted refused. (5) shouldLaunchClaudeInteractive is untouched (CLAUDE-only); no role polarity duplicated here. (6) No generated files, dist, or docs touched; the lease is released. Theoretical only: buildCommandForTest gained a defaulted trailing codexExec param (test hook, backward compatible).",
+      "startedAt": "2026-11-06T06:11:24.248Z",
+      "completedAt": "2026-11-06T06:11:46.374Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-2e281ccb",
+  "status": "REVIEW",
+  "assignedWorkerId": "qa-a196fc69",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -77,12 +88,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:34.737Z",
-  "updatedAt": "2026-11-06T06:07:35.910Z",
+  "updatedAt": "2026-11-06T06:13:49.650Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:08:40.745Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
@@ -94,7 +105,9 @@
   "codexModel": "gpt-6.1-sol",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3",
+    "step-4"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:10:16.943Z",
@@ -152,5 +165,46 @@
   },
   "planApprovedAt": "2026-11-05T22:10:16.976Z",
   "approvedPlanRevision": 1,
-  "workStartedAt": "2026-11-06T06:05:11.697Z"
+  "workStartedAt": "2026-11-06T06:05:11.697Z",
+  "reviewStartedAt": "2026-11-06T06:12:04.019Z",
+  "verification": {
+    "command": "cmd.exe /d /c 'set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-d609eae395894045ad025c65bc114ee0\\moe-jetbrains&& .\\gradlew.bat test --tests com.moe.util.TerminalAgentLauncherTest --tests com.moe.util.VerifiedLocalLaunchTest && .\\gradlew.bat test --rerun-tasks'  (Windows equivalent of the POSIX checkRef: WSL has no JDK)",
+    "exitCode": 0,
+    "outputTail": "focused: BUILD SUCCESSFUL in 5s (TerminalAgentLauncherTest 68 tests, 0 failures, 1 skipped = pre-existing A7 assume; VerifiedLocalLaunchTest 8 tests, 0 failures). full: > Task :test ... BUILD SUCCESSFUL in 40s, 11 actionable tasks: 11 executed. build/test-results/test XML: 51 suites, 745 tests, 6 skipped, 0 failures, 0 errors, none older than 5 min. Total wall ~46s.",
+    "reportedAt": "2026-11-06T06:12:04.019Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+  ],
+  "completionSummary": "JetBrains now offers and launches GitHub Copilot CLI. Added AgentProvider.COPILOT(\"Copilot\",\"copilot\") directly before CUSTOM, so the Agents popup, the MoeSettingsDialog combo and the protected host allowlist all inherit it from AgentProvider.entries. The codexExec override gets explicit COPILOT arms in both builders: ' -Interactive:$false' (PowerShell) and ' --no-interactive' (bash/WSL), never -CodexExec or an exec flag. shouldLaunchClaudeInteractive stays CLAUDE-only; VerifiedLocalLaunch is untouched (VM_AGENT_COMMANDS still claude/codex, a copilot VM seat is still refused). Added moe.panel.provider.copilot=Copilot, copilot in moe.settings.agentCommandHint, and GitHub Copilot CLI in plugin.xml's description line and Your-choice-of-CLI feature line. buildCommandForTest gained a defaulted trailing codexExec param so the tests drive all four routes. Tests (TerminalAgentLauncherTest, 68 tests/0 failures/1 pre-existing A7 skip; VerifiedLocalLaunchTest 8/0): enum order and exact fromCommand; bundle label, every enum entry labelled, hint text; plugin.xml asserted per line; copilot default and headless flag lists as exact tokens for 4 roles x 4 routes; claude and custom still -CodexExec/--codex-exec; quoting with spaces and apostrophes on 4 routes; protected table plus refusals (copilot --flag, paths, .exe, case); VM refusal table. Full gate: 51 suites, 745 tests, 6 skipped, 0 failures, 0 errors, fresh XML, ~46 s wall. A mutant mapping COPILOT to -CodexExec/--interactive was killed by the headless-override test. WSL has no JDK, so the gate ran as the Windows equivalent via cmd.exe + gradlew.bat in the task worktree under the jetbrains-gradle lease (released).",
+  "commits": [
+    {
+      "sha": "1f440e6d618b50ecc2e9c64fd88d80d89ed6a0a2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2e281ccb@2026-11-06T06:03:44Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "recordedBy": "worker-2e281ccb",
+      "recordedAt": "2026-11-06T06:13:43.396Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-2e281ccb@2026-11-06T06:03:44Z",
+    "at": "2026-11-06T06:13:43.396Z"
+  }
 }

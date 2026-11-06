@@ -15,6 +15,26 @@
     {
       "stepId": "step-1",
       "description": "Goal/architecture: extend the landed Copilot launch producer task-ab323f85, not a parallel launcher. Read its actual launch arrays, private-temp cleanup and recording fake first; at planning time that dependency is not landed. Use test-driven-development and extend the existing vmr_run / Invoke-VmrRow cases and fake in these four files. Add one per-iteration Copilot option array reused by headless/TUI/probe. Bash resolution is `COPILOT_MODEL=\"${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-}}\"; COPILOT_EFFORT=\"${MOE_COPILOT_EFFORT:-${TASK_LAUNCH_EFFORT:-}}\"`; initialize the new option array empty every iteration and append `--model \"$COPILOT_MODEL\"` and `--reasoning-effort \"$COPILOT_EFFORT\"` only when nonempty. PowerShell uses grok's verified explicit-source order ($Model, then $projConfig.settings.models.$Role, then env:MOE_COPILOT_MODEL) and env:MOE_COPILOT_EFFORT then $taskLaunchEffort, otherwise no flag. Preserve operator-pinned values verbatim; no default max, no conversion to launch.codex, no implicit $resolvedModel/RESOLVED_MODEL or task launch.model. Append --model, not grok's -m. Keep flags on both TUI and headless argv and their printed command banners without touching other providers or the shared launch-hint parser.\nTest table: extend the recording fake to distinguish probe (`--help`), version (`--version`) and real headless/TUI calls in an append-only per-test call log rather than allowing a probe to overwrite the launch record. Use existing FAKE_CLAIM_LAUNCH with tier:'standard', effort:'xhigh', model:'claude-opus-5-5' and a deliberately different launch.codex.effort to prove the top-level effort wins while the model is omitted. Cover empty env + no hint (both flags absent), MOE_COPILOT_EFFORT=max overriding routed xhigh, explicit none/minimal being preserved, and CLI model > settings model > env model > absent. Combine cases rather than a full Cartesian product; cover both headless and architect TUI and keep existing stdin/MCP/role assertions intact. Use VMR_SETUP / $script:VmrSetup for project model settings; no fake-proxy edit needed. Assert exact flag/value token pairs and count one occurrence; assert no implicit Claude fallback. A second launch with no hint must not inherit the first launch's effort; reuse the existing taskless/claim-limited fixtures, leaving fake-proxy source untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added per-iteration explicit model/effort options to both launcher paths, append-only probe/version/run recording, paired routing regressions. Copilot-only Bash slice passed (existing CP rows + route/env/settings/CLI/TUI precedence). FAKE_CLAIM_LAUNCH is actually resume-only, so fixtures use FAKE_CLAIM_MODE=resume + WORKING; no proxy change. Two-launch no-stale-hint coverage will share step 3's terminating auth fixture. Full exact gate will be run after all edits; an exploratory baseline overlapped harness edits and is not valid verification.",
+      "startedAt": "2026-11-06T06:05:15.219Z",
+      "completedAt": "2026-11-06T06:11:20.907Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the Copilot-only once-per-wrapper headless argv probe, using the exact constructed launch array INCLUDING optional model/effort, log-dir once step 3 adds it, command prefix args and per-launch MCP config, plus --help. Introduce a process-lifetime guard (e.g. COPILOT_ARGV_PROBED / $script:CopilotArgvProbed), outside iteration resets; MOE_DISABLE_ARGV_PROBE=1 bypasses the probe. Bash launches through agent_git_exec with `< /dev/null` and captures combined output/exit without set -e aborting. PowerShell reuses the producer's real stdin transport in its explicit empty-input/closed-stdin mode; do not assume `$null | Invoke-MoeGuardedCommand` forwards input, because the current generic helper calls only `& $Command @args`. Preserve its guarded environment and .cmd handling, restore $ErrorActionPreference and any encoding changes in finally; native stderr under PS 5.1 must not throw before capturing the code. No TUI probe.\nClassification condition is `exit != 0 AND /unexpected argument|invalid value|unrecognized/i`. Zero with such text and unrelated nonzero errors are NOT parser rejection and must proceed to the normal run. First matching/error line and first --version line only; flatten CR/LF, keep a fixed 'unknown' fallback if version cannot be read, do not dump full help. Emit exactly one `[ERROR] MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <first error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check.` with identical fixed prose. Send one @governors escalation via moe_rpc chat_send / Invoke-MoeRpc to the discovered general channel (fallback channel 'general'), swallowing only the escalation transport error so failure to page never permits launch. Stop heartbeat and exit 1; ps1 sets $script:MoeExitStatus=1, leaving normal finally/deregister/rescue intact. Do not directly release the task or call launch-outage/backoff.\nTests: table-drive each rejection phrase; fake --version returns a stable test version. Assert exit 1, exactly one coded console line, one matching chat_send (not all unrelated chat), deregistration, no real launch, and the expected version/error text. The fake must record zero stdin bytes for --help even when the wrapper's own stdin has a sentinel, and must see every optional arg/prefix/MCP flag expected by the real run. Add skip=1 (zero probe calls, real launch happens), successful-help then two launches (one probe total), and unrelated nonzero probe output (real run occurs, no rejection line). All child executions bounded; retain existing non-Copilot cases.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
@@ -22,18 +42,7 @@
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-06T06:05:15.219Z"
-    },
-    {
-      "stepId": "step-2",
-      "description": "Add the Copilot-only once-per-wrapper headless argv probe, using the exact constructed launch array INCLUDING optional model/effort, log-dir once step 3 adds it, command prefix args and per-launch MCP config, plus --help. Introduce a process-lifetime guard (e.g. COPILOT_ARGV_PROBED / $script:CopilotArgvProbed), outside iteration resets; MOE_DISABLE_ARGV_PROBE=1 bypasses the probe. Bash launches through agent_git_exec with `< /dev/null` and captures combined output/exit without set -e aborting. PowerShell reuses the producer's real stdin transport in its explicit empty-input/closed-stdin mode; do not assume `$null | Invoke-MoeGuardedCommand` forwards input, because the current generic helper calls only `& $Command @args`. Preserve its guarded environment and .cmd handling, restore $ErrorActionPreference and any encoding changes in finally; native stderr under PS 5.1 must not throw before capturing the code. No TUI probe.\nClassification condition is `exit != 0 AND /unexpected argument|invalid value|unrecognized/i`. Zero with such text and unrelated nonzero errors are NOT parser rejection and must proceed to the normal run. First matching/error line and first --version line only; flatten CR/LF, keep a fixed 'unknown' fallback if version cannot be read, do not dump full help. Emit exactly one `[ERROR] MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <first error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check.` with identical fixed prose. Send one @governors escalation via moe_rpc chat_send / Invoke-MoeRpc to the discovered general channel (fallback channel 'general'), swallowing only the escalation transport error so failure to page never permits launch. Stop heartbeat and exit 1; ps1 sets $script:MoeExitStatus=1, leaving normal finally/deregister/rescue intact. Do not directly release the task or call launch-outage/backoff.\nTests: table-drive each rejection phrase; fake --version returns a stable test version. Assert exit 1, exactly one coded console line, one matching chat_send (not all unrelated chat), deregistration, no real launch, and the expected version/error text. The fake must record zero stdin bytes for --help even when the wrapper's own stdin has a sentinel, and must see every optional arg/prefix/MCP flag expected by the real run. Add skip=1 (zero probe calls, real launch happens), successful-help then two launches (one probe total), and unrelated nonzero probe output (real run occurs, no rejection line). All child executions bounded; retain existing non-Copilot cases.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1",
-        "scripts/tests/postflight-vm-route.sh",
-        "scripts/tests/postflight-vm-route.ps1"
-      ]
+      "startedAt": "2026-11-06T06:11:20.939Z"
     },
     {
       "stepId": "step-3",
@@ -83,11 +92,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T22:04:03.921Z",
-  "updatedAt": "2026-11-06T06:05:15.219Z",
+  "updatedAt": "2026-11-06T06:11:20.939Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:06:18.193Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
@@ -99,7 +109,9 @@
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:08:26.389Z",
   "executionContract": {
