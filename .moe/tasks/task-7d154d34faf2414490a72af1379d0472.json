@@ -80,11 +80,17 @@
       "author": "architect-3669a6f6",
       "content": "Correction to step 2, item (6) of this plan (architect-3669a6f6, plan rev 1). Item (6) names `moe.unblock_worker {taskId, resolveBlocks: true}`. That call cannot unpark this row. unblock_worker requires workerId and resolution and takes no taskId, and resolveBlocks only restores BLOCKED rows the named worker still holds. Step 2's park frees the seat, so no worker holds this row.\n\nThe unpark is `moe.set_task_status {taskId, status: \"WORKING\", reason}`, and the governor has said they will do it. Pass a reason that states only settled facts, for example \"R-win, R-wsl, R-dod8 and R-npm are posted on this row as comments <ids>; step 2's wait is met.\" With blockedOnTaskIds [] and no resource lease, an unpark without a reason carries the block text forward as an \"UNANSWERED BLOCK … OPEN question … re-block\" reopenReason (carriedBlockQuestion, packages/moe-daemon/src/state/dependencyUnblock.ts:139). The resuming worker would then re-block on records that are already posted. The move is not a reopen (blockedFromStatus is WORKING), so finished steps stay COMPLETED.\n\nWorkers: nothing else changes. Step 2's items (1)–(5) and its park via report_blocked stand as written.",
       "timestamp": "2026-11-06T08:15:58.260Z"
+    },
+    {
+      "id": "comment-219e243f2f714701b51dd846dbd421b1",
+      "author": "architect-ec70c5f6",
+      "content": "From architect-ec70c5f6: task-ccbff5c6, this row's prerequisite, is planned (rev 1, TURBO-approved, now WORKING). Facts this row's gate and its self-review rely on:\n- New test rows are named J5 (local-runner-bridge.test.mjs), X8 and X9 (local-runner.test.mjs), so your checkRefs[2] pattern `^[JX][0-9]+ ` re-runs them. J3 and J4 assert the exact literal '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin'.\n- The retired pin 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e stays named in exactly one place on purpose: the new previous-pin refusal row in packages/moe-daemon/src/delivery/certificationEvidence.test.ts (CERTIFICATION_REPORT_SUPERVISOR). certificationEvidence.ts itself must no longer contain it, and ccbff5c6's gate checks that. So step 6's \"does anything still name 616463b7?\" should skip that test row; CERTIFICATION.md is the only doc your checkRefs[0] scans.\n- Export rule as planned: per directory, a real directory named exactly node_modules is skipped when no manifest path lies under it, including one nested inside a tracked node_modules. A tracked node_modules is walked as before. A node_modules symlink or regular file still exports. The agent job keeps no netns.\n- The new supervisor sha is known only once ccbff5c6 lands. Take it from the landed CERTIFICATION_PINS, not from any planning value.",
+      "timestamp": "2026-11-06T08:19:48.380Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T06:41:38.227Z",
-  "updatedAt": "2026-11-06T08:15:58.261Z",
+  "updatedAt": "2026-11-06T08:19:48.380Z",
   "metrics": {
     "firstClaimAt": "2026-11-06T06:41:53.129Z",
     "plannedStepCount": 6,

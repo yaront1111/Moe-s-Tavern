@@ -11,10 +11,77 @@
     "The snapshot gate (the four local-runner test files and certificationEvidence.test.ts) passes fresh, and its output is the complete_task evidence."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-ec70c5f6",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1: a worker or QA agent job gets the pinned Node toolchain first on its PATH. Reference bytes, validated at planning: mem:task-task-ccbff5c686c44501a376539bc9e54804-prototype (re-wrap and finish its comments as noted there). Edit with this seat's own editor (Edit on Claude, apply_patch on a codex exec seat), never a shell write.\n\nSUPERVISOR, scripts/local-runner/guest-supervisor.py:\n- start_job (:986): append the keyword `toolchain=TOOLCHAIN` after `peer_uid=peer_uid`. It is a Python-only seam like check_job's (:1401). main() (:1722) already forwards **seams to start_job and stays byte-unchanged.\n- Its env (:1017): `'PATH': toolchain + '/bin:' + JOB_PATH`, check_job's exact form (:1434). Nothing else in env or spawn changes. In particular there is no netns key: the agent job keeps the guest's own network, and J3 pins spawn.\n- Wrap that env dict so no added line exceeds 120 chars (move `'LANG': 'C.UTF-8',` to the next line).\n- Comments, each changed or added line at most 120 chars:\n  - start_job's comment block (:979-985) adds toolchain to its Python-only seams. It also says the job's PATH puts toolchain/bin first, as a check job's does. That bin holds the pinned Node, which agent-seat.mjs installs at seat start through the 'toolchain' mode.\n  - The TOOLCHAIN comment (:911) says agent and check jobs both put its bin first.\n  - Never rewrap header lines that describe other modes.\n\nTESTS, scripts/tests/local-runner-bridge.test.mjs:\n- J3 (:1703) and J4 (:1761): the expected PATH becomes exactly '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin'. task-7d154d34's gate greps this literal. J3 covers the worker (claude) and QA (codex) jobs; J4 covers the QA job's real environment.\n- HELD (:1737) gains an optional second parameter `extra = ''`, appended to the main() keywords after `agent_socket=None`. J4's HELD('None') call stays unchanged.\n- New row J5, named 'J5 ...': task-7d154d34 re-runs `^[JX][0-9]+ `. Place it after J4, with `{ skip: NO_GUEST, timeout: 30_000 }`; it reads no /proc, so macOS runs it too. In its own mkdtemp dir, removed in t.after:\n  - toolchain/bin/node: a 0755 `#!/bin/sh` stub printing `toolchain node $*`.\n  - toolchain/bin/npm: exactly `#!/usr/bin/env node` plus a newline, 0755.\n  - shadow/node and shadow/npm: 0755 stubs printing `shadow node` and `shadow npm`.\n- The J5 harness sets `m.JOB_PATH = <shadow> + ':' + m.JOB_PATH`, which start_job reads at call time. shadow then stands where a node in /usr/local/bin would; a non-root test cannot write /usr/local/bin. The harness passes `, toolchain=<toolchain>` through HELD's extra.\n- The Python probe prints os.environ['PATH'], then shutil.which('node') and shutil.which('npm'), then the stdout of subprocess.run(['node', 'one']) and subprocess.run(['npm', 'two']), each with check=True.\n- For JOB and for QA_JOB, the exit must be EXIT, and stdout must equal exactly `<tc>/bin:<shadow>:/usr/local/bin:/usr/bin:/bin\\n<tc>/bin/node <tc>/bin/npm\\ntoolchain node one\\ntoolchain node <tc>/bin/npm two\\n`. The last line proves that npm's env shebang found the toolchain's node through PATH.\n\nPlanning evidence: J3, J4 and J5 were green with the change and red on the base supervisor. The JOB_PATH-first mutant failed J3, J4 and J5. The mutant using TOOLCHAIN in place of the toolchain seam failed J5.\n\nError handling: start_job keeps every refusal (74, 65, 71, 66) in the same order. Only the value of the env's PATH changes, so this step adds no new error handling path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "start_job gains toolchain=TOOLCHAIN and PATH = toolchain + '/bin:' + JOB_PATH (check_job's form); comments updated, no added line over 120 chars. J3/J4 expect the new PATH, HELD takes an optional extra, new J5 proves node/npm (npm via env shebang) resolve to the toolchain bin ahead of a shadow dir. J3-J5 pass (node --test, 3/3).",
+      "startedAt": "2026-11-06T08:20:26.276Z",
+      "completedAt": "2026-11-06T08:21:35.427Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2: the export never carries an untracked node_modules directory. Reference bytes: mem:task-task-ccbff5c686c44501a376539bc9e54804-prototype. Use this seat's own editor.\n\nSUPERVISOR, guest-supervisor.py, class Export (:793):\n- __init__ (:798) builds `self.vendored` once: the node_modules directory paths that hold a manifest path. Split each manifest path on '/'; every prefix whose LAST segment is exactly 'node_modules' qualifies, never the path's own final segment. The prototype is a two-line set comprehension over `known`.\n- directory() (:808): inside `if stat.S_ISDIR(info.st_mode):` (:823), before the os.open, add `if name == 'node_modules' and path not in self.vendored: continue`, with a short comment.\n  - The listing loop has already counted that name in self.visited. Nothing under it is listed, opened, emitted, counted, or added to seen.\n- Only that exact name is skipped: case-sensitive, never a prefix. It is skipped only when lstat says it is a real directory. A symlink or a regular file named node_modules falls through to today's 'symlink' and 'file' frames; the host's SNAPSHOT_SYMLINK_DENIED stays the fail-closed path for a node_modules link.\n- The rule is per directory. An untracked node_modules nested inside a tracked one is skipped too.\n- Suppose the manifest held a file at the path node_modules itself, and that path is now a directory. The directory holds no manifest path, so it is skipped, and finish() still emits that path's delete.\n- Comments: the Export docstring (:794-796) states the skip, and so does the header's export clause (:8-9). Change only that clause's own line or lines, wrapped at 120. Never change the lines that describe other modes.\n- Add no module-level statement. checkRefs[1] lets only start_job and Export differ from the existing top-level statements at fb142d89.\n\nTESTS, scripts/tests/local-runner.test.mjs (the X rows from :5332):\n- workspaceIn(t) (:5336) gains `base = EXPORT_BASE`. Existing calls are unchanged.\n- New row 'X8 ...' after X3. In one workspaceIn(t), create a node_modules both at the root and under src (a tracked package directory). Each holds dep/index.js, a nested dep/node_modules/deep/x.js, and .bin/dep, a symlink to ../dep/index.js.\n  - exportIn must give status 0 and exactly [{kind: 'end', entries: 0}].\n  - The same workspace with `m.WALK_LIMIT = 8` must exit 0, and with 7 must exit 65: EXPORT_BASE's 6 names plus the 2 skipped names, never a name inside one.\n- New row 'X9 ...', a table like X2's over workspaceIn(t, base).\n  - With base = [...EXPORT_BASE, fileOf('lib/node_modules/kept/a.js', 'A'), fileOf('node_modules/kept/index.js', 'K')]:\n    - an edit of node_modules/kept/index.js;\n    - an edit of lib/node_modules/kept/a.js, under a package directory;\n    - a delete of node_modules/kept/index.js;\n    - a new sibling, node_modules/new.js.\n    Each exports exactly its file and data frames, or its delete, then end(1).\n    An untracked node_modules/kept/node_modules/x/i.js exports [end(0)].\n  - With base = EXPORT_BASE:\n    - a node_modules symlink to src exports [{kind: 'symlink', path: 'node_modules'}, end(1)];\n    - a regular file named node_modules exports its file and data frames;\n    - directories named 'Node_modules' and 'node_modules.old', each holding f, export both files, then end(2).\n\nPlanning evidence: X8 and X9 were green with the change; the base supervisor fails both. Each of these mutants failed X9:\n- skip every node_modules;\n- a prefix match;\n- a case-folded match;\n- a vendored set holding only top-level paths;\n- the skip moved before the S_ISDIR test.\n\nError handling: export() keeps its exit codes (65, 71, 74) and its drop-before-walk order. The skip opens nothing, so it adds no failure path.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "note": "Export gains self.vendored (node_modules dirs holding a manifest path) and skips a real directory named exactly node_modules not in it, before os.open; docstring and header export clause state it. workspaceIn takes a base; new X8 (untracked tree exports end(0), WALK_LIMIT 8 ok / 7 refused) and X9 (tracked node_modules walked, symlink/file/other names still export). X8 and X9 were red on the base supervisor, green now; all 14 [JX] rows pass.",
+      "startedAt": "2026-11-06T08:21:37.674Z",
+      "completedAt": "2026-11-06T08:22:50.939Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3: move the certification pin. Do this after the LAST edit to guest-supervisor.py (mem:decision-certification-evidence-pins).\n- packages/moe-daemon/src/delivery/certificationEvidence.ts:28: set CERTIFICATION_PINS.supervisorSha256 to `sha256sum scripts/local-runner/guest-supervisor.py` of the final file.\n  - Its bytes are LF: .gitattributes has `* text=auto eol=lf`, and core.autocrlf is false.\n  - Nothing else in that file changes, and it must no longer contain 616463b7 anywhere; the gate checks this.\n- packages/moe-daemon/src/delivery/certificationEvidence.test.ts: add a new row that refuses, with CERTIFICATION_REPORT_SUPERVISOR, a report carrying the previous pin '616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e'.\n  - Write the full 64-hex literal; the gate greps for it.\n  - Only readCertificationStore's judge() yields that code. So add the row to MISMATCHES (:124), beside the existing 'e'.repeat(64) SUPERVISOR row, as ['SUPERVISOR', valid({ supervisorSha256: '<previous pin>' })] with a comment naming this task. Or add its own it() in the readCertificationStore describe (:135) that asserts refused('REPORT_SUPERVISOR').\n- The drift row (:88) then passes. If it fails, the pin is stale. Any supervisor edit after this step, including in the self-review, means re-pinning.\n- Expected consequence, not a defect: every host's stored report stops matching. So verified-local readiness stays not-ready on Windows and WSL until task-7d154d34's re-certify.\n\nTest: the gate's vitest run of certificationEvidence.test.ts, 100 tests at planning including the new row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "note": "CERTIFICATION_PINS.supervisorSha256 moved to 8a917937c1cf806ac7857ac32ffc4f832daac1a957856dac2902d085e4860349, the sha256 of the current guest-supervisor.py (LF, no CR); 616463b7 no longer appears in certificationEvidence.ts. Added a MISMATCHES row refusing a report carrying the previous pin with CERTIFICATION_REPORT_SUPERVISOR. The vitest run happens in the step-4 gate (snapshot only, no npm in this worktree). Any supervisor edit in the self-review means re-pinning.",
+      "startedAt": "2026-11-06T08:22:52.844Z",
+      "completedAt": "2026-11-06T08:23:12.120Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verify once, from this task's worktree. Run checkRefs[1] and then checkRefs[0], each exactly as stored, joined with &&. Each starts with its own cd to the toplevel, and checkRefs[0] runs its snapshot in a subshell. The output of that one run is the complete_task evidence.\n\n- checkRefs[1] (DoD 4) compares every top-level statement of guest-supervisor.py with fb142d89 by its AST source segment. It must print `changed top-level: ['Export', 'start_job']`. It also requires the header to name the node_modules skip. At planning it was red at base and green on the prototype.\n- checkRefs[0] (DoD 1, 2, 3 and 5) first checks three sentinels:\n  - J3/J4's literal PATH;\n  - the previous-pin row;\n  - the moved pin.\n  It then takes a git-archive snapshot of HEAD with the five owned files overlaid, under a Linux-only Node 24 PATH, and runs:\n  - the four local-runner test files under node --test;\n  - npm ci in packages/moe-daemon;\n  - certificationEvidence.test.ts under vitest.\n  At planning it was red at base ('FAIL J3/J4 PATH') and green on the full prototype in 93-96 s: 572 node tests (566 passed, 6 skipped) and 100 vitest tests. That is far inside the 20-minute budget.\n- After the run, remove the printed `snapshot <dir>` with a plain `rm -rf <that literal path>`. Never put a trap inside the command (mem:gotcha-gate-checkref-rm-trap-blocked).\n- Scope (DoD 4): `git status --short` in the worktree lists exactly the five files.\n- Line length: `git diff -U0 -- scripts/local-runner/guest-supervisor.py | grep '^+[^+]' | awk 'length>121'` prints nothing. The file has 23 pre-existing long lines; add none.\n\nError handling for a red run:\n- 'FAIL J3/J4 PATH': step 1's literal is missing or differs.\n- 'FAIL pin': the old pin is still in certificationEvidence.ts, or the previous-pin row is missing.\n- A failing drift row: re-pin after the last supervisor edit (step 3).\n- checkRefs[1] naming any other statement: revert that edit. check_job, main and every other mode stay byte-unchanged.\n- A J5, X8 or X9 failure: fix the code or the fixture. Never loosen an assertion.\n- An S, I or H bridge row timing out under host load (mem:gotcha-local-runner-supervisor-tests): rerun that file alone, then the whole gate fresh, and cite both runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[1] then checkRefs[0] run fresh as one chain in this worktree: printed \"changed top-level: ['Export', 'start_job']\" and \"R1 OK\"; snapshot gate: 572 node tests (566 pass, 0 fail, 6 skipped, 92 s) and certificationEvidence.test.ts 100/100 vitest tests; chain exit 0, 1m35s. Snapshot dir removed with a plain rm -rf. git status lists exactly the five owned files; no added supervisor line over 120 chars; no forbidden pattern in the diff.",
+      "startedAt": "2026-11-06T08:23:16.829Z",
+      "completedAt": "2026-11-06T08:25:12.067Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, once, over this task's diff (skill adversarial-self-review). In the completion summary, map each DoD item to its evidence. Ask as an attacker:\n- Can the skip ever drop a tracked change? vendored comes from the manifest, not the disk. finish() still emits every missing manifest path's delete, and a node_modules that holds a manifest path is walked.\n- Can anything other than a real directory named exactly node_modules be skipped? X9's symlink, file and name rows test this.\n- Could an agent use the skip to smuggle bytes into a candidate? The skip only removes bytes, and what it hides never reaches the host. A check VM installs its own dependencies offline from the lockfile, and a tracked file still exports.\n- Does the agent job keep the guest's own network (no netns key in spawn, J3) and every other env key?\n- Are main(), check_job and every other mode byte-unchanged (checkRefs[1])?\n- Does the pin equal the sha of the final file (the drift row)? Any supervisor edit made here means re-pinning.\n- Do the new rows run rather than skip on Linux and macOS? NO_GUEST and NOT_POSIX skip only win32. Is each name, J5, X8 and X9, followed by a space?\n- Does any added line contain a project.json globalRails.forbiddenPatterns string?\n\nFix what you find, then re-run step 4's command fresh before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review over the five-file diff, nothing to fix, so no supervisor edit and no re-pin (the step-4 gate stays fresh). (1) Tracked changes cannot be dropped: `vendored` comes from the manifest keys, not the disk; a node_modules holding a manifest path is walked; a manifest file at the path 'node_modules' that became a directory is skipped but finish() still emits its delete (the skip adds nothing to `seen`). (2) Only a real directory named exactly node_modules is skipped: the skip sits inside the S_ISDIR branch after lstat, so a symlink or regular file falls through to 'symlink'/'file' (X9 rows), and Node_modules / node_modules.old are walked (X9). (3) Smuggling: the skip only removes bytes; hidden bytes never reach the host and check VMs install their own deps from the lockfile. (4) The agent job spawn has no netns key and every env key is unchanged but PATH's value (J3/J4 pin both). (5) checkRefs[1] shows only Export and start_job changed. (6) The pin equals the sha of the final file (drift row green). (7) J5/X8/X9 skip only on win32 and each name is followed by a space. (8) No forbidden pattern and no added supervisor line over 120 chars. No concurrency, input-size or cleanup concern: the skip opens nothing and WALK_LIMIT still bounds the walk (X8: 8 passes, 7 fails).",
+      "startedAt": "2026-11-06T08:25:14.638Z",
+      "completedAt": "2026-11-06T08:25:36.969Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -29,15 +96,160 @@
       "author": "architect-3669a6f6",
       "content": "@architect-ec70c5f6 Context from architect-3669a6f6, who carved this row out of task-7d154d34. Its plan, rev 1, is TURBO-approved and dependsOn this row.\n\n7d154d34's gate re-runs this row's tests, so two things need to hold:\n- The gate runs `node --test --test-name-pattern='^[JX][0-9]+ ' scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs` from a git-archive snapshot (11 tests, 7 s at fb142d89). Please name the new rows J<n> and X<n> (a digit after the letter, then a space, e.g. J5 and X8), or they are not re-run there.\n- The gate requires the literal '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin' in local-runner-bridge.test.mjs, which is your DoD 1's J3/J4 expectation.\n\nFacts I checked at fb142d89:\n- J3 is at :1687 and pins PATH at :1703. J4 is at :1750 and pins PATH at :1761.\n- X2 (:5359) is a table of [label, change, frames, setup] rows that new cases can extend.\n- EXPORT_BASE (:5332) is fixed, so the tracked-node_modules case needs its own base. Snapshots allow node_modules paths: CONTROL_SEGMENTS in source-snapshot.mjs:22 does not list it.\n- TOOLCHAIN (:911) is defined above start_job (:986), so it can serve as a default argument.\n- main() passes **seams to start_job (:1745).\n- The drift row is certificationEvidence.test.ts:88, and the SUPERVISOR refusal list is at :126.\n- The skip only drops bytes. A symlink named node_modules must still emit 'symlink', because the host's SNAPSHOT_SYMLINK_DENIED is the fail-closed path for a `node_modules -> elsewhere` trick.",
       "timestamp": "2026-11-06T07:59:27.094Z"
+    },
+    {
+      "id": "comment-2679f2c1c8ee43c6acc730d0f7f2b455",
+      "author": "architect-ec70c5f6",
+      "content": "@architect-3669a6f6 My chat reply (msg-aae5e841d3794c089d62adf05fc1964d in chan-b6d8273b) did not route (routingTargets []), so here is its open question on the row. Does 7d154d34's checkRef require exactly 11 passing tests (ok-lines), or only fail 0? This row's new J<n>/X<n> tests raise the total that 7d154d34's gate re-runs. If 11 is pinned, they break the approved gate, and as far as I know amend_plan_step can't change a stored executionContract. Please answer here so whichever architect plans this row sees it before submit_plan. Note to the planner: read 7d154d34's executionContract yourself too, and don't wait on this answer.",
+      "timestamp": "2026-11-06T08:24:11.414Z"
+    },
+    {
+      "id": "comment-0873315c35cc4faea0138e035c883c95",
+      "author": "governor-a42b7613",
+      "content": "Governor answer to architect-ec70c5f6's question (msg-aae5e841, 08:23Z): task-7d154d34's stored gate pins no test count. Its checkRefs[2] has two checks:\n1. A grep for the literal `/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin` in scripts/tests/local-runner-bridge.test.mjs.\n2. `node --test --test-name-pattern='^[JX][0-9]+ ' scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs` from a git-archive snapshot. It passes or fails on node's exit status alone.\n\"11 tests, 7 s at fb142d89\" and \"143 tests\" (checkRefs[3]) are informational lines in the plan text. Neither ref asserts them. So new J<n>/X<n> rows only raise the count and break nothing. Name them with a digit after the letter and then a space, or the pattern skips them. Note that this row's plan was already submitted and auto-approved at 08:19Z, and worker-12053315 is on step-1. No re-plan is needed for this.",
+      "timestamp": "2026-11-06T08:24:17.055Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T07:50:08.825Z",
-  "updatedAt": "2026-11-06T07:59:27.094Z",
+  "updatedAt": "2026-11-06T08:27:18.455Z",
   "metrics": {
-    "firstClaimAt": "2026-11-06T07:55:46.657Z"
+    "firstClaimAt": "2026-11-06T07:55:46.657Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
-    "architect-ec70c5f6"
-  ]
+    "architect-ec70c5f6",
+    "worker-12053315"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-06T08:19:32.192Z",
+  "executionContract": {
+    "intendedBehavior": "In a verified-local seat VM, a worker or QA agent job runs with the pinned Node toolchain's bin first on its PATH. Both roles go through start_job.\n- The PATH is toolchain + '/bin:' + JOB_PATH, the check job's form. toolchain=TOOLCHAIN ('/opt/moe/toolchain') is injectable from Python only.\n- So a bare node, npm or npx resolves to /opt/moe/toolchain/bin, and npm's #!/usr/bin/env node shebang finds that node.\n\nThe supervisor's export (the candidate the host imports) skips a real directory named exactly node_modules when no manifest path lies under it.\n- Such a directory is neither walked nor emitted. It adds no entry, delete, byte or visit past its own name.\n- So an in-place npm ci neither poisons a worker's candidate (symlinks, entry and byte caps) nor refuses a QA job's empty candidate.\n- A node_modules directory that holds a manifest path is walked as before. A node_modules symlink or regular file still exports as 'symlink' or 'file'.\n\nCERTIFICATION_PINS.supervisorSha256 moves to the new file's sha256 in the same diff, so readiness accepts only reports of the new supervisor. Until the governor re-certifies (task-7d154d34), verified-local readiness is not-ready on Windows and WSL. That is expected.",
+    "acceptanceCriteria": [
+      "DoD 1: J3 and J4 expect PATH '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin' for the worker (claude) and QA (codex) jobs. J5 injects a toolchain holding a stub node and a #!/usr/bin/env node npm, plus a shadow node and npm placed ahead of /usr/local/bin. For both jobs it proves that bare node and npm (npm through its shebang) resolve to the toolchain bin.",
+      "DoD 2, X8: an untracked node_modules tree holding files, a .bin symlink and a nested node_modules, at the root and under src, exports only end(0). WALK_LIMIT 8 passes and 7 fails.",
+      "DoD 2, X9: in a tracked node_modules, an edit, an edit under a package directory, a delete and a new sibling are exported, and an untracked nested node_modules is skipped. A node_modules symlink and a regular file named node_modules still export, and other names are walked.",
+      "DoD 3: the drift row is green with the new pin. A new row refuses a report carrying 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e with CERTIFICATION_REPORT_SUPERVISOR.",
+      "DoD 4: the completion's diff names exactly the five files. checkRefs[1] shows that, of the base's top-level statements, only start_job and Export changed.",
+      "DoD 5: checkRefs[0] passes fresh, and its output is the complete_task evidence."
+    ],
+    "invariants": [
+      "check_job, main(), relay, GUARD, materialize, verify, agents, toolchain, dependencies and reset are byte-unchanged.",
+      "The agent job's spawn has no netns key. Its env keys are unchanged; only PATH's value changes.",
+      "The export never skips a symlink, a regular file, a directory with any other name, or a node_modules that holds a manifest path. Every missing manifest path still gets its delete.",
+      "CERTIFICATION_PINS.supervisorSha256 equals the sha256 of the landed guest-supervisor.py.",
+      "No npm command runs in the shared checkout or the task worktree. Gates run only in the git-archive snapshot."
+    ],
+    "compatibility": [
+      "start_job's existing keywords and refusal codes are unchanged, and so is main()'s forwarding of seams. toolchain is a new trailing keyword.",
+      "task-7d154d34's checkRefs[2] greps local-runner-bridge.test.mjs for the literal '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin' and re-runs the `^[JX][0-9]+ ` rows. So the new rows are named J5, X8 and X9.",
+      "HELD's new parameter defaults to '' and workspaceIn's to EXPORT_BASE, so existing rows are unchanged.",
+      "Host import, admission and agent-seat.mjs's QA-empty rule are untouched. A report filed with the old pin is refused as CERTIFICATION_REPORT_SUPERVISOR."
+    ],
+    "approvedScope": [
+      "guest-supervisor.py: start_job (its signature, the env PATH and its comment block), the TOOLCHAIN comment, class Export (the __init__ vendored set, the directory() skip and the docstring), and the header's export clause.",
+      "local-runner-bridge.test.mjs: the J3 and J4 PATH literals, HELD's optional extra parameter, and a new J5.",
+      "local-runner.test.mjs: workspaceIn's base parameter, and new X8 and X9.",
+      "certificationEvidence.ts: CERTIFICATION_PINS.supervisorSha256 only.",
+      "certificationEvidence.test.ts: one previous-pin refusal row."
+    ],
+    "reuse": [
+      "check_job's PATH form (guest-supervisor.py:1434) and its Python-only toolchain seam (:1401).",
+      "J5 reuses the J4 harness (HELD, JOB_DIRS, session). X8 and X9 reuse workspaceIn/exportIn and X2's table shape. The pin row reuses MISMATCHES and readCertificationStore.",
+      "checkRefs[0] follows the snapshot-plus-overlay shape of mem:convention-daemon-full-suite-gate-checkref."
+    ],
+    "sourceAssumptions": [
+      "guest-supervisor.py at fb142d89 (sha256 616463b7...): JOB_PATH :910, TOOLCHAIN :911, start_job :986 with its env at :1017, class Export :793 (__init__ :798, directory :808, the S_ISDIR branch :823, finish :859), check_job's PATH :1434, and main :1722, which forwards **seams to start_job.",
+      "local-runner-bridge.test.mjs: J3 :1687 (PATH :1703), HELD :1737, J4 :1750 (PATH :1761).",
+      "local-runner.test.mjs: EXPORT_BASE :5332, workspaceIn :5336 and exportIn :5342. X3's WALK_LIMIT row counts 6 names for EXPORT_BASE. X7 is at :5591.",
+      "certificationEvidence.ts:28 holds the pin. certificationEvidence.test.ts has the drift row at :88, MISMATCHES at :124, and the readCertificationStore describe at :135, which is skipped on a host with no pinned identity.",
+      "The agent job has no netns (J3 pins spawn). Source snapshots allow node_modules paths: CONTROL_SEGMENTS in source-snapshot.mjs:22 does not list it."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && E=packages/moe-daemon/src/delivery/certificationEvidence && { grep -qF /opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin scripts/tests/local-runner-bridge.test.mjs || { echo \"FAIL J3/J4 PATH\"; false; }; } && { grep -q 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e $E.test.ts && ! grep -q 616463b7 $E.ts || { echo \"FAIL pin\"; false; }; } && (S=$(mktemp -d) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-supervisor.py scripts/tests/local-runner{-bridge,}.test.mjs $E{,.test}.ts \"$S\" && cd \"$S\" && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'node --test scripts/tests/local-runner{-bridge,,-check,-guard}.test.mjs >n.log 2>&1 || { tail -n60 n.log; exit 1; }; tail -n8 n.log; cd packages/moe-daemon && { npm ci --no-audit >../c.log 2>&1 || { tail ../c.log; exit 1; }; } && NO_COLOR=1 npx vitest run src/delivery/certificationEvidence.test.ts')",
+      "cd \"$(git rev-parse --show-toplevel)\" && git show fb142d89:scripts/local-runner/guest-supervisor.py | python3 -I -c 'import ast,sys;o=sys.stdin.read();n=open(\"scripts/local-runner/guest-supervisor.py\").read();d=lambda s:{getattr(x,\"name\",0) or ast.get_source_segment(s,x):ast.get_source_segment(s,x) for x in ast.parse(s).body};a,b=d(o),d(n);c={k for k in a if a[k]!=b.get(k)};print(\"changed top-level:\",sorted(c));sys.exit(c!={\"Export\",\"start_job\"})' && { head -n 60 scripts/local-runner/guest-supervisor.py | grep -q node_modules || { echo \"FAIL: the header's export clause does not name the node_modules skip\"; false; }; } && echo \"R1 OK: only start_job and Export changed\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Prepend the toolchain bin to JOB_PATH itself: rejected. check_job already builds toolchain + '/bin:' + JOB_PATH, so its PATH would list the bin twice, and check_job must stay byte-unchanged.\n- A Python-only toolchain keyword on start_job: chosen. It is check_job's own seam shape, it lets J5 inject a stub toolchain, and main() needs no change because it forwards **seams.\n- Skip every node_modules: rejected. A repository that vendors node_modules would silently lose real edits and deletes. The manifest-based vendored set keeps tracked trees walked.\n- Honor .gitignore or a list of build directories: out of scope by the task. It would put a parser inside the security boundary; only node_modules is skipped.\n- Filter at emit time instead of skipping the walk: rejected. It still visits thousands of names against WALK_LIMIT. X8's WALK_LIMIT 8/7 row pins the skip-before-descend.\n- Prove precedence over /usr/local/bin with a real node there: a non-root test cannot write /usr/local/bin. J5 puts a shadow dir at the head of m.JOB_PATH instead, and J3/J4 pin the real PATH string.\n- Extend X2's table: X2 is EXPORT_BASE-only. Separate X8/X9 rows keep the tracked base local, and task-7d154d34's `^[JX][0-9]+ ` pattern still re-runs them.",
+    "codebaseInsights": "- start_job reads the JOB_PATH global at call time, so a harness can patch m.JOB_PATH. The J rows never call check_job.\n- Export counts self.visited while it lists a directory, before sorting and lstat, so a skipped name costs exactly one visit.\n- finish() emits a delete for every manifest path that was never added to seen. Directories are never added, so the skip cannot hide a tracked deletion.\n- J4's probe runs as the real job through GUARD (NoNewPrivs, and a PID namespace when root). So J5's stubs exercise the exec path a real agent uses, including /usr/bin/env's PATH lookup.\n- On success, Node 24's spec reporter ends with the 8-line summary. On failure it prints a failing-tests section after that summary. Hence tail -n8 and tail -n60 in the gate.\n- task-7d154d34 (WORKING, dependsOn this row) re-runs this row's J/X rows and certificationEvidence.test.ts in its own gate, and its governor runbook builds the plugin from this row's landing. architect-3669a6f6's comment on this row confirms the J<n>/X<n> naming and the J3/J4 literal.",
+    "risks": "- A stale pin: any supervisor edit after step 3 changes the sha and the drift row fails. Re-pin last.\n- Rewrapping header lines that belong to other modes: DoD 4 wants those lines byte-unchanged. checkRefs[1] ignores comments, so QA reads the header hunk.\n- The prototype's env line (135 chars) and header line (123 chars) exceed the file's 120-column style. Step 4's awk check flags them.\n- Load flakes in the timing-sensitive S/I/H bridge rows on a busy host (mem:gotcha-local-runner-supervisor-tests): rerun the file alone, then the full gate.\n- A peer landing a guest-supervisor.py change after fb142d89 would make checkRefs[1] name that statement. None is open at planning; re-plan if it happens.\n- macOS CI runs J5, X8 and X9 (only win32 skips them), so the stubs must stay POSIX sh and the paths must come from mkdtemp.\n- After landing, verified-local readiness is not-ready on every host until the governor re-certifies. That is expected and owned by task-7d154d34.",
+    "keyFiles": [
+      "scripts/local-runner/guest-supervisor.py (start_job :986/:1017, TOOLCHAIN :911, class Export :793, check_job PATH :1434, main :1722)",
+      "scripts/tests/local-runner-bridge.test.mjs (J3 :1687, HELD :1737, J4 :1750)",
+      "scripts/tests/local-runner.test.mjs (EXPORT_BASE :5332, workspaceIn :5336, X1-X7 :5347-:5591)",
+      "packages/moe-daemon/src/delivery/certificationEvidence.ts:28",
+      "packages/moe-daemon/src/delivery/certificationEvidence.test.ts (drift :88, MISMATCHES :124, readCertificationStore :135)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4ded4ff17ef45a57a1edea3a403bf0cafa034d0f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-06T08:19:32.223Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T08:20:26.276Z",
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-12053315@2026-11-06T08:19:29Z",
+    "at": "2026-11-06T08:27:18.455Z"
+  },
+  "reviewStartedAt": "2026-11-06T08:26:08.164Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && git show fb142d89:scripts/local-runner/guest-supervisor.py | python3 -I -c 'import ast,sys;o=sys.stdin.read();n=open(\"scripts/local-runner/guest-supervisor.py\").read();d=lambda s:{getattr(x,\"name\",0) or ast.get_source_segment(s,x):ast.get_source_segment(s,x) for x in ast.parse(s).body};a,b=d(o),d(n);c={k for k in a if a[k]!=b.get(k)};print(\"changed top-level:\",sorted(c));sys.exit(c!={\"Export\",\"start_job\"})' && { head -n 60 scripts/local-runner/guest-supervisor.py | grep -q node_modules || { echo \"FAIL: the header's export clause does not name the node_modules skip\"; false; }; } && echo \"R1 OK: only start_job and Export changed\" && cd \"$(git rev-parse --show-toplevel)\" && E=packages/moe-daemon/src/delivery/certificationEvidence && { grep -qF /opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin scripts/tests/local-runner-bridge.test.mjs || { echo \"FAIL J3/J4 PATH\"; false; }; } && { grep -q 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e $E.test.ts && ! grep -q 616463b7 $E.ts || { echo \"FAIL pin\"; false; }; } && (S=$(mktemp -d) && echo \"snapshot $S\" && git archive HEAD | tar -x -C \"$S\" && cp --parents scripts/local-runner/guest-supervisor.py scripts/tests/local-runner{-bridge,}.test.mjs $E{,.test}.ts \"$S\" && cd \"$S\" && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'node --test scripts/tests/local-runner{-bridge,,-check,-guard}.test.mjs >n.log 2>&1 || { tail -n60 n.log; exit 1; }; tail -n8 n.log; cd packages/moe-daemon && { npm ci --no-audit >../c.log 2>&1 || { tail ../c.log; exit 1; }; } && NO_COLOR=1 npx vitest run src/delivery/certificationEvidence.test.ts')",
+    "exitCode": 0,
+    "outputTail": "changed top-level: ['Export', 'start_job']\nR1 OK: only start_job and Export changed\nsnapshot /tmp/tmp.Lnfk73GGeo\nℹ tests 572\nℹ suites 0\nℹ pass 566\nℹ fail 0\nℹ cancelled 0\nℹ skipped 6\nℹ todo 0\nℹ duration_ms 92020.726874\n RUN  v5.0.5 /tmp/tmp.Lnfk73GGeo/packages/moe-daemon\n ✓ src/delivery/certificationEvidence.test.ts (100 tests) 438ms\n Test Files  1 passed (1)\n      Tests  100 passed (100)\nreal\t1m35.635s\nexit=0",
+    "reportedAt": "2026-11-06T08:26:08.164Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/guest-supervisor.py",
+    "scripts/tests/local-runner-bridge.test.mjs",
+    "scripts/tests/local-runner.test.mjs",
+    "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+    "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+  ],
+  "completionSummary": "A verified-local worker or QA job now runs with the pinned Node toolchain first on its PATH, and the export skips an untracked node_modules. Diff: exactly five files.\n\nDoD 1 (PATH): start_job gains `toolchain=TOOLCHAIN` and sets PATH = toolchain + '/bin:' + JOB_PATH, check_job's form. J3 and J4 expect '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin'. New J5 injects a stub toolchain plus a shadow node and npm ahead of /usr/local/bin. For both the claude and codex jobs, bare node and npm (npm through its env shebang) resolve to the toolchain bin.\n\nDoD 2 (export): Export builds `vendored` (node_modules dirs holding a manifest path) and skips a real directory named exactly node_modules that is not in it, before os.open. X8: an untracked tree (files, a .bin symlink, nested node_modules; root and src) exports only end(0); WALK_LIMIT 8 passes and 7 exits 65. X9: a tracked node_modules is walked (edit, edit under a package dir, delete, new sibling, nested untracked skipped); a node_modules symlink, a regular file named node_modules, and Node_modules / node_modules.old still export. X8 and X9 were red on the base supervisor.\n\nDoD 3 (pin): CERTIFICATION_PINS.supervisorSha256 = 8a917937c1cf806ac7857ac32ffc4f832daac1a957856dac2902d085e4860349, the sha of the new guest-supervisor.py; the drift row is green. A new MISMATCHES row refuses a report carrying 616463b7... with CERTIFICATION_REPORT_SUPERVISOR.\n\nDoD 4 (scope): checkRefs[1] printed `changed top-level: ['Export', 'start_job']`, so check_job, main and every other mode are byte-unchanged, and the header names the node_modules skip. git status lists exactly the five files, and no added supervisor line is over 120 characters.\n\nDoD 5 (gate): checkRefs[1] then checkRefs[0], fresh, exit 0 in 1m35s. Snapshot node tests: 572 (566 pass, 0 fail, 6 skipped). certificationEvidence.test.ts: 100/100.\n\nExpected consequence: every host's stored certification report now mismatches, so verified-local readiness is not-ready on Windows an",
+  "commits": [
+    {
+      "sha": "cfb2b395a383784b311548cc0180766a15903ae0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-12053315@2026-11-06T08:19:29Z",
+      "paths": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "packages/moe-daemon/src/delivery/certificationEvidence.ts",
+        "scripts/local-runner/guest-supervisor.py",
+        "scripts/tests/local-runner-bridge.test.mjs",
+        "scripts/tests/local-runner.test.mjs"
+      ],
+      "recordedBy": "worker-12053315",
+      "recordedAt": "2026-11-06T08:27:18.455Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
