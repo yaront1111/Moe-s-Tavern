@@ -16,18 +16,25 @@
     {
       "stepId": "step-1",
       "description": "scripts/moe-agent.sh, launch-mode plumbing. Anchors are quoted as of 9c2129d4; task-98053b89 (this row's dependency) lands first and also edits this file, so locate by the quoted text, not the line numbers. Edit in place in the task worktree with your own editing tool (a TOOL witness; never sed -i, a heredoc or a subagent into the tree), per scripts/CLAUDE.md and the global rails.\n(a) Protected allowlist (`case \"$COMMAND\" in claude|codex|gemini|grok) ;;`, about :621): add copilot, and the refusal becomes exactly `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '<shown>' is not one of claude, codex, gemini, grok, copilot; the protected runtime runs only these agent CLIs by name. Refusing to start.` (byte-identical to the ps1 line). protected_resolve_cli already resolves a bare name: leave it.\n(b) Detection (about :632-647): `elif [ \"$CMD_BASE\" = \"copilot\" ]; then CLI_TYPE=\"copilot\"` (CMD_BASE already drops .exe/.cmd), and the MOE_WORKER_TYPE case gains `copilot) MOE_WORKER_TYPE=COPILOT ;;` (still exported).\n(c) Right after GROK_INTERACTIVE (about :700): COPILOT_INTERACTIVE=false, true when `[ \"$CLI_TYPE\" = copilot ] && [ \"$INTERACTIVE\" = true ]`. This is claude/grok role polarity (architect/governor TUI, worker/qa headless); --interactive/--no-interactive already fold into INTERACTIVE. No new exec flag.\n(d) Beside the 'Grok mode:' banner (about :2414) print once `Copilot mode: interactive` or `Copilot mode: headless (stdin prompt)`, and add `|| [ \"$COPILOT_INTERACTIVE\" = true ]` to the condition that sets LOOP_ENABLED=false and prints 'Interactive mode: polling disabled' (a copilot TUI holds one REPL, like grok's).\n(e) Prompt conditions: add COPILOT_INTERACTIVE to the architect multi-task TUI condition (the one ending `[ \"$GROK_INTERACTIVE\" = true ]; } && [ \"$ARCHITECT_SESSION_TASKS\" -gt 1 ]`, about :11383); add `{ [ \"$CLI_TYPE\" = copilot ] && [ \"$COPILOT_INTERACTIVE\" = false ]; }` to the 'One-shot session:' suffix condition (about :11426) and the copilot TUI arm to the 'INTERACTIVE session:' suffix condition (about :11429).\nLeave the verified-local CLI check (`case \"$CLI_TYPE\" in claude|codex) ;; *) verified_local_refuse MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED ...`, about :10213) untouched: its catch-all already refuses copilot as 'this seat runs copilot'. Finish with bash -n scripts/moe-agent.sh.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Added Copilot detection/type, protected allowlist, role polarity, banner/polling and prompt suffix routing. bash -n scripts/moe-agent.sh exit 0; missing banner assertion observed RED before change, now green; behavioral harness proof follows step 3. Recommended ponytail skill is not installed in advertised/local skill directories; reusing existing grok branches as approved.",
+      "startedAt": "2026-11-06T05:05:59.795Z",
+      "completedAt": "2026-11-06T05:06:43.350Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/moe-agent.sh, the per-launch MCP config and the copilot launch branch.\n(a) New write_copilot_mcp_config FILE SERENA_ROOT beside write_gemini_config: one $PYTHON_CMD quoted heredoc, every value by argv (FILE, $PROJECT, $PROXY_CMD, $PROXY_ARGS, $SERENA_CMD, SERENA_ROOT, $WORKER_ID) and the identity keys from os.environ. It writes {\"mcpServers\":{\"moe\":{\"type\":\"local\",\"command\":PROXY_CMD,\"args\":[PROXY_ARGS] (only when set, as write_gemini_config),\"env\":ENV,\"tools\":[\"*\"],\"timeout\":780000}}}. ENV = MOE_PROJECT_PATH (the control $PROJECT), MOE_TOOL_NAME_STYLE=underscore, MOE_WORKER_ID, then each of MOE_WORKER_TYPE, MOE_SESSION_ID, MOE_RUNNER_PROCESS_STARTED_AT, MOE_RUNNER_HOST and MOE_DAEMON_HOST that is set and non-blank, and MOE_ATTEMPT_ID + MOE_ATTEMPT_GENERATION both or neither (codex_moe_server_override's key list; whether copilot hands its own env to MCP servers cannot be measured signed out). 780000 ms because the moe long-polls block up to 720 s. Add \"serena\":{\"type\":\"local\",\"command\":SERENA_CMD,\"args\":[\"start-mcp-server\",\"--context\",\"agent\",\"--project\",SERENA_ROOT,\"--enable-web-dashboard\",\"false\",\"--enable-gui-log-window\",\"false\"],\"tools\":[\"*\"]} only when SERENA_CMD and SERENA_ROOT are both non-empty.\n(b) Per-launch Serena root: at the per-iteration reset (`CLI_ROOT=\"\"; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET`, about :10402) set COPILOT_SERENA_ROOT=\"$SERENA_PROJECT\"; in prepare_worktree_launch's `case \"$CLI_TYPE\" in codex|gemini|grok)` add `copilot) COPILOT_SERENA_ROOT=\"$serena\" ;;` (W, KEEP's root, or '' when Serena is off for the launch), so a worktree seat's Serena works in W, never the control checkout.\n(c) New `elif [ \"$CLI_TYPE\" = \"copilot\" ]; then` branch before the claude else (after grok's, about :11840-11938), modeled on grok's:\n- `command -v \"$COMMAND_BIN\"` fails: `printf '%b[ERROR]%b %s\\n' \"$RED\" \"$NC\" \"MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $COMMAND_BIN. Install it (npm install -g @github/copilot), then sign in with copilot login.\" >&2; exit 1` (printf, not echo -e, as the agy line).\n- Prompt body by grok's rules (AUTO_CLAIM: $PROMPT; else grok's ROLE_WORKFLOW sentence; a shared helper is fine only if grok's launch stays byte-for-byte the same). COPILOT_PROMPT_FILE=\"$(create_secure_temp)/copilot-prompt.md\" gets `printf '%s\\n\\n# Session Context (per-iteration)\\n%s' \"$SYSTEM_APPEND\" <body>`; COPILOT_MCP_FILE=\"$(create_secure_temp)/copilot-mcp.json\" via write_copilot_mcp_config \"$COPILOT_MCP_FILE\" \"$COPILOT_SERENA_ROOT\". Both live only in the secure temp dir (cleanup_temp removes it), never in the project, so no DENY or .gitignore entry.\n- Error handling: a failed prompt or config write, or an empty PROXY_CMD, prints exactly one `[ERROR] MOE_COPILOT_CONFIG_FAILED: cannot write <file>; refusing to launch copilot without its prompt and moe server.` on stderr and exits 1 (for the empty PROXY_CMD case name moe-proxy instead of a file). Never launch copilot without its moe server.\n- Headless (COPILOT_INTERACTIVE=false): print a Command: line (never the prompt), then under set +e: `(cd \"${CLI_ROOT:-$PROJECT}\" && agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" -C \"${CLI_ROOT:-$PROJECT}\" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" < \"$COPILOT_PROMPT_FILE\")`, CLI_EXIT_CODE=$?, set -e. The prompt never rides argv: copilot reads stdin when -p is absent, and Windows caps a command line at 32 KB.\n- TUI: the same argv minus --allow-all and --no-ask-user (the operator approves, as in the claude and grok TUIs), plus `-i \"$pointer\"`, where pointer is grok's sentence naming $COPILOT_PROMPT_FILE ('Session context (routed mentions, pre-flight data) is in <file> - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId <id>. Then follow your role doc.'). stdin stays the terminal.\n- Keep this argv order exactly: the harness rows assert the arrays. bash -n again.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "startedAt": "2026-11-06T05:06:43.388Z"
     },
     {
       "stepId": "step-3",
@@ -97,22 +104,26 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:07.016Z",
-  "updatedAt": "2026-11-06T05:04:07.301Z",
+  "updatedAt": "2026-11-06T05:06:43.388Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T21:59:39.338Z",
     "plannedStepCount": 8,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-32d0a5be",
     "architect-a3d9076e",
-    "architect-a8e13516"
+    "architect-a8e13516",
+    "worker-61ce36da"
   ],
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:28:12.434Z",
   "executionContract": {
@@ -195,5 +206,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-32d0a5be@2026-11-05T21:59:36Z",
     "at": "2026-11-05T22:29:06.499Z"
-  }
+  },
+  "workStartedAt": "2026-11-06T05:05:59.795Z"
 }

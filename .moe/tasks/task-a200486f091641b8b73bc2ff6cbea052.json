@@ -16,11 +16,18 @@
     {
       "stepId": "step-1",
       "description": "Docs, part 1: the credential contract. Edit with this seat's own editor: Edit on Claude, apply_patch on a codex exec seat. Never use Serena (it ignores docs/) and never a shell write. Take every fact from the LANDED code of slice A (task-fbd2a42f: scripts/moe-account-lease.mjs, its VM_CREDENTIAL_REASONS, the renewal run, the vm-credential and vm-credential-state commands) and slice B (task-98053b89: the wrappers' `[seat] VM credential` and MOE_VM_CREDENTIAL_UNAVAILABLE lines), not from this plan's paraphrase. Where the code differs, document the code and say so in the completion summary.\n(a) docs/ARCHITECTURE.md, `### The verified-local path`. Replace the sub-bullet that starts `  - Credentials: a claude seat sends the leased account's VM token` (4 lines, through the codex sentence) with ONE sub-bullet. It starts exactly `  - Credentials: a claude seat sends the leased account's VM credential` and wraps like its neighbours (about 118 columns, 4-space continuation lines). In this order it says:\n  1. The wrapper reads the credential through `moe-account-lease.mjs vm-credential <id> <configDir> <claude command>`: a minted VM token when one is stored (`accounts vm-token <id>`, optional, valid about a year), else the short-lived access token of the account's own host sign-in, read-only from `.credentials.json` in its Claude config folder.\n  2. It reaches the guest only in the job frame, sent to `seat-job` on stdin, as `CLAUDE_CODE_OAUTH_TOKEN`.\n  3. The refresh token never leaves the host: Moe never uses, sends or writes it and never writes that file. When 5 minutes or less are left, the host's own claude renews the sign-in first (claude's own refresh, under its own lock, as when a host seat starts on that account), so host seats keep their sign-in.\n  4. The access token lasts 8 hours from claude's last renewal and the guest cannot renew it. A job that outlives it ends with claude's authentication error, and its work lands as for any nonzero exit: a worker's candidate commit, while a QA job leaves the row in REVIEW. The next job gets a renewed token. A minted token avoids this.\n  5. With no usable credential, the seat prints `MOE_VM_CREDENTIAL_UNAVAILABLE` with a reason, waits with the task held and never falls back to the host.\n  6. macOS keeps the sign-in in the login Keychain, which Moe does not read, so a macOS host needs a minted token.\n  7. Rotation stays on. The existing codex sentence stays as is.\n(b) docs/MCP_SERVER.md, `## Claude Account Rotation`.\n  - In the bullet `- **No credential passes through Moe.**` (about line 3359), keep the daemon and CLI sentences. Replace \"Only the wrapper's helper opens one file there, `.claude.json`, for an interactive seat's folder trust (below).\" with: the wrapper's helper opens two files there, `.claude.json` for an interactive seat's folder trust (below), and, read-only, `.credentials.json` for a verified-local VM seat's job credential. It takes only the short-lived access token, never the refresh token, writes nothing, and leaves renewal to the host's own claude (see Credentials under `### The verified-local path` in docs/ARCHITECTURE.md).\n  - Retitle that bold lead-in so it stays true, e.g. `**No credential passes through the daemon.**`; no test pins it.\n  - In the trust sub-bullet (about line 3362), replace \"and `.credentials.json` is never opened\" with \"and the trust step never opens `.credentials.json`\". After the 2026-10-26 sign-off sentence, add that the VM credential read follows the human's directive of 2026-11-05 (task-a200486f).\n  - In the CLI Commands line (about line 3379), mark `vm-token <id> [--remove]` optional: without a token, a claude VM seat uses the account's sign-in.\nError handling: if an anchor quoted here is not found exactly once, re-read the section and anchor on unique text. Never edit a near match. The test for this step is checkRefs[1] in step 4.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/ARCHITECTURE.md",
         "docs/MCP_SERVER.md"
       ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Documented against landed code: wrapper min-life 3600s (short-life) per amend-1; reasons from VM_CREDENTIAL_REASONS.",
+      "startedAt": "2026-11-06T05:04:25.354Z",
+      "completedAt": "2026-11-06T05:05:12.833Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -35,11 +42,17 @@
     {
       "stepId": "step-2",
       "description": "Docs, part 2: operator steps and codes. Same editor rule and same source-of-truth rule as step 1.\n(a) docs/CERTIFICATION.md, activation step 2 (about line 164, starting `2. **Mint a VM token for each rotation account**`). Replace the whole step with `2. **Sign in each rotation account**`. It says:\n  - How: the Accounts tab's Sign in, or `node <plugin>/daemon/index.js accounts login <id>` (on Windows `node <plugin>\\daemon\\index.js accounts login <id>`).\n  - On Windows and Linux nothing more is needed: a claude seat VM gets a short-lived credential from the leased account's own sign-in, renewed on the host by claude.\n  - A VM token stays optional. `accounts vm-token <id>`, or **Set VM token...** on the Accounts tab, runs `claude setup-token` and stores a year-long token outside every project.\n  - Why it stays: it is the route on macOS, whose sign-in is in the Keychain, and it never expires in the middle of a long job.\n  - Keep the codex sentence (OPENAI_API_KEY or CODEX_API_KEY).\n(b) docs/TROUBLESHOOTING.md, `## Verified-local (VM route) Issues` table.\n  - Rewrite the row that starts with the MOE_VM_CREDENTIAL_UNAVAILABLE code. For claude, name every reason the helper prints, each backticked verbatim from VM_CREDENTIAL_REASONS, with its cause:\n    - no-signin-file: no readable `.credentials.json` in the account folder, as on macOS;\n    - signed-out: no usable claude.ai login in it;\n    - expired: the host's claude could not renew it;\n    - no-claude: renewal was needed but the wrapper's claude command cannot run.\n  - The same row says a minted token is used first, and that the claude seat posts one #governors message, retries and holds the task. A codex seat missing its key stops instead; it does not retry.\n  - Fix column: sign the account in again (Accounts tab, or `accounts login <id>`), or set an optional VM token (`accounts vm-token <id>`, the only route on macOS); for codex, set the key.\n  - Right after it, add a row for the `[seat] VM credential account=<id> source=…` line (both wrappers, as slice B prints it):\n    - it shows which credential the job got: a minted token, or the sign-in with its expiry;\n    - a job still running at that expiry ends with claude's own authentication error, its work lands as for any nonzero exit, and the next job gets a renewed credential;\n    - fix: none, or set a VM token for jobs longer than 8 hours.\nError handling: as in step 1, never edit a near match. Keep every table row on one line. The test for this step is checkRefs[1], which requires each VM_CREDENTIAL_REASONS value in the MOE_VM_CREDENTIAL_UNAVAILABLE row.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/CERTIFICATION.md",
         "docs/TROUBLESHOOTING.md"
       ],
+      "modifiedFiles": [
+        "docs/CERTIFICATION.md",
+        "docs/TROUBLESHOOTING.md"
+      ],
+      "startedAt": "2026-11-06T05:05:13.671Z",
+      "completedAt": "2026-11-06T05:05:16.067Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -54,16 +67,22 @@
     {
       "stepId": "step-3",
       "description": "JetBrains Accounts text. In moe-jetbrains/src/main/resources/messages/MoeBundle.properties, edit with this seat's editor, never a shell write.\n- `moe.accounts.vmToken.removeConfirm`: replace \"Moe then cannot run the agents of this account in a Moe VM until a new token is set.\" with a true sentence: Moe VM jobs of this account then use its Claude sign-in instead, a short-lived credential renewed on this computer. Keep the rest of the value.\n- `moe.accounts.vmToken.setConfirm`: say the token is optional. Without one, VM jobs use the account's Claude sign-in. A token never expires in the middle of a long job, and it is the route on macOS. Keep the terminal-tab instructions.\nRules for both values:\n- Exactly one {0} and no other brace.\n- No apostrophe: java.text.MessageFormat treats a single quote as a quoting character, and AccountPresentationTest's bundle guard formats every account key and fails on a leftover brace.\n- Change no key and no other value; the guard counts 72 account keys.\nError handling: a failure in the gate's Gradle leg here means a quote or brace slipped into a value. Fix the value and rerun that leg. The test is checkRefs[0]'s AccountPresentationTest leg, plus checkRefs[1]'s `cannot run the agents` check.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
-      ]
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "startedAt": "2026-11-06T05:05:17.154Z",
+      "completedAt": "2026-11-06T05:05:28.858Z"
     },
     {
       "stepId": "step-4",
       "description": "Verify, once. Run checkRefs[0] && checkRefs[1] exactly as stored, joined with ' && ', from this task's worktree. Their output is the complete_task evidence.\n- checkRefs[0] re-runs the slices' tests in four parallel legs:\n  - the JetBrains AccountPresentationTest (Windows Gradle);\n  - postflight-vm-route.ps1 on Windows PowerShell 5.1, through pwsh then cmd, which keeps PSModulePath;\n  - postflight-vm-route.ps1 on pwsh 7;\n  - in bash: moe-account-lease.test.mjs and account-trust-docs.test.mjs on node and node.exe, then postflight-vm-route.sh, parity-check.sh and npm run lint.\n  It passes only when all four legs print GATE_OK. That takes about 10-15 minutes, inside the 20-minute budget. Start it in the background and poll the log; do not hold one foreground call past the tool cap.\n- checkRefs[1] imports the landed helper's VM_CREDENTIAL_REASONS. It requires each reason in the MOE_VM_CREDENTIAL_UNAVAILABLE row, the new ARCHITECTURE Credentials sub-bullet with its key facts, no 'Mint a VM token for each' and no 'is never opened' left, no false bundle sentence, and the `[seat] VM credential` line in both wrappers. Before these edits it fails: verified on 4f0280c3, along with a simulated green run and a red mutant.\n- If the slices' landed text differs from this plan (a reason renamed, a different line), fix the docs to match the code. Do not edit the checkRef: name the difference in the completion summary, and QA judges it.\nError handling for a red run: read that leg's log tail in $L.\n- A WSL interop failure (UtilAcceptVsock) or a Gradle daemon start failure is not a test result: rerun the whole gate once.\n- If a ps1 leg fails, rerun it against the parent revision before blaming this row (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A docs or bundle defect is fixed in this row's files.\n- A failure inside a slice's own code or tests (helper, wrappers, harnesses) is never patched here. Call moe.report_blocked naming the failing leg and the slice row (task-fbd2a42f or task-98053b89), so the governor files the fix row.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-06T05:05:29.587Z"
     },
     {
       "stepId": "step-5",
@@ -99,11 +118,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:22:46.400Z",
-  "updatedAt": "2026-11-06T05:03:44.028Z",
+  "updatedAt": "2026-11-06T05:05:29.587Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:22:49.127Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-fe831cde",
@@ -117,7 +137,11 @@
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T18:52:43.780Z",
   "executionContract": {
@@ -196,5 +220,6 @@
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
     "sessionId": "architect-fe831cde@2026-11-05T18:22:47Z",
     "at": "2026-11-05T19:01:23.910Z"
-  }
+  },
+  "workStartedAt": "2026-11-06T05:04:25.354Z"
 }
