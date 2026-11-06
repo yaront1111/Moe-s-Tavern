@@ -486,7 +486,9 @@ again does not establish ownership of the other changes already in it. Uncontest
 continue to follow the existing ASSERTED, PLANNED and MEASURED rules.
 
 The importee guard checks path presence for supported literal relative imports, including
-TypeScript source candidates for emitted `.js`, `.mjs` and `.cjs` specifiers. It does not prove
+TypeScript source candidates for emitted `.js`, `.mjs` and `.cjs` specifiers, and the appended
+extensions and `/index` forms for a specifier with no source extension. A dot inside the last
+segment, as in `[...path]` or `vite.config`, does not count as a source extension. It does not prove
 compiler or runtime validity, resolve computed imports, or replace the project quality gate.
 
 ### Rails Reference

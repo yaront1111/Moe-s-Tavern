@@ -126,6 +126,21 @@ test('Bash guard subtracts a landing deletion from HEAD', t => {
     assert.deepEqual(result.skipped, [['MOE_ATTR_IMPORTEE_MISSING(./b.mjs)', 'a.mjs']]);
 });
 
+// 2026-11-05: '../pages/api/platform/[...path]' was held twice although HEAD had '[...path].ts'.
+test('Bash guard appends extensions to a specifier whose last segment holds a dot', t => {
+    const result = fixture(t, {
+        'a.ts': 'import handler from "./[...path]"; import config from "./vite.config"; export { handler, config };',
+    }, { head: { '[...path].ts': 'export default 1;', 'vite.config.ts': 'export default {};' } });
+    assert.deepEqual(result.selected, ['a.ts']);
+    assert.deepEqual(result.skipped, []);
+});
+
+test('Bash guard still holds a missing specifier whose last segment holds a dot', t => {
+    const result = fixture(t, { 'a.ts': 'import handler from "./[...missing]";' });
+    assert.deepEqual(result.selected, []);
+    assert.deepEqual(result.skipped, [['MOE_ATTR_IMPORTEE_MISSING(./[...missing])', 'a.ts']]);
+});
+
 test('Bash guard preserves a closed cycle and TypeScript emitted-JS bridge', t => {
     const result = fixture(t, {
         'a.ts': 'import { b } from "./b.js"; export const a = 1;',

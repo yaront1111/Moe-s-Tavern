@@ -5169,7 +5169,12 @@ def importee_present(target, head, landing):
         cands.append(stem + '.cts')
     elif ext == '.jsx':
         cands.append(stem + '.tsx')
-    elif ext == '':
+    elif ext not in SRC_EXT:
+        # No source extension, though the last segment may hold a dot that
+        # splitext reports as one ('[...path]' -> '.path]', 'vite.config'), so
+        # resolvers append it. Ps1 twin: Test-MoeImporteePresent. (2026-11-05:
+        # a test importing '../pages/api/platform/[...path]' was held twice as
+        # MOE_ATTR_IMPORTEE_MISSING while HEAD had '[...path].ts'.)
         cands += [target + e for e in ('.ts', '.tsx', '.js', '.mjs', '.mts')] + [target + '/index' + e for e in ('.ts', '.tsx', '.js')]
     return any((key(c) in head) or (key(c) in landing) for c in cands)
 src_cands = [c for c in cands if c[0] != 'BOARD' and c[1] != 'D' and os.path.splitext(c[2])[1].lower() in SRC_EXT]
