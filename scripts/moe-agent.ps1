@@ -483,10 +483,10 @@ if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1'
 # or grok runs, by bare name and with no -CommandArgs, resolved by
 # Resolve-MoeProtectedCli below. Lines are byte-identical in moe-agent.sh.
 function Stop-MoeProtectedAgent([string]$Line) { [Console]::Error.WriteLine($Line); exit 1 }
-if ($script:MoeRuntimeProtected -and ($CommandArgs.Count -ne 0 -or $Command -cnotin @('claude', 'codex', 'gemini', 'grok'))) {
+if ($script:MoeRuntimeProtected -and ($CommandArgs.Count -ne 0 -or $Command -cnotin @('claude', 'codex', 'gemini', 'grok', 'copilot'))) {
     $moeShown = ((@($Command) + @($CommandArgs)) -join ' ') -replace '\p{Cc}', '?'
     if ($moeShown.Length -gt 200) { $moeShown = $moeShown.Substring(0, 200) }
-    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '$moeShown' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start."
+    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '$moeShown' is not one of claude, codex, gemini, grok, copilot; the protected runtime runs only these agent CLIs by name. Refusing to start."
 }
 # Protected runtime gate, before the exit handler, any MCP config, daemon, proxy
 # RPC or CLI. The refusal names the variable, never its value; byte-identical in
@@ -844,6 +844,8 @@ $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFil
 # the outer finally on every exit path) and the pre-launch values of the GROK_*
 # env the branch overrides (restored in the same finally).
 $script:GrokPromptFile = $null
+$script:CopilotPromptFile = $null
+$script:CopilotMcpFile = $null
 $script:GrokEnvPrev = $null
 
 # Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single
@@ -1227,6 +1229,7 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini" -or $cmdBase -eq "agy") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
+elseif ($cmdBase -eq "copilot") { $cliType = "copilot" }
 # The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
 # Replaces an inherited value (the in-process hot reload keeps env).
 $env:MOE_WORKER_TYPE = $cliType.ToUpperInvariant()
@@ -1321,6 +1324,7 @@ $claudeInteractive = ($cliType -eq "claude") -and $Interactive
 # default: $Interactive is already resolved above (architect/governor true,
 # worker/qa false, an explicit switch wins), and -GrokExec forces headless.
 $grokInteractive = ($cliType -eq "grok") -and $Interactive -and (-not $GrokExec)
+$copilotInteractive = ($cliType -eq "copilot") -and $Interactive
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 # (-Root: the control or the task worktree; MOE_PROJECT_PATH stays the control)
@@ -3689,6 +3693,7 @@ try {
             'codex' { Write-MoeCodexConfig -Root $script:cliRoot -SerenaProject $serenaProject }
             'gemini' { Write-MoeGeminiConfig -Root $script:cliRoot -SerenaProject $serenaProject }
             'grok' { Write-MoeGrokConfig -Root $script:cliRoot -SerenaProject $serenaProject }
+            'copilot' { $script:MoeCopilotSerena = $serenaProject }
         }
         # Claude's temp --mcp-config, for this launch only: the loop top writes the shared one back.
         $what = 'cannot write the claude MCP config'; $at = $mcpConfigFile
@@ -9058,7 +9063,11 @@ if ($moeTasklessWaitSec -lt 5) { $moeTasklessWaitSec = 5 }
 if ($moeTasklessWaitSec -gt 600) { $moeTasklessWaitSec = 600 }
 $moeTasklessPollSec = 5
 if ($moeTasklessPollSec -gt $moeTasklessWaitSec) { $moeTasklessPollSec = $moeTasklessWaitSec }
-if ($codexInteractive -or $geminiInteractive -or $grokInteractive) {
+if ($cliType -eq 'copilot') {
+    if ($copilotInteractive) { Write-Host 'Copilot mode: interactive' }
+    else { Write-Host 'Copilot mode: headless (stdin prompt)' }
+}
+if ($codexInteractive -or $geminiInteractive -or $grokInteractive -or $copilotInteractive) {
     # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
     # interactive mode is fine to loop: each iteration spawns a fresh CLI
@@ -9507,7 +9516,7 @@ function Invoke-MoeGuardedCommand {
             $saved[$p.Name] = [Environment]::GetEnvironmentVariable($p.Name)
             [Environment]::SetEnvironmentVariable($p.Name, $p.Value)
         }
-        & $Command @args
+        if ($MyInvocation.ExpectingInput) { $input | & $Command @args } else { & $Command @args }
         $code = $LASTEXITCODE
     } finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
@@ -10158,6 +10167,7 @@ do {
     $preflightTaskId = ""
     $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''; $script:MoeWtDirtList = ''; $script:MoeWtCompletion = $false
     $script:cliRoot = "$projectPath"; Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue
+    $script:MoeCopilotSerena = $serenaProject
     if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false }
     if ($script:MoeMcpConfigDirty) { $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFile -Encoding UTF8; $script:MoeMcpConfigDirty = $false }
     # Per-task launch hint from claim_next_task (reset so a tier never leaks into the next task).
@@ -10942,7 +10952,7 @@ $mentionsJson
                 # that for TUIs too. The sh twin resolves this identically.
                 $architectSessionTasks = 0
                 if (-not ("$env:MOE_ARCHITECT_TASKS_PER_SESSION" -match '^\d+$' -and [int]::TryParse("$env:MOE_ARCHITECT_TASKS_PER_SESSION", [ref]$architectSessionTasks)) -or $architectSessionTasks -lt 1) { $architectSessionTasks = 10 }
-                if ((($cliType -eq 'claude' -and $Interactive) -or $codexInteractive -or $geminiInteractive -or $grokInteractive) -and $architectSessionTasks -gt 1) {
+                if ((($cliType -eq 'claude' -and $Interactive) -or $codexInteractive -or $geminiInteractive -or $grokInteractive -or $copilotInteractive) -and $architectSessionTasks -gt 1) {
                     "Task $preflightTaskId is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $architectSessionTasks tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WorkerId'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $architectSessionTasks tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                 } else {
                     "Task $preflightTaskId is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
@@ -10986,11 +10996,12 @@ $mentionsJson
         'codex' { -not $codexInteractive }
         'gemini' { -not $geminiInteractive }
         'grok' { -not $grokInteractive }
+        'copilot' { -not $copilotInteractive }
         default { -not $Interactive }
     }
     if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor' -and -not $notificationPrompt) {
         $claimPromptBody += " One-shot session: this CLI process exits when you end your turn, and any background jobs/builds/tests die with it, so a completion notification cannot arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
-    } elseif ($cliType -in @('claude', 'grok', 'codex', 'gemini') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
+    } elseif ($cliType -in @('claude', 'grok', 'codex', 'gemini', 'copilot') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
         # An interactive TUI stays open after the agent stops, and the wrapper
         # claims the next task only once the CLI exits: without this line the
         # seat parks after every task until the operator notices.
@@ -11516,6 +11527,69 @@ $mentionsJson
                 Stop-HeartbeatSidecar
             }
         }
+    } elseif ($cliType -eq 'copilot') {
+        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+            [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $Command. Install it (npm install -g @github/copilot), then sign in with copilot login.")
+            $script:MoeExitStatus = 1; exit 1
+        }
+        if ($claimPromptBody) { $copilotDirective = $claimPromptBody }
+        elseif ($AutoClaim) { $copilotDirective = "If a routed_mentions block is present in the session context above, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc." }
+        else {
+            $roleWorkflow = switch ($Role) {
+                'architect' { 'Workflow: join chat -> read messages -> claim task -> get_context -> read Serena memory -> explore codebase -> submit_plan -> write Serena memory (handoff + learnings) -> announce in chat' }
+                'worker' { 'Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> start_step -> implement -> complete_step -> complete_task -> write Serena memory (handoff + learnings) -> announce in chat' }
+                'qa' { 'Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> review code and tests -> qa_approve or qa_reject -> write Serena memory (handoff + learnings) -> announce in chat' }
+                default { 'Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff' }
+            }
+            $copilotDirective = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+        }
+        $copilotFileBody = $systemAppend
+        if ($dynamicContext) { $copilotFileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext }
+        $copilotFileBody += "`n`n" + $copilotDirective
+        $script:CopilotPromptFile = Join-Path $env:TEMP "moe-copilot-prompt-$Role-$myPid.md"
+        $script:CopilotMcpFile = Join-Path $env:TEMP "moe-copilot-mcp-$Role-$myPid.json"
+        $copilotWritePath = $script:CopilotPromptFile
+        try {
+            [IO.File]::WriteAllText($copilotWritePath, $copilotFileBody, [Text.UTF8Encoding]::new($false))
+            $copilotWritePath = $script:CopilotMcpFile
+            $copilotEnv = @{ MOE_PROJECT_PATH = "$projectPath"; MOE_TOOL_NAME_STYLE = 'underscore'; MOE_WORKER_ID = $WorkerId }
+            $copilotKeys = @('MOE_WORKER_TYPE', 'MOE_SESSION_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_DAEMON_HOST')
+            if (-not [string]::IsNullOrWhiteSpace($env:MOE_ATTEMPT_ID) -and -not [string]::IsNullOrWhiteSpace($env:MOE_ATTEMPT_GENERATION)) { $copilotKeys += @('MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION') }
+            foreach ($key in $copilotKeys) {
+                $value = [Environment]::GetEnvironmentVariable($key)
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $copilotEnv[$key] = $value }
+            }
+            $copilotMoe = $mcpConfigObj.mcpServers.moe
+            $copilotServers = @{ moe = @{ type = 'local'; command = $copilotMoe.command; args = $copilotMoe.args; env = $copilotEnv; tools = @('*'); timeout = 780000 } }
+            if ($serenaPath -and $script:MoeCopilotSerena) {
+                $copilotServers.serena = @{ type = 'local'; command = $serenaPath; tools = @('*'); args = @('start-mcp-server', '--context', 'agent', '--project', $script:MoeCopilotSerena, '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false') }
+            }
+            [IO.File]::WriteAllText($copilotWritePath, (ConvertTo-Json -InputObject @{ mcpServers = $copilotServers } -Depth 6), [Text.UTF8Encoding]::new($false))
+        } catch {
+            [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_CONFIG_FAILED: cannot write $copilotWritePath; refusing to launch copilot without its prompt and moe server.")
+            $script:MoeExitStatus = 1; exit 1
+        }
+        Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+        try {
+            Push-Location -LiteralPath $script:cliRoot
+            try {
+                if ($copilotInteractive) {
+                    $copilotPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CopilotPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    Write-Host "Command: $Command -C `"$script:cliRoot`" --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" -i `"<prompt>`""
+                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" -i "$copilotPointerPrompt"
+                    $script:CliExitCode = $LASTEXITCODE
+                } else {
+                    Write-Host "Command: $Command -C `"$script:cliRoot`" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`""
+                    $previousOutputEncoding = $global:OutputEncoding; $previousConsoleEncoding = [Console]::OutputEncoding
+                    try {
+                        $global:OutputEncoding = New-Object Text.UTF8Encoding($false)
+                        [Console]::OutputEncoding = $global:OutputEncoding
+                        $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)"
+                        $script:CliExitCode = $LASTEXITCODE
+                    } finally { $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding }
+                }
+            } finally { Pop-Location }
+        } finally { Stop-HeartbeatSidecar }
     } else {
         # Enable Claude Code subagents for all Moe roles by default. Architects
         # benefit hugely from Explore-style parallel research during planning;
@@ -12296,6 +12370,9 @@ $mentionsJson
     }
     if ($script:GrokPromptFile -and (Test-Path -LiteralPath $script:GrokPromptFile)) {
         Remove-Item -LiteralPath $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($copilotFile in @($script:CopilotPromptFile, $script:CopilotMcpFile)) {
+        if ($copilotFile) { Remove-Item -LiteralPath $copilotFile -Force -ErrorAction SilentlyContinue }
     }
     foreach ($moeAccountFile in @($script:AccountSampleFile, $script:AccountSettingsFile)) {
         if ($moeAccountFile) { Remove-Item -LiteralPath $moeAccountFile -Force -ErrorAction SilentlyContinue }

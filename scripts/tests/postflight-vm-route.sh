@@ -121,6 +121,59 @@ process.stdout.write(JSON.stringify(walk(rec), null, 1));
 ' "$REC" "$RUN_TMP"
 }
 
+# --- [copilot]: only this fake reads stdin, and never for a TUI.
+mkdir -p "$TMP_DIR/serena-bin"
+printf '#!/bin/sh\nexit 0\n' > "$TMP_DIR/serena-bin/serena"; chmod +x "$TMP_DIR/serena-bin/serena"
+printf '#!/usr/bin/env bash\nexec %q -e %q %q "$@"\n' "$NODE" '
+const fs=require("fs"),[rec,...argv]=process.argv.slice(1),i=argv.indexOf("-i"),mcpFile=argv[argv.indexOf("--additional-mcp-config")+1].slice(1);
+fs.writeFileSync(rec,JSON.stringify({cli:"copilot",argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,"utf8")),stdin:i<0?fs.readFileSync(0,"utf8"):"",pointerText:i<0?"":fs.readFileSync(argv[i+1].split(" is in ")[1].split(" - read it.")[0],"utf8")}));' "$REC" > "$BIN/copilot"
+chmod +x "$BIN/copilot"; cp "$BIN/copilot" "$BIN/copilot.exe"; cp "$BIN/copilot" "$BIN/copilot.cmd"
+cp_assert() {
+  [ "$VMR_CODE" = 0 ] && [ -f "$REC" ] || vmr_fail "$VMR_ROW" "copilot did not launch: $VMR_CODE"
+  "$NODE" - "$REC" "$PROJECT" "$1" "${2:-$PROJECT}" "$FAKE_PROXY" "$TMP_DIR/serena-bin/serena" <<'JS' || vmr_fail "$VMR_ROW" 'copilot contract'
+const [file,project,mode,root,proxy,serena]=process.argv.slice(2),fs=require('fs'),a=require('assert/strict'),r=JSON.parse(fs.readFileSync(file)),tui=mode==='tui';
+a.equal(r.env.MOE_WORKER_TYPE,'COPILOT'); a.equal(r.cwd,root);
+a.deepEqual(r.argv,['-C',root,...(tui?[]:['--allow-all','--no-ask-user']),'--no-auto-update','--disable-builtin-mcps','--additional-mcp-config','@'+r.mcpFile,...(tui?['-i',r.argv.at(-1)]:[])]);
+const text=tui?r.pointerText:r.stdin;
+for(const s of ['task-postflight','# Session Context (per-iteration)',tui?'INTERACTIVE session:':'One-shot session:']) a.ok(text.includes(s),s);
+if(tui) a.ok(text.includes('This interactive session may plan up to')); else a.ok(text.includes('\u2014'));
+if(mode==='worker') a.ok(text.startsWith('Role: worker.'));
+const m=r.mcp.mcpServers.moe,e=m.env;
+a.equal(m.type,'local'); a.deepEqual(m.tools,['*']); a.equal(m.timeout,780000); a.deepEqual(m.args,[proxy]); a.ok(m.command);
+a.equal(e.MOE_PROJECT_PATH,project); a.equal(e.MOE_TOOL_NAME_STYLE,'underscore'); a.equal(e.MOE_WORKER_ID,r.env.MOE_WORKER_ID);
+for(const k of ['MOE_WORKER_TYPE','MOE_SESSION_ID','MOE_RUNNER_PROCESS_STARTED_AT','MOE_RUNNER_HOST','MOE_DAEMON_HOST']) if(r.env[k]) a.equal(e[k],r.env[k]);
+for(const k of ['MOE_ATTEMPT_ID','MOE_ATTEMPT_GENERATION']) a.equal(e[k],r.env.MOE_ATTEMPT_ID&&r.env.MOE_ATTEMPT_GENERATION?r.env[k]:undefined);
+a.deepEqual(r.mcp.mcpServers.serena,{type:'local',command:serena,tools:['*'],args:['start-mcp-server','--context','agent','--project',root,'--enable-web-dashboard','false','--enable-gui-log-window','false']});
+a.ok(!r.mcpFile.startsWith(project+'/')); a.ok(!fs.existsSync(r.mcpFile),'temp cleanup');
+JS
+}
+cp_fixture() {
+  printf '.moe/\n.worktrees/\n.mcp.json\n.serena/\n' > "$PROJECT/.gitignore"
+  git -C "$PROJECT" init -q -b main; git -C "$PROJECT" add .gitignore
+  git -C "$PROJECT" commit -qm seed; git -C "$PROJECT" checkout -qb moe/control
+  mkdir -p "$PROJECT/.serena/memories"
+  export FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_CTX_WORKSPACE='{"mode":"worktree","target":"main"}'
+}
+(
+  export MOE_SERENA_PATH="$TMP_DIR/serena-bin/serena"
+  vmr_run CP-H worker copilot - off -; vmr_launched CP-H; cp_assert worker
+  grep -Fq 'Copilot mode: headless (stdin prompt)' "$OUT" || vmr_fail CP-H banner
+  for ext in exe cmd; do VMR_CMD="$BIN/copilot.$ext"; vmr_run CP-X worker copilot - off -; cp_assert worker; done
+  VMR_ARGS=(--poll-interval 1); vmr_run CP-A architect copilot - off -; cp_assert tui
+  grep -Fq 'Copilot mode: interactive' "$OUT" && grep -Fq 'Interactive mode: polling disabled' "$OUT" || vmr_fail CP-A polling
+  VMR_ARGS=(--no-loop --poll-interval 0 --no-interactive); vmr_run CP-AN architect copilot - off -; cp_assert headless
+  VMR_ARGS=(--no-loop --poll-interval 0)
+  for name in copilot copilot.exe copilot.cmd; do
+    missing="$TMP_DIR/missing/$name"; VMR_CMD="$missing"; vmr_run CP-NF worker copilot - off -
+    [ "$VMR_CODE" = 1 ] && [ ! -e "$REC" ] && [ "$(grep -c MOE_COPILOT_NOT_FOUND "$OUT")" = 1 ] &&
+      grep -Fq "MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $missing. Install it (npm install -g @github/copilot), then sign in with copilot login." "$OUT" || vmr_fail CP-NF refusal
+  done
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$TMP_DIR/cp-gitconfig"
+  printf '[user]\n name = Test\n email = test@example.com\n' > "$GIT_CONFIG_GLOBAL"
+  VMR_SETUP=cp_fixture; vmr_run CP-W worker copilot - on -; cp_assert worker "$PROJECT/.worktrees/task-postflight"
+)
+echo '[copilot] ok CP-H, CP-X, CP-A, CP-AN, CP-NF, CP-W'
+
 echo "[vm route] today's path: every non-verified-local answer launches the same CLI"
 LEGACY='{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
 vmr_run T-legacy worker claude "$LEGACY" - -
@@ -221,6 +274,7 @@ REFUSAL_ROWS=(
   "W1|worker|gemini|$VL_FALSE|off|1|MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED|$VL, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat."
   "C1|worker|gemini|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat."
   "C2|worker|grok|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat."
+  "C3|worker|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat."
   "S1|worker|claude|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is 'off'; refusing to start this seat."
   "S2|worker|claude|$VL_FALSE|\"ON\"|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is invalid (\"ON\"); refusing to start this seat."
   "$S3_ROW" "$S4_ROW"
@@ -232,7 +286,7 @@ for r in "${REFUSAL_ROWS[@]}"; do
   vmr_run "$row" "$role" "$cli" "$readiness" "$wt" "$seam"
   vmr_refused "$row" "$code" "$detail"
 done
-echo "[vm route] ok refusals (W1, C1, C2, S1-S4, N1, N2; R1/R2 in the seat-job block)"
+echo "[vm route] ok refusals (W1, C1, C2, C3, S1-S4, N1, N2; R1/R2 in the seat-job block)"
 
 echo "[vm route] architect and governor seats never read readiness"
 for r in A1:architect G1:governor; do

@@ -33,10 +33,10 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     foreach ($a in $WrapperArgs) {
         if ($a -match '[\s"]') { $quoted += ('"' + ($a -replace '"', '\"') + '"') } else { $quoted += $a }
     }
-    if ($WrapperArgs -contains '-AutoClaim:$false') {
+    if (@($WrapperArgs | Where-Object { $_ -match '^-[A-Za-z]+:\$false$' }).Count) {
         # 5.1 -File cannot bind an explicit false switch; use a literal command.
-        $words = @($wrapper) + @($WrapperArgs | Where-Object { $_ -cne '-AutoClaim:$false' })
-        $invoke = '& ' + (($words | ForEach-Object { if ($_ -match '^-[A-Za-z]+$') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' ') + ' -AutoClaim:$false; exit $LASTEXITCODE'
+        $words = @($wrapper) + $WrapperArgs
+        $invoke = '& ' + (($words | ForEach-Object { if ($_ -match '^-[A-Za-z]+(:\$false)?$') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' ') + '; exit $LASTEXITCODE'
         $quoted = @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invoke)))
     }
     if ($script:VmjInterrupt) {
@@ -123,6 +123,59 @@ function Get-VmrNormalized {
     $normalized = & node $recorder normalize $rec $runTmp
     if ($LASTEXITCODE -ne 0) { throw 'record normalization failed' }
     return ($normalized -join "`n")
+}
+
+function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project) {
+    if ($R.Code -ne 0 -or -not $R.Ran) { Stop-Vmr $R 'copilot did not launch' }
+    $rcli = [IO.File]::ReadAllText($rec) | ConvertFrom-Json; $tui = $Mode -eq 'tui'
+    $expected = @('-C', $rcli.argv[1]) + @(if (-not $tui) { '--allow-all'; '--no-ask-user' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @(if ($tui) { '-i'; $rcli.argv[-1] })
+    if (($rcli.argv -join "`0") -cne ($expected -join "`0") -or $rcli.env.MOE_WORKER_TYPE -cne 'COPILOT') { Stop-Vmr $R 'argv/worker type' }
+    foreach ($p in @($rcli.cwd, $rcli.argv[1])) { if ([IO.Path]::GetFullPath($p) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'CLI root' } }
+    $text = if ($tui) { $rcli.pointerText } else { $rcli.stdin }
+    foreach ($s in @('task-postflight', '# Session Context (per-iteration)') + @(if ($tui) { 'INTERACTIVE session:'; 'This interactive session may plan up to' } else { 'One-shot session:'; [string][char]0x2014 })) {
+        if (-not $text.Contains($s)) { Stop-Vmr $R "prompt lacks $s" }
+    }
+    if ($Mode -eq 'worker' -and -not $text.StartsWith('Role: worker.')) { Stop-Vmr $R 'role prompt' }
+    $m = $rcli.mcp.mcpServers.moe; $e = $m.env; $s = $rcli.mcp.mcpServers.serena
+    if ($m.type -cne 'local' -or ($m.tools -join ',') -cne '*' -or $m.timeout -ne 780000 -or ($m.args -join ',') -cne $fakeProxy -or -not $m.command -or $e.MOE_PROJECT_PATH -cne "$project" -or $e.MOE_TOOL_NAME_STYLE -cne 'underscore' -or $e.MOE_WORKER_ID -cne $rcli.env.MOE_WORKER_ID) { Stop-Vmr $R 'moe MCP shape' }
+    foreach ($k in @('MOE_WORKER_TYPE', 'MOE_SESSION_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_DAEMON_HOST')) { if ($rcli.env.$k -and $e.$k -cne $rcli.env.$k) { Stop-Vmr $R "MCP identity $k" } }
+    foreach ($k in @('MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')) { $want = if ($rcli.env.MOE_ATTEMPT_ID -and $rcli.env.MOE_ATTEMPT_GENERATION) { $rcli.env.$k } else { $null }; if ($e.$k -cne $want) { Stop-Vmr $R "MCP pair $k" } }
+    $wantSerena = @('start-mcp-server', '--context', 'agent', '--project', $s.args[4], '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false')
+    if ($s.type -cne 'local' -or $s.command -cne $env:MOE_SERENA_PATH -or ($s.tools -join ',') -cne '*' -or ($s.args -join "`0") -cne ($wantSerena -join "`0") -or [IO.Path]::GetFullPath($s.args[4]) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'Serena MCP shape/root' }
+    if ($rcli.mcpFile.StartsWith($project) -or (Test-Path -LiteralPath $rcli.mcpFile)) { Stop-Vmr $R 'MCP temp location/cleanup' }
+}
+function Invoke-CopilotRows {
+    $saved = @{}; foreach ($k in @('MOE_SERENA_PATH', 'FAKE_CLAIM_WORKSPACE', 'FAKE_CTX_WORKSPACE', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        New-Item -ItemType Directory -Path "$tempRoot\serena-bin" | Out-Null
+        $env:MOE_SERENA_PATH = "$tempRoot\serena-bin\serena.cmd"
+        [IO.File]::WriteAllText($env:MOE_SERENA_PATH, "@exit /b 0`r`n")
+        $r = Invoke-VmrRow CP-H worker copilot '' off; Assert-VmrLaunched $r; Assert-CopilotRow $r worker
+        if (-not $r.Text.Contains('Copilot mode: headless (stdin prompt)')) { Stop-Vmr $r 'banner' }
+        $script:VmrLoop = @('-PollInterval', '1'); $r = Invoke-VmrRow CP-A architect copilot '' off; Assert-CopilotRow $r tui
+        foreach ($s in @('Copilot mode: interactive', 'Interactive mode: polling disabled', 'Loop: False')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r $s } }
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @('-Interactive:$false')
+        $r = Invoke-VmrRow CP-AN architect copilot '' off; Assert-CopilotRow $r headless; $script:VmjExtraArgs = @()
+        foreach ($name in @('copilot', 'copilot.exe', 'copilot.cmd')) {
+            $script:VmrCommand = "$tempRoot\missing\$name"; $r = Invoke-VmrRow CP-NF worker copilot '' off
+            $lines = @($r.Text -split '\r?\n' | Where-Object { $_.Contains('MOE_COPILOT_NOT_FOUND') })
+            if ($r.Code -ne 1 -or $r.Ran -or $lines.Count -ne 1 -or $lines[0] -cne "[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $script:VmrCommand. Install it (npm install -g @github/copilot), then sign in with copilot login.") { Stop-Vmr $r 'missing CLI refusal' }
+        }
+        $script:VmrCommand = ''; $env:GIT_CONFIG_GLOBAL = "$tempRoot\cp-gitconfig"; $env:GIT_CONFIG_NOSYSTEM = '1'
+        [IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, "[user]`n name = Test`n email = test@example.com`n")
+        $script:VmrSetup = {
+            [IO.File]::WriteAllText("$project\.gitignore", ".moe/`n.worktrees/`n.mcp.json`n.serena/`n")
+            Invoke-VmcGit $project @('init', '-q', '-b', 'main') | Out-Null; Invoke-VmcGit $project @('add', '.gitignore') | Out-Null
+            Invoke-VmcGit $project @('commit', '-qm', 'seed') | Out-Null; Invoke-VmcGit $project @('checkout', '-qb', 'moe/control') | Out-Null
+            New-Item -ItemType Directory -Force -Path "$project\.serena\memories" | Out-Null
+            $env:FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; $env:FAKE_CTX_WORKSPACE = $env:FAKE_CLAIM_WORKSPACE
+        }
+        $r = Invoke-VmrRow CP-W worker copilot '' on; Assert-CopilotRow $r worker "$project\.worktrees\task-postflight"
+        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W'
+    } finally {
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @(); $script:VmrCommand = ''; $script:VmrSetup = $null
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
 }
 
 # --- [vm seat] CQ-M07n3: port of af8ca2bb's seat-job rows; shared stub only. ---
@@ -1479,6 +1532,9 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
     expiresAt: Date.now() + 288e5, scopes: ['user:inference'], subscriptionType: 'max'}}));
   fs.appendFileSync(require('node:path').dirname(RECORD) + '/renew.jsonl', JSON.stringify({argv, cwd: process.cwd(), configDir: d,
     hasMoeWorkerId: 'MOE_WORKER_ID' in e, hasPluginDirs: 'CLAUDE_CODE_PLUGIN_DIRS' in e}) + '\n');
+} else if (cli === 'copilot') {
+  const i=argv.indexOf('-i'),mcpFile=argv[argv.indexOf('--additional-mcp-config')+1].slice(1);
+  fs.writeFileSync(RECORD,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,'utf8')),stdin:i<0?fs.readFileSync(0,'utf8'):'',pointerText:i<0?'':fs.readFileSync(argv[i+1].split(' is in ')[1].split(' - read it.')[0],'utf8')}));
 } else if (cli !== 'normalize') {
   fs.writeFileSync(RECORD, JSON.stringify({cli, argv, cwd:process.cwd(), env:process.env}));
   // PS 5.1 routes a quoted prompt through a private context file, not argv.
@@ -1498,11 +1554,12 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
 }
 '@
     [IO.File]::WriteAllText($recorder, ('const RECORD = ' + (ConvertTo-Json $rec) + ";`n" + $body))
-    foreach ($cli in @('claude', 'codex', 'gemini', 'grok')) {
+    foreach ($cli in @('claude', 'codex', 'gemini', 'grok', 'copilot')) {
         Set-Content -LiteralPath (Join-Path $tempRoot "$cli.cmd") -Encoding ASCII -Value "@echo off`r`nnode `"$recorder`" $cli %*`r`nexit /b %errorlevel%"
     }
     $bytes = [IO.File]::ReadAllBytes($wrapper)
     if ($bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw 'wrapper lost its UTF-8 BOM' }
+    Invoke-CopilotRows
     Invoke-VmcSections
     Invoke-VmjSections
     Invoke-SgSections
@@ -1577,6 +1634,7 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
     $rows = @(
         "C1|worker|gemini|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat.",
         "C2|qa|grok|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat.",
+        "C3|worker|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.",
         "S1|worker|claude|$vlFalse|off|SHARED_MODE_UNSUPPORTED|$shared is 'off'; refusing to start this seat.",
         "S2|worker|claude|$vlFalse|`"ON`"|SHARED_MODE_UNSUPPORTED|$shared is invalid (`"ON`"); refusing to start this seat.",
         "S3|worker|claude|$vlFalse|-|SHARED_MODE_UNSUPPORTED|$shared is unset, which resolves to 'off' while settings.qualityGate is blank; refusing to start this seat.",
@@ -1593,7 +1651,7 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
         $r = Invoke-VmrRow $a[0] $a[1] $a[2] $a[3] $a[4]
         Assert-VmrRefused $r "MOE_VERIFIED_LOCAL_$($a[5])" $a[6]
     }
-    Write-Host '[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)'
+    Write-Host '[vm route] ok refusals (C1/C2/C3, S1-S6, N1-N4; R1/R2 in vm seat)'
     foreach ($seat in @('A1|architect', 'G1|governor')) {
         $a = $seat -split '\|'
         $r = Invoke-VmrRow $a[0] $a[1] claude $vlFalse off
