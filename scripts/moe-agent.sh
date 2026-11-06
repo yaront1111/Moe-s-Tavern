@@ -1460,10 +1460,10 @@ copilot_fatal() {
     exit 1
 }
 
-copilot_signed_out() {
+copilot_log_has() { # $1 = this launch's own log dir, $2 = fixed phrase
     local file
     for file in "$1"/*.log; do
-        [ -f "$file" ] && [ ! -L "$file" ] && grep -Fq 'No authentication information found' "$file" 2>/dev/null && return 0
+        [ -f "$file" ] && [ ! -L "$file" ] && grep -Fq -- "$2" "$file" 2>/dev/null && return 0
     done
     return 1
 }
@@ -12063,6 +12063,12 @@ $PROMPT_BODY"
                 printf '[ERROR] Cannot create private Copilot log directory; refusing to launch.\n' >&2
                 exit 1
             fi
+            # This launch's private stderr copy, beside (never inside) its log dir.
+            COPILOT_ERR_FILE="$COPILOT_LOG_DIR.stderr"
+            if ! { : > "$COPILOT_ERR_FILE"; } 2>/dev/null; then
+                printf '[ERROR] Cannot create private Copilot stderr copy %s; refusing to launch.\n' "$COPILOT_ERR_FILE" >&2
+                exit 1
+            fi
             COPILOT_ARGS=(-C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" --log-dir "$COPILOT_LOG_DIR")
             if [ "${COPILOT_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != 1 ]; then
                 COPILOT_ARGV_PROBED=true
@@ -12079,15 +12085,23 @@ $PROMPT_BODY"
             fi
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} ${COPILOT_ARGS[*]}"
             set +e
-            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" < "$COPILOT_PROMPT_FILE")
-            CLI_EXIT_CODE=$?
+            # stderr is shown live and copied (tee); stdout stays the terminal (fd 3).
+            { (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" < "$COPILOT_PROMPT_FILE") 2>&1 1>&3 3>&- | tee -a "$COPILOT_ERR_FILE" >&2 3>&-; CLI_EXIT_CODE=${PIPESTATUS[0]}; } 3>&1
             set -e
-            COPILOT_SIGNED_OUT=false
-            if [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_signed_out "$COPILOT_LOG_DIR"; then COPILOT_SIGNED_OUT=true; fi
-            rm -rf -- "$COPILOT_LOG_DIR" 2>/dev/null || true
-            if [ "$COPILOT_SIGNED_OUT" = true ]; then
-                copilot_fatal 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+            # One coded stop per launch: signed out, then not entitled (both from this launch's
+            # own log, nonzero exit only), then the moe server blocked (its stderr copy, any exit).
+            COPILOT_FATAL=""
+            if [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_log_has "$COPILOT_LOG_DIR" 'No authentication information found'; then
+                COPILOT_FATAL='MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+            elif [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_log_has "$COPILOT_LOG_DIR" 'not authorized to use this Copilot feature'; then
+                COPILOT_FATAL='MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+            elif grep -qE "Third-party MCP servers are disabled|blocked by policy.*'moe'" "$COPILOT_ERR_FILE" 2>/dev/null; then
+                COPILOT_FATAL='MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+            elif grep -qE "blocked by policy.*'serena'" "$COPILOT_ERR_FILE" 2>/dev/null; then
+                echo -e "${YELLOW}[WARN]${NC} The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them."
             fi
+            rm -rf -- "$COPILOT_LOG_DIR" "$COPILOT_ERR_FILE" 2>/dev/null || true
+            [ -z "$COPILOT_FATAL" ] || copilot_fatal "$COPILOT_FATAL"
         else
             COPILOT_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $COPILOT_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
             echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" ${COPILOT_OPTIONS[*]} -i \"<prompt>\""

@@ -200,6 +200,7 @@ function Invoke-CopilotRows {
         Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_TASK_STATUS, Env:\FAKE_CLAIM_LAUNCH, Env:\MOE_COPILOT_MODEL, Env:\MOE_COPILOT_EFFORT; $script:VmrSetup = $null; $script:VmjExtraArgs = @()
         Invoke-CopilotProbeRows
         Invoke-CopilotAuthRows
+        Invoke-CopilotPolicyRows
         foreach ($name in @('copilot', 'copilot.exe', 'copilot.cmd')) {
             $script:VmrCommand = "$tempRoot\missing\$name"; $r = Invoke-VmrRow CP-NF worker copilot '' off
             $lines = @($r.Text -split '\r?\n' | Where-Object { $_.Contains('MOE_COPILOT_NOT_FOUND') })
@@ -252,9 +253,65 @@ function Invoke-CopilotAuthRows {
             if (@($dirs | Select-Object -Unique).Count -ne $count) { Stop-Vmr $r 'shared log directory' }
             foreach ($d in $dirs) { if (-not [IO.Path]::IsPathRooted($d) -or -not (Split-Path $d -Leaf).StartsWith('copilot-log.') -or (Test-Path -LiteralPath $d) -or (Test-Path -LiteralPath (Split-Path $d))) { Stop-Vmr $r 'log isolation/cleanup' } }
             if ($count -eq 2 -and ($runs[0].argv[[Array]::IndexOf($runs[0].argv,'--reasoning-effort')+1] -cne 'xhigh' -or $runs[1].argv -contains '--reasoning-effort' -or @($runs | Where-Object { $_.argv -contains '--model' }).Count)) { Stop-Vmr $r 'stale routed hint' }
+            foreach ($x in $runs) { if (-not $x.copyExists -or (Test-Path -LiteralPath "$($x.logDir).stderr")) { Stop-Vmr $r 'stderr copy/cleanup' } }
+            if (($count -eq 2 -and -not $runs[1].priorGone) -or @($r.Text -split '\r?\n' | Where-Object { $_.Contains('The Copilot policy of this account blocked the serena MCP server') }).Count -ne ($count - 1)) { Stop-Vmr $r 'per-launch copy/serena WARN' }
             foreach ($s in @('secret-copilot-token','secret-gh-token','secret-github-token')) { if (($r.Text + [IO.File]::ReadAllText($calls)).Contains($s)) { Stop-Vmr $r 'credential leaked' } }
         }
     } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k,$saved[$k]) }; $script:VmrLoop = @('-NoLoop','-PollInterval','0') }
+}
+
+# [copilot policy]: a 403 in this launch's own log (nonzero exit only) or a moe server blocked
+# on this launch's stderr (any exit) stops the seat once; a blocked serena only warns.
+function Assert-CopilotPolicy($R, [int]$Want, [int]$Runs, [string]$Coded, [int]$Warns, [bool]$LaunchFailure) {
+    $lines = @($R.Text -split '\r?\n'); $rpc = Read-VmeJsonl $calls
+    $runRows = @(Get-Content "$rec.copilot" | ConvertFrom-Json | Where-Object kind -eq run)
+    $texts = @{
+        NE = 'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+        MB = 'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+    }
+    if ($R.Code -ne $Want -or $runRows.Count -ne $Runs) { Stop-Vmr $R "exit $($R.Code), launches $($runRows.Count)" }
+    foreach ($k in @('NE', 'MB')) {
+        $n = if ($Coded -ceq $k) { 1 } else { 0 }; $id = $texts[$k].Split(':')[0]
+        if (@($lines | Where-Object { $_.Contains($id) }).Count -ne $n -or @($lines | Where-Object { $_.Contains($texts[$k]) }).Count -ne $n) { Stop-Vmr $R "$id line" }
+        if (@($rpc | Where-Object { $_.tool -ceq 'chat_send' -and $_.args.channel -ceq 'chan-general' -and "$($_.args.content)".Contains('@governors') -and "$($_.args.content)".Contains($id) }).Count -ne $n) { Stop-Vmr $R "$id escalation" }
+    }
+    $fatal = if ($Coded -ceq '-') { 0 } else { 1 }
+    if ((Get-VmeCount $rpc 'chat_send' 'MOE_COPILOT_') -ne $fatal -or ($fatal -and $R.Tools -notcontains 'deregister_worker')) { Stop-Vmr $R 'one escalation and deregistration' }
+    if (@($lines | Where-Object { $_.Contains('The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.') }).Count -ne $Warns) { Stop-Vmr $R 'serena WARN' }
+    if ($R.Text.Contains('[launch-failure]') -ne $LaunchFailure) { Stop-Vmr $R 'launch-failure line' }
+    foreach ($s in @(("$env:FAKE_CP_STDERR" -split '\\n') + ("$env:FAKE_CP_STDOUT" -split '\\n') | Where-Object { $_ })) {
+        if (@($lines | Where-Object { $_ -ceq $s }).Count -ne 1) { Stop-Vmr $R "not shown exactly once: $s" }
+    }
+    $phrase = [regex]::Escape('not authorized to use this Copilot feature')
+    if ($R.Text.Contains('sentinel-log-line') -or ($R.Text -split $phrase).Count -ne ("$env:FAKE_CP_STDOUT" -split $phrase).Count) { Stop-Vmr $R 'log echoed' }
+    foreach ($x in $runRows) { if (-not $x.copyExists -or (Test-Path -LiteralPath $x.logDir) -or (Test-Path -LiteralPath "$($x.logDir).stderr")) { Stop-Vmr $R 'stderr copy/cleanup' } }
+}
+function Set-CopilotFake([hashtable]$Knobs) {
+    foreach ($k in @('FAKE_CP_STDERR', 'FAKE_CP_STDOUT', 'FAKE_CP_LOGTEXT', 'FAKE_CP_STALE', 'FAKE_CP_EXIT')) { [Environment]::SetEnvironmentVariable($k, $Knobs[$k]) }
+}
+function Invoke-CopilotPolicyRows {
+    $l403 = '[ERROR] Error loading models: Error: 403 "unauthorized: not authorized to use this Copilot feature\n"'
+    $third = " ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available."
+    $blocked = " ! 1 MCP server was blocked by policy: '{0}' (Could not verify server against any configured registry)"
+    try {
+        $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
+        $script:VmrLoop = @('-Loop', '-PollInterval', '1')
+        Set-CopilotFake @{ FAKE_CP_LOGTEXT = ('sentinel-log-line\n' + $l403); FAKE_CP_STDERR = ('Error: Access denied by policy settings (Request ID: test)\n' + $third); FAKE_CP_EXIT = '1' }
+        $r = Invoke-VmrRow CP-NE worker copilot '' off; Assert-CopilotPolicy $r 1 1 NE 0 $false
+        Set-CopilotFake @{ FAKE_CP_STDERR = $third }
+        $r = Invoke-VmrRow CP-MB0 worker copilot '' off; Assert-CopilotPolicy $r 1 1 MB 0 $false
+        Set-CopilotFake @{ FAKE_CP_STDERR = ($blocked -f 'moe'); FAKE_CP_EXIT = '1' }
+        $r = Invoke-VmrRow CP-MB1 worker copilot '' off; Assert-CopilotPolicy $r 1 1 MB 0 $false
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+        Set-CopilotFake @{ FAKE_CP_STDERR = ($blocked -f 'serena'); FAKE_CP_LOGTEXT = $l403 }
+        $r = Invoke-VmrRow CP-SER worker copilot '' off; Assert-VmrLaunched $r; Assert-CopilotPolicy $r 0 1 '-' 1 $false
+        Set-CopilotFake @{ FAKE_CP_EXIT = '1'; FAKE_CP_LOGTEXT = 'unrelated error'; FAKE_CP_STALE = $l403; FAKE_CP_STDOUT = ('not authorized to use this Copilot feature\n' + $third + '\n' + ($blocked -f 'moe')) }
+        $r = Invoke-VmrRow CP-NEG worker copilot '' off; Assert-CopilotPolicy $r 0 1 '-' 0 $true
+        Write-Host '[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG'
+    } finally {
+        Set-CopilotFake @{}; Remove-Item Env:\MOE_LAUNCH_BACKOFF_BASE_SEC, Env:\MOE_LAUNCH_BACKOFF_MAX_SEC -ErrorAction SilentlyContinue
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+    }
 }
 
 # --- [vm seat] CQ-M07n3: port of af8ca2bb's seat-job rows; shared stub only. ---
@@ -1613,7 +1670,9 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
     hasMoeWorkerId: 'MOE_WORKER_ID' in e, hasPluginDirs: 'CLAUDE_CODE_PLUGIN_DIRS' in e}) + '\n');
 } else if (cli === 'copilot') {
   const i=argv.indexOf('-i'),kind=argv.includes('--version')?'version':argv.includes('--help')?'probe':'run',stdin=i<0?fs.readFileSync(0,'utf8'):'';
-  fs.appendFileSync(RECORD+'.copilot',JSON.stringify({kind,argv,stdin})+'\n');
+  const ld=argv.indexOf('--log-dir'),logDir=kind!=='run'||ld<0?'':argv[ld+1];
+  const prior=logDir&&fs.existsSync(RECORD+'.copilot')?fs.readFileSync(RECORD+'.copilot','utf8').trim().split('\n').map(JSON.parse).filter(x=>x.logDir):[];
+  fs.appendFileSync(RECORD+'.copilot',JSON.stringify({kind,argv,stdin,logDir,copyExists:!!logDir&&fs.existsSync(logDir+'.stderr'),priorGone:prior.every(x=>!fs.existsSync(x.logDir)&&!fs.existsSync(x.logDir+'.stderr'))})+'\n');
   if(kind!=='run'){console.error(kind==='version'?'copilot-test 1.0\nignored version tail':(e.FAKE_CP_PROBE||'help')+'\nignored help tail');process.exit(Number(e[kind==='version'?'FAKE_CP_VERSION_EXIT':'FAKE_CP_PROBE_EXIT']||0))}
   const mcpFile=argv[argv.indexOf('--additional-mcp-config')+1].slice(1);
   fs.writeFileSync(RECORD,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,'utf8')),stdin,pointerText:i<0?'':fs.readFileSync(argv[i+1].split(' is in ')[1].split(' - read it.')[0],'utf8')}));
@@ -1621,6 +1680,12 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
   if(mode==='stdout')console.log(auth);
   if(mode==='stale')fs.writeFileSync(require('path').dirname(dir)+'/stale.log',auth);
   if(dir&&['auth','two','unrelated'].includes(mode))fs.writeFileSync(dir+'/process-test-'+process.pid+'.log',mode==='unrelated'?'unrelated error':auth+'\nsecret-copilot-token');
+  const t=k=>e[k].split('\\n').join('\n');
+  if(mode==='two'&&n===1)console.error(" ! 1 MCP server was blocked by policy: 'serena' (Could not verify server against any configured registry)");
+  if(e.FAKE_CP_STDOUT)console.log(t('FAKE_CP_STDOUT'));
+  if(e.FAKE_CP_STDERR)console.error(t('FAKE_CP_STDERR'));
+  if(e.FAKE_CP_LOGTEXT&&logDir)fs.writeFileSync(logDir+'/process-test-'+process.pid+'.log',t('FAKE_CP_LOGTEXT'));
+  if(e.FAKE_CP_STALE)for(const d of [require('path').dirname(logDir)+'/copilot-log.stale',e.USERPROFILE+'/.copilot/logs']){fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+'/process-old.log',t('FAKE_CP_STALE'))}
   process.exit(mode==='two'?(n===1?0:1):Number(e.FAKE_CP_EXIT||0));
 } else if (cli !== 'normalize') {
   fs.writeFileSync(RECORD, JSON.stringify({cli, argv, cwd:process.cwd(), env:process.env}));
@@ -1722,6 +1787,7 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
         "C1|worker|gemini|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat.",
         "C2|qa|grok|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat.",
         "C3|worker|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.",
+        "C4|qa|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.",
         "S1|worker|claude|$vlFalse|off|SHARED_MODE_UNSUPPORTED|$shared is 'off'; refusing to start this seat.",
         "S2|worker|claude|$vlFalse|`"ON`"|SHARED_MODE_UNSUPPORTED|$shared is invalid (`"ON`"); refusing to start this seat.",
         "S3|worker|claude|$vlFalse|-|SHARED_MODE_UNSUPPORTED|$shared is unset, which resolves to 'off' while settings.qualityGate is blank; refusing to start this seat.",
@@ -1738,7 +1804,7 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
         $r = Invoke-VmrRow $a[0] $a[1] $a[2] $a[3] $a[4]
         Assert-VmrRefused $r "MOE_VERIFIED_LOCAL_$($a[5])" $a[6]
     }
-    Write-Host '[vm route] ok refusals (C1/C2/C3, S1-S6, N1-N4; R1/R2 in vm seat)'
+    Write-Host '[vm route] ok refusals (C1/C2/C3/C4, S1-S6, N1-N4; R1/R2 in vm seat)'
     foreach ($seat in @('A1|architect', 'G1|governor')) {
         $a = $seat -split '\|'
         $r = Invoke-VmrRow $a[0] $a[1] claude $vlFalse off

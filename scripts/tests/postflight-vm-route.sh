@@ -126,8 +126,9 @@ mkdir -p "$TMP_DIR/serena-bin"
 printf '#!/bin/sh\nexit 0\n' > "$TMP_DIR/serena-bin/serena"; chmod +x "$TMP_DIR/serena-bin/serena"
 printf '#!/usr/bin/env bash\nexec %q -e %q %q "$@"\n' "$NODE" '
 const fs=require("fs"),[rec,...argv]=process.argv.slice(1),i=argv.indexOf("-i"),kind=argv.includes("--version")?"version":argv.includes("--help")?"probe":"run";
-const stdin=i<0?fs.readFileSync(0,"utf8"):"";
-fs.appendFileSync(rec+".copilot",JSON.stringify({kind,argv,stdin})+"\n");
+const stdin=i<0?fs.readFileSync(0,"utf8"):"",ld=argv.indexOf("--log-dir"),logDir=kind!=="run"||ld<0?"":argv[ld+1];
+const prior=logDir&&fs.existsSync(rec+".copilot")?fs.readFileSync(rec+".copilot","utf8").trim().split("\n").map(JSON.parse).filter(x=>x.logDir):[];
+fs.appendFileSync(rec+".copilot",JSON.stringify({kind,argv,stdin,logDir,copyExists:!!logDir&&fs.existsSync(logDir+".stderr"),priorGone:prior.every(x=>!fs.existsSync(x.logDir)&&!fs.existsSync(x.logDir+".stderr"))})+"\n");
 if(kind!=="run"){console.error(kind==="version"?"copilot-test 1.0\nignored version tail":(process.env.FAKE_CP_PROBE||"help")+"\nignored help tail");process.exit(Number(process.env[kind==="version"?"FAKE_CP_VERSION_EXIT":"FAKE_CP_PROBE_EXIT"]||0))}
 const mcpFile=argv[argv.indexOf("--additional-mcp-config")+1].slice(1);
 fs.writeFileSync(rec,JSON.stringify({cli:"copilot",argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,"utf8")),stdin,pointerText:i<0?"":fs.readFileSync(argv[i+1].split(" is in ")[1].split(" - read it.")[0],"utf8")}));
@@ -135,6 +136,12 @@ const e=process.env,mode=e.FAKE_CP_LOG,dir=argv[argv.indexOf("--log-dir")+1],aut
 if(mode==="stdout")console.log(auth);
 if(mode==="stale")fs.writeFileSync(require("path").dirname(dir)+"/stale.log",auth);
 if(dir&&["auth","two","unrelated"].includes(mode))fs.writeFileSync(dir+"/process-test-"+process.pid+".log",mode==="unrelated"?"unrelated error":auth+"\nsecret-copilot-token");
+const t=k=>e[k].split("\\n").join("\n");
+if(mode==="two"&&n===1)console.error(" ! 1 MCP server was blocked by policy: \x27serena\x27 (Could not verify server against any configured registry)");
+if(e.FAKE_CP_STDOUT)console.log(t("FAKE_CP_STDOUT"));
+if(e.FAKE_CP_STDERR)console.error(t("FAKE_CP_STDERR"));
+if(e.FAKE_CP_LOGTEXT&&logDir)fs.writeFileSync(logDir+"/process-test-"+process.pid+".log",t("FAKE_CP_LOGTEXT"));
+if(e.FAKE_CP_STALE)for(const d of [require("path").dirname(logDir)+"/copilot-log.stale",e.HOME+"/.copilot/logs"]){fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+"/process-old.log",t("FAKE_CP_STALE"))}
 process.exit(mode==="two"?(n===1?0:1):Number(e.FAKE_CP_EXIT||0));' "$REC" > "$BIN/copilot"
 chmod +x "$BIN/copilot"; cp "$BIN/copilot" "$BIN/copilot.exe"; cp "$BIN/copilot" "$BIN/copilot.cmd"
 cp_assert() {
@@ -176,7 +183,9 @@ a.equal(Number(code),fatal==='1'?1:0);a.equal(r.length,Number(count));a.equal(al
 a.equal(text.split('\n').filter(l=>l.includes(msg)).length,Number(fatal));a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes(msg)&&x.args.channel==='chan-general').length,Number(fatal));a.ok(rpc.some(x=>x.tool==='deregister_worker'));
 if(fatal==='1'){a.ok(!text.includes('[launch-failure]'));for(const s of ['copilot login','COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN','Windows and WSL sign in separately'])a.ok(text.includes(s));}
 const dirs=r.map(x=>x.argv[x.argv.indexOf('--log-dir')+1]);a.equal(new Set(dirs).size,r.length);for(const d of dirs){a.ok(p.isAbsolute(d));a.ok(p.basename(d).startsWith('copilot-log.'));a.ok(!fs.existsSync(d));a.ok(!fs.existsSync(p.dirname(d)));}
-if(r.length===2){a.equal(r[0].argv[r[0].argv.indexOf('--reasoning-effort')+1],'xhigh');a.ok(!r[1].argv.includes('--reasoning-effort'));a.ok(!r.some(x=>x.argv.includes('--model')));}
+if(r.length===2){a.equal(r[0].argv[r[0].argv.indexOf('--reasoning-effort')+1],'xhigh');a.ok(!r[1].argv.includes('--reasoning-effort'));a.ok(!r.some(x=>x.argv.includes('--model')));a.ok(r[1].priorGone,'earlier log dir and copy removed');}
+for(const x of r){a.ok(x.copyExists,'stderr copy');a.ok(!fs.existsSync(x.logDir+'.stderr'));}
+a.equal(text.split('\n').filter(l=>l.includes('The Copilot policy of this account blocked the serena MCP server')).length,r.length===2?1:0,'serena WARN');
 for(const s of ['secret-copilot-token','secret-gh-token','secret-github-token'])a.ok(!(text+fs.readFileSync(c,'utf8')).includes(s));
 JS
 }
@@ -243,6 +252,48 @@ cp_fixture() {
   VMR_SETUP=cp_fixture; vmr_run CP-W worker copilot - on -; cp_assert worker "$PROJECT/.worktrees/task-postflight"
 )
 echo '[copilot] ok CP-H, CP-X, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
+
+# --- [copilot policy]: a 403 in this launch's own log (nonzero exit only) or a moe server
+# blocked on this launch's stderr (any exit) stops the seat once; a blocked serena only warns.
+# cp_policy WRAPPER_EXIT RUNS CODED(NE|MB|-) WARNS LAUNCH_FAILURE(0|1)
+cp_policy() {
+  "$NODE" - "$REC" "$REC.copilot" "$OUT" "$CALLS" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$VMR_ROW" 'copilot policy'
+const fs=require('fs'),a=require('assert/strict'),[rec,f,o,c,code,want,runs,coded,warns,lf]=process.argv.slice(2),rows=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse);
+const r=rows(f).filter(x=>x.kind==='run'),text=fs.readFileSync(o,'utf8'),lines=text.split('\n'),rpc=rows(c),env=JSON.parse(fs.readFileSync(rec)).env,cp=rpc.filter(x=>x.tool==='chat_send'&&/MOE_COPILOT_/.test(x.args.content));
+const texts={NE:'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.',MB:'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'};
+a.equal(code,want,'wrapper exit');a.equal(r.length,Number(runs),'launches');
+for(const k of ['NE','MB']){const n=coded===k?1:0,id=texts[k].split(':')[0];a.equal(lines.filter(l=>l.includes(id)).length,n,id);a.equal(lines.filter(l=>l.includes(texts[k])).length,n,id+' text');
+  a.equal(cp.filter(x=>x.args.channel==='chan-general'&&x.args.content.includes('@governors')&&x.args.content.includes(id)).length,n,id+' escalation');}
+a.equal(cp.length,coded==='-'?0:1,'one escalation');if(coded!=='-')a.ok(rpc.some(x=>x.tool==='deregister_worker'));
+a.equal(lines.filter(l=>l.includes('The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.')).length,Number(warns),'serena WARN');
+a.equal(text.includes('[launch-failure]'),lf==='1','launch-failure');
+const shown=[...(env.FAKE_CP_STDERR||'').split('\\n'),...(env.FAKE_CP_STDOUT||'').split('\\n')].filter(Boolean),phrase='not authorized to use this Copilot feature';
+for(const s of shown)a.equal(lines.filter(l=>l===s).length,1,'shown once: '+s);
+a.ok(!text.includes('sentinel-log-line'));a.equal(text.split(phrase).length,(env.FAKE_CP_STDOUT||'').split(phrase).length,'log never echoed');
+for(const x of r){a.ok(x.copyExists,'stderr copy');a.ok(!fs.existsSync(x.logDir));a.ok(!fs.existsSync(x.logDir+'.stderr'));}
+JS
+}
+(
+  export MOE_SERENA_PATH="$TMP_DIR/serena-bin/serena" MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1
+  RUN_TMP="$TMP_DIR/copilot temp"
+  L403='[ERROR] Error loading models: Error: 403 "unauthorized: not authorized to use this Copilot feature\n"'
+  THIRD=" ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available."
+  BLOCKED=" ! 1 MCP server was blocked by policy: '%s' (Could not verify server against any configured registry)"
+  VMR_ARGS=(--poll-interval 1)
+  vmr_run CP-NE worker copilot - off - FAKE_CP_LOGTEXT="sentinel-log-line\n$L403" FAKE_CP_STDERR="Error: Access denied by policy settings (Request ID: test)\n$THIRD" FAKE_CP_EXIT=1
+  cp_policy 1 1 NE 0 0
+  vmr_run CP-MB0 worker copilot - off - FAKE_CP_STDERR="$THIRD"; cp_policy 1 1 MB 0 0
+  vmr_run CP-MB1 worker copilot - off - FAKE_CP_STDERR="$(printf "$BLOCKED" moe)" FAKE_CP_EXIT=1; cp_policy 1 1 MB 0 0
+  VMR_ARGS=(--no-loop --poll-interval 0)
+  vmr_run CP-SER worker copilot - off - FAKE_CP_STDERR="$(printf "$BLOCKED" serena)" FAKE_CP_LOGTEXT="$L403"; vmr_launched CP-SER; cp_policy 0 1 - 1 0
+  vmr_run CP-NEG worker copilot - off - FAKE_CP_EXIT=1 FAKE_CP_LOGTEXT='unrelated error' FAKE_CP_STALE="$L403" \
+    FAKE_CP_STDOUT="not authorized to use this Copilot feature\n$THIRD\n$(printf "$BLOCKED" moe)"; cp_policy 0 1 - 0 1
+  REAL_MKTEMP=$(command -v mktemp)
+  cp_no_copy() { printf '#!/bin/bash\nd=$(%q "$@") || exit\ncase "$*" in *copilot-log*) mkdir "$d.stderr";; esac\necho "$d"\n' "$REAL_MKTEMP" > "$BIN/mktemp"; chmod +x "$BIN/mktemp"; }
+  VMR_SETUP=cp_no_copy; vmr_run CP-copyfail worker copilot - off -; rm "$BIN/mktemp"
+  [ "$VMR_CODE" = 1 ] && [ ! -e "$REC.copilot" ] && grep -Fq 'Cannot create private Copilot stderr copy' "$OUT" || vmr_fail CP-copyfail 'launched without its stderr copy'
+)
+echo '[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG'
 
 echo "[vm route] today's path: every non-verified-local answer launches the same CLI"
 LEGACY='{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
@@ -345,6 +396,7 @@ REFUSAL_ROWS=(
   "C1|worker|gemini|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat."
   "C2|worker|grok|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat."
   "C3|worker|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat."
+  "C4|qa|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat."
   "S1|worker|claude|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is 'off'; refusing to start this seat."
   "S2|worker|claude|$VL_FALSE|\"ON\"|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is invalid (\"ON\"); refusing to start this seat."
   "$S3_ROW" "$S4_ROW"
@@ -356,7 +408,7 @@ for r in "${REFUSAL_ROWS[@]}"; do
   vmr_run "$row" "$role" "$cli" "$readiness" "$wt" "$seam"
   vmr_refused "$row" "$code" "$detail"
 done
-echo "[vm route] ok refusals (W1, C1, C2, C3, S1-S4, N1, N2; R1/R2 in the seat-job block)"
+echo "[vm route] ok refusals (W1, C1, C2, C3, C4, S1-S4, N1, N2; R1/R2 in the seat-job block)"
 
 echo "[vm route] architect and governor seats never read readiness"
 for r in A1:architect G1:governor; do

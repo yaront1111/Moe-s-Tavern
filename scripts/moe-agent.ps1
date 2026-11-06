@@ -9535,9 +9535,9 @@ function New-MoeCopilotLog {
     return $dir
 }
 
-function Test-MoeCopilotSignedOut([string]$Directory) {
+function Test-MoeCopilotLog([string]$Directory, [string]$Phrase) { # this launch's own log dir, a fixed phrase
     foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter '*.log' -File -ErrorAction SilentlyContinue)) {
-        if (-not ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -CaseSensitive -Pattern 'No authentication information found' -Quiet -ErrorAction SilentlyContinue)) { return $true }
+        if (-not ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -CaseSensitive -Pattern $Phrase -Quiet -ErrorAction SilentlyContinue)) { return $true }
     }
     return $false
 }
@@ -11646,20 +11646,50 @@ $mentionsJson
                     $copilotArgs = @('-C', "$script:cliRoot", '--allow-all', '--no-ask-user', '--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($script:CopilotMcpFile)") + $copilotOptions + @('--log-dir', $copilotLogDir)
                     Test-MoeCopilotArgv $copilotArgs
                     Write-Host "Command: $Command $($CommandArgs -join ' ') $($copilotArgs -join ' ')"
+                    # This launch's private stderr copy, beside (never inside) its log dir.
+                    $copilotErrFile = "$copilotLogDir.stderr"
+                    try { $copilotErrWriter = New-Object IO.StreamWriter($copilotErrFile, $true, (New-Object Text.UTF8Encoding($false))) } catch {
+                        [Console]::Error.WriteLine("[ERROR] Cannot create private Copilot stderr copy $copilotErrFile; refusing to launch.")
+                        Remove-Item -LiteralPath $copilotLogDir, $copilotErrFile -Recurse -Force -ErrorAction SilentlyContinue
+                        $script:MoeExitStatus = 1; exit 1
+                    }
                     $previousOutputEncoding = $global:OutputEncoding; $previousConsoleEncoding = [Console]::OutputEncoding
                     $previousCopilotEap = $ErrorActionPreference
                     try {
-                        $ErrorActionPreference = 'Continue'
+                        $ErrorActionPreference = 'Continue' # 5.1 throws NativeCommandError on redirected stderr under Stop.
                         $global:OutputEncoding = New-Object Text.UTF8Encoding($false)
                         [Console]::OutputEncoding = $global:OutputEncoding
-                        $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs @copilotArgs
-                        $script:CliExitCode = $LASTEXITCODE
-                    } finally { $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding; $ErrorActionPreference = $previousCopilotEap }
-                    $copilotSignedOut = $script:CliExitCode -ne 0 -and (Test-MoeCopilotSignedOut $copilotLogDir)
-                    Remove-Item -LiteralPath $copilotLogDir -Recurse -Force -ErrorAction SilentlyContinue
-                    if ($copilotSignedOut) {
-                        Stop-MoeCopilot 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+                        # stderr is shown live and copied; stdout passes through. Nothing in here may throw:
+                        # a throw inside ForEach-Object would stop copilot.
+                        & { $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs @copilotArgs; $script:CliExitCode = $LASTEXITCODE } 2>&1 | ForEach-Object {
+                            if ($_ -is [Management.Automation.ErrorRecord]) {
+                                $copilotErrLine = $_.Exception.Message # never "$_": 5.1 renders a blank line as RemoteException
+                                try { [Console]::Error.WriteLine($copilotErrLine) } catch {}
+                                try { $copilotErrWriter.WriteLine($copilotErrLine) } catch {}
+                            } else { try { $_ | Out-Host } catch {} }
+                        }
+                    } finally {
+                        try { $copilotErrWriter.Dispose() } catch {}
+                        $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding; $ErrorActionPreference = $previousCopilotEap
                     }
+                    # One coded stop per launch: signed out, then not entitled (both from this launch's
+                    # own log, nonzero exit only), then the moe server blocked (its stderr copy, any exit).
+                    $copilotFatal = ''
+                    if ($script:CliExitCode -ne 0 -and (Test-MoeCopilotLog $copilotLogDir 'No authentication information found')) {
+                        $copilotFatal = 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+                    } elseif ($script:CliExitCode -ne 0 -and (Test-MoeCopilotLog $copilotLogDir 'not authorized to use this Copilot feature')) {
+                        $copilotFatal = 'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+                    } else {
+                        $copilotErrText = ''
+                        try { $copilotErrText = [IO.File]::ReadAllText($copilotErrFile, [Text.Encoding]::UTF8) } catch {}
+                        if ($copilotErrText -cmatch "Third-party MCP servers are disabled|blocked by policy.*'moe'") {
+                            $copilotFatal = 'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+                        } elseif ($copilotErrText -cmatch "blocked by policy.*'serena'") {
+                            Write-Host '[WARN] The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.' -ForegroundColor Yellow
+                        }
+                    }
+                    Remove-Item -LiteralPath $copilotLogDir, $copilotErrFile -Recurse -Force -ErrorAction SilentlyContinue
+                    if ($copilotFatal) { Stop-MoeCopilot $copilotFatal }
                 }
             } finally { Pop-Location }
         } finally { Stop-HeartbeatSidecar }
