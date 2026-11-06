@@ -9509,6 +9509,59 @@ try {
         [IO.File]::ReadAllText((Join-Path $script:AgentGitGuardRoot "env.json")) | ConvertFrom-Json
     } else { $null }
 }
+function Stop-MoeCopilot([string]$Message) {
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
+    $channel = if ($generalChannelId) { $generalChannelId } else { 'general' }
+    try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $channel; workerId = $WorkerId; content = "@governors ${WorkerId}: $Message" } | Out-Null } catch {}
+    Stop-HeartbeatSidecar
+    $script:MoeExitStatus = 1
+    exit 1
+}
+
+function New-MoeCopilotLog {
+    if (-not $script:CopilotLogRoot) {
+        $root = Join-Path $env:TEMP ('moe-copilot-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+        $script:CopilotLogRoot = $root # Cleanup owns it only after creation succeeds.
+        # Direct .NET avoids Security module autoload under a redirected USERPROFILE (5.1).
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+        if ($PSVersionTable.PSVersion.Major -ge 6) { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($script:CopilotLogRoot), $acl) }
+        else { [IO.Directory]::SetAccessControl($script:CopilotLogRoot, $acl) }
+    }
+    $dir = Join-Path $script:CopilotLogRoot ('copilot-log.' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+    return $dir
+}
+
+function Test-MoeCopilotSignedOut([string]$Directory) {
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter '*.log' -File -ErrorAction SilentlyContinue)) {
+        if (-not ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -CaseSensitive -Pattern 'No authentication information found' -Quiet -ErrorAction SilentlyContinue)) { return $true }
+    }
+    return $false
+}
+
+function Test-MoeCopilotArgv([string[]]$LaunchArgs) {
+    if ($script:CopilotArgvProbed -or $env:MOE_DISABLE_ARGV_PROBE -eq '1') { return }
+    $script:CopilotArgvProbed = $true
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue' # 5.1 must capture native stderr without throwing.
+        $probeOut = @(@() | Invoke-MoeGuardedCommand @CommandArgs @LaunchArgs --help 2>&1 | ForEach-Object { "$_" })
+        $probeExit = $LASTEXITCODE
+        if ($probeExit -ne 0 -and ($probeOut -join "`n") -match 'unexpected argument|invalid value|unrecognized') {
+            $probeLine = ($probeOut | Where-Object { $_ -match 'error|unexpected argument|invalid value|unrecognized' } | Select-Object -First 1).Trim()
+            $copilotVersion = 'unknown'
+            try {
+                $versionOut = @(@() | Invoke-MoeGuardedCommand @CommandArgs --version 2>&1 | ForEach-Object { "$_" })
+                if ($LASTEXITCODE -eq 0 -and $versionOut.Count -gt 0 -and $versionOut[0].Trim()) { $copilotVersion = $versionOut[0].Trim() }
+            } catch {}
+            Stop-MoeCopilot "MOE_CLI_ARGV_REJECTED: the installed copilot ($copilotVersion) rejects the wrapper's launch argv -- $probeLine. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+        }
+    } finally { $ErrorActionPreference = $previousEap }
+}
+
 function Invoke-MoeGuardedCommand {
     $saved = @{}
     try {
@@ -11532,6 +11585,13 @@ $mentionsJson
             [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $Command. Install it (npm install -g @github/copilot), then sign in with copilot login.")
             $script:MoeExitStatus = 1; exit 1
         }
+        $copilotModel = $env:MOE_COPILOT_MODEL
+        if ($Model) { $copilotModel = $Model }
+        elseif ($projConfig -and $projConfig.settings -and $projConfig.settings.models -and $projConfig.settings.models.$Role) { $copilotModel = [string]$projConfig.settings.models.$Role }
+        $copilotEffort = if ($env:MOE_COPILOT_EFFORT) { $env:MOE_COPILOT_EFFORT } else { $taskLaunchEffort }
+        $copilotOptions = @()
+        if ($copilotModel) { $copilotOptions += @('--model', $copilotModel) }
+        if ($copilotEffort) { $copilotOptions += @('--reasoning-effort', $copilotEffort) }
         if ($claimPromptBody) { $copilotDirective = $claimPromptBody }
         elseif ($AutoClaim) { $copilotDirective = "If a routed_mentions block is present in the session context above, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc." }
         else {
@@ -11575,18 +11635,31 @@ $mentionsJson
             try {
                 if ($copilotInteractive) {
                     $copilotPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CopilotPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
-                    Write-Host "Command: $Command -C `"$script:cliRoot`" --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" -i `"<prompt>`""
-                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" -i "$copilotPointerPrompt"
+                    Write-Host "Command: $Command $($CommandArgs -join ' ') -C `"$script:cliRoot`" --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" $($copilotOptions -join ' ') -i `"<prompt>`""
+                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" @copilotOptions -i "$copilotPointerPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } else {
-                    Write-Host "Command: $Command -C `"$script:cliRoot`" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`""
+                    try { $copilotLogDir = New-MoeCopilotLog } catch {
+                        [Console]::Error.WriteLine('[ERROR] Cannot create private Copilot log directory; refusing to launch.')
+                        $script:MoeExitStatus = 1; exit 1
+                    }
+                    $copilotArgs = @('-C', "$script:cliRoot", '--allow-all', '--no-ask-user', '--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($script:CopilotMcpFile)") + $copilotOptions + @('--log-dir', $copilotLogDir)
+                    Test-MoeCopilotArgv $copilotArgs
+                    Write-Host "Command: $Command $($CommandArgs -join ' ') $($copilotArgs -join ' ')"
                     $previousOutputEncoding = $global:OutputEncoding; $previousConsoleEncoding = [Console]::OutputEncoding
+                    $previousCopilotEap = $ErrorActionPreference
                     try {
+                        $ErrorActionPreference = 'Continue'
                         $global:OutputEncoding = New-Object Text.UTF8Encoding($false)
                         [Console]::OutputEncoding = $global:OutputEncoding
-                        $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)"
+                        $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs @copilotArgs
                         $script:CliExitCode = $LASTEXITCODE
-                    } finally { $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding }
+                    } finally { $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding; $ErrorActionPreference = $previousCopilotEap }
+                    $copilotSignedOut = $script:CliExitCode -ne 0 -and (Test-MoeCopilotSignedOut $copilotLogDir)
+                    Remove-Item -LiteralPath $copilotLogDir -Recurse -Force -ErrorAction SilentlyContinue
+                    if ($copilotSignedOut) {
+                        Stop-MoeCopilot 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+                    }
                 }
             } finally { Pop-Location }
         } finally { Stop-HeartbeatSidecar }
@@ -12374,6 +12447,7 @@ $mentionsJson
     foreach ($copilotFile in @($script:CopilotPromptFile, $script:CopilotMcpFile)) {
         if ($copilotFile) { Remove-Item -LiteralPath $copilotFile -Force -ErrorAction SilentlyContinue }
     }
+    if ($script:CopilotLogRoot) { Remove-Item -LiteralPath $script:CopilotLogRoot -Recurse -Force -ErrorAction SilentlyContinue }
     foreach ($moeAccountFile in @($script:AccountSampleFile, $script:AccountSettingsFile)) {
         if ($moeAccountFile) { Remove-Item -LiteralPath $moeAccountFile -Force -ErrorAction SilentlyContinue }
     }

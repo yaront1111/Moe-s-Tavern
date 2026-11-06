@@ -45,7 +45,8 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     }
     $errFile = "$OutFile.err"
     Remove-Item -LiteralPath $OutFile, $errFile -Force -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath $psExe -ArgumentList $quoted -RedirectStandardOutput $OutFile -RedirectStandardError $errFile -PassThru -NoNewWindow
+    $stdinArgs = @{}; if ($script:VmrStdin) { $stdinArgs.RedirectStandardInput = $script:VmrStdin }
+    $p = Start-Process -FilePath $psExe -ArgumentList $quoted -RedirectStandardOutput $OutFile -RedirectStandardError $errFile -PassThru -NoNewWindow @stdinArgs
     $null = $p.Handle
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
         try { & taskkill /T /F /PID $p.Id 2>&1 | Out-Null } catch {}
@@ -61,7 +62,7 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     return $code
 }
 function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readiness, [string]$Mode) {
-    Remove-Item -LiteralPath $project, $runTmp, $homeDir, $rec, "$rec.context", $calls -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $project, $runTmp, $homeDir, $rec, "$rec.context", "$rec.copilot", $calls -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $project '.moe\messages'), $runTmp, $homeDir | Out-Null
     $settings = '"autoCommit":false'
     switch -CaseSensitive ($Mode) {
@@ -125,14 +126,15 @@ function Get-VmrNormalized {
     return ($normalized -join "`n")
 }
 
-function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project) {
+function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project, [string]$Model = '', [string]$Effort = '') {
     if ($R.Code -ne 0 -or -not $R.Ran) { Stop-Vmr $R 'copilot did not launch' }
     $rcli = [IO.File]::ReadAllText($rec) | ConvertFrom-Json; $tui = $Mode -eq 'tui'
-    $expected = @('-C', $rcli.argv[1]) + @(if (-not $tui) { '--allow-all'; '--no-ask-user' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @(if ($tui) { '-i'; $rcli.argv[-1] })
+    $cliRoot = $rcli.argv[[Array]::IndexOf($rcli.argv, '-C')+1]
+    $expected = @(if ($rcli.env.FAKE_CP_PREFIX) { '--prefix-test' }) + @('-C', $cliRoot) + @(if (-not $tui) { '--allow-all'; '--no-ask-user' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @(if ($Model) { '--model'; $Model }; if ($Effort) { '--reasoning-effort'; $Effort }) + @(if ($tui) { '-i'; $rcli.argv[-1] } else { '--log-dir'; $rcli.argv[-1] })
     if (($rcli.argv -join "`0") -cne ($expected -join "`0") -or $rcli.env.MOE_WORKER_TYPE -cne 'COPILOT') { Stop-Vmr $R 'argv/worker type' }
-    foreach ($p in @($rcli.cwd, $rcli.argv[1])) { if ([IO.Path]::GetFullPath($p) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'CLI root' } }
+    foreach ($p in @($rcli.cwd, $cliRoot)) { if ([IO.Path]::GetFullPath($p) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'CLI root' } }
     $text = if ($tui) { $rcli.pointerText } else { $rcli.stdin }
-    foreach ($s in @('task-postflight', '# Session Context (per-iteration)') + @(if ($tui) { 'INTERACTIVE session:'; 'This interactive session may plan up to' } else { 'One-shot session:'; [string][char]0x2014 })) {
+    foreach ($s in @($(if ($rcli.env.FAKE_CLAIM_MODE -eq 'resume') { 'task-resume' } else { 'task-postflight' }), '# Session Context (per-iteration)') + @(if ($tui) { 'INTERACTIVE session:'; 'This interactive session may plan up to' } else { 'One-shot session:'; [string][char]0x2014 })) {
         if (-not $text.Contains($s)) { Stop-Vmr $R "prompt lacks $s" }
     }
     if ($Mode -eq 'worker' -and -not $text.StartsWith('Role: worker.')) { Stop-Vmr $R 'role prompt' }
@@ -143,8 +145,36 @@ function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project) {
     $wantSerena = @('start-mcp-server', '--context', 'agent', '--project', $s.args[4], '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false')
     if ($s.type -cne 'local' -or $s.command -cne $env:MOE_SERENA_PATH -or ($s.tools -join ',') -cne '*' -or ($s.args -join "`0") -cne ($wantSerena -join "`0") -or [IO.Path]::GetFullPath($s.args[4]) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'Serena MCP shape/root' }
     if ($rcli.mcpFile.StartsWith($project) -or (Test-Path -LiteralPath $rcli.mcpFile)) { Stop-Vmr $R 'MCP temp location/cleanup' }
+    if (-not $tui -and (Test-Path -LiteralPath $rcli.argv[-1])) { Stop-Vmr $R 'log cleanup' }
+    $probes = @(Get-Content "$rec.copilot" | ConvertFrom-Json | Where-Object kind -eq probe)
+    $want = if ($tui -or $env:MOE_DISABLE_ARGV_PROBE -eq '1') { 0 } else { 1 }
+    if ($probes.Count -ne $want) { Stop-Vmr $R 'probe count' }
+    if ($want -and ($probes[0].stdin -cne '' -or ($probes[0].argv -join "`0") -cne (($rcli.argv + @('--help')) -join "`0"))) { Stop-Vmr $R 'probe stdin/argv' }
+}
+function Invoke-CopilotProbeRows {
+    $script:VmrStdin = "$tempRoot\cp-stdin"; [IO.File]::WriteAllText($script:VmrStdin, 'inherited stdin sentinel')
+    try {
+        foreach ($phrase in @('Unexpected Argument', 'invalid value', 'unrecognized', 'version-failure')) {
+            $env:FAKE_CP_PROBE = if ($phrase -eq 'version-failure') { 'unrecognized' } else { $phrase }
+            $env:FAKE_CP_PROBE_EXIT = '1'; $env:FAKE_CP_VERSION_EXIT = if ($phrase -eq 'version-failure') { '1' } else { '0' }
+            $r = Invoke-VmrRow CP-reject worker copilot '' off
+            $v = if ($phrase -eq 'version-failure') { 'unknown' } else { 'copilot-test 1.0' }
+            $rows = @(Get-Content "$rec.copilot" | ConvertFrom-Json)
+            $msg = @(Get-Content $calls | ConvertFrom-Json | Where-Object { $_.tool -eq 'chat_send' -and $_.args.content.Contains('MOE_CLI_ARGV_REJECTED') -and $_.args.channel -eq 'chan-general' })
+            if ($r.Code -ne 1 -or $r.Ran -or ($rows.kind -join ',') -cne 'probe,version' -or $rows[0].stdin -cne '' -or $rows[1].stdin -cne '' -or $msg.Count -ne 1 -or $r.Tools -notcontains 'deregister_worker') { Stop-Vmr $r 'rejection lifecycle/stdin' }
+            if ([regex]::Matches($r.Text, 'MOE_CLI_ARGV_REJECTED').Count -ne 1 -or -not $r.Text.Contains("copilot ($v)") -or -not $r.Text.Contains($env:FAKE_CP_PROBE) -or $r.Text.Contains('ignored version tail') -or $r.Text.Contains('ignored help tail') -or $r.Text.Contains('[launch-failure]') -or (Test-Path -LiteralPath (Split-Path $rows[0].argv[-2]))) { Stop-Vmr $r 'rejection message/cleanup' }
+        }
+        foreach ($mode in @('skip', 'accepted', 'unrelated')) {
+            $env:FAKE_CP_PROBE = if ($mode -eq 'unrelated') { 'network unavailable' } else { 'invalid value' }
+            $env:FAKE_CP_PROBE_EXIT = if ($mode -eq 'accepted') { '0' } else { '1' }
+            $env:MOE_DISABLE_ARGV_PROBE = if ($mode -eq 'skip') { '1' } else { '' }
+            $r = Invoke-VmrRow "CP-$mode" worker copilot '' off; Assert-CopilotRow $r worker
+            if ($r.Text.Contains('MOE_CLI_ARGV_REJECTED')) { Stop-Vmr $r 'false rejection' }
+        }
+    } finally { $script:VmrStdin = $null; Remove-Item Env:\FAKE_CP_PROBE, Env:\FAKE_CP_PROBE_EXIT, Env:\FAKE_CP_VERSION_EXIT, Env:\MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue }
 }
 function Invoke-CopilotRows {
+    $runTmp = Join-Path $tempRoot 'copilot temp'
     $saved = @{}; foreach ($k in @('MOE_SERENA_PATH', 'FAKE_CLAIM_WORKSPACE', 'FAKE_CTX_WORKSPACE', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
     try {
         New-Item -ItemType Directory -Path "$tempRoot\serena-bin" | Out-Null
@@ -156,6 +186,20 @@ function Invoke-CopilotRows {
         foreach ($s in @('Copilot mode: interactive', 'Interactive mode: polling disabled', 'Loop: False')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r $s } }
         $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @('-Interactive:$false')
         $r = Invoke-VmrRow CP-AN architect copilot '' off; Assert-CopilotRow $r headless; $script:VmjExtraArgs = @()
+        $env:FAKE_CLAIM_MODE = 'resume'; $env:FAKE_TASK_STATUS = 'WORKING'; $env:FAKE_CLAIM_LAUNCH = '{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
+        $r = Invoke-VmrRow CP-route worker copilot '' off; Assert-CopilotRow $r worker $project '' xhigh
+        $env:MOE_COPILOT_MODEL = 'env-model'; $env:MOE_COPILOT_EFFORT = 'max'
+        $r = Invoke-VmrRow CP-env worker copilot '' off; Assert-CopilotRow $r worker $project env-model max
+        $script:VmrSetup = { $f = "$project\.moe\project.json"; $p = Get-Content -Raw $f | ConvertFrom-Json; $p.settings | Add-Member models @{worker='settings-model';architect='settings-model'}; [IO.File]::WriteAllText($f, (ConvertTo-Json $p -Depth 6)) }
+        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-settings worker copilot '' off; Assert-CopilotRow $r worker $project settings-model none
+        $script:VmjExtraArgs = @('-Model', 'cli-model'); $env:MOE_COPILOT_EFFORT = 'minimal'
+        $script:VmrCommand = "$tempRoot\copilot.cmd --prefix-test"; $env:FAKE_CP_PREFIX = '1'
+        $r = Invoke-VmrRow CP-cli worker copilot '' off; Assert-CopilotRow $r worker $project cli-model minimal
+        $script:VmrCommand = ''; Remove-Item Env:\FAKE_CP_PREFIX
+        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-tui architect copilot '' off; Assert-CopilotRow $r tui $project cli-model none
+        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_TASK_STATUS, Env:\FAKE_CLAIM_LAUNCH, Env:\MOE_COPILOT_MODEL, Env:\MOE_COPILOT_EFFORT; $script:VmrSetup = $null; $script:VmjExtraArgs = @()
+        Invoke-CopilotProbeRows
+        Invoke-CopilotAuthRows
         foreach ($name in @('copilot', 'copilot.exe', 'copilot.cmd')) {
             $script:VmrCommand = "$tempRoot\missing\$name"; $r = Invoke-VmrRow CP-NF worker copilot '' off
             $lines = @($r.Text -split '\r?\n' | Where-Object { $_.Contains('MOE_COPILOT_NOT_FOUND') })
@@ -171,11 +215,46 @@ function Invoke-CopilotRows {
             $env:FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; $env:FAKE_CTX_WORKSPACE = $env:FAKE_CLAIM_WORKSPACE
         }
         $r = Invoke-VmrRow CP-W worker copilot '' on; Assert-CopilotRow $r worker "$project\.worktrees\task-postflight"
-        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W'
+        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
     } finally {
         $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @(); $script:VmrCommand = ''; $script:VmrSetup = $null
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
+}
+
+function Invoke-CopilotAuthRows {
+    $keys = @('COPILOT_GITHUB_TOKEN','GH_TOKEN','GITHUB_TOKEN','FAKE_CP_LOG','FAKE_CP_EXIT','FAKE_CLAIM_MODE','FAKE_CLAIM_ONCE','FAKE_MENTION','FAKE_CLAIM_LAUNCH','FAKE_TASK_STATUS'); $saved = @{}
+    foreach ($k in $keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        $env:COPILOT_GITHUB_TOKEN='secret-copilot-token'; $env:GH_TOKEN='secret-gh-token'; $env:GITHUB_TOKEN='secret-github-token'
+        & { # Exercise the production allocator's throwing path without changing the wrapper's environment.
+            . ([scriptblock]::Create([regex]::Match([IO.File]::ReadAllText($wrapper), '(?ms)^function New-MoeCopilotLog \{.*?^\}').Value))
+            & {
+                function New-Item { throw 'fixture: creation failed' }
+                $script:CopilotLogRoot = $null; $failed = $false
+                try { New-MoeCopilotLog | Out-Null } catch { $failed = $true }
+                if (-not $failed -or $script:CopilotLogRoot) { throw 'Failed root creation claimed an unowned cleanup path' }
+            }
+            $script:CopilotLogRoot = "$tempRoot\not-a-directory"; [IO.File]::WriteAllText($script:CopilotLogRoot,'')
+            $failed = $false; try { New-MoeCopilotLog | Out-Null } catch { $failed = $true }
+            if (-not $failed) { throw 'Copilot log allocator did not throw' }; $script:CopilotLogRoot = $null
+        }
+        foreach ($mode in @('auth','unrelated','missing','stdout','stale','fatal','two')) {
+            $fatal = $mode -in @('fatal','two'); $count = if ($mode -eq 'two') { 2 } else { 1 }
+            $env:FAKE_CP_LOG = if ($mode -eq 'fatal') { 'auth' } else { $mode }; $env:FAKE_CP_EXIT = if ($mode -eq 'auth') { '0' } else { '1' }
+            if ($fatal) { $script:VmrLoop = @('-PollInterval','1') }
+            if ($mode -eq 'two') { $env:FAKE_CLAIM_ONCE='1'; $env:FAKE_MENTION='1'; $env:FAKE_CLAIM_MODE='resume'; $env:FAKE_TASK_STATUS='WORKING'; $env:FAKE_CLAIM_LAUNCH='{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5"}' }
+            $r = Invoke-VmrRow "CP-log-$mode" worker copilot '' off; $all = @(Get-Content "$rec.copilot" | ConvertFrom-Json); $runs = @($all | Where-Object kind -eq run)
+            $msg = @(Get-Content $calls | ConvertFrom-Json | Where-Object { $_.tool -eq 'chat_send' -and $_.args.content.Contains('MOE_COPILOT_SIGNED_OUT') -and $_.args.channel -eq 'chan-general' })
+            if ($r.Code -ne [int]$fatal -or $runs.Count -ne $count -or @($all | Where-Object kind -eq probe).Count -ne 1 -or $msg.Count -ne [int]$fatal -or [regex]::Matches($r.Text,'MOE_COPILOT_SIGNED_OUT').Count -ne [int]$fatal -or $r.Tools -notcontains 'deregister_worker') { Stop-Vmr $r 'auth lifecycle' }
+            if ($fatal) { foreach ($s in @('copilot login','COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN','Windows and WSL sign in separately')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r 'auth remediation' } }; if ($r.Text.Contains('[launch-failure]')) { Stop-Vmr $r 'auth retried' } }
+            $dirs = @($runs | ForEach-Object { $_.argv[[Array]::IndexOf($_.argv,'--log-dir')+1] })
+            if (@($dirs | Select-Object -Unique).Count -ne $count) { Stop-Vmr $r 'shared log directory' }
+            foreach ($d in $dirs) { if (-not [IO.Path]::IsPathRooted($d) -or -not (Split-Path $d -Leaf).StartsWith('copilot-log.') -or (Test-Path -LiteralPath $d) -or (Test-Path -LiteralPath (Split-Path $d))) { Stop-Vmr $r 'log isolation/cleanup' } }
+            if ($count -eq 2 -and ($runs[0].argv[[Array]::IndexOf($runs[0].argv,'--reasoning-effort')+1] -cne 'xhigh' -or $runs[1].argv -contains '--reasoning-effort' -or @($runs | Where-Object { $_.argv -contains '--model' }).Count)) { Stop-Vmr $r 'stale routed hint' }
+            foreach ($s in @('secret-copilot-token','secret-gh-token','secret-github-token')) { if (($r.Text + [IO.File]::ReadAllText($calls)).Contains($s)) { Stop-Vmr $r 'credential leaked' } }
+        }
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k,$saved[$k]) }; $script:VmrLoop = @('-NoLoop','-PollInterval','0') }
 }
 
 # --- [vm seat] CQ-M07n3: port of af8ca2bb's seat-job rows; shared stub only. ---
@@ -1533,8 +1612,16 @@ if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.include
   fs.appendFileSync(require('node:path').dirname(RECORD) + '/renew.jsonl', JSON.stringify({argv, cwd: process.cwd(), configDir: d,
     hasMoeWorkerId: 'MOE_WORKER_ID' in e, hasPluginDirs: 'CLAUDE_CODE_PLUGIN_DIRS' in e}) + '\n');
 } else if (cli === 'copilot') {
-  const i=argv.indexOf('-i'),mcpFile=argv[argv.indexOf('--additional-mcp-config')+1].slice(1);
-  fs.writeFileSync(RECORD,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,'utf8')),stdin:i<0?fs.readFileSync(0,'utf8'):'',pointerText:i<0?'':fs.readFileSync(argv[i+1].split(' is in ')[1].split(' - read it.')[0],'utf8')}));
+  const i=argv.indexOf('-i'),kind=argv.includes('--version')?'version':argv.includes('--help')?'probe':'run',stdin=i<0?fs.readFileSync(0,'utf8'):'';
+  fs.appendFileSync(RECORD+'.copilot',JSON.stringify({kind,argv,stdin})+'\n');
+  if(kind!=='run'){console.error(kind==='version'?'copilot-test 1.0\nignored version tail':(e.FAKE_CP_PROBE||'help')+'\nignored help tail');process.exit(Number(e[kind==='version'?'FAKE_CP_VERSION_EXIT':'FAKE_CP_PROBE_EXIT']||0))}
+  const mcpFile=argv[argv.indexOf('--additional-mcp-config')+1].slice(1);
+  fs.writeFileSync(RECORD,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,'utf8')),stdin,pointerText:i<0?'':fs.readFileSync(argv[i+1].split(' is in ')[1].split(' - read it.')[0],'utf8')}));
+  const mode=e.FAKE_CP_LOG,dir=argv[argv.indexOf('--log-dir')+1],auth='[ERROR] No authentication information found.',n=fs.readFileSync(RECORD+'.copilot','utf8').trim().split('\n').map(JSON.parse).filter(x=>x.kind==='run').length;
+  if(mode==='stdout')console.log(auth);
+  if(mode==='stale')fs.writeFileSync(require('path').dirname(dir)+'/stale.log',auth);
+  if(dir&&['auth','two','unrelated'].includes(mode))fs.writeFileSync(dir+'/process-test-'+process.pid+'.log',mode==='unrelated'?'unrelated error':auth+'\nsecret-copilot-token');
+  process.exit(mode==='two'?(n===1?0:1):Number(e.FAKE_CP_EXIT||0));
 } else if (cli !== 'normalize') {
   fs.writeFileSync(RECORD, JSON.stringify({cli, argv, cwd:process.cwd(), env:process.env}));
   // PS 5.1 routes a quoted prompt through a private context file, not argv.

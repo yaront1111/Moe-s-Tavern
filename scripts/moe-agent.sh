@@ -1451,6 +1451,23 @@ GEMINIEOF
 }
 if [ "$CLI_TYPE" = "gemini" ]; then write_gemini_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
 
+copilot_fatal() {
+    local message="$1" args
+    printf '[ERROR] %s\n' "$message" >&2
+    args=$($PYTHON_CMD -c 'import json,sys; print(json.dumps(dict(channel=sys.argv[1],workerId=sys.argv[2],content="@governors " + sys.argv[2] + ": " + sys.argv[3])))' "${GENERAL_CHANNEL_ID:-general}" "$WORKER_ID" "$message")
+    moe_rpc chat_send "$args" >/dev/null 2>&1 || true
+    stop_heartbeat_sidecar
+    exit 1
+}
+
+copilot_signed_out() {
+    local file
+    for file in "$1"/*.log; do
+        [ -f "$file" ] && [ ! -L "$file" ] && grep -Fq 'No authentication information found' "$file" 2>/dev/null && return 0
+    done
+    return 1
+}
+
 write_copilot_mcp_config() {
     $PYTHON_CMD - "$1" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$2" "$WORKER_ID" << 'COPILOTEOF'
 import json, os, sys
@@ -12012,6 +12029,11 @@ $PROMPT_BODY"
             printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $COMMAND_BIN. Install it (npm install -g @github/copilot), then sign in with copilot login." >&2
             exit 1
         fi
+        COPILOT_MODEL="${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-}}"
+        COPILOT_EFFORT="${MOE_COPILOT_EFFORT:-${TASK_LAUNCH_EFFORT:-}}"
+        COPILOT_OPTIONS=()
+        [ -z "$COPILOT_MODEL" ] || COPILOT_OPTIONS+=(--model "$COPILOT_MODEL")
+        [ -z "$COPILOT_EFFORT" ] || COPILOT_OPTIONS+=(--reasoning-effort "$COPILOT_EFFORT")
         COPILOT_PROMPT_BODY="$PROMPT"
         if [ "$AUTO_CLAIM" != true ]; then
             case $ROLE in
@@ -12037,16 +12059,40 @@ $PROMPT_BODY"
             exit 1
         fi
         if [ "$COPILOT_INTERACTIVE" = false ]; then
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\""
+            if ! COPILOT_LOG_DIR="$(mktemp -d "$SECURE_TEMP_DIR/copilot-log.XXXXXX")"; then
+                printf '[ERROR] Cannot create private Copilot log directory; refusing to launch.\n' >&2
+                exit 1
+            fi
+            COPILOT_ARGS=(-C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" --log-dir "$COPILOT_LOG_DIR")
+            if [ "${COPILOT_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != 1 ]; then
+                COPILOT_ARGV_PROBED=true
+                PROBE_EXIT=0
+                PROBE_OUT="$(cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" --help < /dev/null 2>&1)" || PROBE_EXIT=$?
+                if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|invalid value|unrecognized'; then
+                    PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -iE 'error|unexpected argument|invalid value|unrecognized' | sed -n '1{s/\r//g;p;}')"
+                    COPILOT_VERSION=unknown
+                    if VERSION_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --version < /dev/null 2>&1)"; then
+                        COPILOT_VERSION="$(printf '%s\n' "$VERSION_OUT" | sed -n '1{s/\r//g;p;}')"
+                    fi
+                    copilot_fatal "MOE_CLI_ARGV_REJECTED: the installed copilot (${COPILOT_VERSION:-unknown}) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+                fi
+            fi
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} ${COPILOT_ARGS[*]}"
             set +e
-            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" < "$COPILOT_PROMPT_FILE")
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" < "$COPILOT_PROMPT_FILE")
             CLI_EXIT_CODE=$?
             set -e
+            COPILOT_SIGNED_OUT=false
+            if [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_signed_out "$COPILOT_LOG_DIR"; then COPILOT_SIGNED_OUT=true; fi
+            rm -rf -- "$COPILOT_LOG_DIR" 2>/dev/null || true
+            if [ "$COPILOT_SIGNED_OUT" = true ]; then
+                copilot_fatal 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+            fi
         else
             COPILOT_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $COPILOT_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" -i \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" ${COPILOT_OPTIONS[*]} -i \"<prompt>\""
             set +e
-            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" -i "$COPILOT_POINTER_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" -i "$COPILOT_POINTER_PROMPT")
             CLI_EXIT_CODE=$?
             set -e
         fi
