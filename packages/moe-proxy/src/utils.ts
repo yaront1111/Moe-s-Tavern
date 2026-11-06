@@ -310,9 +310,9 @@ const WORKER_TYPE_TOOLS = new Set([...CLAIM_TOOL, 'moe.join_team', 'moe_join_tea
  * workerId (the wrapper's pre-flight claim and join always do) and it never
  * touches tools/list. A `workerType` key the caller already set wins whatever
  * its value, and a blank value counts as unset, as for MOE_WORKER_ID. The value
- * is sent verbatim: the daemon owns validation (CLAUDE, CODEX, GEMINI or GROK,
- * anything else registers as CLAUDE). Returns true if the parsed object was
- * mutated. Never throws.
+ * is sent verbatim: the daemon owns validation (CLAUDE, CODEX, GEMINI, GROK or
+ * COPILOT, anything else registers as CLAUDE). Returns true if the parsed
+ * object was mutated. Never throws.
  */
 export function injectWorkerType(
   parsed: unknown,

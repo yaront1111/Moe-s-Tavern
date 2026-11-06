@@ -1,6 +1,6 @@
 # Moe's Tavern
 
-An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, agy and Grok Build through a shared Kanban board with human plan approval.
+An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, agy, Grok Build and GitHub Copilot CLI through a shared Kanban board with human plan approval.
 
 JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary interface to the same daemon and `.moe/` project state. Full documentation lives in the [repository](https://github.com/yaront1111/Moe-s-Tavern).
 
@@ -10,7 +10,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 - **Plan approval** — review each implementation plan before code is written (CONTROL mode; SPEED and TURBO relax the gate)
 - **Task notifications** — a notice when a task moves into Awaiting Approval, Blocked, Review or Done, with **View Task** (Done has no button); no notice for a reconnect snapshot
 - **Task detail** — the blocker section names the cause, what clears it and the prerequisites; a read-only **Delivery** section shows the candidate, check run, receipt and attempt phase the daemon reports; **Release Agent** unassigns the task's agent after a confirmation
-- **Agent launcher** — start architect, worker, QA and governor agents with your chosen CLI. Closing the terminal of an agent this window launched deregisters that worker and releases its tasks; if the daemon is unreachable, it retries at the next connect. Seats still running after a window reload are kept
+- **Agent launcher** — start architect, worker, QA and governor agents with your chosen CLI: Claude Code, Codex, Antigravity, Grok Build or GitHub Copilot CLI. Closing the terminal of an agent this window launched deregisters that worker and releases its tasks; if the daemon is unreachable, it retries at the next connect. Seats still running after a window reload are kept
 - **Claude accounts** — the accounts rotation in its own view: usage per account, the switch threshold, and add, sign in, remove, move, rename and switch-percent actions. Sign-in runs the daemon's accounts CLI in a "Claude accounts" terminal
 - **Chat and metrics** — agent chat channels with notifications, plus a metrics view; a deleted channel leaves the channel list and the selection
 - **Drag & drop** — change task status by dragging between columns
@@ -22,7 +22,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 ## Requirements
 
 - Node.js 22.22+ on PATH (24 LTS recommended; the extension bundles the Moe daemon and MCP proxy and starts them for you)
-- One coding CLI installed and signed in: Claude Code, Codex, Antigravity or Grok Build
+- One coding CLI installed and signed in: Claude Code, Codex, Antigravity, Grok Build or GitHub Copilot CLI
 
 ## Getting started
 
@@ -79,6 +79,7 @@ The extension does not define default keyboard shortcuts.
 - The packaged extension ships only the bundled `dist/extension.js`
 - The unused `moe.agentCommand` and `moe.chat.notifications.soundEnabled` settings are removed
 - Reconnects on its own after a daemon restart, with backoff; actions taken while disconnected say so and keep their forms; an open Settings form follows changes made elsewhere; POSIX launch lines run in any default shell
+- GitHub Copilot CLI supported as an agent CLI: the provider picker and the agent command setting offer it
 
 ### 0.8.0
 
