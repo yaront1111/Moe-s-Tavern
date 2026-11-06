@@ -15,12 +15,13 @@
     {
       "stepId": "step-1",
       "description": "Add 'copilot' before 'custom' to the exported AgentProvider union and 'COPILOT' to WorkerType; no daemon/wire schema change or worker-name heuristics. The production launcher already uses `command = provider` for every non-custom provider and both command builders quote that string, so do not add a Copilot-only branch or change quoting helpers. Keep VM_AGENT_COMMANDS as ['claude','codex'] and vmSeatsMayLaunch refusal before readiness unchanged.\nUse test-driven-development in verified-local-launch.test.cjs. Extend V5's unsupported-provider table with ['copilot', undefined, 'copilot'] and run each row for BOTH worker and qa. The exact assertion remains `assert.deepEqual([f.errors,f.terminals.length,ask.calls],[[CLI_REFUSAL(shown)],0,0])`; a ready daemon reply must still not be queried. Add host launch cases with legacy/observe for Copilot, all roles; exact decoded terminal command must carry -Command 'copilot' on Windows or --command 'copilot' on POSIX and no provider-specific exec/positive interactive flags. Exercise both builders on every host: minimally parameterize the existing launcher VM harness with optional simulated process.platform, use Object.create(process,{platform:{value:platform}}) as agent-launcher-controls.test.cjs already does, and create both fake bundled wrapper files for those cases; leave default callers/fixtures intact. Compare full decoded command/terminal options, only normalizing the random seat id, not dropping meaningful argv. Add a TypeScript AST assertion on the exported WorkerType union that 'COPILOT' is present exactly once, since runtime transpilation erases the type. Preserve all old union members. Error handling: existing missing custom command, unsafe arg, missing wrapper and VM refusal paths stay unchanged; no real sockets or installed Copilot needed.",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "moe-vscode/src/util/AgentLauncher.ts",
         "moe-vscode/src/types/moe.ts",
         "moe-vscode/tests/verified-local-launch.test.cjs"
-      ]
+      ],
+      "startedAt": "2026-11-06T05:49:06.646Z"
     },
     {
       "stepId": "step-2",
@@ -47,29 +48,35 @@
   ],
   "planRevision": 1,
   "status": "WORKING",
-  "assignedWorkerId": null,
+  "assignedWorkerId": "worker-b3b3db54",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
   "reopenReason": null,
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
-  "dependsOn": [
-    "task-ab323f8520b2414cb41b3b13c9355489"
-  ],
+  "dependsOn": [],
   "priority": "MEDIUM",
   "order": 546.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-159c370b5ed1412789470b8840a95f90",
+      "author": "governor-913c7930",
+      "content": "Governor, 05:50Z. I removed this row's dependsOn edge to ab323f85 so an idle worker can start now; the board had 4 idle workers and one active row. This row edits only moe-vscode/** and tests against fake bundled wrappers, so it needs no wrapper bytes. Code to the wrapper contract the plans state, as d609eae3 does:\n- `copilot` is accepted under the protected runtime;\n- the headless override for copilot is the generic `-Interactive:$false` / `--no-interactive`;\n- there is no -CopilotExec.\nIf ab323f85 lands a different contract, the landed one wins, and QA checks this row against it. The docs row 1c580985 still waits on this row and on d609eae3.",
+      "timestamp": "2026-11-06T05:47:34.542Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:42.193Z",
-  "updatedAt": "2026-11-05T22:12:37.207Z",
+  "updatedAt": "2026-11-06T05:49:06.646Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:10:28.876Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5
   },
   "contextFetchedBy": [
-    "architect-a3d9076e"
+    "architect-a3d9076e",
+    "worker-b3b3db54"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -133,5 +140,6 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-05T22:12:37.207Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T05:49:06.646Z"
 }

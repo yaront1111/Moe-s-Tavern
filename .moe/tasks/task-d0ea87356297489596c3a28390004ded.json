@@ -10,10 +10,60 @@
     "checkRefs[0] passes within 20 minutes: vm-route on bash, 5.1 and pwsh 7, the wrapper parse checks, both parity checks and npm run lint. No full postflight, and no live package build."
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
-  "assignedWorkerId": "architect-32d0a5be",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Read the landed prerequisites before any edit. task-ab323f85, task-49d4a565 and task-e266a150 are DONE by the time this task is claimable: `git log --oneline -E --grep='ab323f85|49d4a565|e266a150' moe/work-2026-10-24`, then `git show <sha> -- scripts/` for each. Locate the copilot headless launch in both wrappers, 49d4a565's per-launch --log-dir, its nonzero-exit log scan and MOE_COPILOT_SIGNED_OUT stop route, and its copilot fake, knobs, launch log and rows in postflight-vm-route.{sh,ps1}. Every name below that those tasks introduce is a planning-time expectation: build on the landed symbols, never a parallel path. Edit tracked files only with your own editing tool (a TOOL witness): no sed -i, heredoc, script write or subagent edit into the tree.\n\nscripts/tests/postflight-vm-route.sh: the [copilot policy] rows, written first so they fail RED on the prerequisite tip (test-driven-development).\n(a) Extend 49d4a565's copilot fake (never a second fake). On real launches only, never its --help probe or --version call: write a configurable text into <its --log-dir>/process-<ts>-<pid>.log (generalize 49d4a565's auth-log knob if it has one), print a configurable text on stderr and another on stdout (a literal \\n in a value is a line break), and exit with the configured code. A stale-log knob writes the log text OUTSIDE its --log-dir instead: <parent of --log-dir>/copilot-log.stale/process-old.log and <HOME>/.copilot/logs/process-old.log. The launch record gains logDir and copyExists (fs.existsSync(logDir + '.stderr') while it runs; step 2 names the copy so). Fixture texts are copilot 1.0.106's measured ones, ASCII only: log `[ERROR] Error loading models: Error: 403 \"unauthorized: not authorized to use this Copilot feature\\n\"`; stderr `Error: Access denied by policy settings (Request ID: test)`, ` ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available.`, ` ! 1 MCP server was blocked by policy: 'moe' (Could not verify server against any configured registry)` and the same line naming 'serena'.\n(b) Rows, right after 49d4a565's copilot rows. Polling rows use VMR_ARGS=(--poll-interval 1) with no --no-loop, plus MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1 as the existing loop rows do, so a missed classification shows as a second launch or a timeout; restore VMR_ARGS after. The others keep --no-loop.\n- CP-NE, polling: log = a sentinel line plus the 403 line; stderr = the access-denied line plus the Third-party line; exit 1. Expect exit 1, exactly one real launch, exactly one MOE_COPILOT_NOT_ENTITLED line with step 2's text, no MOE_COPILOT_MCP_BLOCKED line (precedence), exactly one chat_send whose content holds @governors and MOE_COPILOT_NOT_ENTITLED and no other chat_send naming MOE_COPILOT_, deregister_worker called, no '[launch-failure]' line, each stderr fixture line exactly once as a whole line (grep -cxF: shown live, never doubled), and neither the sentinel nor 'not authorized to use this Copilot feature' anywhere in the output (logs are never echoed).\n- CP-MB0, polling: stderr = the Third-party line only; exit 0. Expect exit 1 after one launch, exactly one MOE_COPILOT_MCP_BLOCKED line with step 2's text, one matching escalation, deregistration, the stderr line exactly once, no serena WARN.\n- CP-MB1, polling: stderr = the 'moe' line only; exit 1; no log. As CP-MB0, plus no MOE_COPILOT_NOT_ENTITLED and no '[launch-failure]' line.\n- CP-SER, --no-loop: stderr = the 'serena' line; log = the 403 line; exit 0. Expect vmr_launched, exactly one serena WARN with step 2's text, no MOE_COPILOT_ coded line (an exit 0 never classifies the log), and no chat_send naming MOE_COPILOT_.\n- CP-NEG, --no-loop: exit 1; its own log holds only an unrelated line; the stale-log knob writes the 403 line elsewhere; stdout = the 403 phrase, the Third-party line and the 'moe' line; stderr empty. Expect one launch, the normal '[launch-failure]' line, no coded copilot line, no WARN and no chat_send naming MOE_COPILOT_.\n- Every row: copyExists was true, and after the wrapper exits neither the recorded log dir nor <log dir>.stderr exists. The sh [ERROR]/[WARN] tags carry ANSI colour: match the text after the tag with grep -F.\n(c) Per launch: extend 49d4a565's multi-launch copilot row so its first launch prints the 'serena' line: exactly one WARN across the launches, distinct log dirs, and each later launch's fake records that the earlier log dir and its .stderr are gone. If 49d4a565 landed none, add CP-SEQ (polling, a per-launch knob modeled on FAKE_SEAT_JOBS, a launch counter from the launch log): launch 1 exits 0 with the 403 log and the 'serena' line (WARN, normal outcome); launch 2 exits 1 with the Third-party line and no log (MOE_COPILOT_MCP_BLOCKED, never NOT_ENTITLED from launch 1's log), so the row ends by itself with 2 launches and 1 WARN.\nPrint exactly `[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG` (checkRefs[0] counts it; append CP-SEQ if you add it). One small assertion helper and a row table keep the diff small (whole task under the 400 net-LOC review cap). Run `bash scripts/tests/postflight-vm-route.sh` with MOE_*, CLAUDE* and FAKE_* unset: the new rows fail now, every older row still passes.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.sh, in the copilot headless launch only: the TUI, 49d4a565's --help probe and every other CLI stay byte-identical. Read mem:gotcha-native-stderr-live-copy first (the measured bash and PowerShell patterns).\n(a) Copy: COPILOT_ERR_FILE=\"$COPILOT_LOG_DIR.stderr\" (use the landed log-dir variable): beside, never inside, the per-launch --log-dir 49d4a565 creates in the private secure temp dir, so copilot's log scan never reads it and the harness can find it. Create it empty with `: >` right after the log dir, in the same branch. Error handling: a failed creation takes 49d4a565's pre-launch route for a log dir that cannot be created (an explanatory error naming the path, exit 1, no launch); never launch without the copy.\n(b) Run the landed command unchanged (argv, stdin file, Command: banner) but send only stderr through tee, with stdout still on the terminal: `{ (cd \"${CLI_ROOT:-$PROJECT}\" && agent_git_exec <landed argv> < \"$COPILOT_PROMPT_FILE\") 2>&1 1>&3 3>&- | tee -a \"$COPILOT_ERR_FILE\" >&2 3>&-; CLI_EXIT_CODE=${PIPESTATUS[0]}; } 3>&1`, under the existing set +e. Read PIPESTATUS inside the group. Not `2> >(tee ...)`: its process substitution can still be writing when the scan reads the copy.\n(c) Classification right after the run, where 49d4a565 checks the sign-in and before the generic launch-failure accounting. At most one coded line per launch, in this order:\n1. 49d4a565's MOE_COPILOT_SIGNED_OUT check, unchanged.\n2. CLI_EXIT_CODE != 0 and this launch's log dir holds `not authorized to use this Copilot feature` (49d4a565's scan: the same files, and a missing or unreadable log is no evidence): print `[ERROR] MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.` and escalate `@governors $WORKER_ID: MOE_COPILOT_NOT_ENTITLED - Copilot refused the GitHub account of this seat (HTTP 403, no Copilot CLI access). Seat exiting and deregistering (the task returns to the queue); sign in with an account whose Copilot plan includes Copilot CLI, or have the organization enable it (github.com/settings/copilot), before relaunching.`\n3. Any exit code, and `grep -qE \"Third-party MCP servers are disabled|blocked by policy.*'moe'\" \"$COPILOT_ERR_FILE\"` (one grep, no pipe; any line naming the moe server, so a plural 'servers were blocked' line counts too): print `[ERROR] MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.` and escalate `@governors $WORKER_ID: MOE_COPILOT_MCP_BLOCKED - the Copilot policy of this account blocked the moe MCP server, so the seat cannot claim or complete tasks. Seat exiting and deregistering (the task returns to the queue); allow MCP servers in the Copilot policy of the account or organization before relaunching.`\n4. Else, a copy matching `grep -qE \"blocked by policy.*'serena'\"` prints one `[WARN] The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.` and the run keeps its normal outcome.\nEach fatal route is the sign-out route: one #general escalation (transport errors swallowed, so a failed page never relaunches), remove this launch's log dir and copy, stop_heartbeat_sidecar, exit 1 (the EXIT trap deregisters and rescues any bytes), never the launch-failure backoff. If 49d4a565 wrote that tail inline, lift it into one small helper for the three codes, with SIGNED_OUT's text unchanged. Print the coded lines on the same stream as the landed SIGNED_OUT line. A missing or unreadable copy is no evidence; never print a log or the copy; never read a credential store.\n(d) Remove \"$COPILOT_LOG_DIR\" and \"$COPILOT_ERR_FILE\" together wherever 49d4a565 removes the log dir; cleanup_temp's removal of the secure temp dir stays the fallback on every other exit, interruption included.\nbash -n, then step 1's rows pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/postflight-vm-route.ps1: the twin of step 1, with the same knobs, fixture texts, row names and expectations, in a section right after 49d4a565's copilot rows. Keep the file UTF-8 with BOM.\n- The fake (ab323f85's recorder behind copilot.cmd, as 49d4a565 extended it) gains the same knobs, read from $env:FAKE_* values that each row sets and its finally removes, and records logDir and copyExists.\n- Polling rows: $script:VmrLoop = @('-Loop', '-PollInterval', '1') with $env:MOE_LAUNCH_BACKOFF_BASE_SEC and $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1' (the existing loop rows' shape); the rest keep -NoLoop.\n- Assert on $R.Text split into lines. A stderr fixture line counts only as a WHOLE line equal to it, exactly once: 5.1 renders a leaked ErrorRecord as `copilot.cmd : <line>`, which must not count. Match the coded and WARN lines by step 2's exact texts, chat_send content through Read-VmeJsonl $calls and Get-VmeCount, deregister_worker in $R.Tools, and launches from 49d4a565's launch log.\n- After each row, Test-Path is false for the recorded log dir and <log dir>.stderr. TEMP is the row's $runTmp, so this checks the wrapper's own cleanup.\n- Step 1(c)'s per-launch extension.\n- Mind mem:gotcha-ps1-harness-syntax-traps and mem:gotcha-ps1-byte-order-sort-and-array-ack: wrap one-element results in @(), compare arrays with -join. Reset every knob in finally ($script:VmrLoop, MOE_LAUNCH_BACKOFF_*, FAKE_COPILOT_*). Print `[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG`.\nRun it on Windows PowerShell 5.1 and pwsh 7 from scripts/tests on a /mnt/<drive> path (mem:gotcha-qa-ps1-postflight-from-wsl, mem:gotcha-wsl-interop-binfmt-init): the new rows must fail RED before step 4, and the older rows still pass.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "scripts/moe-agent.ps1: the twin of step 2, in the copilot headless launch only, with byte-identical strings: both coded lines, the WARN, both escalations and both regexes.\n(a) Copy: \"$copilotLogDir.stderr\" (the landed log-dir variable), beside the per-launch log dir 49d4a565 creates. Open it before the launch with `New-Object IO.StreamWriter($path, $true, (New-Object Text.UTF8Encoding($false)))`. Error handling: a failure to open it takes 49d4a565's pre-launch route for the log dir (an explanatory error, $script:MoeExitStatus = 1, exit 1, no launch).\n(b) Run, per mem:gotcha-native-stderr-live-copy (probed on 5.1.26100 and 7.6.9). Keep ab323f85's UTF-8 switch of $global:OutputEncoding and [Console]::OutputEncoding (mem:gotcha-ps1-native-stdin-utf8). Save $ErrorActionPreference and set 'Continue': under Stop, 5.1 throws NativeCommandError on the first redirected stderr record. Then `& { $body | Invoke-MoeGuardedCommand <landed argv>; $script:CliExitCode = $LASTEXITCODE } 2>&1 | ForEach-Object { if ($_ -is [Management.Automation.ErrorRecord]) { $line = $_.Exception.Message; [Console]::Error.WriteLine($line); try { $writer.WriteLine($line) } catch {} } else { $_ | Out-Host } }`. In finally, dispose the writer and restore the error preference and both encodings. Use $_.Exception.Message, never \"$_\": 5.1 turns a blank stderr line into the text System.Management.Automation.RemoteException. A throw inside ForEach-Object would stop copilot, so no write may throw out of it. The piped body keeps Invoke-MoeGuardedCommand's ExpectingInput stdin route (probed).\n(c) After the run, step 2's order. SIGNED_OUT stays unchanged. A nonzero exit plus the log phrase gives MOE_COPILOT_NOT_ENTITLED. The copy, read as UTF-8 (missing or unreadable = no evidence), matching -cmatch \"Third-party MCP servers are disabled|blocked by policy.*'moe'\" gives MOE_COPILOT_MCP_BLOCKED. Otherwise -cmatch \"blocked by policy.*'serena'\" gives the WARN (yellow, as other warnings). -cmatch keeps grep's case-sensitivity, and .NET's . never crosses a line break, so whole-text matching equals the sh per-line grep. The fatal route is the sign-out route: Invoke-MoeRpc chat_send to $generalChannelId in try/catch, remove both per-launch paths, Stop-HeartbeatSidecar, $script:MoeExitStatus = 1, exit 1. Use the shared helper if step 2 lifted one.\n(d) Remove the copy wherever the log dir is removed, the outer-finally fallback included.\nRun ParseFile on 5.1 and 7. Step 3's rows pass, and ab323f85's CP-H (U+2014 on stdin) still passes on 5.1, which proves the stdin pipe.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ]
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run checkRefs[0] exactly once, fresh, from the task worktree root, and submit its tail, exit status and wall time as complete_task evidence. The root must be a /mnt/<drive> path, not /tmp: cmd.exe rejects a UNC cwd.\nThe gate runs three legs in parallel:\n- vm-route on Windows PowerShell 5.1, plus ParseFile and parity-check.ps1 on that engine;\n- the same on pwsh 7;\n- bash: bash -n, vm-route, parity-check.sh and npm run lint.\nGreen needs 3 PASS_GATE, 3 'PASS postflight-vm-route' and 3 '[copilot policy] ok ' lines. Every Windows hop goes through /init (mem:gotcha-wsl-interop-binfmt-init).\nA dry run on 7adec0c9 (2026-11-06, load 7-11) passed every leg in 651 s, pwsh 7 slowest at about 11 min. It exited 1 only for the missing ok lines: that is the RED signal. The prerequisites' rows and these add a few minutes; the 1200 s timeout is the 20-minute budget.\nError handling for a red run: read the failing leg's log (tail prints $L/powershell, $L/pwsh, $L/bash) and rerun that leg alone.\n- A leg that dies at once with 'Exec format error', or with a lone UtilAcceptVsock line, is WSL interop, not the change: rerun (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A polling row that hangs to the 360 s timeout is a missed classification.\n- If the whole gate passes 1200 s on an idle host, report it with the leg times instead of dropping rows or assertions.\nNever run npm install, a build or package tests in the shared checkout, and never the full postflight.{sh,ps1} (mem:decision-mid-epic-launcher-gate-narrow). Signal only PIDs you started.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff (git diff against the merge base), with the adversarial-self-review skill, before complete_task. Fix anything found and rerun checkRefs[0] if a file changed.\n- Twins: every new literal is byte-identical in both wrappers; grep each coded line, the WARN, both escalations and both regexes. e266a150's MOE_COPILOT_ family compare sees both new codes in both files, so parity-check needs no edit. If it pins an exact member list after all, do not edit it here: add a task comment naming the check.\n- Inputs: exit 0 and nonzero; stderr empty, with blank lines, non-ASCII, a last line without a newline, or very long; the phrases only on stdout, or only in a stale or another launch's log; serena and moe both named; a plural blocked line; paths with spaces; a missing, unreadable or partial copy; two seats launching at once (unique per-launch names).\n- Streams: stdout stays the terminal in sh and passes through unchanged in ps1; stderr appears exactly once and live; logs and copies are never printed; no credential store is read.\n- PowerShell: ErrorActionPreference, $global:OutputEncoding and [Console]::OutputEncoding are restored on every path, the writer is disposed, the native exit code survives, nothing inside ForEach-Object can throw, and the stdin pipe is unchanged.\n- Exits: each fatal route sends one escalation, stops the heartbeat, skips the launch-failure backoff and keeps the EXIT trap's and outer finally's deregistration and rescue. The TUI, the --help probe and the other CLIs are untouched. A Ctrl+C mid-run still removes both per-launch paths.\n- Tests: on the bash harness in a scratch snapshot outside the repo, each mutant must fail its row: drop the 403 phrase (CP-NE), drop the 'moe' alternative (CP-MB1), classify on exit 0 (CP-SER), scan stdout (CP-NEG).\n- Size: the whole diff stays under the 400 net non-board LOC review cap. No added line contains a project.json globalRails.forbiddenPatterns string.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ]
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -36,11 +86,89 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T05:14:13.779Z",
-  "updatedAt": "2026-11-06T05:27:25.598Z",
+  "updatedAt": "2026-11-06T05:45:30.196Z",
   "metrics": {
-    "firstClaimAt": "2026-11-06T05:14:20.901Z"
+    "firstClaimAt": "2026-11-06T05:14:20.901Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4
   },
   "contextFetchedBy": [
     "architect-32d0a5be"
-  ]
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-06T05:44:33.753Z",
+  "executionContract": {
+    "intendedBehavior": "A headless copilot seat whose GitHub account may not use Copilot CLI (HTTP 403 in this launch's own --log-dir after a nonzero exit), or whose Copilot policy blocks the moe MCP server (copilot's stderr for this launch, at any exit code), stops once with exactly one coded line, one #general escalation and exit 1, instead of relaunch-looping. A serena-only block prints one [WARN] and keeps the run's normal outcome. stderr is still shown live, through a private per-launch copy that is cleaned on every exit path.",
+    "acceptanceCriteria": [
+      "After a nonzero headless copilot exit whose own per-launch log holds `not authorized to use this Copilot feature`, moe-agent.sh and moe-agent.ps1 print exactly one MOE_COPILOT_NOT_ENTITLED line with the remedy, send one #general escalation, stop the heartbeat and exit 1 after exactly one launch with polling on. An exit 0, an unrelated or missing log, or the phrase only in another launch's log never classify. postflight-vm-route rows pass on bash, Windows PowerShell 5.1 and pwsh 7.",
+      "When copilot's stderr for the launch reports the moe server blocked by policy (`MCP server was blocked by policy: 'moe'` or `Third-party MCP servers are disabled`), both wrappers print exactly one MOE_COPILOT_MCP_BLOCKED line, escalate once and exit 1 without relaunching, whatever copilot's exit code. stderr is still shown live. A blocked serena alone prints one [WARN] and keeps the normal outcome, and the phrases only on stdout never classify. Same rows.",
+      "The private stderr copies and log dirs are per launch, cleaned on every exit path, and never echoed whole. PowerShell keeps the UTF-8 stdin pipe, the native exit code and its error preferences. Same rows.",
+      "checkRefs[0] passes within 20 minutes: vm-route on bash, 5.1 and pwsh 7, the wrapper parse checks, both parity checks and npm run lint. No full postflight, and no live package build."
+    ],
+    "invariants": [
+      "Only the copilot headless launch changes: the TUI, the --help argv probe, the other CLIs and the shared launch-failure classes stay as landed.",
+      "At most one coded line per launch, in the order SIGNED_OUT, NOT_ENTITLED, MCP_BLOCKED. NOT_ENTITLED needs a nonzero exit and this launch's own log; MCP_BLOCKED reads only this launch's stderr copy, at any exit code; stdout never classifies.",
+      "stderr is shown live exactly once; logs and stderr copies are never printed; no credential store is read; no precheck spends a model call.",
+      "Each launch's log dir and <log dir>.stderr are private and unique, and are removed after inspection and on every exit path.",
+      "PowerShell keeps the UTF-8 stdin pipe and the native exit code, and restores ErrorActionPreference and both output encodings on every path.",
+      "Both wrappers ship byte-identical strings; no parity, docs, IDE or .moe changes; no live package build or test; no full postflight; the gate stays within 20 minutes; only own recorded PIDs are signalled."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: the copilot headless launch (stderr copy through tee, NOT_ENTITLED / MCP_BLOCKED / serena WARN after the run, one shared copilot stop helper if the sign-out tail was inline)",
+      "scripts/moe-agent.ps1: the twin (2>&1 | ForEach-Object live copy, the same classification and stop route)",
+      "scripts/tests/postflight-vm-route.sh and .ps1: copilot fake knobs (log text, stale log, stderr, stdout, exit code, logDir/copyExists record) and rows CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG plus the per-launch extension"
+    ],
+    "reuse": [
+      "task-49d4a565's per-launch --log-dir, its nonzero-exit log scan and its MOE_COPILOT_SIGNED_OUT stop route (escalation, heartbeat stop, exit 1, no launch-failure backoff).",
+      "The ps1 claude headless launch's `& { ... 2>&1; $script:CliExitCode = $LASTEXITCODE } | ForEach-Object` shape and the codex probe's local ErrorActionPreference 'Continue'.",
+      "tee and grep -E in bash; -cmatch and IO.StreamWriter in PowerShell; no new helper script.",
+      "vmr_run / Invoke-VmrRow, FAKE_CALL_LOG, Read-VmeJsonl / Get-VmeCount, the loop rows' MOE_LAUNCH_BACKOFF_* knobs, and 49d4a565's fake and launch log."
+    ],
+    "sourceAssumptions": [
+      "Measured 2026-11-06 on copilot 1.0.106 (task description): the 403 line holding `not authorized to use this Copilot feature` is in the run's own --log-dir process log; the MCP policy lines arrive only on stderr in text mode, never in the log.",
+      "task-ab323f85, task-49d4a565 and task-e266a150 are DONE before this task is claimable (dependsOn, and ab323f85 through 49d4a565); their symbols are read from the landed diffs.",
+      "e266a150's approved plan compares MOE_COPILOT_ as a code family in parity-check.{sh,ps1}, so new MOE_COPILOT_ codes present in both wrappers pass with no parity edit.",
+      "Probed 2026-11-06 on PowerShell 5.1.26100, pwsh 7.6.9 and bash 5.2 (mem:gotcha-native-stderr-live-copy): both stderr-copy patterns keep stdin, the exit code, the encodings and live display."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); W=\"/init $(command -v pwsh.exe)\"; for e in powershell pwsh; do (P=\"/init $(command -v $e.exe)\"; $W -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $P -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $P -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"^\\[copilot policy\\] ok \")\" = 3 ]'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Scanning copilot's --log-dir for the MCP policy lines: rejected. Measured: they never reach the process log, even at --log-level debug.\n- --output-format json and parsing session.warning events: rejected. It changes the headless transcript operators read and the stdout contract ab323f85/49d4a565 test; text-mode stderr carries the same lines.\n- bash `2> >(tee ...)`: rejected. The process substitution is asynchronous, so the scan could read a partial copy. The brace-group pipeline with fd 3 is synchronous and keeps stdout on the terminal (probed).\n- PowerShell .NET Process with RedirectStandardError: rejected. It bypasses Invoke-MoeGuardedCommand (git guard env, .cmd resolution, ExpectingInput stdin). 2>&1 | ForEach-Object is the shape the ps1 claude headless launch already uses.\n- PowerShell flags set in-stream with no file: smaller, but the deliverable names a private per-launch copy and DoD 3 checks it, so ps1 keeps a file like sh.\n- An entitlement or policy precheck before the run: out of scope (it spends a model call or reads credentials).\n- Matching only the exact `MCP server was blocked by policy: 'moe'`: widened to a line with `blocked by policy` then `'moe'`, which also covers a plural `servers were blocked` line; a serena-only line still only warns.\n- Precedence SIGNED_OUT > NOT_ENTITLED > MCP_BLOCKED: each later fix only matters once the earlier one is done, and the MCP policy is per account, so an account change comes first. One coded line and one escalation per launch.\n- Parity edits: none. e266a150's MOE_COPILOT_ family compare covers both new codes; the serena WARN has no code and the twin rows pin its text.",
+    "codebaseInsights": "- At planning time ab323f85 is WORKING (its sh launch is written in its worktree; ps1 not yet), and 49d4a565 and e266a150 have not started. Approved plans: headless argv `-C <root> --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config @<file>` (49d4a565 adds --model, --reasoning-effort and --log-dir), prompt on stdin; sh files in the secure temp dir, ps1 files TEMP\\moe-copilot-*-$Role-$myPid. 49d4a565 adds a per-launch log dir (sh: mktemp -d in SECURE_TEMP_DIR; ps1: a GUID dir under TEMP), a nonzero-only log scan and the SIGNED_OUT stop.\n- Stop-route precedent: codex MOE_CLI_ARGV_REJECTED (sh about :11734-11750, ps1 about :11236-11251): coded line, `@governors` chat_send to GENERAL_CHANNEL_ID / $generalChannelId with errors swallowed, stop the heartbeat, exit 1 ($script:MoeExitStatus = 1 in ps1).\n- ps1 claude headless already runs `& { Invoke-MoeGuardedCommand ... 2>&1; $script:CliExitCode = $LASTEXITCODE } | ForEach-Object {...}` (about :11852-11856); ps1 sets $ErrorActionPreference = 'Stop' at :125.\n- agent_git_exec is a subshell function that execs the CLI; moe-agent.sh has no global pipefail.\n- Harness: vmr_run passes VAR=VALUE env to the CLI; FAKE_CALL_LOG records proxy calls (chat_send content, deregister_worker); loop rows set MOE_LAUNCH_BACKOFF_BASE_SEC=1 / MAX_SEC=1. ps1 Invoke-VmrRow sets TEMP/TMP to the row's runTmp and appends the wrapper's stderr after stdout in $R.Text.\n- Gate dry run on 7adec0c9 (2026-11-06, load 7-11): every leg PASS; bash 8 min, 5.1 10 min, pwsh 7 11 min; exit 1 only for the missing `[copilot policy] ok` lines (RED).",
+    "risks": "- The prerequisites are unlanded: every ab323f85/49d4a565 symbol named here is a planning expectation. Read the landed diffs first and adapt; never duplicate.\n- Gate time: 651 s at load ~10 before the prerequisites' rows and these; the budget is 1200 s. Keep each new row to one wrapper run.\n- An MCP server or descendant that outlives copilot keeps the stderr pipe open and the wrapper waits. The claude headless 2>&1 launch has the same exposure.\n- An MCP-blocked run may still have edited files. The fatal exit leaves them to the existing EXIT-trap / outer-finally rescue, as SIGNED_OUT does; it adds no new landing route.\n- 5.1 traps: NativeCommandError under Stop, the RemoteException text for a blank stderr line, OEM decoding of captured stdout, a throw inside ForEach-Object stopping copilot.\n- The sh [ERROR]/[WARN] tags carry ANSI colour: assert the text after the tag.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-vm-route.ps1",
+      "mem:gotcha-native-stderr-live-copy"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "15c7fb34b75b7024732a1ebb92931ec69a51203e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-06T05:44:33.790Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-32d0a5be@2026-11-06T05:14:18Z",
+    "at": "2026-11-06T05:45:30.196Z"
+  }
 }

@@ -86,34 +86,46 @@
     {
       "stepId": "step-6",
       "description": "scripts/tests/protected-agent-command.test.mjs:\n- refusedLine lists `claude, codex, gemini, grok, copilot`, so every R1/R2 row pins the new text on each engine. The header comment (lines 11-12) names copilot.\n- In the first per-engine loop, beside A1, add CP1 'resolves copilot from a trusted absolute PATH entry': A1's shape with cliStub(fx, fx.trusted, 'copilot', 'trusted') and assertResolved(fx, r, 'copilot', file).\n- Beside AG5 add CP2 'under the marker a governor seat runs the trusted copilot as COPILOT': typedStub copilot in fx.trusted, role governor, AG5's PATH and env, then assert exit 0 and ranText(fx) === 'trusted copilot COPILOT\\n'. This proves the bare name RUNS, with the worker type.\nRun `node --test protected-agent-command.test.mjs` on WSL (bash rows; the PowerShell rows skip, since this host has no Linux pwsh) and through Windows node (`/init \"$(command -v pwsh.exe)\" -nop -c \"node --test protected-agent-command.test.mjs\"`: 5.1 and 7 rows, about 4 min).",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
       ],
-      "startedAt": "2026-11-06T05:30:30.465Z"
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Updated five-name refusal and CP1 trusted-path resolution / CP2 protected COPILOT launch. node --test protected-agent-command.test.mjs: Bash 67 pass, 42 engine skips; Windows 88 pass, 63 platform skips; zero failures on both. Scratch CP2 detection mutant fails with actual CLAUDE vs expected COPILOT. Also tightened earlier Bash CP assertions to require role at stdin start and Session Context header, matching the approved step-3 assertions; the upcoming fresh combined gate covers this test-only refinement.",
+      "startedAt": "2026-11-06T05:30:30.465Z",
+      "completedAt": "2026-11-06T05:36:14.342Z"
     },
     {
       "stepId": "step-7",
       "description": "Verification gate: run checkRefs[0] exactly, once, fresh, from the task worktree root, and submit its tail and exit status as complete_task's evidence. The root must be a /mnt/<drive> path: a /tmp cwd is a UNC path, which cmd.exe rejects.\nThe gate runs four legs in parallel:\n- PS 5.1 vm-route (pwsh to cmd to powershell, as CI's node hop) plus ParseFile on 5.1;\n- pwsh 7 vm-route plus ParseFile on 7;\n- protected-agent-command.test.mjs through Windows node (5.1 and 7 rows);\n- bash: vm-route, protected-agent-command.test.mjs (bash rows), bash -n, parity-check.sh and npm run lint.\nEach Windows hop goes through /init, which works whether or not WSL's binfmt entry is registered (mem:gotcha-wsl-interop-binfmt-init). Green means 4 '@' lines plus 3 '[copilot] ok ' lines = 7.\nMeasured on the current tip on 2026-11-05: 522 s, all four legs printed '@', and the gate exited 1 only because no '[copilot] ok' line exists yet. That is the RED signal. Expect roughly 10-12 min once the rows exist, inside the 20-min budget.\nError handling for a red run: read the failing leg's log ($L/51, $L/7, $L/pw, $L/sh, printed by tail) and rerun that leg alone.\n- A leg that dies at once with 'Exec format error' or 'MZ...: Permission denied' is WSL interop, not the change.\n- A lone UtilAcceptVsock failure is a WSL launch failure: rerun (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A row that hangs to the 360 s timeout is usually a polling or stdin bug: a fake reading stdin with -i, or a copilot TUI that loops.\nThis gate builds nothing. Never run npm install/build or package tests in the shared checkout (global rail), and never the full postflight.sh/ps1 (mem:decision-mid-epic-launcher-gate-narrow).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran checkRefs[0] verbatim from task worktree, exit 0, within ~11 minutes (20-minute budget). Logs /tmp/tmp.xjTMO1yPzH/{51,7,pw,sh}; marker counts 2+2+1+2=7 (four @ plus three Copilot ok). Includes Bash/5.1/7 vm-route, Windows+Bash protected tests, both ParseFile engines, bash -n, parity-check and npm run lint. No builds or prohibited full postflight suites.",
+      "startedAt": "2026-11-06T05:36:14.384Z",
+      "completedAt": "2026-11-06T05:47:02.562Z"
     },
     {
       "stepId": "step-8",
       "description": "Adversarial self-review of this task's own diff (git diff against the merge base) before complete_task. Fix anything found, then re-run checkRefs[0] if a file changed.\n- Twin parity: every new literal is byte-identical in both wrappers: the refusal line, the MOE_COPILOT_NOT_FOUND and MOE_COPILOT_CONFIG_FAILED lines, both banners, the pointer sentence and the argv order. grep each one in both files.\n- Unchanged CLIs: the claude, codex, gemini and grok launches, Invoke-MoeGuardedCommand's unpiped path and the four existing fakes behave as before. The T-legacy baseline diffs, A1/G1 and every older row still pass, and no fake but copilot reads stdin.\n- Leaks: no copilot file is written inside the project; both ps1 temp files are removed in the outer finally; $global:OutputEncoding and [Console]::OutputEncoding are restored on every path; harness knobs are reset so later rows run as before.\n- Concurrency and inputs: two seats of one role (pid-unique ps1 names, a per-process secure dir in sh); a CLI root, prompt file or MCP file path with spaces (still one argv token, '@' prefix intact); an empty Serena root (no serena server); MOE_ATTEMPT_ID without MOE_ATTEMPT_GENERATION (neither written); non-ASCII prompt text on 5.1 (UTF-8, no BOM); MOE_RUNTIME_PROTECTED=1 resolving copilot.ps1 first (npm's shim forwards piped input).\n- Cheap mutants in a scratch snapshot outside the repo: drop the detection arm (the CP rows fail); drop the 5.1 OutputEncoding switch (CP-H's U+2014 check fails on 5.1); drop the polling arm (CP-A hangs to the timeout).\n- Size: keep the whole diff under the 400 net non-board LOC review cap. If it grows, fold repeated harness assertions into one small helper per harness.\n- No added line contains a project.json globalRails.forbiddenPatterns string.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1",
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "note": "Adversarial review of all five own-file diffs vs merge base complete; no fixes needed after gate. Verified exact new diagnostic/pointer parity, grok dispatch byte-identical, 2 pinned JSON writers, BOM, forbidden-pattern scan and net 284 LOC (<400). Reviewed PID/private-dir concurrency, cleanup and encoding restoration, absent Serena/pair identity, path spaces and .ps1 shim; scratch checks pass. Three planned mutants killed (detection CP-H/CP2; 5.1 encoding CP-H; polling CP-A timeout). Full named gate exit 0 retained; separate qualityGate exit 0. Handoff and UTF-8 reader gotcha recorded in Serena.",
+      "startedAt": "2026-11-06T05:47:02.593Z",
+      "completedAt": "2026-11-06T05:48:40.179Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-61ce36da",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -128,12 +140,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:07.016Z",
-  "updatedAt": "2026-11-06T05:30:30.465Z",
+  "updatedAt": "2026-11-06T05:50:25.464Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T21:59:39.338Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 8
   },
   "contextFetchedBy": [
     "architect-32d0a5be",
@@ -150,7 +162,10 @@
     "step-2",
     "step-3",
     "step-4",
-    "step-5"
+    "step-5",
+    "step-6",
+    "step-7",
+    "step-8"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:28:12.434Z",
@@ -229,11 +244,47 @@
   "planApprovedAt": "2026-11-05T22:28:12.465Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-32d0a5be@2026-11-05T21:59:36Z",
-    "at": "2026-11-05T22:29:06.499Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-61ce36da@2026-11-06T05:04:04Z",
+    "at": "2026-11-06T05:50:25.464Z"
   },
-  "workStartedAt": "2026-11-06T05:05:59.795Z"
+  "workStartedAt": "2026-11-06T05:05:59.795Z",
+  "reviewStartedAt": "2026-11-06T05:49:07.341Z",
+  "verification": {
+    "command": "cd scripts/tests&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC;L=$(mktemp -d);W=\"/init $(command -v pwsh.exe)\";F=\"/init $(command -v powershell.exe)\";B='-nop -ep Bypass -f';X=\"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\";($W -nop -c \"cmd /c powershell $B postflight-vm-route.ps1\"&&$F -nop -c \"$X\"&&echo @)>$L/51 2>&1&($W $B postflight-vm-route.ps1&&$W -nop -c \"$X\"&&echo @)>$L/7 2>&1&($W -nop -c \"node --test protected-agent-command.test.mjs\"&&echo @)>$L/pw 2>&1&(bash postflight-vm-route.sh&&node --test protected-agent-command.test.mjs&&bash -n ../moe-agent.sh&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -cE '^@$|^\\[copilot\\] ok ') = 7 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.xjTMO1yPzH/51 <==\nPASS postflight-vm-route.ps1\n\r\n@\n\n==> /tmp/tmp.xjTMO1yPzH/7 <==\nPASS postflight-vm-route.ps1\r\n\r\n@\n\n==> /tmp/tmp.xjTMO1yPzH/pw <==\nℹ todo 0\nℹ duration_ms 308679.477\n@\n\n==> /tmp/tmp.xjTMO1yPzH/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\n",
+    "reportedAt": "2026-11-06T05:49:07.341Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/tests/protected-agent-command.test.mjs"
+  ],
+  "completionSummary": "Implemented GitHub Copilot CLI seats in both wrappers: detection/COPILOT identity, protected allowlist, role-polarity TUI/headless stdin, per-launch temporary MCP config, launch-root Serena, paired attempt identity, UTF-8 forwarding and cleanup/refusal paths. Added exact Copilot vm-route rows and protected resolution/launch tests. Fresh checkRefs[0] passed verbatim in ~11 min: Bash + Windows PowerShell 5.1 + pwsh 7, all 7 markers. Protected tests: 67 Bash and 88 Windows passes, zero failures; platform skips 42/63. ParseFile, bash -n, parity and lint passed; separate qualityGate passed. Three scratch mutants killed (detection, 5.1 UTF-8, polling); paths-with-spaces and npm-style .ps1 shim probes passed. Self-review clean, no source changes after gate; net 284 LOC across five planned files. Handoff and encoding-reader gotcha saved in Serena. Signed-in real Copilot smoke belongs to closing integration slice.",
+  "commits": [
+    {
+      "sha": "6bbe12158ce83f87c9cbc11796fadc3a044cc102",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-61ce36da@2026-11-06T05:04:04Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-61ce36da",
+      "recordedAt": "2026-11-06T05:50:25.464Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }

@@ -258,11 +258,17 @@
       "author": "governor-913c7930",
       "content": "Governor, 18:22Z. The human's directive, given at about 18:20Z: VM seats must sign in automatically with the rotation accounts' existing subscription logins, as WSL and host seats do, \"not like this\", meaning no manual `accounts vm-token` mint. I filed task-a200486f (HIGH, PLANNING). It keeps decisions 4 and 5's isolation: the renewable login never enters a VM, so at most a short-lived credential goes in through the job frame.\nThis changes the handoff in comment-a38e473a: the Windows E1-E10 run (steps 4-5) now waits until a200486f lands, and the human will NOT mint tokens. Steps 2-3 (deliveryPolicy, activation) can still be done now. This row stays BLOCKED, with the governor and the human controlling it; it does not auto-unblock.",
       "timestamp": "2026-11-05T18:22:57.754Z"
+    },
+    {
+      "id": "comment-43df7f3502d04c44b4ad886c99f95113",
+      "author": "governor-913c7930",
+      "content": "Governor, 05:36Z on 11-06. New DoD 8 build and a Linux addendum.\nBUILD for the Windows VM run. The human's automatic VM login (a200486f) is DONE on moe/work-2026-10-24: slice A 9c2129d4, slice B 05e359c0, integration 15c7fb34. A clean snapshot of 15c7fb34 (D:\\moe-scratch\\m07fp-15c7fb34) was built on Windows with npm ci, both builds and gradlew.bat buildPlugin, under the jetbrains-gradle lease, since released. That took 39 s, EXIT 0.\n- Zip: D:\\moe-scratch\\governor\\vl-e2e-20261105\\moe-jetbrains-0.8.0-15c7fb34.zip, sha256 74520ab6fb35ade91d0cf198ec45b2f7640759fbe2e3fa3ebd3c7bc8f44eaec3, jar 952925 B.\n- Checks: vm-credential-state appears in the helper (6) and in each wrapper (2); the short-life 1 h rule is in both wrappers; protectedEntries appears 3 times in each wrapper; guest-supervisor.py is 616463b7…, the certified pin. Both wrappers and moe-account-lease.mjs are byte-identical to 15c7fb34.\nLINUX ADDENDUM, same build, WSL: the scratch daemon was restarted from this zip. get_execution_readiness gives profile verified-local, ready:true, missingCapabilities []. A worker launch exits 1 with `[ERROR] MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED…` before any claim. The legacy leg's PASS is on 56016dcd (run 3, main 5e65fba3); the VM-login change does not touch the legacy path.\nNEXT (Windows): the human installs this zip (Settings > Plugins > Install Plugin from Disk) and restarts PyCharm when worker-61ce36da's ab323f85 has landed. Then the human reopens C:\\moe-scratch\\vl-e2e, and the governor runs steps 2-4 of comment-a38e473a: deliveryPolicy, waiting more than 30 s for readiness, activation, and the mul task with a host architect. Then the human clicks Start Agent for Worker and QA; collect E1-E10. No VM token is needed now: a VM seat uses its leased account's host sign-in, and seats stop with short-life when less than 1 h is left. qgc is still Disabled.",
+      "timestamp": "2026-11-06T05:35:34.513Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T21:17:20.276Z",
-  "updatedAt": "2026-11-05T18:34:35.348Z",
+  "updatedAt": "2026-11-06T05:35:34.513Z",
   "metrics": {
     "firstClaimAt": "2026-10-31T21:17:38.753Z",
     "plannedStepCount": 5,
