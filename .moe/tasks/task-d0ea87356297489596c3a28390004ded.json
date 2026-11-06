@@ -112,7 +112,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -142,16 +142,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T05:14:13.779Z",
-  "updatedAt": "2026-11-06T09:16:50.118Z",
+  "updatedAt": "2026-11-06T09:30:04.557Z",
   "metrics": {
     "firstClaimAt": "2026-11-06T05:14:20.901Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-06T09:29:24.496Z",
+    "wallClockMs": 15303595
   },
   "contextFetchedBy": [
     "architect-32d0a5be",
-    "worker-db9d247b"
+    "worker-db9d247b",
+    "qa-076e761a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -230,10 +233,11 @@
   "planApprovedAt": "2026-11-06T05:44:33.790Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-db9d247b@2026-11-06T08:30:48Z",
-    "at": "2026-11-06T09:16:50.118Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-076e761a@2026-11-06T09:17:06Z",
+    "at": "2026-11-06T09:30:04.557Z"
   },
   "workStartedAt": "2026-11-06T08:31:50.934Z",
   "reviewStartedAt": "2026-11-06T09:15:45.254Z",
@@ -270,5 +274,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-06T09:29:24.496Z",
+  "reviewCompletedAt": "2026-11-06T09:29:24.496Z",
+  "reviewSummary": "Completion 06dbe068 is on moe/work-2026-10-24 and origin; its tree d5921847 equals the candidate's. 4 files, +187/-25 (net 162 LOC), no forbidden patterns, in scope (including amend-1's C4 row).\n\nGate: checkRefs[0] re-run verbatim from a --shared clone at 06dbe068 on D:, at load ~4: CHAIN_EXIT=0, 590s. Each leg (bash, powershell 5.1, pwsh 7) printed PASS_GATE, PASS postflight-vm-route, the [copilot policy] ok line for CP-NE/MB0/MB1/SER/NEG, the C4 refusals ok line and [copilot] ok. ParseFile, bash -n, both parity checks and lint are green.\n\nDoD:\n1. NOT_ENTITLED: nonzero exit plus this launch's own log. CP-NE runs polling: 1 launch, 1 line, 1 #general @governors message, deregister, no launch-failure. The negatives are CP-SER (exit 0 with the 403 log) and CP-NEG (stale log, stdout only).\n2. MCP_BLOCKED: from the stderr copy at any exit (CP-MB0 exit 0, CP-MB1 exit 1). A serena-only block gives 1 WARN. Each stderr line shows exactly once.\n3. Copy and log dir are removed per launch (priorGone). sh: SECURE_TEMP_DIR plus the EXIT trap. ps1: the writer opens after the argv probe and is disposed in finally, and the outer finally removes the root. stdin UTF-8 holds (CP-H on 5.1), as do the exit code and EAP/encodings.\n4. Gate under 20 min.\n\nStrings and regexes are byte-identical across both wrappers.\n\nMutants: the worker killed 4 sh mutants; I killed 5 ps1 mutants on pwsh 7:\n- 403 phrase dropped: CP-NE.\n- 'moe' alternative dropped: CP-MB1, which timed out at 360s after 253 relaunches.\n- exit-0 classify: CP-SER.\n- stdout copied: CP-NEG.\n- copy not removed: CP-log-two.",
+  "requiredCheckAtDone": null
 }
