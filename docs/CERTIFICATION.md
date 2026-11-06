@@ -161,11 +161,13 @@ an operator sets grants it: each step below supplies evidence the daemon checks,
    A native, certified run files its report in `<OS account home>/.moe/certification` (see the host certification store in
    [CONFIGURATION.md](CONFIGURATION.md)). A plugin update that moves a pin, or a Multipass upgrade, needs a re-certify
    (`certification-report-mismatch`, `provider-version-mismatch`).
-2. **Mint a VM token for each rotation account**: `node <plugin>/daemon/index.js accounts vm-token <id>` (on Windows
-   `node <plugin>\daemon\index.js accounts vm-token <id>`), or **Set VM token...** on the JetBrains **Accounts** tab. It
-   runs `claude setup-token` for that account and stores the pasted token outside every project. A claude seat VM gets
-   only the leased account's token. A codex seat instead needs `OPENAI_API_KEY` or `CODEX_API_KEY` in the environment
-   the IDE launches seats with.
+2. **Sign in each rotation account**: the **Accounts** tab's Sign in, or `node <plugin>/daemon/index.js accounts login
+   <id>` (on Windows `node <plugin>\daemon\index.js accounts login <id>`). On Windows and Linux nothing more is needed:
+   a claude seat VM gets a short-lived credential from the leased account's own sign-in, renewed on the host by claude.
+   A VM token stays optional: `accounts vm-token <id>`, or **Set VM token...** on the Accounts tab, runs `claude
+   setup-token` and stores a year-long token outside every project. It stays because it is the route on macOS, whose
+   sign-in is in the Keychain, and because it never expires in the middle of a long job. A codex seat instead needs
+   `OPENAI_API_KEY` or `CODEX_API_KEY` in the environment the IDE launches seats with.
 3. **Run the plugin's installed daemon** (`protected-host-control-plane`: the daemon's install tree must lie outside the
    project). Opening the project in JetBrains starts the bundled daemon when `MOE_DAEMON_COMMAND` is unset and no
    `packages/moe-daemon/dist/index.js` or `moe-daemon/dist/index.js` sits in the project or a parent folder. Once the
