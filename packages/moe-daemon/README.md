@@ -1,6 +1,6 @@
 # moe-daemon
 
-Part of [Moe's Tavern](https://github.com/yaront1111/Moe-s-Tavern), an AI agent task board for Claude Code, Codex, Antigravity and Grok Build. This package is the daemon: the MCP + WebSocket state manager that owns `.moe/` and serves the IDE boards and agent proxies.
+Part of [Moe's Tavern](https://github.com/yaront1111/Moe-s-Tavern), an AI agent task board for Claude Code, Codex, Antigravity, Grok Build and GitHub Copilot CLI. This package is the daemon: the MCP + WebSocket state manager that owns `.moe/` and serves the IDE boards and agent proxies.
 
 ## Installation
 
