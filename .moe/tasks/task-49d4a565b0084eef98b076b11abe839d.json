@@ -35,6 +35,26 @@
     {
       "stepId": "step-2",
       "description": "Add the Copilot-only once-per-wrapper headless argv probe, using the exact constructed launch array INCLUDING optional model/effort, log-dir once step 3 adds it, command prefix args and per-launch MCP config, plus --help. Introduce a process-lifetime guard (e.g. COPILOT_ARGV_PROBED / $script:CopilotArgvProbed), outside iteration resets; MOE_DISABLE_ARGV_PROBE=1 bypasses the probe. Bash launches through agent_git_exec with `< /dev/null` and captures combined output/exit without set -e aborting. PowerShell reuses the producer's real stdin transport in its explicit empty-input/closed-stdin mode; do not assume `$null | Invoke-MoeGuardedCommand` forwards input, because the current generic helper calls only `& $Command @args`. Preserve its guarded environment and .cmd handling, restore $ErrorActionPreference and any encoding changes in finally; native stderr under PS 5.1 must not throw before capturing the code. No TUI probe.\nClassification condition is `exit != 0 AND /unexpected argument|invalid value|unrecognized/i`. Zero with such text and unrelated nonzero errors are NOT parser rejection and must proceed to the normal run. First matching/error line and first --version line only; flatten CR/LF, keep a fixed 'unknown' fallback if version cannot be read, do not dump full help. Emit exactly one `[ERROR] MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <first error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check.` with identical fixed prose. Send one @governors escalation via moe_rpc chat_send / Invoke-MoeRpc to the discovered general channel (fallback channel 'general'), swallowing only the escalation transport error so failure to page never permits launch. Stop heartbeat and exit 1; ps1 sets $script:MoeExitStatus=1, leaving normal finally/deregister/rescue intact. Do not directly release the task or call launch-outage/backoff.\nTests: table-drive each rejection phrase; fake --version returns a stable test version. Assert exit 1, exactly one coded console line, one matching chat_send (not all unrelated chat), deregistration, no real launch, and the expected version/error text. The fake must record zero stdin bytes for --help even when the wrapper's own stdin has a sentinel, and must see every optional arg/prefix/MCP flag expected by the real run. Add skip=1 (zero probe calls, real launch happens), successful-help then two launches (one probe total), and unrelated nonzero probe output (real run occurs, no rejection line). All child executions bounded; retain existing non-Copilot cases.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added exact-array once-per-process headless probe with EOF stdin, nonzero+parser-phrase classification, version first-line/unknown fallback, one general escalation, heartbeat stop and normal fatal teardown. Added paired success/skip/unrelated/accepted-error-text/three-rejection/version-failure assertions plus inherited-stdin sentinel and exact probe argv comparison. Bash Copilot-only red failed on missing probe count; green passed. PS 5.1 Copilot-only run underway and will be polled; final exact three-engine gate remains required. No full postflight or package build/test executed.",
+      "startedAt": "2026-11-06T06:11:20.939Z",
+      "completedAt": "2026-11-06T06:14:18.082Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add per-headless-launch log isolation and terminal sign-out handling before generic launch-failure classification. Create a unique log child beneath the producer's secure private temp root each invocation (bash `mktemp -d \"$SECURE_TEMP_DIR/copilot-log.XXXXXX\"`; Windows use a GUID child under the producer's private temp root), append `--log-dir <child>` to the real/probe headless array, and register it in the existing cleanup path. Do not add log flags or authentication handling to the TUI. Read logs only after the native run exit code is saved and ONLY when it is nonzero. Match the literal `No authentication information found` in this launch's regular *.log files; never scan the home directory, credential stores, another iteration's logs or stdout alone. Avoid dumping matched log lines. Missing/unreadable logs mean no authentication evidence: preserve normal exit/backoff behavior, not a false sign-out. A directory-creation failure must produce an explanatory error and exit 1 before any launch, with existing cleanup; never continue with a blank path or the global log directory.\nOn evidence, emit exactly one identical fixed console line: `[ERROR] MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.` Send one #general @governors escalation with this code and the same remediation (no credential values or raw logs). Stop the heartbeat, set the PS exit status, exit 1 through existing cleanup/deregistration BEFORE launch-failure/backoff accounting. Restore native error preferences/encoding even on failure. Clean log children after inspection and retain outer cleanup as a fallback on interruption; only owned directories, never global temp cleanup. Bash already initializes create_secure_temp in the parent shell: preserve it rather than reintroducing subshell-cached-directory leaks.\nTests: fake --help succeeds; actual headless fake reads --log-dir, writes process-test-<pid>.log with `[ERROR] No authentication information found.`, and exits 1. Enable polling with one-second test intervals; require wrapper exit 1, one real invocation, one coded console line, one matching chat escalation, deregistration, no launch-failure backoff, and removed log directory. Negative cases: exit 0 with auth text; nonzero with unrelated log; nonzero with missing log; auth phrase only on stdout; a stale auth log outside the new per-launch directory. None emits MOE_COPILOT_SIGNED_OUT. Reuse two-launch fixture to assert unique log paths/cleanup and no stale evidence reuse. Assert no COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN fixture secret value appears in console/chat, only env-variable names. Keep all fake activity offline and isolated.",
       "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/moe-agent.sh",
@@ -42,18 +62,7 @@
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-06T06:11:20.939Z"
-    },
-    {
-      "stepId": "step-3",
-      "description": "Add per-headless-launch log isolation and terminal sign-out handling before generic launch-failure classification. Create a unique log child beneath the producer's secure private temp root each invocation (bash `mktemp -d \"$SECURE_TEMP_DIR/copilot-log.XXXXXX\"`; Windows use a GUID child under the producer's private temp root), append `--log-dir <child>` to the real/probe headless array, and register it in the existing cleanup path. Do not add log flags or authentication handling to the TUI. Read logs only after the native run exit code is saved and ONLY when it is nonzero. Match the literal `No authentication information found` in this launch's regular *.log files; never scan the home directory, credential stores, another iteration's logs or stdout alone. Avoid dumping matched log lines. Missing/unreadable logs mean no authentication evidence: preserve normal exit/backoff behavior, not a false sign-out. A directory-creation failure must produce an explanatory error and exit 1 before any launch, with existing cleanup; never continue with a blank path or the global log directory.\nOn evidence, emit exactly one identical fixed console line: `[ERROR] MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.` Send one #general @governors escalation with this code and the same remediation (no credential values or raw logs). Stop the heartbeat, set the PS exit status, exit 1 through existing cleanup/deregistration BEFORE launch-failure/backoff accounting. Restore native error preferences/encoding even on failure. Clean log children after inspection and retain outer cleanup as a fallback on interruption; only owned directories, never global temp cleanup. Bash already initializes create_secure_temp in the parent shell: preserve it rather than reintroducing subshell-cached-directory leaks.\nTests: fake --help succeeds; actual headless fake reads --log-dir, writes process-test-<pid>.log with `[ERROR] No authentication information found.`, and exits 1. Enable polling with one-second test intervals; require wrapper exit 1, one real invocation, one coded console line, one matching chat escalation, deregistration, no launch-failure backoff, and removed log directory. Negative cases: exit 0 with auth text; nonzero with unrelated log; nonzero with missing log; auth phrase only on stdout; a stale auth log outside the new per-launch directory. None emits MOE_COPILOT_SIGNED_OUT. Reuse two-launch fixture to assert unique log paths/cleanup and no stale evidence reuse. Assert no COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN fixture secret value appears in console/chat, only env-variable names. Keep all fake activity offline and isolated.",
-      "status": "PENDING",
-      "affectedFiles": [
-        "scripts/moe-agent.sh",
-        "scripts/moe-agent.ps1",
-        "scripts/tests/postflight-vm-route.sh",
-        "scripts/tests/postflight-vm-route.ps1"
-      ]
+      "startedAt": "2026-11-06T06:14:18.113Z"
     },
     {
       "stepId": "step-4",
@@ -92,12 +101,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T22:04:03.921Z",
-  "updatedAt": "2026-11-06T06:11:20.939Z",
+  "updatedAt": "2026-11-06T06:14:18.113Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:06:18.193Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 1
+    "executedStepCount": 2
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
@@ -110,7 +119,8 @@
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
-    "step-1"
+    "step-1",
+    "step-2"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:08:26.389Z",
