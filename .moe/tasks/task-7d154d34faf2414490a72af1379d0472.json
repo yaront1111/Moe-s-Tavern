@@ -1,0 +1,36 @@
+{
+  "id": "task-7d154d34faf2414490a72af1379d0472",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: a verified-local worker or QA job cannot run the project's tests: the agent job's PATH (guest-supervisor.py JOB_PATH) leaves out the pinned Node toolchain, so node/npm are \"not found\" (exit 127) in the seat VM",
+  "description": "Found by the governor's DoD 8 Windows real-VM run for task-1a8f1d0e on 2026-11-06, with plugin 15c7fb34 (zip sha256 74520ab6…) in scratch project C:\\moe-scratch\\vl-e2e on task-7a9ae68a (\"mul helper\").\nThe VM route worked:\n- `[seat] started moe-vm-8390b245f00d796ef0da`\n- `[seat] VM credential account=acct-2 source=signin`\n- `[seat] job role=worker …`\n- `[OK] MOE_VM_CANDIDATE_COMMITTED … paths=2`\n- `[seat] stopped …`\nBut the agent reported: \"there is no `node` or `npm` in this workspace, so I could not run the red or green steps. The command exited 127 (not found).\" It started step 1, completed no step, and its complete_task was refused. The task went back to WORKING.\n\nCause, in scripts/local-runner/guest-supervisor.py:\n- :910 sets JOB_PATH = '/usr/local/bin:/usr/bin:/bin'.\n- :1017 builds the agent job env with 'PATH': JOB_PATH.\n- :911 says TOOLCHAIN '/opt/moe/toolchain' is where the 'toolchain' mode installs Node, and only a check job puts it first (:1434).\n- agent-seat.mjs installs the pinned toolchain at seat-start.\nSo the toolchain is in the seat VM but off the agent's PATH. A verified-local worker can never run the plan's local verification (TDD red/green, npm test), and QA can't re-run anything either.\n\nPlan this so that agent jobs can run the project's Node toolchain, or, if that is deliberately excluded, say so and make planning and worker guidance consistent with it (verification only through requiredChecks in check VMs). Questions to settle:\n- whether npm ci with registry dependencies works in the seat VM, given its egress;\n- whether QA jobs need the same.\nNOTE: changing guest-supervisor.py moves its pinned sha256 (CERTIFICATION_PINS.supervisorSha256 616463b7…, packages/moe-daemon/src/delivery/certificationEvidence.ts:28). That means updating the pin and the CERTIFICATION.md table, then re-certifying BOTH hosts in a governor-run certify (about 15 min each). Both certify runs passed on 11-05 with the current pin.\n1a8f1d0e's DoD 8 Windows run is re-run once this lands.",
+  "definitionOfDone": [
+    "Inside a verified-local worker or QA job, `node` and `npm` resolve to the pinned toolchain (or the plan documents and tests a deliberate alternative), so a plan's local `npm test` runs in the seat VM. Covered by the guest-supervisor tests of the agent job env.",
+    "The plan states what the agent job can install (npm ci against the registry under the seat VM's egress) and pins it with a test or a recorded real-VM line.",
+    "If guest-supervisor.py changes: CERTIFICATION_PINS.supervisorSha256 and the CERTIFICATION.md table carry the new sha, readiness accepts only the new pin, and the governor records a passing re-certify on Windows and on Linux (WSL).",
+    "docs/roles/architect.reference.md (Verified-local plans) and the worker guidance say what a verified-local job can run locally, consistent with the code.",
+    "A governor real-VM re-run of the Windows DoD 8 task gets past local verification: the worker completes its steps and calls complete_task."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-a8e13516",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 539.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-06T06:41:38.227Z",
+  "updatedAt": "2026-11-06T06:42:14.854Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-06T06:41:53.129Z"
+  },
+  "contextFetchedBy": [
+    "architect-a8e13516"
+  ]
+}
