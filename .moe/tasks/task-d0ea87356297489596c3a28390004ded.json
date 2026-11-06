@@ -1,0 +1,39 @@
+{
+  "id": "task-d0ea87356297489596c3a28390004ded",
+  "epicId": "epic-be924fb8",
+  "title": "feat(wrappers): a copilot seat whose account may not use Copilot CLI (HTTP 403, \"Access denied by policy settings\") or whose Copilot policy blocks the moe MCP server stops once with one coded line instead of relaunch-looping",
+  "description": "Slice of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider), found while settling that row's contract against the INSTALLED CLI. dependsOn task-49d4a565 (it adds the per-launch --log-dir and the post-run sign-out classification this row extends) and task-e266a150 (it edits the same parity files and owns the copilot guards gate). The closing row task-59e1d150 depends on this row.\n\nMEASURED 2026-11-06 ~05:05Z by architect-a8e13516 on copilot 1.0.106 in WSL (Ubuntu-24.04, nvm node 24), signed in through `copilot login` with the human's GitHub account. Credit-free runs: each failed before any model turn.\n1. NOT ENTITLED. A headless run with the slice argv (prompt on stdin, -C, --no-ask-user, --no-auto-update, --disable-builtin-mcps, --additional-mcp-config @file, --log-dir) exits 1. stderr: `Error: Access denied by policy settings (Request ID: <id>)`, then `Your Copilot CLI policy setting may be preventing access. This can happen when: ...` and `To resolve this, visit your Copilot settings: https://github.com/settings/copilot`. The run's own --log-dir file `process-<ts>-<pid>.log` holds `[ERROR] Error loading models: Error: 403 \"unauthorized: not authorized to use this Copilot feature\\n\"`. task-49d4a565 classifies only `No authentication information found`, so this falls through to the generic launch-failure path, and under polling the wrapper relaunches with backoff forever.\n2. MCP BLOCKED. In text mode copilot prints on stderr, before the model call: ` ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available.` and ` ! 1 MCP server was blocked by policy: 'probe' (Could not verify server against any configured registry)`. The blocked server's process is never started. These lines are NOT in the process log, even at --log-level debug. With --output-format json they arrive as `session.warning` events (data.warningType `policy` and `mcp`). On an entitled account under such a policy, a seat would run without its moe and serena servers, so it can neither claim nor complete, and polling relaunches it.\n3. For comparison, signed out (empty COPILOT_HOME, no token env): stderr `Error: No authentication information found.`, exit 1, and the log line `[ERROR] No authentication information found.` (task-49d4a565's case).\n\nDELIVERABLE, in both wrappers with byte-identical strings, extending task-49d4a565's per-launch log dir and post-run classification (never a parallel path):\n(a) After a NONZERO headless exit, the same scan of this launch's own log dir also matches `not authorized to use this Copilot feature`. It prints exactly one `[ERROR] MOE_COPILOT_NOT_ENTITLED: ...` line. The line names the remedy: sign in with a GitHub account whose Copilot plan includes Copilot CLI (`copilot login`), or have the organization enable Copilot CLI (github.com/settings/copilot); Windows and WSL sign in separately; this seat exits instead of looping. Then one #general @governors escalation, heartbeat stop and exit 1, with no launch-failure backoff, as the sign-out route does.\n(b) The headless launch keeps a private per-launch copy of copilot's stderr, still shown live. After ANY exit code, a line naming the moe server blocked (`MCP server was blocked by policy: 'moe'`) or `Third-party MCP servers are disabled` prints exactly one `[ERROR] MOE_COPILOT_MCP_BLOCKED: ...` line, with the same escalation and stop. The remedy: an account or organization policy that allows MCP servers in Copilot (the moe and serena servers are local stdio servers, and no MCP registry allowlist may exclude them). A blocked `serena` alone prints one [WARN] and keeps the run's normal outcome. PowerShell must keep task-ab323f85's UTF-8 stdin pipe, the native exit code and its error preferences; under 5.1, stderr capture must not throw under Stop. The planner settles the mechanism (for example a 2>&1 pipeline that shows each stderr record live and appends it to the private file).\n(c) Never echo whole logs or stderr copies, and never read a credential store. Clean the per-launch files on every exit path.\n\nTESTS: extend task-ab323f85/49d4a565's recording fake and the postflight-vm-route.{sh,ps1} rows on bash, Windows PowerShell 5.1 and pwsh 7:\n- a fake that writes the 403 log line and exits 1 (polling on, 1 s interval: exactly one launch);\n- fakes that print the MCP-blocked stderr lines and exit 0 and exit 1;\n- negatives: a blocked serena only; the phrases only on stdout; exit 0 with the 403 text in the log; a stale 403 log outside this launch's dir.\n\nNOT IN SCOPE: docs (task-59e1d150 documents both codes), IDEs, any precheck that spends a model call. Parity: task-e266a150's MOE_COPILOT_ family compare covers the new codes automatically. Edit parity-check.{sh,ps1} only if e266a150 pins an exact MOE_COPILOT_ member list.\n\nVERIFICATION: task-e266a150's gate shape (vm-route on bash/5.1/pwsh 7, ParseFile and bash -n, both parity checks, npm run lint), within 20 minutes; never the full postflight.",
+  "definitionOfDone": [
+    "After a nonzero headless copilot exit whose own per-launch log holds `not authorized to use this Copilot feature`, moe-agent.sh and moe-agent.ps1 print exactly one MOE_COPILOT_NOT_ENTITLED line with the remedy, send one #general escalation, stop the heartbeat and exit 1 after exactly one launch with polling on. An exit 0, an unrelated or missing log, or the phrase only in another launch's log never classify. postflight-vm-route rows pass on bash, Windows PowerShell 5.1 and pwsh 7.",
+    "When copilot's stderr for the launch reports the moe server blocked by policy (`MCP server was blocked by policy: 'moe'` or `Third-party MCP servers are disabled`), both wrappers print exactly one MOE_COPILOT_MCP_BLOCKED line, escalate once and exit 1 without relaunching, whatever copilot's exit code. stderr is still shown live. A blocked serena alone prints one [WARN] and keeps the normal outcome, and the phrases only on stdout never classify. Same rows.",
+    "The private stderr copies and log dirs are per launch, cleaned on every exit path, and never echoed whole. PowerShell keeps the UTF-8 stdin pipe, the native exit code and its error preferences. Same rows.",
+    "checkRefs[0] passes within 20 minutes: vm-route on bash, 5.1 and pwsh 7, the wrapper parse checks, both parity checks and npm run lint. No full postflight, and no live package build."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-32d0a5be",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-49d4a565b0084eef98b076b11abe839d",
+    "task-e266a1501d534ac99b8e556f1f89cbff"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.35,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-06T05:14:13.779Z",
+  "updatedAt": "2026-11-06T05:14:39.573Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-06T05:14:20.901Z"
+  },
+  "contextFetchedBy": [
+    "architect-32d0a5be"
+  ]
+}

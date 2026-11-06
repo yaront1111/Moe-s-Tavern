@@ -80,20 +80,32 @@
     {
       "stepId": "step-4",
       "description": "Verify, once. Run checkRefs[0] && checkRefs[1] exactly as stored, joined with ' && ', from this task's worktree. Their output is the complete_task evidence.\n- checkRefs[0] re-runs the slices' tests in four parallel legs:\n  - the JetBrains AccountPresentationTest (Windows Gradle);\n  - postflight-vm-route.ps1 on Windows PowerShell 5.1, through pwsh then cmd, which keeps PSModulePath;\n  - postflight-vm-route.ps1 on pwsh 7;\n  - in bash: moe-account-lease.test.mjs and account-trust-docs.test.mjs on node and node.exe, then postflight-vm-route.sh, parity-check.sh and npm run lint.\n  It passes only when all four legs print GATE_OK. That takes about 10-15 minutes, inside the 20-minute budget. Start it in the background and poll the log; do not hold one foreground call past the tool cap.\n- checkRefs[1] imports the landed helper's VM_CREDENTIAL_REASONS. It requires each reason in the MOE_VM_CREDENTIAL_UNAVAILABLE row, the new ARCHITECTURE Credentials sub-bullet with its key facts, no 'Mint a VM token for each' and no 'is never opened' left, no false bundle sentence, and the `[seat] VM credential` line in both wrappers. Before these edits it fails: verified on 4f0280c3, along with a simulated green run and a red mutant.\n- If the slices' landed text differs from this plan (a reason renamed, a different line), fix the docs to match the code. Do not edit the checkRef: name the difference in the completion summary, and QA judges it.\nError handling for a red run: read that leg's log tail in $L.\n- A WSL interop failure (UtilAcceptVsock) or a Gradle daemon start failure is not a test result: rerun the whole gate once.\n- If a ps1 leg fails, rerun it against the parent revision before blaming this row (mem:gotcha-qa-ps1-postflight-from-wsl).\n- A docs or bundle defect is fixed in this row's files.\n- A failure inside a slice's own code or tests (helper, wrappers, harnesses) is never patched here. Call moe.report_blocked naming the failing leg and the slice row (task-fbd2a42f or task-98053b89), so the governor files the fix row.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [],
-      "startedAt": "2026-11-06T05:05:29.587Z"
+      "note": "checkRefs[0] EXIT 0 (4x GATE_OK), checkRefs[1] exit 0.",
+      "startedAt": "2026-11-06T05:05:29.587Z",
+      "completedAt": "2026-11-06T05:15:50.109Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, once, over the whole change: slices A and B as landed (`git log --oneline` on the target for task-fbd2a42f and task-98053b89, and their diffs) plus this row's own diff, against this row's six DoD items. Map each item to evidence in the completion summary:\n- DoD 1: B's SI-signin and SI-renew rows in both harnesses (checkRefs[0]).\n- DoD 2: A's renewal and leak rows, plus B's SI rows (argv/env checks, job frame only, file unchanged).\n- DoD 3: A's rows proving the helper never writes .credentials.json and renews only through claude, plus B's SI-signin byte-identical file. The governor's real Windows E1-E10 run is extra evidence, not this row's.\n- DoD 4: A's per-reason rows, plus B's SI-none.\n- DoD 5: A's and B's canary rows.\n- DoD 6: steps 1-3.\nAsk as an attacker:\n- Does any sentence promise more than the code does, such as renewal on macOS, renewal inside a running job, or a VM token being required?\n- Does any text imply the refresh token or the config folder reaches a VM?\n- Is every MOE_ code and `[seat]` line quoted in the docs present in both wrappers?\n- Does a doc example show a credential value? None may.\nFix doc defects here. Report code defects as in step 4. Error handling is the same as step 4's: a code defect is reported, never patched here.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/MCP_SERVER.md",
+        "docs/CERTIFICATION.md",
+        "docs/TROUBLESHOOTING.md",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "note": "Self-review: no sentence promises renewal on macOS or mid-job; refresh token/config folder stated as host-only; [seat] VM credential and short-life/no-lease literals exist in both wrappers (helper reasons pass through); no credential values in docs. No code defects found.",
+      "startedAt": "2026-11-06T05:15:50.858Z",
+      "completedAt": "2026-11-06T05:15:59.795Z"
     }
   ],
   "planRevision": 3,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-be0f3922",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -118,12 +130,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:22:46.400Z",
-  "updatedAt": "2026-11-06T05:05:29.587Z",
+  "updatedAt": "2026-11-06T05:17:28.641Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:22:49.127Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-fe831cde",
@@ -140,7 +152,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T18:52:43.780Z",
@@ -215,11 +229,47 @@
   "planApprovedAt": "2026-11-05T18:52:43.836Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
-    "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-fe831cde@2026-11-05T18:22:47Z",
-    "at": "2026-11-05T19:01:23.910Z"
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-be0f3922@2026-11-06T05:03:27Z",
+    "at": "2026-11-06T05:17:28.640Z"
   },
-  "workStartedAt": "2026-11-06T05:04:25.354Z"
+  "workStartedAt": "2026-11-06T05:04:25.354Z",
+  "reviewStartedAt": "2026-11-06T05:16:06.530Z",
+  "verification": {
+    "command": "bash /tmp/a200-gate/c0.sh (checkRefs[0] verbatim, 4 parallel legs: AccountPresentationTest via gradlew.bat, postflight-vm-route.ps1 on 5.1 and pwsh 7, bash leg: lease+trust-docs tests on node and node.exe, postflight-vm-route.sh, parity-check.sh, npm run lint) && bash /tmp/a200-gate/c1.sh (checkRefs[1] docs check)",
+    "exitCode": 0,
+    "outputTail": "5: PASS postflight-vm-route.ps1 GATE_OK | 7: PASS postflight-vm-route.ps1 GATE_OK | g: 11 actionable tasks: 11 executed GATE_OK | s: OK: docs/roles/qa.md has 36 lines (max 40) GATE_OK | EXIT=0; checkRefs[1] exit 0",
+    "reportedAt": "2026-11-06T05:16:06.530Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/ARCHITECTURE.md",
+    "docs/MCP_SERVER.md",
+    "docs/CERTIFICATION.md",
+    "docs/TROUBLESHOOTING.md",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "completionSummary": "Docs and JetBrains text for the claude VM seat sign-in credential (task-a200486f, docs row after slices A and B). ARCHITECTURE Credentials is one sub-bullet: minted token first, else the sign-in access token read-only from .credentials.json; job frame only as CLAUDE_CODE_OAUTH_TOKEN; no refresh token; host-claude renewal at 5 min or less; 8 hours, short-life wait (3600 s min, as slice B landed it) and the mid-job expiry route; fail closed; macOS Keychain needs a minted token. MCP_SERVER: no longer says .credentials.json is never opened (read-only VM exception, 2026-11-05 directive), vm-token marked optional. CERTIFICATION step 2 is now 'Sign in each rotation account', VM token optional with reasons. TROUBLESHOOTING: MOE_VM_CREDENTIAL_UNAVAILABLE row names all four VM_CREDENTIAL_REASONS plus short-life/no-lease/unknown with causes and fixes; new '[seat] VM credential' row. MoeBundle removeConfirm/setConfirm values updated (no key change, no apostrophe). No code differs from the plan. DoD evidence: DoD1-5 by slices A/B tests re-run in the gate (SI-signin/SI-renew/SI-none, canary rows, both wrappers); DoD6 by steps 1-3. Self-review found no code defects.",
+  "commits": [
+    {
+      "sha": "15c7fb34b75b7024732a1ebb92931ec69a51203e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-be0f3922@2026-11-06T05:03:27Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/CERTIFICATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/TROUBLESHOOTING.md",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "recordedBy": "worker-be0f3922",
+      "recordedAt": "2026-11-06T05:17:28.640Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": []
 }
