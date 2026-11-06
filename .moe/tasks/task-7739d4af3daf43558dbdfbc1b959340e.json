@@ -75,7 +75,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -96,16 +96,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:42.193Z",
-  "updatedAt": "2026-11-06T05:54:28.724Z",
+  "updatedAt": "2026-11-06T06:07:53.806Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:10:28.876Z",
     "plannedStepCount": 4,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 4
+    "executedStepCount": 4,
+    "doneAt": "2026-11-06T06:07:13.162Z",
+    "wallClockMs": 28604286
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
-    "worker-b3b3db54"
+    "worker-b3b3db54",
+    "qa-a196fc69"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -214,9 +217,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b3b3db54@2026-11-06T05:47:28Z",
-    "at": "2026-11-06T05:54:28.724Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-06T06:05:28Z",
+    "at": "2026-11-06T06:07:53.806Z"
+  },
+  "completedAt": "2026-11-06T06:07:13.162Z",
+  "reviewCompletedAt": "2026-11-06T06:07:13.162Z",
+  "reviewSummary": "Reviewed completion 25155eac (contained in moe/work-2026-10-24, pushed). Net +134 over exactly the 5 approved files; production change is 5 lines (AgentProvider 'copilot', WorkerType 'COPILOT', a pickProvider row directly before Custom..., a datalist option after grok). No launcher branch; VM_AGENT_COMMANDS still claude/codex.\n\nGate re-run by me in a fresh external /tmp git-archive snapshot of 25155eac (MOE_/CLAUDE/FAKE_ env unset): npm ci, npm test = 869 tests / 852 pass / 0 fail / 17 skip (pre-existing Windows-only rows), exit 0; npm run compile exit 0. I omitted the checkRef's inline `trap rm -rf` (harness refuses it, see gotcha-gate-checkref-rm-trap-blocked) and removed my own mktemp dir by literal path. Nothing run in the live checkout. qualityGate (parity-check.sh && npm run lint) exit 0.\n\nDoD: (1) V7 runs the real launcher on simulated linux+win32 (legacy/observe, all 4 roles) against an independent expectedCommand; asserts -Command/--command 'copilot', no provider flag. (2) P1/P2 run the real nested pickProvider cut from extension.ts by AST: Copilot once, directly before Custom..., last-used and cancel preserved; S1 inspects the real emitted datalist [claude,codex,gemini,grok,copilot]. (3) V5 refuses copilot for worker and qa and via launchAllAgents, 0 terminals, 0 readiness calls. (4) V8 reads both unions from the TS AST. (5) Gate green. All new rows ran, none skipped (35/35 in the file).\n\nMutation check in my snapshot: stripping the 4 production edits makes V8, P1, P2, S1 fail (4 of 35), so they are not vacuous. V5/V7 stay green by design (generic untyped launcher path and VM refusal). No tests deleted or weakened; no forbidden patterns.\n\nNot in scope, left: types/moe.ts comment says the daemon records every worker as CLAUDE; listing/README belong to docs row 1c580985; JetBrains is another slice.",
+  "requiredCheckAtDone": null
 }
