@@ -1173,7 +1173,8 @@ type WorkerType =
   | 'CLAUDE'    // Claude Code CLI
   | 'CODEX'     // OpenAI Codex CLI
   | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)
-  | 'GROK';     // xAI Grok Build CLI
+  | 'GROK'      // xAI Grok Build CLI
+  | 'COPILOT';  // GitHub Copilot CLI
 // NOTE: worker.type is the CLI a seat reports; the daemon cannot check which CLI really runs.
 // The launchers (scripts/moe-agent.{sh,ps1}) export MOE_WORKER_TYPE from the CLI they start:
 // CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE). moe-proxy adds it as workerType

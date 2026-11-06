@@ -6,7 +6,7 @@ import { assertTeamHasSeat } from '../state/teamStore.js';
 import { logger } from '../util/logger.js';
 
 // Record<WorkerType, true> makes tsc fail if WorkerType grows without this list.
-const WORKER_TYPES: Record<WorkerType, true> = { CLAUDE: true, CODEX: true, GEMINI: true, GROK: true };
+const WORKER_TYPES: Record<WorkerType, true> = { CLAUDE: true, CODEX: true, GEMINI: true, GROK: true, COPILOT: true };
 
 /** Exact, case-sensitive WorkerType name; anything else (never a refusal) is CLAUDE. */
 export function normalizeWorkerType(value: unknown): WorkerType {
@@ -41,7 +41,7 @@ export async function refreshWorkerType(
 export const WORKER_TYPE_SCHEMA = {
   type: 'string',
   description:
-    'The seat\'s CLI: CLAUDE, CODEX, GEMINI or GROK (exact, case-sensitive). Any other value is recorded as CLAUDE. ' +
+    'The seat\'s CLI: CLAUDE, CODEX, GEMINI, GROK or COPILOT (exact, case-sensitive). Any other value is recorded as CLAUDE. ' +
     'Omit it to leave an existing record\'s type alone (a new record is CLAUDE).'
 };
 

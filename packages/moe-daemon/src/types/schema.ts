@@ -25,7 +25,7 @@ export type StepStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETED';
 
 export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
-export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK';
+export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK' | 'COPILOT';
 
 export type WorkerStatus =
   | 'IDLE'
