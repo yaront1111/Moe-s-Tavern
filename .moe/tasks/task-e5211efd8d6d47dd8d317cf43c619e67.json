@@ -1,0 +1,207 @@
+{
+  "id": "task-e5211efd8d6d47dd8d317cf43c619e67",
+  "epicId": "epic-be924fb8",
+  "title": "bug: CI's windows-latest step \"Test PowerShell daemon autostart arguments\" is red on PR #230 since edc3e937: daemon-autostart-argv.test.mjs's driver requires exactly one Start-Process passing --project in moe-agent.ps1, and CQ-M07s added a second (the check-dispatch launch, moe-agent.ps1:9617), so both PowerShell rows throw \"found 2\"",
+  "description": "Found by architect-67c762f6 while timing suites for task-5f5c8999 (2026-11-04 ~21:30 local).\n\nEvidence:\n- Real CI: PR #230 runs 41894749395 (headSha d05e6e0b) and 41895358687 (headSha e53f5a5c, the current tip of moe/work-2026-10-24). In both, every job is green except Build (windows-latest), and its only failed step is \"Test PowerShell daemon autostart arguments\" (`node --test scripts/tests/daemon-autostart-argv.test.mjs`, ci.yml, Windows only).\n- Local repro: Windows node (node.exe from WSL) in a git-archive snapshot of edc3e937 on D:. `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` gives 13 pass, 2 fail: \"PowerShell 5.1: the daemon-autostart Start-Process passes literal-name paths as whole arguments\" and the same row for PowerShell 7. Both stderr lines say \"expected exactly one Start-Process passing --project in moe-agent.ps1, found 2\" (the driver's driver.ps1:7).\n\nCause:\n- The DRIVER in daemon-autostart-argv.test.mjs (about :55) selects every CommandAst named Start-Process whose extent text contains '--project', then requires exactly one.\n- edc3e937 (task-74fe4c99, CQ-M07s) added `$script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', ...))` at moe-agent.ps1:9617.\n- The daemon autostart call itself (moe-agent.ps1:1029, `@(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")`) did not change. So the selector is too broad; nothing shows that the launcher misbehaves.\n\nExpected fix: the driver selects the daemon-autostart Start-Process by what makes it that call (for example the `$daemonScript` / \"start\" arguments), not by '--project' alone, and keeps its exactly-one check. The plan decides the exact selector. The launcher is changed only if the plan shows why it must be.\n\nWhy HIGH: PR #230 merges only at all-green CI, and this is the one red step at the tip.",
+  "definitionOfDone": [
+    "`node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` (Windows node, run from WSL) passes at the landing commit with both the PowerShell 5.1 and the PowerShell 7 rows run, none skipped.",
+    "The driver still selects exactly one statement, the daemon autostart Start-Process (the call that runs $daemonScript with start --project), and still fails when that call is missing or duplicated. A mutant run (a copy of moe-agent.ps1 with that call removed, and one with it duplicated) shows each failing.",
+    "scripts/moe-agent.ps1 behavior is unchanged, unless the plan justifies a launcher change; the check-dispatch Start-Process at about :9617 is not touched.",
+    "The verification command finishes within 20 min on this host (GLOBAL gate-budget rail)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first, then the fix, in scripts/tests/daemon-autostart-argv.test.mjs only (load test-driven-development). Read mem:task-task-e5211efd8d6d47dd8d317cf43c619e67-handoff and mem:gotcha-plan-text-unicode-escapes-decoded first. The authoritative bytes are the planning prototype: reference diff /mnt/d/moe-scratch/e521-plan.x8b3/intended.diff (+39/-5 on e53f5a5c's file) and the finished file /mnt/d/moe-scratch/e521-plan.x8b3/scripts/tests/daemon-autostart-argv.test.mjs (sha256 ed65fb1aa576...). Applied verbatim on an unchanged base, your file hashes the same. Apply its hunks with the Edit tool (no git apply, cp or shell write: GLOBAL rail).\n(0) RED: from the task worktree root, run checkRefs[0] once before any edit. It must exit 1 with `not ok 1` and `not ok 3` (the two 'literal-name paths' rows), `# tests 4`, and 'found 2' in the log.\n(1) Selector. In the DRIVER template, replace the one-line `$calls = @($ast.FindAll({ ... $n.Extent.Text.Contains('--project') }, $true))` predicate with the diff's multi-line predicate:\n- return $false unless the node is a CommandAst whose GetCommandName() is Start-Process;\n- collect the call's VariableExpressionAst VariablePath.UserPath values and its StringConstantExpressionAst Value values with nested FindAll(..., $true);\n- match only when the variables contain daemonScript AND the strings contain both start and --project.\nPowerShell -contains is case-insensitive, like variable names. The check dispatch (~:9617) passes '--project' but has neither $daemonScript nor 'start'; the seat CLI (~:9467) passes no --project literal.\n(2) Add `const AUTOSTART_COUNT = 'expected exactly one daemon-autostart Start-Process in moe-agent.ps1, found';` above DRIVER. Make the throw `throw \"${AUTOSTART_COUNT} $($calls.Count)\"`. That ${...} is deliberate JS interpolation into the PowerShell text: no other ${, no backtick and no backslash may appear inside the DRIVER template literal. Keep the exactly-one check (-ne 1) and everything after it unchanged.\n(3) Comments. The DRIVER comment says why --project alone is not enough: the CQ-M07s check dispatch passes it too (task-e5211efd). The header comment gains the Row C sentence from the diff.\n(4) Add plain() above `const show`: strip ANSI codes, join gutter-wrapped lines, collapse whitespace. It is copied from scripts/tests/subagent-mirror.test.mjs:18, proven on CI run 41830422144's wrapped pwsh 7 ConciseView text. Importing that file would run its tests.\n(5) Add row C inside `for (const engine of ENGINES)`, after row B, reusing opts, fixtureRoot, run, show, PS_ARGS, childEnv and DRIVER_CAP_MS:\n- read PS1 as utf8 and split on the newline character (this keeps the BOM and any CR);\n- require exactly one line matching /\\bStart-Process\\b.*\\$daemonScript\\b/, with the count in the assert message;\n- write cases.json as [] and the driver with the BOM spelled '\\u{feff}' + DRIVER;\n- for ['removed', 0, lines.toSpliced(at[0], 1)] and ['duplicated', 2, lines.toSpliced(at[0], 0, lines[at[0]])], write that copy into the fixture root, run the driver on it, and assert spawnError null, exit code not 0, and plain(r.stderr) includes `${AUTOSTART_COUNT} ${found}`;\n- then call t.diagnostic(`autostart ${name}: ${AUTOSTART_COUNT} ${found}`), so the TAP log carries the mutant evidence the gate counts.\nError handling: every failure path is an assertion that prints show(r):\n- a spawn error;\n- a driver that accepts a mutant (exit 0);\n- a driver that stops for another reason (a mutant that does not parse prints 'does not parse' and fails the message check);\n- a hang (DRIVER_CAP_MS, 60 s, kills that recorded PID tree only);\n- an anchor-line count other than 1 (moe-agent.ps1 changed shape).\nEditing-tool trap, seen while planning: the Edit and Write tools turn a 4-hex-digit backslash-u escape into the raw character. Type the row C BOM exactly as '\\u{feff}', and do not touch row A's existing BOM line: an old_string holding it cannot match. After editing, `grep -c $'\\xef\\xbb\\xbf' scripts/tests/daemon-autostart-argv.test.mjs` must print 0, and `grep -cP '[^\\x00-\\x7e]' scripts/tests/daemon-autostart-argv.test.mjs` must print 4 (the é fixture lines, the same as at the base). Do not edit scripts/moe-agent.ps1 or .github/workflows/ci.yml.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "note": "RED first (tests 4, fail 2, found 2), then applied the planned selector, AUTOSTART_COUNT, plain() and row C. File sha256 equals the planning prototype (ed65fb1a...); no raw BOM, 4 non-ASCII lines.",
+      "startedAt": "2026-11-04T19:54:36.377Z",
+      "completedAt": "2026-11-04T19:55:25.342Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify: run checkRefs[0] exactly as stored, once, from the task worktree root (it cds to `git rev-parse --show-toplevel` itself). It is the complete_task verification command, and QA re-runs it from the control checkout.\nWhat it does: it runs Windows node from WSL under env -i (no MOE_/CLAUDE seat env reaches node.exe) on this one test file with the TAP reporter. It prints GATE_OK only when all of these hold:\n- scripts/moe-agent.ps1 is identical to the base (MERGE_HEAD, else the merge-base with $MOE_LAND_TARGET);\n- rc is 0 within 1200 s;\n- `# tests 6`, `# pass 6` and `# skipped 0`;\n- three `ok` rows each for PowerShell 5.1 and PowerShell 7;\n- four `# autostart ... found 0|2` diagnostics.\nPlanning dry-run on e53f5a5c, in a sparse clone on D:: GATE_OK in 10-12 s on every run at load 5-6. RED on the unfixed file: tests 4, fail 2, found 2.\nError handling for a red run: read log=<file> (the full TAP).\n- ps1diff=1: scripts/moe-agent.ps1 differs from the base. If you did not edit it, check `git log --oneline \"$B\"..HEAD -- scripts/moe-agent.ps1` and whether the local target is stale (`git rev-parse \"$MOE_LAND_TARGET\" \"origin/$MOE_LAND_TARGET\"`). Never edit the launcher to make the gate pass.\n- 'found 0' or 'found 2' in a literal-name row: the selector misses or over-matches at this tip. Re-check the predicate against `grep -n Start-Process scripts/moe-agent.ps1`.\n- 'expected one daemon-autostart line in moe-agent.ps1 to mutate': the launcher's autostart line changed shape. Stop and report it in the summary.\n- A lone EPERM or EBUSY from a t.after rmSync on a PowerShell 7 row is the known cleanup race against a just-exited node.exe (mem:gotcha-heartbeat-reload-fixture-vacuity). Rerun once and cite both runs; any other failure is real.\n- A skip means where.exe did not find pwsh.exe (it is the WindowsApps alias on this host). Fix the environment, not the gate.\nSubmit the command, its exit code and the printed tail: the ok lines, the four autostart diagnostics, the counts, the log= line and GATE_OK.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate: GATE_OK, 6 tests/6 pass/0 skipped, ps1diff=0, secs=11.",
+      "startedAt": "2026-11-04T19:55:26.440Z",
+      "completedAt": "2026-11-04T19:55:43.364Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review), then the completion summary. Set `B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"$MOE_LAND_TARGET\")` first.\n(1) Scope. `git diff --stat \"$B\"` lists only scripts/tests/daemon-autostart-argv.test.mjs (about +39/-5). `git diff \"$B\" -- scripts/moe-agent.ps1 .github/workflows/ci.yml` is empty, so the autostart (~:1029) and the check-dispatch Start-Process (~:9617) are untouched (DoD 3). `git status --porcelain` shows no stray log, snapshot or mutant copy in the worktree: the gate log is under /tmp, and row C's copies live in each run's own mkdtemp root under %TEMP%, removed by t.after.\n(2) Template literal. The only ${ inside DRIVER is ${AUTOSTART_COUNT}, with no backtick or backslash inside it. The predicate uses no PowerShell 7-only syntax (no ?:, ??, or && / || chains), so 5.1 parses it; the gate's 5.1 rows prove it.\n(3) Byte traps. No raw U+FEFF (the grep from step 1 prints 0), and the non-ASCII line count is still 4.\n(4) What could go wrong:\n- two runs at once: each has its own fixture root;\n- huge input: two 784 KB copies per engine, written and removed per run;\n- a reformatted autostart call (multi-line, or single-quoted literals): the JS anchor or the AST selector fails loudly, never silently;\n- CI's pwsh 7 ConciseView wraps at about 120 columns: the message is 77 characters, and plain() rejoins a wrap anyway;\n- Linux node: all 6 rows skip with the existing reason (row C inherits opts), so `node --test scripts/tests/*.test.mjs` on Linux is unchanged.\n(5) Optional, already run in planning: /mnt/d/moe-scratch/e521-plan.x8b3/mut.mjs applies one mutant to the test file of a scratch clone on D: (never the worktree): `node mut.mjs <clone> <your test file> <name>`. old-selector, no-exactly-one, pwsh-skipped and ps1-touched each turn the gate red. only-daemonScript (dropping the start/--project literals) stays green by design, because no other Start-Process runs $daemonScript.\nIn the summary, map each DoD item to its evidence:\n- DoD 1: the gate's six ok rows and `# skipped 0`;\n- DoD 2: row C's four diagnostics (removed: found 0; duplicated: found 2; per engine), plus the planning mutants;\n- DoD 3: ps1diff=0 and the scope diff;\n- DoD 4: secs=<n>.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "note": "Self-review: diff is +39/-5 in the one test file; moe-agent.ps1 and ci.yml diff empty; git status shows only that file; the only ${ in DRIVER is ${AUTOSTART_COUNT}; predicate has no PS7-only syntax (5.1 rows pass).",
+      "startedAt": "2026-11-04T19:55:44.528Z",
+      "completedAt": "2026-11-04T19:55:54.373Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 542.7,
+  "comments": [
+    {
+      "id": "comment-5f63d1c2bc1d4736a634fa04bc337ce4",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 19:45Z.\n(1) Priority is now LOW. PR #230 was merged to main red on the human's order (\"merge all, we will fix ci later when all tasks done\", 2026-11-04; merge commit e64646bc), so this fixes main's red Windows step. It uses idle workers only and never preempts a task row.\n(2) Carried from my duplicate task-83f72d9f (archived):\n- Only scripts/tests/daemon-autostart-argv.test.mjs changes; scripts/moe-agent.ps1 is untouched.\n- The locator picks exactly the daemon-autostart Start-Process (e.g. by its daemon entry / `start` argument or enclosing function), unaffected by the check-dispatch call at moe-agent.ps1:9617 or any future `--project` Start-Process.\n- Every assertion about that call is unchanged.\n- It still fails on a mutant that breaks the autostart argument quoting.\n- The gate is one run of the file through a Windows node, on PS 5.1 and 7. It must fit the 20-min rail.\n- If you chain several checkRefs, wrap each in its own subshell: `( ref0 ) && ( ref1 )` (comment-0a43e151 on cb378fd8).",
+      "timestamp": "2026-11-04T19:37:05.964Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T19:31:56.538Z",
+  "updatedAt": "2026-11-04T19:59:30.296Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T19:31:59.114Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T19:59:00.924Z",
+    "wallClockMs": 1621810
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "architect-cd0ac706",
+    "worker-a408f113",
+    "qa-96811257"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T19:53:36.219Z",
+  "executionContract": {
+    "intendedBehavior": "On Windows node, daemon-autostart-argv.test.mjs's row A driver selects exactly the daemon-autostart Start-Process: the call whose arguments hold the variable $daemonScript and the string constants start and --project. The CQ-M07s check-dispatch Start-Process (moe-agent.ps1 ~:9617) also passes --project, but it no longer trips the exactly-one check, so both PowerShell 5.1 and PowerShell 7 rows pass. A new row C per engine proves that guard: the driver run on a copy of moe-agent.ps1 with the autostart line removed fails with 'expected exactly one daemon-autostart Start-Process in moe-agent.ps1, found 0', and on a copy with it duplicated with '... found 2'. scripts/moe-agent.ps1 is unchanged.",
+    "acceptanceCriteria": [
+      "DoD 1: checkRefs[0] (Windows node from WSL) prints GATE_OK: 6 tests, 6 pass, 0 skipped, three ok rows each for PowerShell 5.1 and PowerShell 7.",
+      "DoD 2: row C passes on both engines, and its four TAP diagnostics show the removed copy stopping at 'found 0' and the duplicated copy at 'found 2'; reverting the selector to --project alone, or dropping the exactly-one check, turns the gate red (planning mutants).",
+      "DoD 3: git diff against the base is empty for scripts/moe-agent.ps1 (ps1diff=0); only scripts/tests/daemon-autostart-argv.test.mjs changes.",
+      "DoD 4: the gate reports secs well under 1200 (10-12 s measured in planning)."
+    ],
+    "invariants": [
+      "scripts/moe-agent.ps1 stays byte-identical: the autostart (~:1029) and the check-dispatch Start-Process (~:9617) are not touched.",
+      "The driver still throws unless exactly one Start-Process matches, and still runs that call's extent text once per case.",
+      "No test-only knob or env var is added to the launcher or the test."
+    ],
+    "compatibility": [
+      "ci.yml:325-328 (windows-latest 'Test PowerShell daemon autostart arguments': node --test scripts/tests/daemon-autostart-argv.test.mjs) is unchanged and picks up row C.",
+      "Non-Windows node: every row of the file still skips with the existing reason; row C inherits opts.",
+      "Rows A and B keep their fixtures and assertions; only the driver's selection predicate and its count message change."
+    ],
+    "approvedScope": [
+      "DRIVER's $calls predicate and its count throw in scripts/tests/daemon-autostart-argv.test.mjs",
+      "new const AUTOSTART_COUNT, shared by the DRIVER throw and row C's assertion",
+      "new helper plain(), copied from scripts/tests/subagent-mirror.test.mjs",
+      "new row C per engine: 'the driver refuses a wrapper whose daemon autostart is missing or duplicated'",
+      "the header comment and the DRIVER comment"
+    ],
+    "reuse": [
+      "fixtureRoot, run, show, PS_ARGS, childEnv and DRIVER_CAP_MS are reused by row C.",
+      "plain() is copied from scripts/tests/subagent-mirror.test.mjs:18 (ANSI strip plus gutter join, proven on CI run 41830422144); importing that file would run its tests.",
+      "The mutant copies come from the real moe-agent.ps1 text at test time, so no fixture file is checked in."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:1029 is the only line holding both Start-Process and $daemonScript: Start-Process ... -ArgumentList (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")) -WindowStyle Hidden ...",
+      "scripts/moe-agent.ps1:9617 (Invoke-MoeCheckDispatchChild): Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', \"$projectPath\", '--task', $preflightTaskId, '--commit', $Frozen.Commit)); there is no $daemonScript and no 'start'.",
+      "scripts/moe-agent.ps1:9467: the seat CLI Start-Process passes no --project literal; :848, :1026 and :9950 are comments.",
+      "On PowerShell 5.1 and 7, Ast.FindAll visits the VariableExpressionAst nested in the ExpandableStringExpressionAst \"$daemonScript\", and \"start\" parses as a StringConstantExpressionAst (verified on this host 2026-11-04, powershell.exe 5.1 and the pwsh.exe 7.6.9 WindowsApps alias).",
+      "Node 24 on CI (ci.yml node-version '24') and on this host (node.exe v24.16.0): Array.prototype.toSpliced is available; node.exe's TAP output has no CR."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && L=$(mktemp /tmp/e521-gate.XXXXXX) || exit 9; git diff --quiet \"$B\" -- scripts/moe-agent.ps1; d=$?; s=$SECONDS; env -i HOME=\"$HOME\" PATH=\"/mnt/c/Program Files/nodejs:/usr/bin:/bin\" node.exe --test --test-reporter=tap scripts/tests/daemon-autostart-argv.test.mjs >\"$L\" 2>&1; r=$?; t=$((SECONDS-s)); grep -E '^(not )?ok |^# (tests|pass|fail|skipped) |^# autostart ' \"$L\"; echo \"log=$L base=$B ps1diff=$d rc=$r secs=$t\"; [ $d$r = 00 ] && [ $t -lt 1200 ] && grep -qx '# tests 6' \"$L\" && grep -qx '# pass 6' \"$L\" && grep -qx '# skipped 0' \"$L\" && [ \"$(grep -c '^ok [0-9]* - PowerShell 5\\.1: ' \"$L\")$(grep -c '^ok [0-9]* - PowerShell 7: ' \"$L\")$(grep -c '^# autostart .*, found [02]$' \"$L\")\" = 334 ] && echo GATE_OK )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Chosen: an AST predicate that keys on what makes the call the autostart: $daemonScript among its variables, plus the string constants start and --project. It is quote-style-agnostic and keeps the exactly-one check.\n- Rejected: an Extent.Text match on the literal argument list. It is brittle to whitespace and quote style, and would be a second near-miss of the same kind.\n- Rejected: 'start' alone. The check dispatch could one day gain a 'start' argument.\n- Rejected: changing the launcher, for example reshaping the check-dispatch call. DoD 3 forbids it and the launcher is correct. Touching moe-agent.ps1 would also contest it with the WORKING agy-port rows (task-c199e177, task-cb378fd8), which edit that file.\n- Rejected: a one-off sed mutant run inside the checkRef. Permanent row C keeps the exactly-one guard proven on every PR's Windows job, and QA's re-run stays the same single command. The row costs about 1.5 s per engine.\n- Rejected: a stdout count marker. The established pattern (subagent-mirror.test.mjs) asserts on the thrown error text after plain(), which proves the count check, not another failure, stopped the driver.\n- task.isEpicFinal is the order fallback on this bucket epic: it has no finalTaskId and 316 siblings. The GLOBAL gate-budget rail (20 min; run only the suites that exercise the changed code; the nightly runs everything) outranks the skill's epic-final full regression. The only changed code is this Windows-only test file, so the gate runs it on both Windows engines. PR #230's Windows CI job is the broader check after landing.",
+    "codebaseInsights": "- Start-Process sites in moe-agent.ps1: :1029 is the daemon autostart; :9467 is the seat CLI (no --project); :9617 is the CQ-M07s check dispatch (passes '--project'); :848, :1026 and :9950 are comments.\n- The old predicate `$n.Extent.Text.Contains('--project')` matched both :1029 and :9617, hence 'found 2' since edc3e937.\n- PowerShell variable names and -contains are case-insensitive.\n- The DRIVER is a JS template literal, so ${ interpolates and a backtick ends it.\n- moe-agent.ps1 is UTF-8 with a BOM and LF line endings (.gitattributes `* text=auto eol=lf`, also on CI). Node's readFileSync keeps U+FEFF at index 0, so split/join on the newline character preserves both, and PS 5.1 parses the copies (the prototype run proves it).\n- No doc describes this driver's selector, so no docs change.\n- QA in the control checkout: MOE_LAND_TARGET is unset there, so B=HEAD and ps1diff is vacuous. Check DoD 3 with `git diff --stat <sha>^ <sha>`. If the control HEAD has moved past the completion and later commits touch scripts/moe-agent.ps1 or this test, run the checkRef in a `git clone --shared` on /mnt/d detached at the sha, with MOE_LAND_TARGET=<sha>^. Windows node needs a D: or C: cwd.\n- Planning artifacts live in /mnt/d/moe-scratch/e521-plan.x8b3/: intended.diff, the finished test file, gate.txt (the checkRef bytes), mut.mjs (mutants), head.log (RED) and fix.log (GREEN). A sparse dry-run clone is at /mnt/d/moe-scratch/e521-clone.A1BX/repo.",
+    "risks": "- The editing tools, and moe tool string arguments, turn a 4-hex-digit backslash-u escape into the raw character (mem:gotcha-write-tool-unicode-escapes, mem:gotcha-plan-text-unicode-escapes-decoded). Row C's BOM must be typed as the code-point form with braces, and step 1's greps catch a raw BOM.\n- The EPERM cleanup race on a PowerShell 7 row under heavy load: rerun once (mem:gotcha-heartbeat-reload-fixture-vacuity). It was not seen in any of the 11 planning runs at load 5-6, and row C starts no node.exe, so it adds no race.\n- CI's pwsh 7 ConciseView wraps at about 120 columns. The count message is 77 characters, and plain() handles a wrap anyway.\n- A stale local target can make ps1diff falsely red in the worktree. Diagnose it with git log/rev-parse; never edit the launcher.\n- A later reformat of the autostart call (multi-line, single quotes, or args moved into a variable) makes row C's line anchor or the AST selector fail loudly. That is intended: the line under test changed.\n- only-daemonScript (dropping the start/--project literals) survives as a mutant, by design: no other Start-Process runs $daemonScript, so no extra fixture is warranted.",
+    "keyFiles": [
+      "scripts/tests/daemon-autostart-argv.test.mjs",
+      "scripts/moe-agent.ps1 (read-only: :1029 autostart, :9617 check dispatch, :9467 seat CLI)",
+      "scripts/tests/subagent-mirror.test.mjs (:14-19 plain(), the origin of the copied helper)",
+      ".github/workflows/ci.yml (:325-328, the Windows step that runs this file; unchanged)",
+      "/mnt/d/moe-scratch/e521-plan.x8b3/intended.diff (reference bytes)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e53f5a5c9d89b1ff61aa36a18a6c0f2c5fb96f1f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T19:53:36.249Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T19:54:36.377Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T19:57:25Z",
+    "at": "2026-11-04T19:59:30.296Z"
+  },
+  "reviewStartedAt": "2026-11-04T19:56:21.064Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && L=$(mktemp /tmp/e521-gate.XXXXXX) || exit 9; git diff --quiet \"$B\" -- scripts/moe-agent.ps1; d=$?; s=$SECONDS; env -i HOME=\"$HOME\" PATH=\"/mnt/c/Program Files/nodejs:/usr/bin:/bin\" node.exe --test --test-reporter=tap scripts/tests/daemon-autostart-argv.test.mjs >\"$L\" 2>&1; r=$?; t=$((SECONDS-s)); grep -E '^(not )?ok |^# (tests|pass|fail|skipped) |^# autostart ' \"$L\"; echo \"log=$L base=$B ps1diff=$d rc=$r secs=$t\"; [ $d$r = 00 ] && [ $t -lt 1200 ] && grep -qx '# tests 6' \"$L\" && grep -qx '# pass 6' \"$L\" && grep -qx '# skipped 0' \"$L\" && [ \"$(grep -c '^ok [0-9]* - PowerShell 5\\.1: ' \"$L\")$(grep -c '^ok [0-9]* - PowerShell 7: ' \"$L\")$(grep -c '^# autostart .*, found [02]$' \"$L\")\" = 334 ] && echo GATE_OK )",
+    "exitCode": 0,
+    "outputTail": "ok 1..6 (PowerShell 5.1 and 7: literal-name, spaced-path and new mutant rows all ok)\n# autostart removed: expected exactly one daemon-autostart Start-Process in moe-agent.ps1, found 0\n# autostart duplicated: expected exactly one daemon-autostart Start-Process in moe-agent.ps1, found 2\n(x2 engines)\n# tests 6\n# pass 6\n# fail 0\n# skipped 0\nlog=/tmp/e521-gate.HTidjA base=e53f5a5c9d89b1ff61aa36a18a6c0f2c5fb96f1f ps1diff=0 rc=0 secs=10\nGATE_OK",
+    "reportedAt": "2026-11-04T19:56:21.064Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/daemon-autostart-argv.test.mjs"
+  ],
+  "completionSummary": "Fixed main's red Windows CI step by changing only scripts/tests/daemon-autostart-argv.test.mjs (+39/-5). The driver now selects the daemon-autostart Start-Process by its AST (CommandAst Start-Process holding variable $daemonScript plus string constants 'start' and '--project') instead of '--project' alone, so the CQ-M07s check dispatch no longer counts; the exactly-one check is kept via AUTOSTART_COUNT. New row C per engine runs the driver on copies of moe-agent.ps1 with the autostart removed (stops at 'found 0') and duplicated ('found 2'). DoD1: 6 ok rows, skipped 0, both PS 5.1 and 7. DoD2: four autostart diagnostics, plus planning mutants (old-selector, no-exactly-one, pwsh-skipped, ps1-touched all red). DoD3: ps1diff=0, scope diff is one file; moe-agent.ps1 and ci.yml untouched. DoD4: secs=10 (RED before the fix: tests 4, fail 2, found 2).",
+  "commits": [
+    {
+      "sha": "34fbcbd06aaf69cd16e0b7fabce392d1d21432ca",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T19:53:37Z",
+      "paths": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T19:57:19.334Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T19:59:00.924Z",
+  "reviewCompletedAt": "2026-11-04T19:59:00.924Z",
+  "reviewSummary": "Approved. Reviewed completion 34fbcbd06 (on moe/work-2026-10-24, in control HEAD) via git show: one file, scripts/tests/daemon-autostart-argv.test.mjs, +39/-5 (net 34).\n\nRe-ran task.verification verbatim from the control checkout: GATE_OK. 6 tests, 6 pass, 0 fail, 0 skipped; three ok rows each for PS 5.1 and PS 7; row-C diagnostics 'autostart removed ... found 0' and 'autostart duplicated ... found 2' on both engines; secs=10 (budget 1200). ps1diff=0 is vacuous here (MOE_LAND_TARGET unset, base=HEAD), so I checked by hand: `git diff --stat e53f5a5c..34fbcbd0 -- scripts/ .github/` lists only the test file, and `git log e53f5a5c..34fbcbd0 -- scripts/moe-agent.ps1 .github/workflows/ci.yml` is empty.\n\nIndependent RED: e53f5a5c's old test against the current moe-agent.ps1 (scratch dir on D:, removed) gives tests 4, pass 2, with both literal-name rows failing 'expected exactly one Start-Process passing --project ..., found 2'. That reproduces the CI failure.\n\nDoD1: both engine rows ran, none skipped. DoD2: selector = Start-Process CommandAst holding $daemonScript plus string constants 'start' and '--project'; -ne 1 check kept via shared AUTOSTART_COUNT; row C mutates copies of the real launcher (autostart removed -> found 0, duplicated -> found 2) and asserts spawnError null, nonzero exit and the exact message after plain(), so it is not vacuous. Worker's planning mutants (old selector, no exactly-one, pwsh skipped, ps1 touched) were red; I re-verified the old-selector one. DoD3: moe-agent.ps1 and ci.yml untouched, so :1029 and the check-dispatch :9617 are as before. DoD4: secs=10.\n\nByte traps: no raw U+FEFF (grep 0), 4 non-ASCII lines as at base; only ${ in DRIVER is ${AUTOSTART_COUNT}; no PS7-only syntax (5.1 rows pass). Ponytail pass: nothing to cut; plain() copied on purpose (importing subagent-mirror.test.mjs would run its tests).",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

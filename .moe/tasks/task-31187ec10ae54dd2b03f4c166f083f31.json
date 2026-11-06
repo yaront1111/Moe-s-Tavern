@@ -11,53 +11,81 @@
     {
       "stepId": "step-1",
       "description": "Tests first (RED). Two shared fixtures that other WT rows also extend, so edit ADD-ONLY: with the new knob value unset, every fake answer stays byte-identical, and every existing suite case, helper and launch() default stays unchanged.\n\n(a) scripts/tests/postflight-fake-proxy.js, get_context handler. Beside the existing `if (process.env.FAKE_GET_CONTEXT_FAIL === 'empty') { ok({}); break; }` (it only covers calls with a taskId, after the adoption-probe branch), add the value 'error': write the JSON-RPC error line `{jsonrpc:'2.0',id:req.id||1,error:{code:-32603,message:'fixture: get_context failed'}}` + '\\n', then break. This is how moe-proxy answers when the daemon is down, restarting or times out. sh moe_rpc and ps1 Invoke-MoeRpc turn it into an empty / $null context, as they do a transport failure. 'empty' is NOT that path: it is a successful '{}'. Add one line for it to the handler's comment block: `'error' => the read fails (a JSON-RPC error)`.\n\n(b) scripts/tests/postflight-worktree.cjs: four new cases, each with a one-line comment in the suite's terse style naming what it proves (task-31187ec1). Use the existing helpers: repo, launch, refused, provisioned, refusal table, controlSame, entry, revOf, readOr, present.\n 1. 'resume-unread' (shape 1: no branch, no W).\n    - Setup: p=repo('resume-unread',{task:'task-resume'}); before=control(p.top).\n    - For each fail of ['error','empty','mismatch']: r=await launch(p,'resume-unread-'+fail,{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:fail}).\n    - Then: refused(r,'MOE_WORKTREE_CONTEXT_FAILED','task-resume'); controlSame(p,before); W absent and unregistered; revOf(p.top,p.branch)===null.\n    - Prefix each message with fail.\n 2. 'resume-dirty' (shape 2, comment-c800e6b9).\n    - Setup: p=repo('resume-dirty',{task:'task-resume'}), before, main=revOf(p.top,'refs/heads/main').\n    - Run 1 provisions W by a normal resume: provisioned(p, await launch(p,'resume-dirty-add',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_CTX_WORKSPACE:p.ws()}),'created',before,main).\n    - Make W dirty, uncommitted: write W/dirt.txt and change W/src/a.txt.\n    - Fixture check, throwing Error: `git rev-list --count HEAD..refs/heads/moe/task/task-resume` is '0'. That proves the branch counts as landed, so today's shared-mode refusal would not fire.\n    - Run 2: launch(p,'resume-dirty-unread',{FAKE_CLAIM_MODE:'resume',FAKE_CLAIM_WORKSPACE:null,FAKE_GET_CONTEXT_FAIL:'error'}).\n    - Then: refused(..,'task-resume'); entry(p) is still registered and locked 'moe task-resume'; both dirt files are byte-identical; the branch tip is still main; controlSame(p,before).\n 3. 'resume-shared-unread' (epic rail 4).\n    - Setup: p=repo('resume-shared-unread',{task:'task-resume'}); git(p.top,'switch','-q','-c','moe/work-2026-10-24'); take before=control(p.top) after the switch.\n    - Run: the same resume knobs with FAKE_GET_CONTEXT_FAIL:'error'.\n    - Then assert exactly what sharedLanded asserts: the CLI ran, 0 report_blocked, no 'MOE_WORKTREE_' in the log, no W, controlSame, exit 0.\n 4. 'ctx-unread', a new row in the `refusals` table (a fresh claim with the default worktree workspace): ['ctx-unread','MOE_WORKTREE_CONTEXT_FAILED',()=>({FAKE_GET_CONTEXT_FAIL:'error'}),()=>p=>assert.equal(revOf(p.top,p.branch),null,'a task branch was created')].\n\n(c) RED proof, outside the checkout. Never put a scratch file under scripts/tests/.\n    - Setup: S=$(mktemp -d /mnt/d/moe-scratch/red-31187ec1.XXXXXX) || exit 1; git archive HEAD scripts | tar -x -C \"$S\"; copy only the two edited test files into $S.\n    - Run: MOE_WORKTREE_ONLY=resume-unread,resume-dirty,resume-shared-unread,ctx-unread node \"$S/scripts/tests/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$S/scripts/tests/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\".\n    - Expected with HEAD's wrapper: resume-unread, resume-dirty and ctx-unread FAILED (the CLI ran, no report_blocked); resume-shared-unread ok.\n    - Put the lines in the step note. If resume-shared-unread fails at HEAD, the fixture is wrong: fix the test, never the expectation.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-fake-proxy.js",
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "RED tests landed, add-only. Fake proxy: get_context FAKE_GET_CONTEXT_FAIL='error' writes a JSON-RPC error {code:-32603,'fixture: get_context failed'}, plus one comment line. 'empty', 'mismatch' and unset are byte-identical to before. Suite: a new refusals row ctx-unread, and three new cases (resume-unread loops error/empty/mismatch, resume-dirty, resume-shared-unread) registered by one Object.assign line; no existing case or helper changed. RED run on snapshot /mnt/d/moe-scratch/red-31187ec1.nFnHMa (HEAD 0d8422ce wrapper plus the edited tests), sh engine:\n[worktree] ctx-unread FAILED: AssertionError: no \"[ERROR] MOE_WORKTREE_CONTEXT_FAILED:\" line\n[worktree] resume-unread FAILED: AssertionError: error: no \"[ERROR] MOE_WORKTREE_CONTEXT_FAILED:\" line\n[worktree] resume-dirty FAILED: AssertionError: no \"[ERROR] MOE_WORKTREE_CONTEXT_FAILED:\" line\n[worktree] resume-shared-unread ok\n[worktree] 1 ok, 3 failed\nresume-dirty's fixture check passed: the rev-list count HEAD..moe/task/task-resume is 0. WT-07's control_worktree_mode / Test-MoeControlWorktreeMode already exist on HEAD, so steps 2 and 3 reuse them.",
+      "startedAt": "2026-11-02T19:27:07.869Z",
+      "completedAt": "2026-11-02T19:30:57.905Z"
     },
     {
       "stepId": "step-2",
       "description": "sh fix, scripts/moe-agent.sh. Anchor on function names, not line numbers: WT-04's reopen-1 rework (empty-index reuse, the Windows ls-tree probe) moves lines in provision_worktree before this row starts. Build on its final code.\n\n(a) control_worktree_mode. WT-07 (task-b319b263) specifies it:\n    - rc 0 iff `git -C \"$MOE_TOP\" symbolic-ref -q HEAD` prints exactly refs/heads/moe/control; any git failure is rc 1; callers run git_top first.\n    - If it is already in the file, call it.\n    - Else add it right after task_branch_landed with a 2-3 line comment: the design's §7 worktree-mode signal for control seats; runbook step 5 sets it, rollback removes it; Twin: Test-MoeControlWorktreeMode. WT-07 then reuses it.\n\n(b) provision_worktree's python parse. It sits inside single quotes, so use double quotes only.\n    - After `claim, ctx = load(claim), load(ctx)`, compute task first (ctx's task if it is a dict, else {}).\n    - read = task.get(\"id\") == tid: get_context answered for THIS task. A '{}' reply, an error or transport failure (empty input) and another task's context are all unread. plan_progress_mark already uses the same predicate.\n    - If not read: ctx = {} and task = {}, so neither its workspace nor its commits are used.\n    - ws = the claim's workspace if it is a dict, else ctx's.\n    - mode = \"worktree\" when ws is a dict with mode == \"worktree\". Else \"shared\" when the claim's workspace is a dict or read is true: an absent workspace on a readable context stays shared, the design's older-daemon rule. Else \"unknown\".\n    - Write `mode \\x1f (\"1\" if read else \"0\") \\x1f target \\x1f foreign`.\n    - Read it with `IFS=$'\\x1f' read -r mode ctxread target foreign`, and add ctxread to the function's `local` list.\n    - Then `case \"$mode\" in worktree|shared) ;; *) mode=unknown ;; esac`, so an empty parse (python failed) is unknown.\n\n(c) In the existing `if [ \"$mode\" != worktree ]` branch, right after `git_top || return 0` and BEFORE the unlanded-branch check, add:\n    `if [ \"$mode\" = unknown ] && control_worktree_mode; then worktree_stop MOE_WORKTREE_CONTEXT_FAILED \"get_context gave no context for $tid and the claim names no workspace, while the control checkout is on moe/control; unblock the task once get_context answers\"; fi`.\n    An unknown mode anywhere else falls through to today's shared path byte for byte, with no new output (epic rail 4).\n\n(d) Worktree path, right after the target check (\"the claim's target ... is not a local branch\") and before `read -ra rows <<< \"$foreign\"`, add:\n    `[ \"$ctxread\" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED \"get_context gave no context for $tid, so its commits cannot be checked against $target; unblock the task once get_context answers\"`.\n    The §7.2 mode-mismatch guard reads task.commits from that context. On the same failed read it would otherwise pass silently.\n\n(e) Rewrite provision_worktree's header comment. The mode comes from the claim's workspace, else from a get_context that answered for this task. With neither, the mode is shared, unless the control checkout is on moe/control: then it refuses MOE_WORKTREE_CONTEXT_FAILED. Worktree mode also refuses when that context is missing.\n\nError handling:\n    - Call worktree_stop only from the main shell, never inside $(...) or a pipeline.\n    - A failed parse, a missing python, or a failed context read is 'unknown'. On moe/control it refuses; it never silently becomes shared or worktree.\n    - A git failure inside control_worktree_mode reads as not moe/control, per the design's control-seat rule.\n\nThen run the step-1 command over ALL cases (drop MOE_WORKTREE_ONLY) with the edited wrapper copied into a fresh scratch snapshot, and record 'N ok, 0 failed'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh fix in provision_worktree. WT-07's control_worktree_mode already existed (after the WT landing helpers), so it is reused, not re-added.\n(b) The python parse computes task first. read = task.get(\"id\") == tid; when it is false, ctx and task become {}. ws is the claim's workspace dict, else ctx's. mode is worktree, else shared (claim workspace dict or read), else unknown. It emits mode\\x1fread\\x1ftarget\\x1fforeign; ctxread joins the local list, and the case statement maps any empty or odd mode to unknown.\n(c) In the shared branch after git_top: unknown plus control_worktree_mode leads to worktree_stop MOE_WORKTREE_CONTEXT_FAILED, before the unlanded-branch check.\n(d) In the worktree path after the target check: [ \"$ctxread\" = 1 ] || worktree_stop MOE_WORKTREE_CONTEXT_FAILED.\n(e) The header comment is rewritten.\nThe parse was probed directly with 14 inputs (empty, {}, non-JSON, another task, id [\"task-x\"], id 5, task as string, a JSON array, a matching id with and without workspace, claim shared/worktree/bogus). It matches the contract. Every worktree_stop runs in the main shell.\n\nFull sh suite, snapshot v-31187ec1.Mmk7dY (fixtures under /tmp): [worktree] 60 ok, 0 failed. New cases: ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok; codes ok; path-long n/a off win32.\n\nNote: the plan's verbatim command puts the sh fixture parent on /mnt/d. There the pre-existing marker-scan case fails with 'mkfifo: Operation not supported' (59 ok, 1 failed). HEAD 0d8422ce fails it the same way, and it passes on ext4. Filed bug task-93bcb459. Verification therefore uses a /tmp parent for the sh leg only (setup-only change).",
+      "startedAt": "2026-11-02T19:30:59.563Z",
+      "completedAt": "2026-11-02T20:54:48.538Z"
     },
     {
       "stepId": "step-3",
       "description": "ps1 twin, scripts/moe-agent.ps1.\n    - Keep the file UTF-8 with a BOM.\n    - Use the same code and the SAME detail strings as step 2, with $TaskId/$target interpolated. The codes diff and parity-check read both files, comments included, so never name a code in one twin only.\n\n(a) Test-MoeControlWorktreeMode, WT-07's twin spec: true iff `git -C <control> symbolic-ref -q HEAD` is exactly refs/heads/moe/control; any failure is false.\n    - If it is already present, call it.\n    - Else add it after Test-MoeTaskBranchLanded, with no params:\n      - $git = Get-MoeGitTop; return $false when it is absent.\n      - Run Invoke-MoeGit -Top $git.Top -GitArgs @('symbolic-ref','-q','HEAD').\n      - Return true only on Rc 0 and the first output line, trimmed, -ceq 'refs/heads/moe/control'.\n      - Wrap the body in try/catch that returns $false.\n\n(b) Get-MoeWorkspaceClaim, mirroring step 2(b):\n    - $task = Get-MoeProp $Context 'task'; $id = Get-MoeProp $task 'id'.\n    - $read = ($task -is [System.Management.Automation.PSCustomObject]) -and ($id -is [string]) -and ($id -ceq $TaskId). Require a string: -ceq against an array filters instead of comparing.\n    - If -not $read, set $Context = $null BEFORE the workspace and commits reads.\n    - Mode 'worktree' as today. Else 'shared' when the claim's workspace is a PSCustomObject or $read. Else 'unknown'.\n    - Return @{ Mode; Read = $read; Target; Foreign }, and update its comment.\n\n(c) Initialize-MoeWorktree:\n    - In the existing `if ($ws.Mode -cne 'worktree')` branch, after `if (-not $git) { return }` and before the moe/task rev-parse: `if ($ws.Mode -ceq 'unknown' -and (Test-MoeControlWorktreeMode)) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' \"<step 2(c) detail>\" }`.\n    - In the try, after the target check and before `foreach ($f in $ws.Foreign)`: `if (-not $ws.Read) { Stop-MoeWorktreeSeat 'MOE_WORKTREE_CONTEXT_FAILED' \"<step 2(d) detail>\" }`. exit is flow control, so the catch never swallows it.\n    - Update the function comment to match step 2(e).\n\nThen run the ps1 leg of step 4 against a fresh scratch snapshot under Windows PowerShell 5.1, and record 'N ok, 0 failed'.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin, in checkpoint 21921418, UTF-8 BOM kept (ef bb bf). WT-07's Test-MoeControlWorktreeMode already existed and is reused (defined at :6027, before the pre-flight call at :8927).\n\n(b) Get-MoeWorkspaceClaim: Read is true only for a PSCustomObject task whose id is a [string] -ceq the claimed id. It deliberately deviates from the plan's Get-MoeProp read: task and id are read through PSObject.Properties, because Get-MoeProp's return unrolls a one-element array. With it, {\"task\":{\"id\":[\"task-x\"]}} and {\"task\":[{\"id\":\"task-x\"}]} read as answered, while the sh python reads both as unknown (mem gotcha-ps1-getmoeprop-unrolls-lists). When not Read, $Context and $task are $null before the workspace and commits reads. Mode is worktree, else shared (claim workspace PSCustomObject, or Read), else unknown. It returns @{Mode; Read; Target; Foreign}.\n(c) Initialize-MoeWorktree:\n- In the shared branch after Get-MoeGitTop: unknown plus Test-MoeControlWorktreeMode leads to Stop-MoeWorktreeSeat MOE_WORKTREE_CONTEXT_FAILED, before the moe/task rev-parse.\n- In the worktree try, after the target check and before the Foreign loop: if not Read, the same code.\n- Detail strings are identical to sh. Comments are updated.\n\nEvidence, run 2 (/mnt/d/moe-scratch/run-31187ec1.KEEfZI/verify2.log, snapshot v-31187ec1.Mmk7dY, ps1 bytes == HEAD 21921418): EXIT=0, 20:43:08Z-21:11:37Z.\n- PS 5.1 leg (node.exe ... powershell): ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, path-long ok, codes ok, '[worktree] 60 ok, 0 failed'.\n- The sh leg in the same run: 60 ok, 0 failed.",
+      "startedAt": "2026-11-02T20:58:04.722Z",
+      "completedAt": "2026-11-02T21:11:59.256Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run this ONE fresh command from the repo root in WSL; its output is the complete_task evidence. It takes about 5-6 minutes, so raise the Bash tool timeout to 600000 ms or run it in the background.\n\nmkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$S\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell\n\nThe architect dry-ran this exact command at HEAD 920f9cca, with the CONTEXT_FAILED grep stubbed and MOE_WORKTREE_ONLY=shared-landed: rc 0 in 11 s, with sh and PS 5.1 each printing '1 ok, 0 failed'.\n\nExpected output:\n- the codes diff is empty and parity-check prints PASS;\n- the sh suite prints '[worktree] path-long n/a off win32' and 'N ok, 0 failed';\n- the ps1 suite (Windows PowerShell 5.1 via node.exe) prints 'N ok, 0 failed';\n- the four new cases print 'ok' in both.\n\nN is 16 for sh and 17 for ps1 at today's case list. It is higher if a peer row (WT-05) added cases before this row.\n\nPut both summary lines and the new-case lines in the step note.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Fresh verification on the final bytes, run 3: /mnt/d/moe-scratch/run-31187ec1.KEEfZI/run3.sh, log verify3.log, snapshot v-31187ec1.u0LT3S. The snapshot was cmp-equal to all 4 working files after the run. START=20:59:25Z, END=21:27:11Z, EXIT=0.\n\nSession 2 made one byte change before this run: it restored a stray whitespace change in the sh python parse (`own ={` back to `own = {`, no behaviour change). That is why scripts/moe-agent.sh is listed.\n\nThe command is the plan's, with ONE setup-only change: the sh leg's fixture parent is P=$(mktemp -d /tmp/wt-31187ec1.XXXXXX), not \"$S\". On /mnt/d drvfs the pre-existing marker-scan case fails with 'mkfifo: Operation not supported', HEAD 0d8422ce included (bug task-93bcb459). MOE_*/CLAUDE* are unset first.\n\nOutput:\n- snapshot line; the codes diff is empty; bash -n ok; the CONTEXT_FAILED grep is ok; PASS parity-check.sh.\n- sh: '[worktree] path-long n/a off win32'. ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, codes ok. '[worktree] 60 ok, 0 failed'.\n- ps1 (node.exe, Windows PowerShell 5.1): path-long ok. ctx-unread ok, resume-unread ok, resume-dirty ok, resume-shared-unread ok, codes ok. '[worktree] 60 ok, 0 failed'.\n- N is 60, not the plan's 16/17, because peer rows WT-05..WT-13 added cases since the plan.",
+      "startedAt": "2026-11-02T21:12:01.935Z",
+      "completedAt": "2026-11-02T21:27:35.961Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review of this task's diff (`git diff -- <the 4 files>`), read as an attacker, before complete_task. Check and record the following.\n\n(1) A real get_context for the claimed task always carries task.id equal to the claimed id: check the getContext.ts task projection. Otherwise every live resume would refuse. Also confirm that the claim's own workspace still wins over the context, and that an explicit workspace mode 'shared' is never refused.\n\n(2) The rail-4 surface:\n    - Off moe/control, an unknown mode prints nothing new and refuses nothing new.\n    - shared-landed, shared-unlanded and resume-shared-unread pass.\n    - postflight.{sh,ps1}'s FAKE_GET_CONTEXT_FAIL=empty/mismatch gate cases run on non-moe/control fixtures, so they are untouched.\n\n(3) A refusal creates, moves, deletes and commits nothing: W, its dirt, moe/task/<id> and the control checkout all stay as they were. It also fires before '# -------- Pre-flight landing' / '# -------- Pre-flight baseline', so nothing lands.\n\n(4) report_blocked failing as well, with the daemon down: the seat still stops (the existing [WARN]). A later relaunch either resumes with a working read or is a fresh claim that carries workspace.\n\n(5) Odd inputs, in both twins:\n    - an empty python parse, PYTHON_CMD missing;\n    - ps1 $Context as $null, a string, or an object without task;\n    - an id that is an array or a number.\n\n(6) No code token appears in one twin only, the detail strings are identical, and the ps1 BOM is intact.\n\n(7) Optional, not a gate: run the sh suite under native Git Bash if it is available.\n\n(8) Report numstat: about +80 net lines is expected.\n\nFix anything found, then re-run step 4 fresh before complete_task. The completion summary should name the contract choice: wrapper-only, keyed on moe/control, with no daemon or wire change.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-worktree.cjs",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "note": "Adversarial self-review of the 4-file diff against 0d8422ce.\n\n(1) Reads and precedence:\n- getContext.ts:584 projects `id: task.id`, so a real get_context for the claimed task always reads as answered.\n- The claim's workspace wins (sh `ws = cws if isinstance(cws, dict)`, ps1 `$ws = $cws`).\n- A claim workspace that is a dict/PSCustomObject (explicit 'shared' included) is mode shared, never unknown, so it is never refused.\n(2) Rail 4:\n- Off moe/control, unknown falls through to the old shared path.\n- control_worktree_mode / Test-MoeControlWorktreeMode print nothing.\n- shared-landed, shared-unlanded and resume-shared-unread pass in both engines; the last asserts no MOE_WORKTREE_ line.\n- postflight.sh:2334/2381 and postflight.ps1:2038/2053/3384 use FAKE_GET_CONTEXT_FAIL=empty/mismatch with no claim workspace, on non-moe/control fixtures, so they are untouched.\n- postflight.sh's wtr_run (moe/control plus a worktree claim) gets the default ctx, whose id equals args.taskId, so it is read.\n(3) Refusal ordering:\n- The resume refusal sits in the shared branch right after git_top / Get-MoeGitTop, before any rev-parse or follow. It creates, moves and deletes nothing.\n- Both call sites (sh :9725, ps1 :8927) precede '# -------- Pre-flight landing' (sh :9733) and '# -------- Pre-flight baseline' (ps1 :8934).\n- Known, theoretical: in worktree mode the ctxread refusal comes after WT-13's follow_control_checkout switch / Invoke-MoeControlFollow -Switch, which may fast-forward moe/control first. That matches the existing CREATE_FAILED/MODE_MISMATCH refusals at the same spot. The plan placed it after the target check, and WT-13 landed after the plan. A follow is WT-13's benign loop-top behaviour, not part of the refusal.\n(4) A failed report_blocked (daemon down): the existing [WARN] prints and the seat still exits 1. A relaunch either reads the context fine, or refuses again without touching anything.\n(5) Odd inputs:\n- sh: an empty or failed parse, or PYTHON_CMD missing, gives mode unknown via the case statement. In worktree_stop, args fail to build, so it WARNs and still stops.\n- ps1: $Context as $null, a string, or an object without task gives Read $false.\n- An id that is an array or a number is unread in both twins (ps1 via PSObject.Properties plus [string]; Get-MoeProp would unroll it).\n- Session 1 probed about 16 JSON inputs on both twins, and they agree.\n(6) Twin parity:\n- The codes diff is empty.\n- The two detail strings are mechanically identical after $tid/$TaskId normalisation ('details-identical').\n- The ps1 BOM is ef bb bf.\n- Get-MoeWorkspaceClaim has one caller.\n(7) Git Bash: not run (optional).\n(8) Numstat vs 0d8422ce: sh +23/-6, ps1 +32/-11, fake proxy +5/-0, cjs +46/-0, so +106/-17 (89 net).\n\nFound and fixed one item: a stray whitespace edit `own ={` in the sh python, restored before the fresh step-4 run 3 (EXIT=0). Nothing else changed since. Scratch snapshots from this task are deleted; the run logs stay in /mnt/d/moe-scratch/run-31187ec1.KEEfZI.",
+      "startedAt": "2026-11-02T21:27:39.180Z",
+      "completedAt": "2026-11-02T21:29:03.464Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -68,8 +96,7 @@
   "dependsOn": [
     "task-c20464ff64ca49fca4371dd9b5194364",
     "task-f58c7c75e2f7401fbd8648817d343a6b",
-    "task-fbe8e3880ddf47dfa8546f220acea770",
-    "task-c7ca56e6511b4d9bb8dcb9fe482e2fa8"
+    "task-fbe8e3880ddf47dfa8546f220acea770"
   ],
   "priority": "MEDIUM",
   "order": 28,
@@ -103,11 +130,17 @@
       "author": "governor-e6b40560",
       "content": "Governor re-slot, superseding my earlier comment on this row. The human asked for a faster switch, so this row is no longer a switch prerequisite. It now lands right after the switch, in worktree mode: it depends on c7ca56e6, which depends on gate task-6519ed91.\n\nAccepted risk until it lands: the narrow resume window (a first session refused before W existed, then a daemon restart). The governor watches every daemon restart in that period.\n\nThe plan is unchanged.",
       "timestamp": "2026-11-02T09:16:04.823Z"
+    },
+    {
+      "id": "comment-6e69b3f679674b12a7681d846af99d5c",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-02T21:30:26.531Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-c3677d18a2fe4b20bbf668025cc1def4 (generation 5); paths: scripts/moe-agent.sh, scripts/tests/postflight-worktree.cjs; rescue ref: refs/moe/rescue/task-31187ec10ae54dd2b03f4c166f083f31/20261102T213024Z; target tip: 96c4ee1962fb64f5939668b1e60e69eec202ee50; task WORKING."
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T19:51:26.149Z",
-  "updatedAt": "2026-11-02T09:16:04.823Z",
+  "updatedAt": "2026-11-04T19:20:39.606Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T19:53:26.719Z",
@@ -116,11 +149,16 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T19:53:43.609Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 4
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T22:38:24.713Z",
+    "wallClockMs": 269081104
   },
   "contextFetchedBy": [
     "architect-bd1eb82d",
-    "architect-4ff0711c"
+    "architect-4ff0711c",
+    "worker-c9368191",
+    "qa-93f9625e"
   ],
   "commits": [
     {
@@ -156,28 +194,81 @@
       "treeId": "280e6d54d90355d9f8d90bfdea312f6e45ec7061",
       "status": "WORKING",
       "pushed": true
+    },
+    {
+      "sha": "219214187900631f17985f65f81988d0e5bedfb4",
+      "ref": "refs/heads/moe/task/task-31187ec10ae54dd2b03f4c166f083f31",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T19:22:02Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T20:55:47.058Z",
+      "treeId": "b30716bbcca3cfcf177f060cd3077196589499fc",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "5fb9cfce88d39b52db9c254bc977ef52f2249681",
+      "ref": "refs/moe/rescue/task-31187ec10ae54dd2b03f4c166f083f31/20261102T213024Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T20:56:29Z",
+      "paths": [],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T21:30:25.324Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-31187ec10ae54dd2b03f4c166f083f31 ref=refs/moe/rescue/task-31187ec10ae54dd2b03f4c166f083f31/20261102T213024Z sha=5fb9cfce88d39b52db9c254bc977ef52f2249681 reason=conflict"
+    },
+    {
+      "sha": "ebb06b856736d4831c37bf11c4a9c3d1ebe61cb0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T21:31:04Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-02T22:05:05.503Z",
+      "status": "REVIEW",
+      "pushed": true
     }
   ],
   "filesModified": [
-    ".moe/tasks/task-31187ec10ae54dd2b03f4c166f083f31.json",
-    ".moe/tasks/task-7cc959e9b42043ba8009cdd9813103e0.json",
-    ".moe/tasks/task-9eaa4c4e4ef74d43ab2538e0010b098e.json",
-    ".moe/tasks/task-cda65eb0efb244efa8a506969bac47f9.json",
-    ".moe/tasks/task-ced857485a1c4d75b57cc25dcc9b4d82.json",
-    ".moe/tasks/task-f33bf7aff4d245d3b8bb1d8c8a6ceedf.json"
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "architect-4ff0711c@2026-10-30T20:24:31Z",
-    "at": "2026-10-30T21:09:54.321Z"
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T22:05:16Z",
+    "at": "2026-11-02T22:39:25.743Z"
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T20:52:50.174Z",
   "executionContract": {
@@ -251,5 +342,20 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T20:52:50.195Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:27:07.869Z",
+  "reviewStartedAt": "2026-11-02T22:03:56.728Z",
+  "verification": {
+    "command": "( for v in $(compgen -e | grep -E '^(MOE_|CLAUDE)'); do unset \"$v\"; done; mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-31187ec1.XXXXXX) && git ls-files -z scripts | tar --null -T - -cf - | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight-worktree.cjs scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && echo \"snapshot $S\" && cd \"$S\" && bash -n scripts/moe-agent.sh && g='MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' && diff <(grep -oE \"$g\" scripts/moe-agent.sh | sort -u) <(grep -oE \"$g\" scripts/moe-agent.ps1 | sort -u) && grep -q MOE_WORKTREE_CONTEXT_FAILED scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && T=\"$S/scripts/tests\" && P=$(mktemp -d /tmp/wt-31187ec1.XXXXXX) && node \"$T/postflight-worktree.cjs\" sh \"$S/scripts/moe-agent.sh\" \"$T/postflight-fake-proxy.js\" \"$P\" \"$(command -v bash)\" && node.exe \"$(wslpath -w \"$T/postflight-worktree.cjs\")\" ps1 \"$(wslpath -w \"$S/scripts/moe-agent.ps1\")\" \"$(wslpath -w \"$T/postflight-fake-proxy.js\")\" \"$(wslpath -w \"$S\")\" powershell )",
+    "exitCode": 0,
+    "outputTail": "START=21:34:47Z (run from the task worktree on the merged tree; log /mnt/d/moe-scratch/run-31187ec1.OIjGLs/verify.log)\nsnapshot /mnt/d/moe-scratch/v-31187ec1.B5NOeL\nPASS parity-check.sh\n--- sh (Linux bash) ---\n[worktree] path-long n/a off win32\n[worktree] ctx-unread ok\n[worktree] wt-config-lock ok\n[worktree] wt-config-lock-exhausted ok\n[worktree] wt-config-other ok\n[worktree] wt-config-preset ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] codes ok\n[worktree] 64 ok, 0 failed\n--- ps1 (node.exe, Windows PowerShell 5.1) ---\n[worktree] ctx-unread ok\n[worktree] wt-config-lock ok\n[worktree] wt-config-lock-exhausted ok\n[worktree] wt-config-other ok\n[worktree] wt-config-preset ok\n[worktree] resume-unread ok\n[worktree] resume-dirty ok\n[worktree] resume-shared-unread ok\n[worktree] wt-lease-signal n/a for ps1 (no signal to send on Windows)\n[worktree] codes ok\n[worktree] 64 ok, 0 failed\nEXIT=0\nEND=22:02:36Z\n(selected lines; the codes diff printed nothing; all 128 other case lines printed ok)",
+    "reportedAt": "2026-11-02T22:03:56.728Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "LANDING-CONFLICT resolution. No new behaviour; the scope is the same 4 files.\n\nThe first completion (21:30Z) was refused with MOE_COMMIT_FAILED_CONFLICT. Rescue ref: refs/moe/rescue/task-31187ec1…/20261102T213024Z. The wrapper merged origin/moe/work-2026-10-24 (96c4ee19) into the task worktree. That left 2 conflict hunks, both resolved by keeping both sides:\n- scripts/moe-agent.sh, provision_worktree `local` line: this row's `ctxread` plus the target's `fail` (WT config-lock retry).\n- scripts/tests/postflight-worktree.cjs, `cases` map: the target's wt-config-lock/-lock-exhausted/-other/-preset entries plus this row's resume-unread/resume-dirty/resume-shared-unread Object.assign line.\nNo conflict markers remain.\n\nChecked: the merged tree differs from MERGE_HEAD only in this row's 4 files (moe-agent.sh, moe-agent.ps1, postflight-fake-proxy.js, postflight-worktree.cjs; +106/-17). Its -U0 change lines are identical to the task's own diff 0d8422ce..5fb9cfce, except that one resolved `local` line.\n\nContract (unchanged from the first completion):\n- The mode is known only from the fresh claim's workspace, or from a get_context whose task.id is the claimed id.\n- An unknown mode on a control checkout on refs/heads/moe/control refuses with MOE_WORKTREE_CONTEXT_FAILED: one report_blocked, no CLI, nothing touched, exit 1.\n- An unknown mode elsewhere is today's shared path, with no new output.\n- Worktree mode with an unread context refuses with the same code.\n\nEvidence, fresh run on the merged bytes: EXIT=0. Codes diff empty, parity PASS, sh 64 ok / 0 failed, PS 5.1 64 ok / 0 failed. The 4 new cases and the target's 4 wt-config-* cases are ok in both engines; path-long is n/a off win32, and wt-lease-signal is n/a for ps1. `npm run lint` is ok.\n\nVerification deviation (setup only): the snapshot is built from the merged working tree's tracked scripts/ (git ls-files | tar) instead of `git archive HEAD scripts`. HEAD is pre-merge, so the plan's form would pair the old parity-check.sh",
+  "landingRetry": null,
+  "completedAt": "2026-11-02T22:38:24.713Z",
+  "reviewCompletedAt": "2026-11-02T22:38:24.713Z",
+  "reviewSummary": "APPROVED: completion ebb06b85 (tree e8cfc0ba = candidate treeSha), on moe/work-2026-10-24 and origin. 4 files, +106/-17 (89 net), all in approvedScope. ps1 keeps its UTF-8 BOM; the .cjs and fake-proxy changes are add-only.\n\nRe-run: the plan's step-4 command on `git archive ebb06b85 scripts`, MOE_*/CLAUDE* unset, sh fixtures under /tmp (drvfs mkfifo, task-93bcb459). 22:06-22:33Z, EXIT=0, log /mnt/d/moe-scratch/qa-31187ec1.jsk0mg/verify.log.\n- bash -n ok, codes diff empty, PASS parity-check.sh.\n- sh and PS 5.1: 64 ok, 0 failed each. The 4 new cases are ok in both.\n- npm run lint ok.\n\nACs:\n- AC1: resume-unread loops error, empty and mismatch. It asserts one report_blocked for the task and seat with the reason starting with the code, no CLI, exit 1, no W or branch, and the control unchanged.\n- AC2: resume-dirty proves HEAD..branch = 0. W stays registered and locked, the dirt is byte-identical, and the tip is unchanged.\n- AC3: resume-shared-unread: the CLI ran, 0 blocks, no MOE_WORKTREE_ line, exit 0.\n- AC4: ctx-unread, with the check placed before the Foreign loop and any W work.\n- AC5: no existing case, helper or fake answer changed.\n- AC6: codes diff empty.\n\nTwins match: the same id predicate and mode table, and identical details. A failed parse is unknown, and stops are main-shell only. The real get_context carries task.id. The postflight.sh/.ps1 empty/mismatch cases run in non-moe/control repos (rail 4 holds).\n\nNote: in worktree mode the ctxread stop follows WT-13's follow switch, a fast-forward to the target. That is the plan's placement and the same as the sibling refusals.",
+  "requiredCheckAtDone": null
 }

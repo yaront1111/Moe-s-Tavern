@@ -15,73 +15,108 @@
     {
       "stepId": "step-1",
       "description": "sh: the junction-safe removal engine and the QA DONE removal, with their postflight.sh cases (DoD 1, DoD 4 unlink half, comment-dc04a1d3).\n\nFirst read the landed bytes this builds on, and reuse them; never re-implement a landed helper:\n- WT-04: task_branch_landed REF TASKID, the `worktree list --porcelain -z` parser, and the D:\\ vs /mnt/d path normalization.\n- WT-06: the link manifest writer, its line format and its location under the common git dir.\n- WT-07: the control-seat predicate control_worktree_mode, the worktree attribution with denied_wt, the local MOE_TOP/MOE_REL/MOE_GITDIR shadow, and the .control-dirt path.\n- WT-13: the target rule (consolidationBranch or main) and the #general alert throttle.\nWhere a landed name differs from this plan, use the landed one and list the mapping in complete_task's summary. sh editing rule: write the whole file elsewhere on the same filesystem, run `bash -n`, then one `mv -f`. New helpers go above the main-loop `{ ... exit }` group. Every new line must be set -e safe.\n\nNew helpers (D = `<common git dir>/moe/worktree`, from `git -C <top> rev-parse --path-format=absolute --git-common-dir`):\n- worktree_lock_take / worktree_lock_drop:\n  - take = `mkdir -p D`, then `mkdir D/sweep.lock`.\n  - A held lock whose mtime is older than 7200s is stale: `rmdir` it once and retry mkdir once.\n  - Never sleep or wait. A held lock returns 1.\n  - drop rmdirs the lock only if this process took it.\n- remove_task_worktree TOP TID, the one engine both callers use. Each guard failure prints `[WARN] MOE_WORKTREE_REMOVE_REFUSED: <W>: <detail>` and returns 1, leaving W registered and the branch kept:\n  1. TID must match `^task-[A-Za-z0-9_-]{1,128}$`, and W = TOP/.worktrees/TID.\n  2. Refuse when W or TOP/.worktrees is itself a link.\n  3. The porcelain must list W on refs/heads/moe/task/TID. A W recorded in the other OS's spelling gets `git worktree repair` first, as WT-04 does.\n  4. Refuse when W/.moe exists (`[ -e ] || [ -L ]`).\n  5. Manifest D/TID.links: each non-empty line is a W-relative path.\n     - Refuse a line that is absolute, has a drive letter or backslash, or has an empty, '.' or '..' segment.\n     - Refuse when any ancestor of the entry inside W is a link, so nothing is ever reached through a parent link.\n     - An entry that is a link: `rm -- \"$W/$rel\"`, then verify it is gone (`[ -e ] || [ -L ]` both false).\n     - A missing entry is an unused reservation: skip it.\n     - An entry that exists but is not a link is W's own bytes: leave it for the remove.\n  6. `git -C TOP worktree remove --force --force W`. There is no separate unlock: a double force removes a locked worktree, and a failed remove keeps W's lock against a cross-OS prune. This deliberately differs from §1.9's unlock-then-remove. Put git's first stderr line in the detail.\n  7. Delete exactly D/TID.links and D/TID.control-dirt. A missing file is fine; a failed delete is a [WARN]. Never glob-delete under D: journals live there.\n  8. `git -C TOP branch -D moe/task/TID`. A failure is a [WARN]; W is already gone.\n  9. Print `[worktree] removed <W> on moe/task/TID`.\n- qa_done_worktree_removal TID. Return 0 silently unless all of these hold: the control predicate is true, git_top resolves with MOE_REL empty, and W is registered. Then:\n  - Leave W with `[worktree] left <W> to the orphan sweep: <reason>` when:\n    - W/.moe exists;\n    - the porcelain branch is not moe/task/TID;\n    - W holds non-DENY dirt, or the status check fails (WT-07 attribution, the list a checkpoint would land);\n    - task_branch_landed refs/heads/<target> TID fails;\n    - the lock is held.\n  - Otherwise: engine, then drop the lock.\n  - This path never rescues and never deletes anything else.\n- Call site: the task-holding post-flight branch, after finalize_postflight and live_marker_remove: `if [ \"$ROLE\" = qa ] && [ \"$FINAL_STATUS\" = DONE ]; then qa_done_worktree_removal \"$PREFLIGHT_TASK_ID\" || true; fi`. It must never change LAND_OUTCOME, POSTFLIGHT_BREAK, finalize or the exit code.\n\nTests in postflight.sh. Write ONE fixture builder:\n- control on moe/control;\n- W made exactly as WT-04 makes it (`worktree add --lock --no-checkout -b`, then sparse `'/*' '!/.moe/'`, then `read-tree -mu HEAD`);\n- control .serena/memories/sentinel.md and .claude/skills/s/SKILL.md;\n- W/.serena/memories and W/.claude/skills linked to them with WT-06's harness helper, or else `ln -s` (a node junction on msys);\n- the manifest written in WT-06's format.\nTest teardown unlinks its own links before deleting scratch. Cases are table-driven, with `[scenario WT14A]` style names; bump the harness scenario counters per the landed convention.\n- WT14A (DoD 1): a landed branch (target holds the task commit's tree), ROLE qa, FAKE_TASK_STATUS=DONE. W is absent from disk and from the porcelain; moe/task/TID, .links and .control-dirt are gone; both control sentinels are byte-identical.\n- WT14B: as A, plus W/.moe/x. W, the branch, the manifest and .moe/x are kept, and the sentinels are intact.\n- WT14C: as A, plus a modified tracked file in W. W is kept, with the `left ... orphan sweep` line.\n- WT14D (DoD 4): as A, with `chmod 0555` on W/.serena so the unlink fails. Expect MOE_WORKTREE_REMOVE_REFUSED; W stays registered; the branch, the link and the sentinels are intact. Restore the mode in teardown. When `id -u` is 0, print `[scenario WT14D] SKIP (root ignores mode bits)`.\n- WT14S (rail 4): control on a shared moe/work-* branch with a registered DONE W. Nothing is removed, and no MOE_WORKTREE_ or [worktree] line appears.\nError handling: every git call's failure maps to REFUSED or to the leave-to-sweep path, never to a deletion.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "sh removal engine + QA DONE removal + postflight.sh WT14A/B/C/U/D/S.\n\nNew in moe-agent.sh:\n- wt_porcelain TOP find W: WT-04's porcelain parser, moved verbatim out of provision_worktree, which now calls it.\n- wt_registration, wt_admin_dir, worktree_lock_take/drop, wt_manifest_read, worktree_dirt_scan, wt_remove_refused, remove_task_worktree, qa_done_worktree_removal.\n- Call site after live_marker_remove, gated by a new MOE_CONTROL_SEAT flag that the dispatch sets only when control_seat_postflight runs. Shared mode therefore runs no new git command and prints no new line.\n\nLanded-name mappings:\n- task_branch_landed REF=refs/heads/<target>\n- WT-13's target rule\n- control_worktree_mode\n- git_top, with MOE_REL empty\n- resolve_attribution worktree, the denied_wt rule, under a local MOE_TOP/MOE_REL/MOE_GITDIR shadow\n- git_dirty_snapshot\n\nDeviations:\n1. Edits went through the Edit tool, not write-elsewhere + mv, per global rail 3. bash -n passes.\n2. worktree_dirt_scan also refuses when git status's entry count differs from the snapshot's row count (control-char paths and nested repos are dropped by git_dirty_snapshot). Such bytes keep W rather than going unrescued.\n3. branch -D runs only while the branch is still at the tip read before removal; otherwise it WARNs and keeps the branch.\n4. The manifest is fully validated before the first unlink. A link entry is unlinked with `rm -f --` and proved gone; a missing entry is skipped; a non-link entry is left.\n5. Added case WT14U (an unlanded commit on the branch is left to the sweep). It is the only case that guards the task_branch_landed check.\n6. WT14D SKIPs as root and on msys; mode bits don't deny an unlink there, and the ps1 twin uses icacls. Both skips lower the expected count.\n7. worktree_dirt_scan reads N_CANDIDATES into WT_DIRT_N instead of attr_summary_load, so the QA path never clobbers ATTR_* globals.\n\nEvidence:\n- WT-14 block in a scratch harness (env MOE_/CLAUDE scrubbed): 6/6 ok, PASS.\n- Mutations, each caught by its intended case:\n  - drop the W/.moe leave → WT14B fails\n  - drop the dirt leave → WT14C fails\n  - drop task_branch_landed → WT14U fails\n  - skip the link unlink → WT14A fails\n- Shared provisioning suite postflight-worktree.cjs (sh) re-run against this wrapper copy for the wt_porcelain refactor: 27/27 cases ok so far, still running. The full result goes in the step-2 note.\n\nOut-of-scope bug filed: task-f977d76e9a9c44e7af0322be1eb76333. A tracked .serena/project.yml makes W's WT-06 copy non-DENY dirt that WT-07 lands.",
+      "startedAt": "2026-11-02T19:23:23.442Z",
+      "completedAt": "2026-11-02T20:13:29.982Z"
     },
     {
       "stepId": "step-2",
       "description": "sh: the orphan sweep at the loop top, the fake-proxy status knob, and the postflight.sh cases (DoD 2, DoD 3, DoD 4 unregistered half).\n\nworktree_orphan_sweep. Run order:\n1. Gate, silent: return 0 unless the control predicate is true, git_top resolves with MOE_REL empty, and TOP/.worktrees exists.\n2. Interval: MOE_WORKTREE_SWEEP_INTERVAL_SEC.\n   - Unset or blank means 3600.\n   - `^[0-9]{1,9}$` is used as given; 0 means every loop top, which the tests need.\n   - Anything else prints one [WARN] and uses 3600.\n   - Stamp file D/sweep.last holds epoch seconds. Pre-check it without the lock and return when `now-last < interval` (a stamp in the future counts as stale).\n3. worktree_lock_take. A held lock prints `[worktree] sweep skipped: lock held` and returns 0.\n4. Under the lock:\n   - re-check the stamp;\n   - write now with a temp file plus mv (a failed write is a [WARN] and skips the pass);\n   - run worktree_sweep_pass;\n   - always drop the lock.\n\nworktree_sweep_pass:\n- Enumerate with `git -C TOP worktree list --porcelain -z`, through WT-04's parser and normalization. A failure aborts the pass with a [WARN].\n- Registered set: entries whose normalized path's parent is exactly TOP/.worktrees.\n- Candidates are the subset whose basename matches the TID pattern. Others, such as the main worktree and the temp hook and gate worktrees, are ignored.\n- Unregistered: each DIRECTORY directly under TOP/.worktrees whose normalized path is not in the registered set.\n  - Print `[WARN] MOE_WORKTREE_UNREGISTERED: <path>: not a registered worktree; left on disk`.\n  - chat_send one #general alert per path per 24h, through WT-13's throttle helper keyed by a hash of the normalized path. If the helper is hour-only, add optional key and window arguments without changing its existing calls.\n  - Never delete it.\n- Per candidate, in TID sort order, local checks first:\n  - Skip when W/.moe exists, with a `[worktree] sweep left <W>: W/.moe exists (MOE_WORKTREE_MOE_PRESENT)` line.\n  - Skip when the branch is not moe/task/TID (REFUSED detail).\n  - Skip when any control-project .moe/attempts/*.json record (read as utf-8-sig) has taskId TID and a phase other than 'closed'.\n    - An unparsable attempt record aborts the pass: it cannot be proved not to be TID's.\n  - Then `moe_rpc_unserved get_context {taskId, view:'status'}`. The status view writes nothing, unlike the default view's contextFetchedBy stamp.\n    - A reply whose task.id equals TID gives the status. Only DONE or ARCHIVED make a candidate.\n    - A failure whose stderr JSON carries data.codeName TASK_NOT_FOUND means unknown, which is a candidate. Reuse launch_outage_release's codeName parse.\n    - Anything else aborts the pass: a transport failure, any other refusal, or a missing or mismatched task. An RPC failure never counts as unknown.\n- Per candidate, removal phase, stopping after 5 candidates have reached it (removed or refused):\n  a. Non-DENY dirt (WT-07 attribution in W, under the same local shadow WT-07 uses, plus `local FROZEN_TREE=\"\" LAND_TASK_ID=TID LAND_TITLE='worktree orphan'`) goes through `rescue_ref worktree-orphan <cand>`.\n  b. When task_branch_landed refs/heads/<target> TID fails, run `rescue_ref_from_commit <tip> worktree-orphan`.\n  c. Proceed only when each needed rescue ref resolves to the commit just written. Dirt that rescue_ref reports as matching HEAD has nothing to lose. Anything else is REFUSED with 'rescue failed'.\n  d. Re-read the attempt records right before the engine. A record that appeared now means skip.\n  e. remove_task_worktree TOP TID.\n- Call site: the loop top, after WT-13's follow and the wrapper reload check, just above `# -------- Pre-flight: perform startup rituals`: `worktree_orphan_sweep || true`. It never sleeps, never blocks on the lock and never changes claim behavior.\n\nscripts/tests/postflight-fake-proxy.js, one knob, FAKE_TASK_STATUS_MAP: a comma list of `taskId=STATUS`.\n- It applies only to get_context with view 'status', which no wrapper sent before this task. Answer it BEFORE the context-count block, so the attempt-finalizing flip never sees sweep reads.\n- A mapped STATUS answers {contextScope:'status', task:{id, status}}.\n- NOT_FOUND answers a refusal with data.codeName 'TASK_NOT_FOUND'.\n- FAIL answers an error without a codeName.\n- An unmapped id answers WORKING, which is never a candidate.\n- Every other call is byte-identical.\n\nCases in postflight.sh, using step 1's builder, with MOE_WORKTREE_SWEEP_INTERVAL_SEC=0 unless stated and FAKE_CLAIM_MODE idle:\n- WT14E (DoD 2): a DONE W whose branch has an unlanded commit T, plus a modified tracked file and an untracked non-DENY file. Expect:\n  - a refs/moe/rescue/TID/<ts> that resolves to T exactly;\n  - the chan-general log has `MOE_RESCUE_REF task=TID ... sha=<T> reason=worktree-orphan`;\n  - a second rescue ref whose tree has both dirty files' bytes (`git show`);\n  - then W, the branch and the manifest are gone, and the sentinels are intact.\n  An unknown task (NOT_FOUND) in the same run is removed the same way.\n- WT14F (DoD 3): the map holds d1..d6 DONE, w1 WORKING, a1 DONE with an open .moe/attempts record (phase running), and m1 DONE with W/.moe. One run removes exactly d1..d5. d6, w1, a1 and m1 keep their W and branch.\n  - A run with a fresh D/sweep.lock removes nothing and logs `sweep skipped`.\n  - A run with that lock's mtime set 3h old breaks it and removes d6.\n- WT14G (DoD 4): unregistered .worktrees/stray and .worktrees/task-ghost, each with a file. Both print MOE_WORKTREE_UNREGISTERED and stay with their bytes. Two runs give exactly one chan-general row per path.\n- WT14H (error handling):\n  - a FAIL mapping for a candidate aborts the pass: no ref, no removal;\n  - with the interval unset and a fresh sweep.last, nothing runs;\n  - an invalid interval (`abc`) warns and uses 3600.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.sh",
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "sh orphan sweep (DoD 2-4). worktree_orphan_sweep runs at the loop top, before pre-flight. It runs only when the control checkout is on moe/control at the repo top and TOP/.worktrees is a real directory, so shared mode runs no new git command and prints nothing. Pacing: MOE_WORKTREE_SWEEP_INTERVAL_SEC (unset or blank 3600; 0 every loop top; anything else prints one [WARN] per value and uses 3600). <admin>/sweep.last is checked before the sweep lock and again under it, then written by temp+mv before the pass. A held lock prints '[worktree] sweep skipped: lock held'. wt_porcelain gained a 'sweep' mode. Candidates are only registered .worktrees/task-* worktrees on moe/task/<same id> (comment-3263c743). An unregistered .worktrees/task-* directory gets MOE_WORKTREE_UNREGISTERED, one #general alert per path per day (control_alert gained KEY and WINDOW; the key is sha1 of the comparable path, first 16 hex). Nothing else under .worktrees is touched. Per candidate, at most 5 removals a pass: a link W is REFUSED; a missing W is skipped; W/.moe prints 'sweep left ... MOE_WORKTREE_MOE_PRESENT'; an open attempt (.moe/attempts phase != closed) is skipped. Status comes from get_context view:'status', unserved. Only TASK_NOT_FOUND counts as UNKNOWN; any other RPC failure stops the pass. DONE, ARCHIVED and UNKNOWN go to worktree_sweep_remove. There, W's non-DENY dirt goes to rescue_ref worktree-orphan on W's HEAD, strictly: the staged count must equal the dirt count and the ref must resolve, else REFUSED. An unlanded tip goes to rescue_ref_from_commit, which must resolve to the tip. Attempts are re-read, then remove_task_worktree runs. Landing globals are shadowed; the sessionId is <worker>@unknown. #general is looked up lazily, because pre-flight sets it after the loop top. Fake proxy: view:'status' answers from FAKE_TASK_STATUS_MAP. NOT_FOUND gives -32001 with data.codeName TASK_NOT_FOUND, as the daemon does; FAIL gives -32603; unmapped gives WORKING. Every other read is unchanged. postflight.sh WT14E-I; wt14_fixture sets a repo identity, because rescue refs are commit-trees. Evidence: RED WT14E 'no single rescue ref at the unlanded commit' before the code. GREEN dev copy '[WT-14] ok: 11 scenarios' / 'PASS wt14-dev', rc=0. Mutation (sweep-only cases, 12 mutants): attempts, budget, status, notfound, tiprescue, uprefix, branch, dirt, lock, dotmoe, interval and window each FAILED with their case message; the noop baseline gave PASS rc=0. The dirt mutant first aborted silently through set -e on a grep -v pipeline; that is fixed with '|| true', so it now prints 'no single second rescue ref for W's dirt'. Full suites run in step 5.",
+      "startedAt": "2026-11-02T20:13:45.527Z",
+      "completedAt": "2026-11-02T20:43:13.702Z"
     },
     {
       "stepId": "step-3",
       "description": "ps1 twin of step 1 (scripts/moe-agent.ps1, scripts/tests/postflight.ps1). Same contract, guard order, codes and detail text, the same `[worktree] ...` lines, and the same MOE_WORKTREE_SWEEP_INTERVAL_SEC name, so parity-check and the code diff stay equal.\n\nFunctions, placed beside the landed WT-04/WT-07 twins:\n- Lock-MoeWorktreeSweep and Unlock-MoeWorktreeSweep:\n  - [IO.Directory]::CreateDirectory for D;\n  - New-Item -ItemType Directory for the lock, in try/catch, so an existing lock is 'held';\n  - the same 7200s stale break: Remove-Item without -Recurse, then one retry.\n- Remove-MoeTaskWorktree -Top -TaskId, the engine.\n- Invoke-MoeQaWorktreeRemoval -TaskId.\n\nPS rules:\n- Every git call goes through Invoke-MoeGit, with -MergeStderr where the detail needs git's message.\n- Compare paths with the landed comparable-path normalization, then [string]::Equals(a, b, [StringComparison]::Ordinal). Use -ceq for refs and codes, and -LiteralPath everywhere.\n- PS 5.1 compatible: no `&&`, no ternary.\n- Link test: `(Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue)`, then `.Attributes -band [IO.FileAttributes]::ReparsePoint`.\n- Unlink:\n  - On Windows, `cmd /c rmdir` on the quoted path. It removes a junction or directory link and never its target. Check $LASTEXITCODE.\n  - On a non-Windows pwsh host, Remove-Item -LiteralPath -Force WITHOUT -Recurse.\n  - Then verify the path is gone.\n- The W/.moe test is WT-04's exact `$null -ne (Get-Item -LiteralPath (Join-Path $w '.moe') -Force -ErrorAction SilentlyContinue)`.\n- The lock is always released in finally.\n- Call site: after the ps1 post-flight's finalize, for qa when the final status is DONE. Wrap it in try/catch, so it can never change the landing outcome, the finalize or the loop.\n\nTests in postflight.ps1: WT14A, WT14B, WT14C, WT14D and WT14S, mirroring step 1 with one fixture builder.\n- Links are made with New-Item -ItemType Junction, or WT-06's harness helper if one landed.\n- WT14D forces the unlink failure with icacls for the current user: deny DE on the junction and DC on its parent. Remove both denies in finally, so scratch cleanup works.\n- Teardown removes the junctions with `cmd /c rmdir` before deleting scratch.\n- Bump the ps1 scenario counters.\nError handling: as in step 1. A thrown .NET exception inside the engine becomes REFUSED, never a partial delete.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "ps1 twin of step 1: Remove-MoeTaskWorktree (engine, same guard order and REFUSED detail texts as sh; a thrown exception inside it becomes REFUSED \"the removal failed in PowerShell: ...\", never a partial delete), Invoke-MoeQaWorktreeRemoval (QA + DONE call site after finalize, in try/catch), Lock-/Unlock-MoeWorktreeSweep (mkdir lock, 7200s stale break, released in finally), Read-MoeWorktreeManifest, Get-MoeWorktreeDirtScan, Get-MoeWorktreeRegistration, Get-MoeWorktreeAdminDir, Get-MoeTaskBranchTip, Test-MoeLinkItem; Install-MoeTaskWorktree now reuses the new Get-MoeWorktreeRecords porcelain parser. Deviations: (1) unlink, stale-lock break and test teardown use [IO.Directory]::Delete / [IO.File]::Delete (Remove-MoeGateRoot's landed pattern) instead of cmd /c rmdir / Remove-Item: cmd's %-expansion rewrites paths and Remove-Item without -Recurse prompts on a non-empty dir; Directory.Delete on a junction/dir-symlink unlinks the link only. (2) sh: MOE_CONTROL_SEAT renamed to WT_CONTROL_SEAT (3 sites) so the MOE_CONTROL_ token set stays equal across sh/ps1. Tests (postflight.ps1 [WT-14] block): WT14A removed+sentinels intact, WT14B W/.moe kept, WT14C tracked edit left, WT14U unlanded commit left, WT14D icacls deny DE/DC -> REMOVE_REFUSED + W registered, WT14S shared mode silent. Focused ps1 harness (snapshot /mnt/d/moe-scratch/wt14ps.YcweYK): \"[WT-14] ok: 6 scenarios\", PASS, exit 0. RED checks on scratch copies only: both W/.moe guards disabled -> WT14B FAILED \"no left-to-the-sweep line matching 'MOE_WORKTREE_MOE_PRESENT'\" (W deleted); unlink loop skipped -> WT14A FAILED \"W ... is still on disk\". Probe: Git for Windows 2.54 `worktree remove --force --force` does not follow a junction inside W (target sentinel survives) but exits 0, deregisters W and leaves the dir on disk. parity-check.sh PASS; bash -n ok; the code diff now differs only by MOE_WORKTREE_SWEEP_INTERVAL_SEC and MOE_WORKTREE_UNREGISTERED, which step 4 adds to ps1.",
+      "startedAt": "2026-11-02T20:46:50.436Z",
+      "completedAt": "2026-11-02T21:17:33.445Z"
     },
     {
       "stepId": "step-4",
       "description": "ps1 twin of step 2 (scripts/moe-agent.ps1, scripts/tests/postflight.ps1).\n\nInvoke-MoeWorktreeSweep, called at the loop top in the same position as sh: after WT-13's follow and the reload check, before pre-flight. It runs the same gate, interval parse, stamp, lock, enumeration, unregistered alert, candidate checks and 5-cap.\n- Porcelain: read `worktree list --porcelain -z` and split on \"`0\", reusing WT-04's ps1 parser.\n- Attempt records: Get-ChildItem -LiteralPath on the control .moe/attempts. Parse each one with ConvertFrom-Json in try/catch. An unparsable record aborts the pass.\n- Daemon status: Invoke-MoeRpcUnserved get_context @{taskId; view='status'}.\n  - Unknown means $script:MoeRpcFailure -eq 'daemon refusal' AND $script:MoeRpcCodeName -ceq 'TASK_NOT_FOUND'.\n  - Anything else non-null without a matching task.id, or a null reply, aborts the pass.\n- Rescues: Invoke-MoeRescueRef with a W -Git hashtable built as WT-07's Invoke-MoeWorktreeCheckpoint builds it.\n  - Dirt: -Reason worktree-orphan with -Attr @{Candidates=<non-DENY paths from Test-MoeDenyPathWorktree>}.\n  - Tip: -Sha <tip> -Reason worktree-orphan.\n  - Verify each ref resolves to the commit just written before the engine runs.\n- Alerts: WT-13's ps1 throttle helper keyed by a path hash, with a 24h window.\n- The stamp is written with a temp file plus Move-Item -Force.\n- try/finally around the lock.\n\nTests in postflight.ps1: WT14E, WT14F, WT14G and WT14H, mirroring step 2 with the same FAKE_TASK_STATUS_MAP knob.\n- Stale-lock aging: (Get-Item -LiteralPath $lock).LastWriteTime = (Get-Date).AddHours(-3).\n- Keep the cases table-driven and compact. Bump the counters.\nError handling: as in step 2. No catch block may fall through to a deletion; every catch maps to REFUSED, leave-to-sweep, or abort-pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "ps1 orphan sweep, the twin of the sh step-2 sweep, called at the loop top in sh's position: after WT-13's follow and the reload check, before pre-flight, inside try/catch.\n\nFunctions added:\n- Get-MoeOpenAttemptTaskIds: ordinal HashSet; an unreadable or non-object record returns $null, which aborts the pass.\n- Get-MoeWorktreeTaskStatus: Invoke-MoeRpcUnserved get_context view 'status'. UNKNOWN only for a 'daemon refusal' with codeName TASK_NOT_FOUND; anything else returns '', which stops the pass. I checked the real daemon: getContext throws notFound('Task') (-32001, data.codeName TASK_NOT_FOUND) before the status branch, and the status view returns {task:{id,status}}.\n- Test-MoeSweepDue.\n- Invoke-MoeWorktreeSweep: gate, interval parse (an invalid value warns once per value and uses 3600), due check, sweep.lock, due check again, stamp via temp + Move-Item -Force, lazy #general lookup into a local that the alerts and rescue rows read by dynamic scope, try/finally around the unlock.\n- Invoke-MoeWorktreeSweepPass: records + directory listing; unregistered task-* dirs alert via Send-MoeControlAlert with key sha1(comparable)[:16] and window 86400; ordinal SortedSet of candidates; 5-cap.\n- Invoke-MoeWorktreeSweepRemove: a dirt rescue (PathCount == N, ref resolves to the commit just written) and a tip rescue (-Sha, ref^{commit} == tip). $script:MoeFrozen is stashed and restored around them. Attempts are re-read before Remove-MoeTaskWorktree.\n- Get-MoeRevSha; Get-MoeTaskBranchTip is now a one-liner over it.\n\nOther changes:\n- Send-MoeControlAlert gained -Key/-Window (defaults: the code and 3600), mirroring sh control_alert's 3rd/4th args.\n- A TASK_NOT_FOUND or FAIL status read prints the existing helper's [moe_rpc error…] line; that is the existing behavior.\n\nTests (postflight.ps1):\n- WT14E (dirt + unlanded rescue, NOT_FOUND), WT14F (5-cap, open attempt, W/.moe, held then stale lock), WT14G (unregistered: named every pass, 1 #general row, bytes kept), WT14H (FAIL stops the pass, interval stamp, invalid interval) and WT14I (non-task worktrees untouched).\n- Counter is now 11. Full ps1 WT-14 block: 11 scenarios PASS in 137 s.\n- RED: 8 mutants on a reduced E–I harness (/mnt/d/moe-scratch/red-s4.summary). The base passes and every mutant fails for its intended reason: M1 cap→50 (WT14F five removed), M2 attempt checks off (WT14F task-d5 kept), M3 dirt rescue off (WT14E), M4 UNKNOWN off (WT14E), M5 window 0 (WT14G), M6 bad interval→0 (WT14H), M7 status failure ignored (WT14H), M8 lock ignored (WT14F).\n\nScope note: moe-agent.sh was touched for two things only.\n- The uncommitted rename MOE_CONTROL_SEAT→WT_CONTROL_SEAT, which keeps the MOE_CONTROL_ token sets equal.\n- A comment-only fix in both engine headers from the adversarial review. git deregisters W even when its remove fails part-way, and Git for Windows exits 0 leaving W on disk when W holds an unlisted junction; the next pass names either leftover MOE_WORKTREE_UNREGISTERED.\n\nAfter the edit: bash -n OK, ParseFile 0 errors, BOM kept, token sets equal, parity-check PASS.",
+      "startedAt": "2026-11-02T21:17:35.806Z",
+      "completedAt": "2026-11-02T21:43:44.359Z"
     },
     {
       "stepId": "step-5",
       "description": "Size check, then the verification, run once, fresh. Its output tail is the complete_task evidence (DoD 5, and DoD 1-4 through both harnesses).\n\n1. Size. Run `git diff --numstat` over the five files and compute net non-board LOC. If it is over 400, file ONE EPIC ADD_RAIL size exception with moe.propose_rail, in prop-d975cf4e's format:\n   - name WT-14 (task-befdddf7e1f047a0ba4f71dd900c9b8f), the five files, the measured +/- and the cap you request;\n   - state that it waives size only: every DoD item, the epic rails, substantive QA and fresh verification still apply.\n   Do it NOW, before the long harness runs, so the governor (standing delegation, msg-aac7c9c0) can approve it while they run.\n\n2. Verification. From the repo root in WSL, exactly:\nS=$(mktemp -d /mnt/d/moe-scratch/v-befdddf7.XXXXXX) && git archive HEAD scripts | tar -x -C \"$S\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash scripts/tests/worktree-landing.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell\n\nNotes on the command:\n- The snapshot keeps peers' unlanded bytes out of the run.\n- MOE_* and CLAUDE* are scrubbed so this seat's identity never reaches the wrappers under test.\n- The ps1 harness runs through Windows node from a /mnt/d path (Serena gotcha-qa-ps1-postflight-from-wsl). On a native Windows seat, run the same chain from Git Bash with `node` for node.exe.\n- Each harness run takes tens of minutes. Run it in the foreground, or poll a background run to the end.\n\nWhen a run fails:\n- Fix it only inside steps 1-4's files, and never weaken an assertion.\n- A failure that also reproduces on a clean HEAD snapshot is pre-existing: report it with that evidence.\n- Name every SKIP (WT14D as root) in the summary.\n- If any byte changes after this run, re-run the whole command and submit the last output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Step 5 was read-only: no repo bytes changed. All five files are cmp-identical to the verified snapshot. Any MODIFIED-FILES-OMITTED fallback lists only this task's own five files.\n\n1. Size. git diff --numstat d08b62d1^ over the five files is +1539/-43 (1496 net):\n   - scripts/moe-agent.sh +440/-26\n   - scripts/moe-agent.ps1 +445/-17\n   - scripts/tests/postflight.sh +312/-0\n   - scripts/tests/postflight.ps1 +328/-0\n   - scripts/tests/postflight-fake-proxy.js +14/-0\n   That is over the 400 cap, so before the long runs I filed one EPIC ADD_RAIL size exception in prop-d975cf4e's format: prop-6812056da5e142f48194d673f33fb038 (PENDING). It asks for a cap of 1550 net and waives size only.\n\n2. Verification. I ran the plan's command verbatim from the worktree root, detached, with a log and an exit marker, and polled it to the end. 21:45:13Z → 23:04:42Z, VERIFY_EXIT=0.\n   - Snapshot /mnt/d/moe-scratch/v-befdddf7.8Xg30v.\n   - The token-set diff printed nothing.\n   - PASS parity-check.sh.\n   - bash: {\"exit\":0, \"failureClass\":\"NONE\"}, about 31 min.\n   - worktree-landing: 18 passed, 0 failed, 0 errors.\n   - powershell: {\"exit\":0, \"failureClass\":\"NONE\"}, about 39 min.\n   - postflight-safe.mjs turns any line starting with SKIP into SKIP_DETECTED, which would fail the run. Both engines report NONE, so no scenario skipped, WT14D included (this seat is not root).",
+      "startedAt": "2026-11-02T21:43:47.378Z",
+      "completedAt": "2026-11-02T23:05:31.862Z"
     },
     {
       "stepId": "step-6",
       "description": "Final adversarial self-review, once, over this task's diff. Load adversarial-self-review and attack it:\n1. Can ANY path delete outside W? Check:\n   - a manifest line with '..', an absolute path or a drive letter;\n   - a parent junction;\n   - W or .worktrees itself being a link;\n   - a link not in the manifest (WT-06 reserves every link before making it; confirm that still holds);\n   - git's own recursion on Windows after the unlinks.\n2. Can an unlanded commit or non-DENY dirty byte be deleted without a rescue ref that resolves to it? Check:\n   - rescue_ref's 'nothing to rescue' return being read as success;\n   - a ref-name collision in the same second (`<ts>` then `<ts>-$$`);\n   - an unknown task whose record_commit fails.\n3. Concurrency. Check:\n   - two seats breaking the same stale lock;\n   - the QA removal racing the sweep (both take the lock);\n   - a human reopening a DONE task mid-sweep (the attempt re-check);\n   - a worker provisioning the same TID: `branch -D` refuses a checked-out branch.\n4. Rail 4: with control off moe/control, does either entry point run a git command or print anything? Do existing postflight and worktree-landing scenarios still pass byte-for-byte (the fake knob only touches view:'status')?\n5. Error handling and fail-closed behaviour:\n   - an RPC failure, an unparsable attempt record, a failed porcelain read and a failed stamp write each abort, never delete;\n   - TASK_NOT_FOUND is the ONLY unknown signal;\n   - set -e safety of each new sh line;\n   - PS 5.1 parsing, -LiteralPath and the finally releases.\n6. Twins: identical codes, banners and env name; the token diff is empty; parity-check passes.\n7. Do any test helpers leak junctions, chmod/icacls denies or locks into scratch cleanup?\nIf any byte changes, re-run step 5's command and submit that last fresh output.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight.sh",
         "scripts/tests/postflight.ps1",
         "scripts/tests/postflight-fake-proxy.js"
-      ]
+      ],
+      "note": "Final adversarial review of the complete five-file task diff (d08b62d1^..HEAD), read-only: no tracked edits this session. Checked traversal/drive/dot-segment and parent-link validation, W/.worktrees/.moe guards, manifest reservation-before-link in BOTH WT-06 twins, Git's non-following behavior, strict dirt/rescue proof, same-second ref collisions, error paths, literal PS paths/finally, shared-mode gating, counters, ACL teardown and fixture link targets. Extra scratch WT14E variant makes dirty+unlanded task UNKNOWN and rejects both record_commit calls: PASS on bash and PS5.1, both exact rescue refs preserved before W removal (scratch wt14-unknown-fdb.hfgni1rc).\nConcurrency reviewed: QA and sweep use the same lock; sweep re-reads attempts immediately before engine; registration and branch tip are rechecked and branch -D refuses a checked-out branch. The stale-lock break/PS New-Item still have narrow non-atomic windows, status is not re-read after rescue, and interrupted sh locks expire after 2h; documented rather than asserting transaction isolation.\nKnown Git limitations recorded in comment-7c35384c: partial git remove failure can deregister W; Windows git may leave an unmanifested junction remnant despite rc0. Next pass names such leftovers UNREGISTERED. Shared-mode entry uses existing read-only git_top/symbolic-ref predicate; no worktree mutation/RPC/banner. No stronger guarantee claimed.\nFresh exact step-5 command rerun in THIS session, snapshot /mnt/d/moe-scratch/v-befdddf7.xiiXpy, exit 0. Token diff empty, parity PASS; postflight-safe bash and Windows powershell each exit 0/failureClass NONE; worktree-landing 18 passed/0 failed/0 errors. Files cmp-identical after run. QualityGate parity && npm run lint exit 0; bash -n and PS5.1 ParseFile clean; diff --check clean. Log /mnt/d/moe-scratch/verify-befdddf7-fdb.log. WT14D not skipped (Linux uid1000, not MSYS; native Windows ACL case).\nFiled out-of-scope task-c25edf4561964340b3684f5ef0a1b5ff: postflight-safe misses scenario-prefixed SKIP lines (direct repro). This corrects prior note's inference that NONE alone proves no skips. Existing task-f977d76e9a9c44e7af0322be1eb76333 is DONE.\nSize stays 1496 net (+1539/-43), pending human waiver prop-6812056da5e142f48194d673f33fb038. Governor directed complete_task then a REVIEW hold if waiver still pending. Serena handoff/gotchas saved. ponytail: reused existing code, added no abstraction; step net0.",
+      "startedAt": "2026-11-02T23:08:44.729Z",
+      "completedAt": "2026-11-03T00:26:03.392Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": null,
+  "reopenReason": "Waiver prop-6812056d APPROVED by the human at 07:05:45Z. The WT-14 size exception (1550 net) is in the WT epic rails exactly once. Bytes are unchanged since QA's substance pass on completion 78cfa1c1, so QA approves on the recorded evidence (comment-e1687a8e, check-qa-af7be174-befdddf7-20261103). A re-run is needed only if the bytes changed.",
   "createdBy": "WORKER",
   "parentTaskId": null,
   "dependsOn": [
     "task-30066ccdeb6042c3b5c89a7a31833d14",
-    "task-fbe8e3880ddf47dfa8546f220acea770",
-    "task-31187ec10ae54dd2b03f4c166f083f31",
-    "task-253884005a59471fb7c59ef38e1f3cc1"
+    "task-fbe8e3880ddf47dfa8546f220acea770"
   ],
   "priority": "MEDIUM",
   "order": 22,
@@ -103,11 +138,65 @@
       "author": "governor-e6b40560",
       "content": "Governor reorder: WT-14 now runs after WT-10M (25388400) and 31187ec1. Both edges are file order on moe-agent.{sh,ps1}.\n\nThis moves WT-10M, the last wrapper prerequisite of the §7.3 worktree flip, one slot earlier. WT-14 still builds only on WT-13, as its plan says, and nothing in the plan changes. Edit from HEAD once 31187ec1 has landed.",
       "timestamp": "2026-11-02T07:46:33.276Z"
+    },
+    {
+      "id": "comment-ffa8ab0e8af84888ac49eb09398e3962",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR RULING (19:42Z), the same as on 414eae5a (comment-4908ce55). Any plan text here that requires an atomic whole-file save of scripts/moe-agent.{sh,ps1} (\"a running seat hot-reloads it… never edit in place\") is moot in worktree mode. Your .worktrees/<taskId> copy is executed by no seat, because seats run the control checkout's committed bytes, which change only by fast-forward at landing.\nEdit W's copy in place with your session's TOOL-witnessed editor (Edit/Write, apply_patch or Serena), never by shell writes. Then run `bash -n` or the PowerShell parser on it. QA: read the plan's editing rule as this ruling.",
+      "timestamp": "2026-11-02T19:41:17.264Z"
+    },
+    {
+      "id": "comment-7c35384c2fa04525a7d40a8f336f3c41",
+      "author": "worker-fdb2af60",
+      "content": "Final self-review continuation (no tracked edits). Confirmed WT-06 reserves manifest entries before creating either link, and both rescue helpers tolerate record_commit failure. An extra scratch WT14E variant made the dirty+unlanded task TASK_NOT_FOUND and rejected both rescue ledger writes: both Bash and Windows PowerShell 5.1 passed, retaining the exact dirty-tree and tip rescue refs before removal (/mnt/d/moe-scratch/wt14-unknown-fdb.hfgni1rc). The full exact step-5 gate is running fresh in /mnt/d/moe-scratch/v-befdddf7.xiiXpy; qualityGate, syntax, and diff checks have passed separately.\n\nImportant existing limitations for QA (also documented in step-4 and prior handoff): git worktree remove can deregister W on a partial filesystem failure; Git for Windows can exit 0 while an unmanifested junction leaves the directory behind. Such remnants are subsequently UNREGISTERED, not recursively retried. The mandated remove command therefore cannot guarantee the plan prose's 'registered after any remove failure' promise, although guarded/unlink failures keep registration and all non-DENY bytes/tips are landed or rescued first. The shared-mode gate invokes the existing read-only control predicate (git_top/symbolic-ref); no worktree mutation/RPC/banner occurs in shared mode. These are not being represented as stronger guarantees than the implementation provides.",
+      "timestamp": "2026-11-02T23:12:52.915Z"
+    },
+    {
+      "id": "comment-9922ed285c4d416598d7e5d45c2100c1",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA, 00:00Z. WT-14's size exception prop-6812056d (EPIC, cap 1550 net) is still PENDING the human's IDE click. The worktree diff right now measures +1539/-43, which is 1496 net over the five named files. The moment this row leaves WORKING, I hold it BLOCKED at REVIEW, then set REVIEW again once the waiver is approved. If you claim it before that hold lands, review it on substance but end verdict-less, with no size reject: a size-only reject would burn a reopen on a row the waiver covers. Expect a LANDING-CONFLICT resume on its two hunks against da5823b5, which is normal.",
+      "timestamp": "2026-11-02T23:58:46.710Z"
+    },
+    {
+      "id": "comment-e897fc98a93c4d8eb3bc6bddf64dd1e6",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T00:27:01.582Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-fd000d891d624362b167f809908ed826 (generation 4); paths: scripts/moe-agent.ps1, scripts/moe-agent.sh; rescue ref: refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z; target tip: 5c5b3706f3ddc37c464ea09638a61110ad5db9c0; task WORKING."
+    },
+    {
+      "id": "comment-7f26129b74044b6cbf5e65cdf4dbcf8c",
+      "author": "governor-e6b40560",
+      "content": "Governor diagnosis of the 00:27Z landing conflict. This is a read-only `git merge-tree --write-tree 5c5b3706 refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z`; nothing was landed or edited.\n\nThe postflight test files and fake-proxy auto-merge cleanly. Each wrapper has exactly ONE conflict hunk, and both are the same shape: two new functions added at the same spot.\n- scripts/moe-agent.sh: the target (da5823b5, task-c7ca56e6) added `enable_worktree_config()` where WT-14 added `wt_porcelain()`. Both sit right before the `# provision_worktree --` comment block.\n- scripts/moe-agent.ps1: the target added `function Enable-MoeWorktreeConfig` where WT-14 added `function Get-MoeWorktreeRecords`.\n\nResolution: keep BOTH functions in full, with their header comments, the target's first. Add the closing `}` between them, because the merge shares one trailing brace, so a resolution that just drops the markers leaves the first function unclosed. Change no line inside either function.\n\nThen check:\n- `bash -n scripts/moe-agent.sh`;\n- the ps1 ParseFile check;\n- `bash scripts/tests/parity-check.sh`;\n- that `grep -c '^function Enable-MoeWorktreeConfig\\|^function Get-MoeWorktreeRecords'` finds 2 and the sh twins find 2.\n\n23 wrapper commits have landed since your base 0d8422ce. Re-run your step-5 gate on the merged tree before complete_task. The size waiver prop-6812056d is still PENDING.",
+      "timestamp": "2026-11-03T00:28:36.282Z"
+    },
+    {
+      "id": "comment-a872d2bc2b5a434294b560ae35369fb7",
+      "author": "governor-e6b40560",
+      "content": "@worker-26483323 Governor ruling on your 00:29Z question (msg-c9029b23): YES, replace only the snapshot preparation. During a LANDING-CONFLICT resume, HEAD is the pre-merge task tip, so `git archive HEAD scripts` would test the tree without the 23 target commits. Do this instead:\n1. After resolving, confirm no conflict-marker lines are left in either wrapper.\n2. Copy the worktree's merged scripts/ into a fresh mktemp dir outside the checkout and enter it with `cd \"$S\" || exit 1`.\n3. Keep every other step-5 command byte-identical. Where an output differs only because the target commits are merged in (for example a token diff measured from your base), disclose it rather than editing the command.\n4. State the substitution and this reason in one line of the complete_task evidence. No plan or assertion changes.",
+      "timestamp": "2026-11-03T00:30:28.473Z"
+    },
+    {
+      "id": "comment-ca6b61a29fef4c91b2088446f34c5c30",
+      "author": "worker-26483323",
+      "content": "LANDING-CONFLICT recovery: resolved the two wrapper add/add hunks by retaining both WT-14's worktree-record parser and task-c7ca56e6's worktree-config retry helper, adding the parser's closing brace. No function body or test assertion changed; only scripts/moe-agent.{sh,ps1} edited (apply_patch), and no direct Git commands run. All marker lines gone; Bash and native Windows PS5.1 parsers pass; qualityGate parity && npm run lint passes. Reviewed the two resolution diffs and both provisioning call sites; no duplicate/missing function or new state/error-path change.\nFresh full verification is running at /mnt/d/moe-scratch/v-befdddf7.W9bE58 (log /mnt/d/moe-scratch/verify-befdddf7-26483323.log). Sanctioned setup-only substitution per governor msg-dc348df240cf450996e75cb1912df655: `cp -a scripts \"$S/scripts\"` replaces `git archive HEAD scripts | tar -x -C \"$S\"`, because HEAD is pre-merge during recovery and the merged scripts are what will land. Every remaining step-5 command is byte-identical, including both full harness engines. All prior steps remain completed; size-waiver REVIEW hold is unchanged.",
+      "timestamp": "2026-11-03T00:31:22.762Z"
+    },
+    {
+      "id": "comment-2e3ab6335a7c46948709696184f1818a",
+      "author": "worker-26483323",
+      "content": "Fresh recovery verification completed, exit 0, 2026-11-03 01:49Z. Snapshot /mnt/d/moe-scratch/v-befdddf7.W9bE58; log /mnt/d/moe-scratch/verify-befdddf7-26483323.log. Governor-sanctioned setup-only substitution copied the merged scripts tree instead of archiving pre-merge HEAD; every remaining step-5 command was unchanged. Token-set diff empty; parity PASS; postflight-safe Bash and native Windows PowerShell 5.1 each exit 0 / failureClass NONE; worktree-landing 18 passed, 0 failed, 0 errors. WT14D ran on Linux uid 1000 (not root/MSYS), and Windows uses the ACL case; both harnesses enforce their WT-14 scenario counts. No claim that NONE alone detects scenario-prefixed skips (existing bug c25edf45).\nAfter the run, full scripts-tree diff against the snapshot is empty; no conflict markers remain; both syntax parsers and qualityGate `bash scripts/tests/parity-check.sh && npm run lint` again exit 0. No code changes after the snapshot. Two resolution diffs reviewed as add/add integration: both helper bodies retained, braces separated, both provisioning call sites intact; no new concurrency/input/error-path behavior. The wrapper owns the pending merge and landing; no direct Git commands used. All completed steps stay closed. Prior size-waiver/REVIEW-hold ruling still applies; this recovery adds no feature scope.",
+      "timestamp": "2026-11-03T01:50:33.795Z"
+    },
+    {
+      "id": "comment-e1687a8efd4d48ad8afe62906b80e9bd",
+      "author": "qa-af7be174",
+      "content": "QA review (qa-af7be174, 2026-11-03 02:45Z). Substance: PASS. Verdict: none. Per governor ruling comment-9922ed28, I'm not approving and not rejecting for size, because the size waiver prop-6812056d is still PENDING and the epic has no WT-14 rail. Next QA: once that rail lands, approve on this evidence. The candidate tree is unchanged: cand-30c175de, tree 830c5c13.\n\nReviewed bytes: completion 78cfa1c1 on moe/work-2026-10-24 (the control HEAD), single parent d7c5e815. Size is +1539/-43 = 1496 net over the 5 declared files, which matches the proposal.\n\nVerification, on the exact commit. Two `git archive 78cfa1c1 scripts` snapshots, every blob checked against the commit with `git hash-object --no-filters`. The task.verification commands were unchanged, except that the bash and PS legs ran concurrently in separate snapshots.\n- Bash leg (/mnt/d/moe-scratch/qa-befdddf7-sh.w2riX1, 01:56:51 to 02:27:56Z):\n  - token-set diff empty;\n  - parity-check PASS;\n  - env-scrubbed `postflight-safe.mjs bash` gave {\"exit\":0,\"failureClass\":\"NONE\"};\n  - worktree-landing 18 passed, 0 failed, 0 errors.\n  - Run as uid 1000, so WT14D executed. Under c25edf45's SKIP rule, a WT14D SKIP would have failed this leg.\n- Native Windows PowerShell 5.1 leg (qa-befdddf7-ps.vtx34n, 01:56:57 to 02:41:44Z): {\"exit\":0,\"failureClass\":\"NONE\"}.\n- `npm run lint` exit 0.\n- After both runs, the snapshot blobs were still identical to the commit.\n\nDoD mapping (both harnesses):\n- DoD 1: WT14A (sentinels byte-identical).\n- DoD 2: WT14E (rescue ref exactly at the unlanded commit, plus a dirt ref holding both dirty files, before removal).\n- DoD 3: WT14F (5-cap, WORKING, open attempt, W/.moe, held and 3h-stale lock).\n- DoD 4: WT14G (unregistered task-ghost named and kept, 1 #general row over 2 runs) and WT14D (forced unlink failure: REFUSED, W registered).\n- DoD 5: the gates above.\n\nLive production evidence. The first real sweep pass ran at 01:52:26Z, in this seat's wrapper (pid 2488121; stamp sweep.last; scan dir wt-sweep-2488121).\n- It skipped task-3ad573a7, which had an open attempt.\n- It then removed exactly 5 DONE, fully landed worktrees in id order: task-137bab15, task-25388400, task-2f22237b, task-31187ec1 and task-3def0804. For each, W, admin dir, .links, .control-dirt and branch are gone, and no sweep rescue ref was needed.\n- The control's .serena/memories (935 files) and .claude/skills (19) are intact. No prunable or leftover directories.\n- Read-only replays through the real proxy and daemon: the porcelain listing gives 38 C rows; 1915 attempt records parse; status reads return DONE, and TASK_NOT_FOUND becomes UNKNOWN.\n- A stubbed replay of worktree_sweep_remove on 5 live DONE worktrees reaches the engine. The real engine also removes a W cleanly on a drvfs replica (WSL links show as junctions), with sentinels intact.\n\nIndependent adversarial read: no blocker. Every failure refuses or aborts; nothing is deleted through a link, outside W, or without a verified rescue. Non-blocking follow-ups, behaviour mostly as the plan prescribes:\n1. A refused candidate counts toward the 5-cap, and each retry mints a new rescue ref and #general row. Consider counting only removals and de-duplicating the rescue.\n2. The stale-lock takeover has a narrow race (already documented).\n3. sweep.last is written before the pass, so an aborted pass waits one interval.\n4. Gitignored bytes in W are not rescued, by design: dirt means git status.\n5. ps1 New-Item -Path and Move-Item -Destination are not literal for paths containing [ ]. This fails safe.\n6. The postflight.ps1 WT-14 junction teardown is not in a finally block.",
+      "timestamp": "2026-11-03T02:43:06.956Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-30T11:56:29.664Z",
-  "updatedAt": "2026-11-02T07:46:33.276Z",
+  "updatedAt": "2026-11-04T19:20:39.411Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-30T13:03:19.375Z",
@@ -116,16 +205,31 @@
   "metrics": {
     "firstClaimAt": "2026-10-30T13:50:04.185Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T08:09:31.113Z",
+    "wallClockMs": 325166928
   },
   "contextFetchedBy": [
-    "architect-899a90d6"
+    "architect-899a90d6",
+    "worker-33f67e5b",
+    "worker-fdb2af60",
+    "worker-26483323",
+    "qa-af7be174",
+    "qa-93f9625e"
   ],
   "tier": "heavy",
   "effort": "max",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-30T14:05:31.742Z",
   "executionContract": {
@@ -170,5 +274,112 @@
     "deliveryPolicy": "legacy"
   },
   "planApprovedAt": "2026-10-30T14:05:31.765Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:23:23.442Z",
+  "commits": [
+    {
+      "sha": "d08b62d12d93ea8ed3da591af4957c154145d9f7",
+      "ref": "refs/heads/moe/task/task-befdddf7e1f047a0ba4f71dd900c9b8f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-02T19:16:18Z",
+      "paths": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-02T20:44:18.154Z",
+      "treeId": "5991cffd1e0a4926d7361553d621d2e2ec401ac8",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "3cd1e08abf16a0da01a8d81b8ffff3b366aafc35",
+      "ref": "refs/heads/moe/task/task-befdddf7e1f047a0ba4f71dd900c9b8f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-02T20:45:03Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight.ps1"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-02T23:06:40.667Z",
+      "treeId": "22b56d4ee76566eb4c670ef911e8a7e22dd54e21",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "3cd1e08abf16a0da01a8d81b8ffff3b366aafc35",
+      "ref": "refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-02T23:07:16Z",
+      "paths": [],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T00:27:00.532Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-befdddf7e1f047a0ba4f71dd900c9b8f ref=refs/moe/rescue/task-befdddf7e1f047a0ba4f71dd900c9b8f/20261103T002700Z sha=3cd1e08abf16a0da01a8d81b8ffff3b366aafc35 reason=conflict"
+    },
+    {
+      "sha": "78cfa1c16fdbf7bf46be97960388868e852dcbf4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T00:27:10Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T01:52:16.961Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight.ps1"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T08:00:53Z",
+    "at": "2026-11-03T08:11:21.811Z"
+  },
+  "reviewStartedAt": "2026-11-03T01:50:50.614Z",
+  "verification": {
+    "command": "S=$(mktemp -d /mnt/d/moe-scratch/v-befdddf7.XXXXXX) && cp -a scripts \"$S/scripts\" && for f in scripts/moe-agent.sh scripts/moe-agent.ps1 scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/tests/postflight-fake-proxy.js; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && diff <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.sh | sort -u) <(grep -oE 'MOE_(WORKTREE|LAND|CONTROL|BOARD)_[A-Z0-9_]*' scripts/moe-agent.ps1 | sort -u) && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=180 node scripts/tests/postflight-safe.mjs bash && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') bash scripts/tests/worktree-landing.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=180 node.exe scripts/tests/postflight-safe.mjs powershell",
+    "exitCode": 0,
+    "outputTail": "Governor-approved setup substitution (comment-a872d2bc): copy merged scripts, not pre-merge HEAD; all remaining step-5 commands unchanged.\nVerification snapshot: /mnt/d/moe-scratch/v-befdddf7.W9bE58\nPASS parity-check.sh\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\n",
+    "reportedAt": "2026-11-03T01:50:50.614Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Resolved LANDING-CONFLICT in both wrappers by retaining WT-14's worktree-record helpers and incoming worktree-config retry helpers, each with its own closing brace; no function bodies or tests changed. All markers removed. Fresh full verification exit 0: Bash and native Windows PowerShell postflight-safe pass, worktree-landing 18/18, token parity clean. QualityGate parity && npm run lint and both syntax parsers pass; complete scripts tree remains byte-identical to verified snapshot W9bE58. Governor-sanctioned setup-only substitution copies merged scripts instead of archiving pre-merge HEAD; every remaining gate command unchanged. Recovery edited/declared only scripts/moe-agent.sh and scripts/moe-agent.ps1, with no direct Git commands. Handoff and snapshot convention saved in Serena. Prior size-waiver REVIEW-hold ruling remains applicable; wrapper owns pending merge and landing.",
+  "landingRetry": null,
+  "declaredFiles": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1"
+  ],
+  "blockedReason": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Waiting for human approval of the WT-14 size waiver prop-6812056da5e142f48194d673f33fb038 (EPIC ADD_RAIL). The diff is 1496 net LOC against the 400 cap.\n\nQA on substance is complete and passes on completion 78cfa1c1 (tree 830c5c13, cand-30c175de):\n- Full verification exit 0 in both engines.\n- Live sweep evidence is clean.\n- An independent adversarial read found no blocker.\nEvidence is in comment-e1687a8e and check run check-qa-af7be174-befdddf7-20261103.\n\nGovernor ruling comment-9922ed28: while the waiver is pending, QA gives no size reject and no verdict. This is the governor's planned BLOCKED-at-REVIEW hold, parked by QA so the seat stops resume-relaunching.\n\nWhen the waiver rail lands, return the row to REVIEW. The next QA approves on the recorded evidence; a re-run is needed only if bytes changed.",
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-03T08:09:31.113Z",
+  "reviewCompletedAt": "2026-11-03T08:09:31.113Z",
+  "reviewSummary": "Approved completion 78cfa1c1 (cand-30c175de, tree 830c5c13), a squash on d7c5e815 in moe/work-2026-10-24, pushed, in control HEAD. Size: numstat 78cfa1c1^..78cfa1c1 = +1539/-43 = 1496 net over exactly the 5 rail files, within the approved WT-14 size rail (cap 1550). No other path. The tests are pure additions.\nFresh re-run on the exact commit (check-qa-93f9625e-befdddf7-20261103), in git-archive snapshots, 160/160 blobs verified before and after:\n- token diff empty; parity PASS;\n- env-scrubbed postflight-safe bash exit 0/NONE, uid 1000, so WT14D ran under the 11-scenario guard;\n- worktree-landing 18/18;\n- Windows PS 5.1 postflight-safe exit 0/NONE (exactly 11 scenarios, no skip path);\n- qualityGate parity && npm run lint exit 0; bash -n OK; diff --check clean.\nThis agrees with qa-af7be174's run on the same bytes.\nDoD:\n1. WT14A: W, branch, manifest and control-dirt are gone; the sentinels are byte-identical.\n2. WT14E: a rescue ref sits at the unlanded commit (reason worktree-orphan), plus a dirt ref, both before removal.\n3. WT14F: 5-cap; WORKING, open attempt and W/.moe kept; held lock skips; 3h lock broken.\n4. WT14G: UNREGISTERED, kept, 1 alert. WT14D: REFUSED, W registered.\n5. Gates above.\nPlus B/C/U/S/H/I.\nI read both twins: every guard refuses, leaves to the sweep or aborts; links are unlinked non-recursively and proven gone before the remove; only TASK_NOT_FOUND counts as unknown; the call sites are worktree-control only; the fake proxy changes only view:'status'.\nNon-blocking follow-ups (comment-e1687a8e): refused candidates count toward the cap and re-mint rescue refs; stale-lock race; stamp written before the pass; ps1 non-literal New-Item/Move-Item paths; ps1 teardown not in finally.\nponytail: sh general_channel_lookup duplicates pre-flight's inline lookup. net: -5 lines possible.",
+  "requiredCheckAtDone": null
 }

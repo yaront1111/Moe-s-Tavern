@@ -1,0 +1,254 @@
+{
+  "id": "task-7e862808ea4f4bf1a08626ef5c0b6a79",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/tests/runtime-requirements.test.mjs \"Docker CI smoke match has exit 0\" times out at the tip (spawnSync /bin/bash ETIMEDOUT at 10 s), because 291a34e3 appended a docker run -d / docker port / curl /health poll to docker.yml's Test Docker image step and the test's docker stub answers only `run`, so CI's \"Test installers with isolated profiles\" step is red on every OS leg",
+  "description": "Filed by hunt #20 (task-9f3eac6d, a CI dry run of moe/work-2026-10-24 at bc4793cf).\n\nPROBLEM\n- `.github/workflows/docker.yml:71-113`, step \"Test Docker image\". 291a34e3 (task-90ed6cb5, DONE, 2026-11-03 21:44) appended a health check after the version check, at lines 82-113:\n  - `docker run -d --name \"$name\" ... -p 127.0.0.1::9876`;\n  - `port=$(docker port \"$name\" 9876/tcp | head -n 1)`;\n  - a 30-try loop of `curl -fsS -m 2 \"http://127.0.0.1:$port/health\"` with `sleep 1`;\n  - a node check that /health reports `status: healthy` and `projectPath: $PWD`;\n  - `docker exec` of the image's HEALTHCHECK.\n- `scripts/tests/runtime-requirements.test.mjs:38-60` replays that step's `run:` block with `bash -e` (spawnSync, `timeout: 10000`). Its `docker` stub (:28-36) answers only `docker run`, by printing the version in match mode.\n- So in match mode the version check passes and the script continues into the new block:\n  - `docker port` prints nothing, so `port` is empty and curl dials 127.0.0.1:80;\n  - 30 curl failures plus 30 × `sleep 1` take about 30 s;\n  - the 10 s cap kills bash, and the case fails with `spawnSync /bin/bash ETIMEDOUT` (assert.ifError at :56).\n- Uncapped, the step exits 1 after 30 s: \"Expected a healthy daemon serving <root> on 127.0.0.1, got: no answer\".\n- The fail (43) and mismatch (1) cases still pass, because they exit before the new block.\n- 90ed6cb5's diff touched neither this test nor any test that runs it.\n\nEVIDENCE (HEAD bc4793cf, snapshots under /tmp, every MOE_* var cleared, Linux node 24)\n- CI dry run, build-all-platforms ubuntu leg, step \"Test installers with isolated profiles\": exit 1. Log: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/j4/07-installers.log\n    ✖ Docker CI smoke match has exit 0 (10006.305826ms)\n    ℹ tests 71 / ℹ pass 34 / ℹ fail 1 / ℹ skipped 36\n    AssertionError [ERR_ASSERTION]: ifError got unwanted exception: spawnSync /bin/bash ETIMEDOUT\n        at TestContext.<anonymous> (file:///.../scripts/tests/runtime-requirements.test.mjs:56:12)\n- Before and after, from /mnt/d/moe-scratch/hunt-9f3eac6d/mine/docker-smoke-repro.sh (a minimal git-archive per rev; logs in /mnt/d/moe-scratch/hunt-9f3eac6d/ci/docker-smoke/):\n  - 291a34e3^: all 3 Docker CI smoke cases pass (match in 24 ms).\n  - 291a34e3: match ✖ after 10006 ms.\n  - bc4793cf: match ✖ after 10005 ms.\n  - The uncapped match-mode step at bc4793cf gives status=1 after 30 s. Its stderr ends \"curl: (7) Failed to connect to 127.0.0.1 port 80 ... | Expected a healthy daemon serving ... got: no answer\".\n- The CI step has no `if:`, so it runs on the ubuntu, windows (Git Bash) and macos legs, and the 30 s loop is the same on each.\n\nFIX DIRECTION\n- Make the test model the whole step again. docker.yml's checks stay as they are.\n- Simplest: PATH-first stubs in the test's bin dir:\n  - `docker run -d` prints a container id;\n  - `docker port` prints `127.0.0.1:<n>`;\n  - a `curl` stub answers `{\"status\":\"healthy\",\"projectPath\":\"<cwd>\"}` in match mode;\n  - `docker inspect` prints a trivially passing command, and `docker exec`, `docker logs` and `docker rm` exit 0.\n- An in-process HTTP server cannot answer while spawnSync blocks the event loop. If you want a real server, run it as a child process, or switch the case to async spawn.\n- Add negative cases for the new block, so removing or breaking it turns the test red:\n  - /health never answers: the step exits 1 with \"Expected a healthy daemon\";\n  - /health reports another projectPath: the step exits 1.\n- Keep each case's timeout well above its real runtime. Do not raise it to swallow the 30-try loop.\n\nFILES: scripts/tests/runtime-requirements.test.mjs only. Not held by any open row (lanes.js -v at 09:12Z).\nPLACEMENT: no dependsOn. No open row edits this file or .github/workflows/docker.yml.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/runtime-requirements.test.mjs` exits 0 in a Linux git-archive snapshot of the fix commit with every MOE_* var unset, and every \"Docker CI smoke\" case finishes in under 5 s.",
+    "New cases make the replayed Test Docker image step exit 1 when the stubbed /health never answers and when it reports another projectPath; restoring docker.yml's step to its 291a34e3^ text (no health block) makes at least one of them fail.",
+    "The row's diff leaves .github/workflows/docker.yml unchanged, and the CI step command `node --test scripts/tests/installers.test.mjs scripts/tests/install-dependencies-windows.test.mjs scripts/tests/dependencies.test.mjs scripts/tests/runtime-requirements.test.mjs` exits 0 in that snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "FIX THE REPLAY (DoD 1 and 3). Edit scripts/tests/runtime-requirements.test.mjs only with the session's own editing tool (Claude Edit/Write, or apply_patch on a codex exec seat). Never use a shell write or a subagent.\n\nReplace the Docker CI smoke harness at :28-59. Drop the `dockerStub` PATH script, the mkdtemp bin dir, the `t.after` cleanup and the PATH prepend. Replay the step as `spawnSync(bash, ['-e', '-c', smokeStubs + commands], ...)`.\n\nKeep exactly:\n- the two `Docker <stage> image satisfies the daemon Node minimum` tests;\n- the step extraction (the 10-space `run: |` lines);\n- the bash choice (`C:/Program Files/Git/bin/bash.exe` on win32, else /bin/bash) and `cwd: root`;\n- `timeout: 10000` (never raise it);\n- `DOCKER_HOST: 'tcp://127.0.0.1:1'`, the fail-fast guard in case a real docker is ever reached;\n- the `MOE_DOCKER_SMOKE_MODE` and `MOE_EXPECTED_DOCKER_VERSION` env names;\n- `assert.ifError(result.error)` and the title `Docker CI smoke ${mode} has exit ${exitCode}`.\nRemove the imports this leaves unused: mkdtempSync, mkdirSync, rmSync, writeFileSync and tmpdir.\n\nError handling:\n- `assert.ifError(result.error)` still fails a case by name on a spawn failure or the 10 s cap;\n- the docker stub's catch-all fails any subcommand it does not model, with exit 97 and a stderr line naming the call;\n- every assertion message carries the step's full stdout+stderr.\n\nsmokeStubs is this template literal. It holds no `${` and no backslash; keep it that way:\n\ndocker() {\n  case \"$1\" in\n    build|logs|rm) ;;\n    run)\n      if [ \"$2\" = -d ]; then echo moe-smoke-container; return; fi\n      case \"$MOE_DOCKER_SMOKE_MODE\" in\n        fail) return 43 ;;\n        mismatch) echo not-the-package-version ;;\n        *) echo \"$MOE_EXPECTED_DOCKER_VERSION\" ;;\n      esac ;;\n    port) echo 127.0.0.1:49153 ;;\n    inspect) if [ \"$MOE_DOCKER_SMOKE_MODE\" = healthcheck-fails ]; then echo 'exit 3'; else echo 'exit 0'; fi ;;\n    exec) shift 2; \"$@\" ;;\n    *) echo \"docker stub: unexpected docker $*\" >&2; return 97 ;;\n  esac\n}\ncurl() {\n  case \"$*\" in *' http://127.0.0.1:49153/health') ;; *) return 7 ;; esac\n  [ \"$MOE_DOCKER_SMOKE_MODE\" != no-health ] || return 7\n  local status=healthy project\n  project=$(pwd -W 2>/dev/null || pwd)\n  case \"$MOE_DOCKER_SMOKE_MODE\" in\n    other-project) project=/elsewhere ;;\n    unhealthy) status=starting ;;\n  esac\n  printf '{\"status\":\"%s\",\"projectPath\":\"%s\"}' \"$status\" \"$project\"\n}\nsleep() { :; }\n\nPut a short comment above it giving two reasons. Both were measured at plan time under Windows node.exe 24.16 with Git for Windows' bash.\n1. Functions, not PATH files. That bash puts /mingw64/bin and /usr/bin ahead of the PATH we pass, so `type -P curl sleep` gave /mingw64/bin/curl and /usr/bin/sleep. PATH stubs with those names (the hunt's FIX DIRECTION) never run on the windows-latest leg (mem:gotcha-git-bash-stub-path-and-msys-sparse). A function also costs no process, so the 30-try loop takes milliseconds.\n2. `pwd -W`. Git Bash hands node.exe the step's EXPECTED=\"$PWD\" converted to D:/..., while a stub's $PWD stays /d/.... A stub answering $PWD failed the match case on Windows. On other systems `pwd -W` errors and pwd answers.\n\nStay bash 3.2-safe for macOS /bin/bash: no [[ =~ ]], ${v,,}, mapfile or local -n.\n\nThis step is done when the existing fail, mismatch and match cases pass, with match well under 1 s.\n\nA vetted copy of the whole end state is at /mnt/d/moe-scratch/arch-7e862808/cand/runtime-requirements.test.mjs. It is a scratch file: read it, never cp it into the tree.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "note": "Replaced PATH docker stub with function stubs (docker/curl/sleep) prepended to the replayed step.",
+      "startedAt": "2026-11-04T09:37:58.229Z",
+      "completedAt": "2026-11-04T09:38:18.074Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "NEGATIVE CASES (DoD 2). Same file, same editing-tool rule.\n\nThe case table has rows of [mode, the step's exit code, text the combined stdout+stderr must contain]. Use exactly these 7 rows. The first three titles stay byte-identical:\n['fail', 43, []],\n['mismatch', 1, ['Expected daemon version', 'got: not-the-package-version']],\n['match', 0, ['healthy: ', 'image HEALTHCHECK passed']],\n['no-health', 1, ['Expected a healthy daemon serving', 'got: no answer']],\n['other-project', 1, ['Expected a healthy daemon serving', '\"projectPath\":\"/elsewhere\"']],\n['unhealthy', 1, ['Expected a healthy daemon serving', '\"status\":\"starting\"']],\n['healthcheck-fails', 3, ['healthy: ']]\n\nAfter `assert.equal(result.status, exitCode, output)`:\n- assert every listed text with output.includes;\n- for every mode except match, assert the output does NOT contain 'image HEALTHCHECK passed'. Only match may reach the step's end.\n\nEach negative row fails the step for its own reason, never the version check:\n- no-health exercises the 30-try loop and the empty-answer path;\n- other-project and unhealthy each exercise one clause of the node check;\n- healthcheck-fails (exit 3: inspect returns 'exit 3', and exec runs `sh -c 'exit 3'`) exercises the HEALTHCHECK line.\n\nWith docker.yml's step restored to its 291a34e3^ text, the step ends after the version check and exits 0. Then match, no-health, other-project, unhealthy and healthcheck-fails all fail. This was measured at plan time on Linux and on Windows.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "note": "7-row case table, includes assertions and no-HEALTHCHECK guard for non-match modes (written with step 1's edit).",
+      "startedAt": "2026-11-04T09:38:21.466Z",
+      "completedAt": "2026-11-04T09:38:23.328Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 1, 2 and 3), once. From the task worktree root, run the three checkRefs commands exactly as written, in order, as ONE Bash call joined with ' && '. That joined command, its exit 0 and its output tail (ending LINUX-OK, WINDOWS-OK, MUTANT-KILLED) are moe.complete_task's verification evidence. Each command snapshots HEAD plus your working-tree test file outside the repo.\n\n1. LINUX-OK (DoD 1 and 3).\n   - Fails if the row changed .github/workflows/docker.yml since it forked from moe/work-2026-10-24, committed or not.\n   - Archives HEAD into /tmp and overlays the test file.\n   - Under env -i (no MOE_* var), runs `node --test scripts/tests/runtime-requirements.test.mjs`. All 7 Docker CI smoke cases must pass, each in under 5000 ms.\n   - Runs CI's exact step command (installers, install-dependencies-windows, dependencies, runtime-requirements), which must exit 0.\n2. WINDOWS-OK. Runs the file under Windows node.exe and Git Bash from a /mnt/d/moe-scratch copy, as on the windows-latest leg. node.exe gets no MOE_* var from WSL. 7 smoke cases must pass.\n3. MUTANT-KILLED (DoD 2). Puts 291a34e3^'s docker.yml beside the test file. The file must then fail, with no-health and other-project among the failures.\n\nAt plan time these exact commands, run on the vetted copy, took about 7 s together. On Linux they ran 75 tests: 39 passed, 0 failed, and 36 Windows-only tests were skipped. On HEAD's file all three fail: 1 and 2 with spawnSync ETIMEDOUT (so the Windows leg is red too), and 3 with 'mutant survived'.\n\nIf node.exe or Git Bash is missing on your host, do not drop command 2: report_blocked, naming the missing binary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "note": "LINUX-OK (7 cases <5s, 75 tests/39 pass/0 fail), WINDOWS-OK (7 cases), MUTANT-KILLED.",
+      "startedAt": "2026-11-04T09:38:24.293Z",
+      "completedAt": "2026-11-04T09:38:45.644Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the last step. Load adversarial-self-review, then check:\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists only scripts/tests/runtime-requirements.test.mjs, and the Node-minimum tests are byte-identical.\n2. No case can reach a real docker, curl or sleep. Every docker subcommand the step runs (build, run, run -d, port, inspect, exec, logs, rm) is modeled, an unknown one returns 97 by name, and DOCKER_HOST is still the guard.\n3. The template literal holds no `${` (JS would interpolate it) and no backslash.\n4. The stubs are bash 3.2-safe (the macOS leg's /bin/bash).\n5. The timeout is still 10000. Nothing was raised to swallow the loop.\n6. Each negative row fails on its own text, not on the version mismatch, and only match prints 'image HEALTHCHECK passed'.\n7. Concurrent runs cannot collide: there is no temp dir and no listening port (49153 is only a string), so parallel node --test files are safe.\n8. The comment above smokeStubs states both Windows reasons.\nFix anything you find. If the file changed, re-run the joined checkRefs so the evidence is fresh.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "note": "Self-review: diff stat lists only the test file; Node-minimum tests untouched; stub literal has 0 '${' and 0 backslashes; timeout 10000; no temp dir/port; docker stub catch-all returns 97; negative rows asserted on own text and no HEALTHCHECK line outside match. Mutant run confirms. File unchanged since verification.",
+      "startedAt": "2026-11-04T09:39:00.122Z",
+      "completedAt": "2026-11-04T09:39:02.386Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 513.7,
+  "comments": [
+    {
+      "id": "comment-ddae68a60f414c9da37ac6b490233076",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T09:40:19.640Z",
+      "content": "Landing unlanded (remote) 1 time(s) in a row; attempt attempt-26e93cc5caaa4526b6fe1458f6a7a444 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z; target tip: 95d91dc2107433a2f1b95a2b7882427d4d7c898d; task WORKING."
+    },
+    {
+      "id": "comment-2ad5096862fe42b6a41723774d392f57",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T09:43:22.503Z",
+      "content": "Landing unlanded (remote) 2 time(s) in a row; attempt attempt-60de7035e58040e0bbb46dcb0d09c047 (generation 3); paths: (none reported); rescue ref: refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z; target tip: 95d91dc2107433a2f1b95a2b7882427d4d7c898d; task WORKING."
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:13:13.972Z",
+  "updatedAt": "2026-11-04T19:20:45.513Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:13:21.593Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T09:49:40.073Z",
+    "wallClockMs": 2178480
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-a0305b0b",
+    "worker-5772dacf",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:37:04.304Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/runtime-requirements.test.mjs replays the whole 'Test Docker image' step of .github/workflows/docker.yml under bash -e, with docker, curl and sleep stubbed as shell functions. Every Docker CI smoke case finishes in well under a second on Linux, macOS and Windows Git Bash, and new cases make the step's health block fail for each of its reasons. docker.yml is unchanged, and CI's 'Test installers with isolated profiles' step passes again.",
+    "acceptanceCriteria": [
+      "Docker CI smoke fail, mismatch and match exit 43, 1 and 0 as before; match's output contains 'healthy: ' and 'image HEALTHCHECK passed'",
+      "no-health exits 1 with 'Expected a healthy daemon serving' and 'got: no answer'",
+      "other-project exits 1 showing projectPath /elsewhere; unhealthy exits 1 showing status starting",
+      "healthcheck-fails exits 3 after 'healthy: ' and never prints 'image HEALTHCHECK passed'",
+      "With docker.yml's step at its 291a34e3^ text, no-health and other-project fail",
+      "Each Docker CI smoke case runs in under 5 s, and the 10 s spawnSync timeout is unchanged"
+    ],
+    "invariants": [
+      "No smoke case runs a real docker, curl or sleep; DOCKER_HOST=tcp://127.0.0.1:1 stays as the guard",
+      "The spawnSync timeout stays 10000 ms",
+      "The stub shell code is bash 3.2-safe and holds no ${ and no backslash"
+    ],
+    "compatibility": [
+      "Titles 'Docker CI smoke fail has exit 43', 'Docker CI smoke mismatch has exit 1' and 'Docker CI smoke match has exit 0' are unchanged",
+      ".github/workflows/docker.yml and .github/workflows/ci.yml are unchanged",
+      "The two 'Docker <stage> image satisfies the daemon Node minimum' tests are unchanged"
+    ],
+    "approvedScope": [
+      "scripts/tests/runtime-requirements.test.mjs: the Docker CI smoke section (smokeStubs, the case table, the test loop) and the fs/os imports it no longer needs"
+    ],
+    "reuse": [
+      "Reuses the existing step extraction and the spawnSync bash -e replay; no new dependency, file, HTTP server or port"
+    ],
+    "sourceAssumptions": [
+      ".github/workflows/docker.yml:71-113 'Test Docker image' runs the version check, then docker run -d, docker port, a 30-try curl+sleep loop, a node check of status and projectPath against $PWD, and docker exec of the inspected HEALTHCHECK, under an EXIT trap that calls docker logs and docker rm",
+      "scripts/tests/runtime-requirements.test.mjs:28-36 is a PATH docker stub that answers only `run`; :51-55 run spawnSync bash -e -c with timeout 10000",
+      ".github/workflows/ci.yml:240-241 runs the file in 'Test installers with isolated profiles' on ubuntu-latest, windows-latest and macos-latest",
+      "Measured 2026-11-04: under Windows node.exe 24.16 with C:/Program Files/Git/bin/bash.exe, type -P resolves curl to /mingw64/bin/curl and sleep to /usr/bin/sleep despite a PATH-first stub dir",
+      "Measured 2026-11-04: Git Bash passes EXPECTED=\"$PWD\" to node.exe in the pwd -W spelling (D:/...) and leaves the HEALTH JSON unconverted"
+    ],
+    "checkRefs": [
+      "( set -e; cd \"$(git rev-parse --show-toplevel)\"; git diff --quiet \"$(git merge-base HEAD moe/work-2026-10-24)\" -- .github/workflows/docker.yml || { echo 'the row changed docker.yml'; exit 1; }; T=scripts/tests; S=$(mktemp -d /tmp/moe-7e86-XXXXXX); git archive HEAD | tar -x -C \"$S\"; cp $T/runtime-requirements.test.mjs \"$S/$T/\"; cd \"$S\"; C=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\"; $C node --test $T/runtime-requirements.test.mjs > one.log 2>&1 || { tail -40 one.log; exit 1; }; grep -a '^✔ Docker CI smoke' one.log | awk -F'[()]' '{ n++; if ($(NF-1) + 0 >= 5000) bad++ } END { print n, \"Docker CI smoke cases passed,\", bad + 0, \"took 5 s or more\"; exit !(n == 7 && !bad) }'; $C node --test $T/installers.test.mjs $T/install-dependencies-windows.test.mjs $T/dependencies.test.mjs $T/runtime-requirements.test.mjs > ci.log 2>&1 || { tail -40 ci.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail) ' ci.log; echo LINUX-OK )",
+      "( set -e; cd \"$(git rev-parse --show-toplevel)\"; T=scripts/tests; W=$(mktemp -d /mnt/d/moe-scratch/moe-7e86-win-XXXXXX); git archive HEAD .github/workflows/docker.yml packages/moe-daemon/package.json packages/moe-daemon/Dockerfile | tar -x -C \"$W\"; mkdir -p \"$W/$T\"; cp $T/runtime-requirements.test.mjs \"$W/$T/\"; cd \"$W\"; \"/mnt/c/Program Files/nodejs/node.exe\" --test $T/runtime-requirements.test.mjs > win.log 2>&1 || { tail -40 win.log; exit 1; }; echo \"windows (Git Bash): $(grep -ac '^✔ Docker CI smoke' win.log) Docker CI smoke cases passed\"; [ \"$(grep -ac '^✔ Docker CI smoke' win.log)\" = 7 ]; echo WINDOWS-OK )",
+      "( set -e; cd \"$(git rev-parse --show-toplevel)\"; T=scripts/tests; S=$(mktemp -d /tmp/moe-7e86-mut-XXXXXX); git archive HEAD packages/moe-daemon/package.json packages/moe-daemon/Dockerfile | tar -x -C \"$S\"; mkdir -p \"$S/$T\" \"$S/.github/workflows\"; cp $T/runtime-requirements.test.mjs \"$S/$T/\"; git show '291a34e3^:.github/workflows/docker.yml' > \"$S/.github/workflows/docker.yml\"; cd \"$S\"; if env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin node --test $T/runtime-requirements.test.mjs > mut.log 2>&1; then echo 'mutant (the 291a34e3^ step) survived'; exit 1; fi; grep -a '^✖ Docker CI smoke' mut.log | sort -u; grep -aq '^✖ Docker CI smoke no-health has exit 1' mut.log; grep -aq '^✖ Docker CI smoke other-project has exit 1' mut.log; echo MUTANT-KILLED )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected: PATH-first stubs for docker, curl and sleep (the hunt's FIX DIRECTION). Under Git for Windows' bin/bash.exe, /mingw64/bin and /usr/bin come before any PATH node passes. At plan time, `type -P` resolved curl to /mingw64/bin/curl and sleep to /usr/bin/sleep, so those stubs would never run on the windows-latest leg. The no-health loop would also cost 60 process spawns.\nRejected: re-prepending the stub dir through BASH_ENV (mem:gotcha-git-bash-stub-path-and-msys-sparse). It works, but it needs a POSIX spelling of the temp dir and more moving parts.\nRejected: a real HTTP server as a child process. It needs async spawn or a helper process plus a free port, and the no-answer case would still need a sleep stub.\nRejected: stubbing seq to shorten the loop. That distorts the step under test.\nChosen: shell functions prepended to the step's text. There are no PATH games and no extra processes, the behaviour is identical on all three OSes, and the temp dir goes away.\nThe gate is three checkRefs because each checkRef is capped at 1000 characters.",
+    "codebaseInsights": "docker.yml's job runs only on ubuntu (pull_request), but runtime-requirements.test.mjs replays its run block on every build-all-platforms leg (ci.yml:240-241). Git Bash converts an env value that looks like a POSIX path when it execs a native program: EXPECTED=$PWD reaches node.exe as D:/..., the same spelling `pwd -W` prints. A JSON value starting with { is left alone, so HEALTH keeps the stub's text. node.exe launched from WSL receives only WSLENV-listed vars, so the Windows probe gets no MOE_* var. The step's EXIT trap calls docker logs and docker rm, which the docker stub models as no-ops. An unbuilt git archive is enough for CI's 4-file command: no dist or node_modules is needed (HEAD: 71 tests, 34 pass, 1 fail, which is this bug). HEAD's file also times out under Windows Git Bash, so the windows-latest leg is red as well.",
+    "risks": "macOS runs /bin/bash 3.2: keep the stubs free of bash 4 syntax. Inside the JS template literal, a `${` would interpolate and a backslash would be eaten, so the vetted stub uses neither. On Windows, CRLF checkouts are safe: the test normalizes docker.yml, and template literals normalize CRLF to LF. QA rerunning the checkRefs from the control checkout after landing: checkRef 1's docker.yml check is vacuous there, because merge-base equals HEAD. Check `git diff --stat <completion>^ <completion>` instead; it must list only the test file. Something listening on 127.0.0.1:49153 cannot matter, because curl is a function. A future docker.yml change that calls a new docker subcommand now fails this test immediately as 'docker stub: unexpected docker ...' (exit 97) instead of timing out: that is intended.",
+    "keyFiles": [
+      "scripts/tests/runtime-requirements.test.mjs",
+      ".github/workflows/docker.yml",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "acea850b15455dad35ae9d37e41b4f9d3ac1b360",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:37:04.336Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:37:58.229Z",
+  "reviewStartedAt": "2026-11-04T09:45:49.292Z",
+  "verification": {
+    "command": "checkRefs 1+2+3 joined with &&, snapshots built from git ls-files tracked files of the worktree (excluding .moe) instead of git archive HEAD: LINUX (env -i node --test runtime-requirements, then CI's 4-file command) && WINDOWS (node.exe + Git Bash from /mnt/d/moe-scratch) && MUTANT (291a34e3^ docker.yml)",
+    "exitCode": 0,
+    "outputTail": "7 Docker CI smoke cases passed, 0 took 5 s or more\nℹ tests 75\nℹ pass 39\nℹ fail 0\nLINUX-OK\nwindows (Git Bash): 7 Docker CI smoke cases passed\nWINDOWS-OK\n✖ Docker CI smoke healthcheck-fails has exit 3\n✖ Docker CI smoke match has exit 0\n✖ Docker CI smoke no-health has exit 1\n✖ Docker CI smoke other-project has exit 1\n✖ Docker CI smoke unhealthy has exit 1\nMUTANT-KILLED",
+    "reportedAt": "2026-11-04T09:45:49.292Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/runtime-requirements.test.mjs"
+  ],
+  "completionSummary": "scripts/tests/runtime-requirements.test.mjs replays docker.yml's whole 'Test Docker image' step behind bash function stubs for docker/curl/sleep, so the match case no longer times out. Added 4 cases: no-health, other-project, unhealthy, healthcheck-fails. Original three titles and the 10000 ms timeout are unchanged, and docker.yml is untouched. Each Docker CI smoke case runs in about 25 ms on Linux and also passes under Windows node.exe plus Git Bash. With docker.yml at 291a34e3^, no-health, other-project, unhealthy, healthcheck-fails and match fail. Re-verified after the landing retry (target tip 95d91dc2 merged), snapshots built from git ls-files of this worktree instead of git archive HEAD.",
+  "commits": [
+    {
+      "sha": "cb48e7b96aa89708be840640ba7c4b2090c8e63e",
+      "ref": "refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T09:37:01Z",
+      "paths": [],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T09:40:17.932Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-7e862808ea4f4bf1a08626ef5c0b6a79 ref=refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094016Z sha=cb48e7b96aa89708be840640ba7c4b2090c8e63e reason=remote"
+    },
+    {
+      "sha": "4f1cfaa75a7d8e25d27d6a9935517118c9febeed",
+      "ref": "refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T09:40:23Z",
+      "paths": [],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T09:43:21.306Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-7e862808ea4f4bf1a08626ef5c0b6a79 ref=refs/moe/rescue/task-7e862808ea4f4bf1a08626ef5c0b6a79/20261104T094320Z sha=4f1cfaa75a7d8e25d27d6a9935517118c9febeed reason=remote"
+    },
+    {
+      "sha": "d6e34442856b5803b56319c80b047fbb65bdece5",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T09:43:58Z",
+      "paths": [
+        "scripts/tests/runtime-requirements.test.mjs"
+      ],
+      "recordedBy": "qa-25f21f0a",
+      "recordedAt": "2026-11-04T09:47:19.733Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T09:48:04Z",
+    "at": "2026-11-04T09:50:13.668Z"
+  },
+  "landingRetry": null,
+  "completedAt": "2026-11-04T09:49:40.073Z",
+  "reviewCompletedAt": "2026-11-04T09:49:40.073Z",
+  "reviewSummary": "Reviewed completion d6e34442 (on moe/work-2026-10-24, contained in control HEAD): one file, scripts/tests/runtime-requirements.test.mjs, +54/-19 (net 35). Re-ran in a git-archive snapshot of HEAD (.moe excluded) under env -i, node v24.21.0. (1) runtime-requirements alone: 9 pass/0 fail; all 7 Docker CI smoke cases 64-183 ms, far under 5 s. (2) CI's 4-file command (installers, install-dependencies-windows, dependencies, runtime-requirements): exit 0, 75 tests/39 pass/0 fail/36 Windows-only skipped. (3) Windows node.exe + Git Bash from a D: scratch copy: 9 pass, 7 smoke cases 98-494 ms. (4) Mutant: docker.yml at 291a34e3^ beside the test file: file fails; no-health, other-project, unhealthy, healthcheck-fails and match go red, fail/mismatch stay green. DoD: docker.yml and ci.yml byte-identical to merge-base; new negative cases cover never-answers and wrong projectPath; each case asserts its own text and that only match prints 'image HEALTHCHECK passed'. Static: stub literal has 0 '${', 0 backslashes, no bash-3.2-unsafe constructs; timeout stays 10000; DOCKER_HOST guard kept; docker stub fails unmodeled subcommands with 97; Node-minimum tests untouched; no temp dir or port. No blocking findings. Scratch removed.",
+  "requiredCheckAtDone": null
+}

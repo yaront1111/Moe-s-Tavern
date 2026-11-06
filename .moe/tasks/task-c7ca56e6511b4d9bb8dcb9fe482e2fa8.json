@@ -14,42 +14,76 @@
     {
       "stepId": "step-1",
       "description": "scripts/moe-agent.sh: add a helper `enable_worktree_config` and call it in provision_worktree. Read mem:gotcha-worktree-first-sparse-checkout-config-race first.\n\nThe call goes inside the existing `if [ \"$added\" = true ] || [ \"$finish\" = true ]` block, right before W's `sparse-checkout set` (moe-agent.sh ~:3119-3128 at HEAD 204cacb8). A reused W runs no sparse-checkout and no helper.\n\nHelper semantics:\n- `git -C \"$MOE_TOP\" config --get --type=bool extensions.worktreeConfig` already `true` → return 0 with no write. Never touch config otherwise.\n- If the common config sets core.worktree, or core.bare is true, do NOT pre-set; return 0 so git's own sparse-checkout init runs as today. Reason: git's init_worktree_config relocates those two settings into config.worktree, and a plain config write would skip that. Say so in a comment.\n- Otherwise, up to 5 attempts of `LC_ALL=C git -C \"$MOE_TOP\" config extensions.worktreeConfig true`. LC_ALL=C keeps the message matchable under any locale.\n  - Success → 0.\n  - Output containing `could not lock config file` → if a re-read now gives true (another seat won), return 0. Otherwise print `[info] MOE_WORKTREE_CONFIG_RETRY attempt=<n>/5: .git/config is locked by another git process` and sleep a short jittered backoff (about 0.2-0.6 s; fractional sleep works in GNU, macOS and Git Bash), then retry.\n  - Any other output → return 1 at once with git's last line.\n  - Attempts exhausted → return 1 naming the lock.\n\nError handling: a helper failure takes the SAME path as a failed sparse-checkout:\n- the existing removal of an added W with no commits;\n- then `worktree_stop MOE_WORKTREE_CREATE_FAILED \"…\"` with the helper's detail.\nThere is no silent fallback to an unchecked sparse-checkout. Call the helper from the main shell, not inside $(...), so worktree_stop still exits the seat. The design comment above provision_worktree explains why. Twin comment: name the ps1 function.\n\nLeave the gate arm (:5330) and the hooked scratch (:5171) alone. A worker's pre-flight provisioning always runs before them in the same repo and sets the extension; say so in the comment.\n\nThe gotcha: git returns 255 with `error: could not lock config file .git/config: File exists` (planner-verified). Match the message, not the exit code.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "enable_worktree_config added above provision_worktree; it is called in the main shell inside the added||finish block, before W's sparse-checkout. A failure sets `fail` and takes the existing added-W cleanup, then worktree_stop MOE_WORKTREE_CREATE_FAILED. Reads and writes use `--local`, the common config that git's own setup and init_worktree_config read, so a global-scope value can't fake 'true'. The extension is re-read at each loop top: first, after each backoff, and once after the 5th collision. So another seat's write counts as success, and nothing is written once the value is true. bash -n passes. A scratch probe with a real .git/config.lock gave 4 retry lines and rc=1. Preset: .git/config sha unchanged. A lock released by another writer mid-backoff gave 1 retry and rc=0. core.worktree set: skipped, no write.",
+      "startedAt": "2026-11-02T19:18:33.798Z",
+      "completedAt": "2026-11-02T19:19:30.582Z"
     },
     {
       "stepId": "step-2",
       "description": "scripts/moe-agent.ps1: twin `Enable-MoeWorktreeConfig`, called in Initialize-MoeWorktree right before W's sparse-checkout (~:2978), with exactly the step-1 semantics:\n- the same 5 attempts;\n- the same `MOE_WORKTREE_CONFIG_RETRY attempt=<n>/5: …` line, byte-identical text (parity-check compares the MOE_WORKTREE_ code sets; also read mem:gotcha-parity-check-literals);\n- the same core.worktree/core.bare skip;\n- the same failure route into `Stop-MoeWorktreeSeat 'MOE_WORKTREE_CREATE_FAILED' …` with the existing added-W cleanup.\n\nUse the file's existing Invoke-MoeGit helper with -MergeStderr. Set `$env:LC_ALL='C'` only around the write, in try/finally, restoring the previous value (or removing it if unset). Sleep with Start-Sleep -Milliseconds and a jitter.\n\nWindows PowerShell 5.1 compatible: no ternary, no `??`, no pipeline-chain operators.\n\nKeep the file UTF-8 with BOM: edit with the Edit tool only, never a shell rewrite. bash scripts/tests/parity-check.sh must pass.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Enable-MoeWorktreeConfig is added after Initialize-MoeWorktree. W's sparse-checkout actually lives in Install-MoeTaskWorktree, which Initialize-MoeWorktree calls, so the call sits there, inside `if ($added -or $finish)`. A non-empty return becomes $fail. $fail takes the existing added-W cleanup, then Stop-MoeWorktreeSeat MOE_WORKTREE_CREATE_FAILED. Semantics and the retry text are identical to sh, with the [info] line in Cyan, per the file's convention. LC_ALL='C' is set only around the write, in try/finally, and restored or removed. The jitter is Get-Random 200..600 ms. PS 5.1 safe: while($true), no ternary or ??. BOM kept (ef bb bf). PS 5.1 ParseFile: 0 errors. parity-check PASS. PS 5.1 unit probe with Windows git: a real config.lock gave 4 retry lines and the 5-fail detail, value unset, .git/config unchanged, LC_ALL unset afterwards. Free repo: true. Preset: hash unchanged.",
+      "startedAt": "2026-11-02T19:19:31.483Z",
+      "completedAt": "2026-11-02T19:20:49.153Z"
     },
     {
       "stepId": "step-3",
       "description": "scripts/tests/postflight-worktree.cjs: deterministic cases for both engines; the suite is shared by postflight.sh and postflight.ps1.\n\n(a) Extend the PATH stub (stub() ~:120) in BOTH its sh `git` and its `git.ps1` with WT_GIT_CONFIG_LOCK=<count file>. When argv holds `config` and `extensions.worktreeConfig` without `--get`, and the file holds a number above 0:\n- decrement it;\n- print `error: could not lock config file .git/config: File exists` to stderr;\n- exit 255.\nOtherwise pass through to the real git. Make launch() (~:191) install the stub when WT_GIT_CONFIG_LOCK is set.\n\n(b) Cases, all on a fresh repo() fixture whose config lacks the extension unless stated:\n- `wt-config-lock` (count 1): `[worktree] created …` appears; exactly one MOE_WORKTREE_CONFIG_RETRY line; `git config --get extensions.worktreeConfig` == true; W's sparse patterns are `/*` and `!/.moe/`; no report_blocked; the CLI ran.\n- `wt-config-lock-exhausted` (count 99): MOE_WORKTREE_CREATE_FAILED via refused(); exactly 4 retry lines (5 attempts); the CLI did not run; no W directory or registration is left behind.\n- `wt-config-other` (WT_GIT_FAIL=extensions.worktreeConfig): an immediate MOE_WORKTREE_CREATE_FAILED with no retry line.\n- `wt-config-preset`: the fixture sets extensions.worktreeConfig=true first. Provisioning succeeds; .git/config is byte-identical before and after; no retry line.\n\nAssertions must fail if the helper is removed. Prove it in step 5's mutant run.\n\nDo not edit the held-out worktree-landing.{sh,ps1}.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-worktree.cjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "The stub gets the WT_GIT_CONFIG_LOCK=<count file> knob in both forms, and launch() installs the stub when it is set.\n- sh: the argv markers are distinct letters (c/k/g). The first try used 1/1/1, and \"$c$k$g\" was ambiguous: `config --get core.worktree` also gave \"11\" and took a collision.\n- ps1: the collision goes through Write-Error, not [Console]::Error. The wrapper's 2>&1 captures only the error stream of an in-process .ps1, so a Console line would have looked like a non-lock failure.\n\nFour cases are registered:\n- wt-config-lock (count 1): provisioned(); exactly 1 retry line; count consumed; extension true; sparse list is ['/*','!/.moe/'].\n- wt-config-lock-exhausted (count 99): refused(); the reason names 'failed 5 times… stayed locked'; 4 retry lines; count 94 (exactly 5 writes); extension unset; control unchanged; W unregistered and absent.\n- wt-config-other (WT_GIT_FAIL=extensions.worktreeConfig): refused(); the reason is 'git config extensions.worktreeConfig true failed: '; 0 retry lines; no W.\n- wt-config-preset (extension preset, count 99): provisioned(); 0 retries; count still 99 (no write attempted); .git/config byte-identical.\n\nDev-loop results:\n- sh: lifecycle, half-made, sparse-fail, the 4 new cases and codes: 8 ok / 0 failed.\n- PS 5.1: half-made, sparse-fail, the 4 new cases and codes: 7 ok / 0 failed.\n- pwsh 7: the 4 new cases: 4 ok / 0 failed.",
+      "startedAt": "2026-11-02T19:20:50.097Z",
+      "completedAt": "2026-11-02T19:27:25.375Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification. Run ONCE, fresh, from the repo root, as ONE command: `node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh`.\n\nRun it in place only if `git status --short scripts/` shows nothing but this task's three files. Otherwise run it from a `git archive HEAD` snapshot with exactly those files copied in and cmp-checked (mem:gotcha-gate-hermetic-snapshot-from-wsl).\n\npostflight-safe takes about 15-25 min. Run it under nohup with a log and an .exit file, and poll it in the foreground until it finishes. Never end the turn with it running.\n\nWindows leg (DoD 4): `node.exe scripts/tests/postflight-safe.mjs powershell` from a /mnt/d copy of the same bytes, per mem:gotcha-qa-windows-launcher-tests-from-wsl and mem:gotcha-postflight-worktree-mutant-copy.\n\nRecord in the summary:\n- the exit codes;\n- postflight-safe's JSON summary, with failureClass NONE and no SKIP;\n- the worktree-landing counts;\n- parity PASS;\n- the Windows result.\n\nA faster dev loop while iterating: `MOE_WORKTREE_ONLY=wt-config-lock,wt-config-lock-exhausted,wt-config-other,wt-config-preset node scripts/tests/postflight-worktree.cjs sh scripts/moe-agent.sh <tmp>/fake-proxy.js <tmp> \"$(command -v bash)\"`.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "The gate ran fresh on the final bytes, in place in this task's W. scripts/ dirt was only this task's 3 files. sha256 was checked before and after the run: unchanged.\n\nCommand: env $(compgen -e | grep '^MOE_' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh'\n- Env-scrubbed as in WT-13; the timeout is widened because host load was about 26-28 on 16 cores.\n- Started 19:35:56Z, about 43 min. EXIT=0.\n- postflight-safe: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n- worktree-landing: 18 passed, 0 failed, 0 errors. parity-check PASS.\n\nWindows leg: a C:\\ temp snapshot of the same bytes (git archive HEAD scripts docs plus the 3 files; diff -rq identical; sha256 OK). Run with node.exe and WSLENV empty.\n- postflight-safe powershell: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}.\n- worktree-landing.ps1 (PS 5.1): 18 passed, 0 failed, 0 errors.\n\nBoth harnesses run the full postflight-worktree.cjs suite, so the new wt-config-* cases are in both legs. npm run lint is OK.\n\nAn earlier gate on the pre-tightening bytes was stopped at 3 min by its own recorded PGID, because step-5's review found the EACCES issue. Its Windows dry run finished as NONE with worktree-landing.ps1 18/0/0, but it is superseded.",
+      "startedAt": "2026-11-02T19:27:26.274Z",
+      "completedAt": "2026-11-02T20:24:01.525Z"
     },
     {
       "stepId": "step-5",
       "description": "Adversarial self-review, then complete_task.\n\nMutant check, in a scratch copy of scripts/ outside the repo (mem:gotcha-postflight-worktree-mutant-copy):\n- drop the helper call → wt-config-lock and wt-config-lock-exhausted must fail with AssertionErrors;\n- make every error retryable → wt-config-other must fail.\nAn unmutated control must pass. Record the results.\n\nChecklist:\n- Two seats at once: the retry, plus the re-read that treats another seat's write as success.\n- The lock held by a human's git: bounded, then the old refusal.\n- Localized git: LC_ALL=C on the write only.\n- core.worktree or core.bare=true: today's path.\n- A reused W: no write.\n- PS 5.1 syntax, BOM kept, parity PASS.\n- Shared mode untouched: the helper runs only in worktree provisioning.\n- No new failure mode: every failure still lands on MOE_WORKTREE_CREATE_FAILED with the existing cleanup.\n\nFix anything found, rerun step 4's command fresh, and submit that output.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "FIX from the self-review: EACCES on .git/config.lock prints the SAME prefix (`could not lock config file .git/config: Permission denied`, verified with git 2.43 on Linux). The first cut retried it about 2 s, then refused with a misleading 'stayed locked by another git process'. Only the EEXIST collision is retried now: sh `*'could not lock config file'*': File exists'*`, ps1 `-cnotmatch 'could not lock config file.*: File exists'`. Git for Windows prints the same EEXIST text (checked). Test: wt-config-other now also runs a wt-config-eacces sub-run (stub knob WT_GIT_CONFIG_LOCK_WHY='Permission denied'): immediate refusal, 0 retries, exactly 1 write, the reason ending in git's own line. Step 4's gate was rerun fresh on these final bytes.\n\nMutants, each in a scratch copy of scripts/ running the 4 wt-config cases. Every kill is an AssertionError on the targeted case:\n- sh control and ps1 (PS 5.1) control: 4/4 ok.\n- sh-drop-call and ps-drop-call: lock, exhausted and other FAIL.\n- sh-all-retry and ps-all-retry: other FAILS.\n- sh-no-eexist and ps-no-eexist (the old prefix-only match): the wt-config-eacces sub-run FAILS.\n- sh-no-preread (always write): preset FAILS.\nThe BOM was kept in all ps1 copies.\n\nChecklist:\n- Concurrency: the extension is re-read at every loop top, after each backoff and after the 5th collision, so another seat's write counts and nothing is rewritten once it is true.\n- A human's stale lock: 5 attempts in about 2 s, then the existing refusal.\n- LC_ALL=C is set on the write only; ps1 restores or removes it in finally.\n- core.worktree or core.bare=true: skipped, so git's own path runs.\n- A reused W never runs the helper.\n- Errexit: the helper runs under `if !`, so set -e cannot trip it.\n- PS 5.1: ParseFile 0 errors, while($true), no ?: or ??, and no leaked pipeline output (wt-config-lock passes on PS 5.1 and pwsh 7).\n- parity PASS.\n- Shared mode untouched: shared-landed asserts there are no MOE_WORKTREE_ lines.\n- Every failure goes to the existing added-W cleanup, then MOE_WORKTREE_CREATE_FAILED.\n\nTheoretical, not fixed: an older-wrapper seat running a bare first sparse-checkout beside a new seat can still collide inside git itself. That is out of scope, and the switch checklist pre-sets the extension anyway.",
+      "startedAt": "2026-11-02T20:24:02.368Z",
+      "completedAt": "2026-11-02T20:24:21.529Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -85,17 +119,26 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T09:09:43.239Z",
-  "updatedAt": "2026-11-02T09:18:30.489Z",
+  "updatedAt": "2026-11-04T19:20:39.735Z",
   "metrics": {
     "firstClaimAt": "2026-11-02T09:13:29.502Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T21:18:32.378Z",
+    "wallClockMs": 43502876
   },
   "tier": "standard",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T09:18:30.457Z",
   "executionContract": {
@@ -161,5 +204,54 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T09:18:30.489Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "contextFetchedBy": [
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
+  ],
+  "workStartedAt": "2026-11-02T19:18:33.798Z",
+  "reviewStartedAt": "2026-11-02T20:24:53.855Z",
+  "verification": {
+    "command": "env $(compgen -e | grep '^MOE_' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=400 bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh && bash scripts/tests/parity-check.sh'",
+    "exitCode": 0,
+    "outputTail": "{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge\nPASS local conflict\nPASS local reflog-linear\nPASS local cas-contains-c\nPASS local relanding-idempotent\nPASS local branch-sync\nPASS local target-checked-out\nPASS local board-path\nPASS remote push-first-no-force\nPASS remote race-fetch-fails\nPASS remote push-transport-fails\nPASS remote push-applied-client-fails\nPASS remote push-outcome-unknown\nPASS remote push-rejected-retry\nPASS remote diverged\nPASS remote push-unanswered-repush\nPASS remote push-remote-rejected\nPASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nPASS parity-check.sh\n[exit 0; Windows leg on the same bytes: postflight-safe powershell {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}; worktree-landing.ps1 (PS 5.1) 18 passed, 0 failed, 0 errors]",
+    "reportedAt": "2026-11-02T20:24:53.855Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-worktree.cjs"
+  ],
+  "completionSummary": "Fix: worker provisioning sets extensions.worktreeConfig itself before W's first sparse-checkout, so two seats provisioning at once no longer race git's common .git/config.lock.\n\nWrappers (twins):\n- scripts/moe-agent.sh: enable_worktree_config, called in provision_worktree's added||finish block.\n- scripts/moe-agent.ps1: Enable-MoeWorktreeConfig, called in Install-MoeTaskWorktree, where the sparse-checkout lives (Initialize-MoeWorktree calls it).\n\nBehavior:\n- core.worktree set, or core.bare=true (--local): skipped, so git's own init_worktree_config path runs.\n- Otherwise each loop pass re-reads `--local --get --type=bool` (true → done, no write), then runs `LC_ALL=C git config --local extensions.worktreeConfig true`.\n- Only the EEXIST collision (`could not lock config file …: File exists`) is retried, 5 attempts with a 0.2-0.6 s jitter, printing `[info] MOE_WORKTREE_CONFIG_RETRY attempt=n/5`. Another seat's write counts as success.\n- Anything else, or exhaustion, takes the existing added-W cleanup, then MOE_WORKTREE_CREATE_FAILED.\n- Self-review fix: EACCES prints the same `could not lock config file` prefix (`: Permission denied`). It is now refused at once with git's own line, not retried.\n\nTests (postflight-worktree.cjs): stub knobs WT_GIT_CONFIG_LOCK and _WHY in the sh and ps1 forms. Cases: wt-config-lock, wt-config-lock-exhausted, wt-config-other (plus an EACCES sub-run) and wt-config-preset (no write; .git/config byte-identical). They pass on sh, PS 5.1 and pwsh 7.\n\nMutants: drop-call, all-retry and no-eexist (sh and ps1) and no-preread (sh) are all killed by AssertionErrors; the controls pass.\n\nGate: fresh, in place in W, env-scrubbed, on sha-checked final bytes: exit 0. postflight-safe bash NONE/Z, worktree-landing 18/0/0, parity PASS. Windows snapshot: postflight-safe powershell NONE/Z; worktree-landing.ps1 on PS 5.1 18/0/0. npm run lint OK. The held-out worktree-landing.{sh,ps1} are unchanged. Diff: +177/-10 over 3 files.",
+  "commits": [
+    {
+      "sha": "da5823b5003d95f9340411cd6498ee511aab2272",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T19:13:46Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T20:26:30.748Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T20:26:46Z",
+    "at": "2026-11-02T21:19:23.067Z"
+  },
+  "completedAt": "2026-11-02T21:18:32.378Z",
+  "reviewCompletedAt": "2026-11-02T21:18:32.378Z",
+  "reviewSummary": "Reviewed completion da5823b5. It is on moe/work-2026-10-24 and origin, and the candidate tree afa36b29 equals its tree. Diff: +177/-10 (167 net) over the 3 declared files. worktree-landing.{sh,ps1} are unchanged.\n\nDoD1: the twin helpers run before W's first sparse-checkout, in the added||finish block (ps1 in Install-MoeTaskWorktree, whose only caller is Initialize-MoeWorktree). They retry only EEXIST, 5 attempts, and any failure takes the added-W cleanup then MOE_WORKTREE_CREATE_FAILED.\nReal-git probes (2.43 Linux; PS 5.1 + Git for Windows 2.54):\n- free → true; preset → .git/config sha unchanged;\n- stale lock → 4 retries then refusal (~1.8 s);\n- lock released mid-backoff → 1 retry then success;\n- core.worktree/core.bare → skip; EACCES → immediate refusal;\n- global-only true → still writes --local; LC_ALL restored.\nRace repro, 20 repos × 2 parallel sparse-checkouts: without helper 16/120 failed; with helper 0/120 (10 retries).\n\nDoD2: sh mutants killed by AssertionErrors: drop-call, all-retry, no-eexist, no-preread, bound-4. ps1 (PS 5.1): drop-call and no-eexist killed. Controls 4/4 on sh, PS 5.1 and pwsh 7.\n\nDoD3/4: exact task.verification command, env-scrubbed, on a git archive of da5823b5 (sha256-checked): exit 0. postflight-safe bash NONE/Z, worktree-landing 18/0/0, parity PASS.\nWindows PS 5.1 on the same bytes: ParseFile 0 errors, BOM kept, parity-check.ps1 PASS, postflight-safe powershell NONE/Z, worktree-landing.ps1 18/0/0. npm run lint OK.\n\nNotes (non-blocking): MOE_WORKTREE_CONFIG_RETRY is not documented yet (WT-16/17/18 docs rows). Retrying the sparse-checkout on EEXIST would have been leaner, but the pre-set is the approved plan.",
+  "requiredCheckAtDone": null
 }

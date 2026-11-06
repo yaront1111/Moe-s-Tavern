@@ -1,0 +1,54 @@
+{
+  "id": "task-7a3640da3e04450f9e180439309f286c",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #22): file 2-4 evidence-backed bug rows from a CI dry run of the steps hunt #20 could not run: the Windows legs of .github/workflows/ci.yml (PowerShell 5.1 and 7 landing guards, wrapper postflight and parity, .moe-agent.json read, daemon autostart arguments) and the JetBrains build-plugin job (buildPlugin, ./gradlew test, packaged onboarding), at the tip on the Windows host",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04.\n\nWHY\n- Hunt #20 (task-9f3eac6d) dry-ran every Linux CI step at the tip in about 45 minutes. It found 4 red steps (7e862808, 649f34dd, 6b3ab9d8, e45da220), a flake (20f59bc9) and a docs drift (c0adee44).\n- It could not run the gradle job, the Windows-only steps, the PS-5.1-only steps or the macOS steps. Its full step list and exit codes are in /mnt/d/moe-scratch/hunt-9f3eac6d/ci/SUMMARY.txt.\n- main moves only by PR, so CI must be green on every leg first.\n- At 10:02Z, 4 architects, 2 QA seats and 1 coder are idle, with nothing in PLANNING.\n\nLANE, in order of preference\n1. The Windows legs of build-all-platforms (windows-latest), run on the Windows host at HEAD fec9a842 or later.\n   - Use a fresh clone or git-archive snapshot on D: or in %TEMP%, outside the shared checkout, with its own `npm ci`. powershell.exe and pwsh 7 are both reachable from WSL; see the ParseFile recipe in the hunt memories.\n   - Run each Windows step as ci.yml writes it: \"Test PowerShell .moe-agent.json read\", \"Test PowerShell daemon autostart arguments\", \"Test Windows PowerShell landing guard\", \"Test PowerShell 7 landing guard\", \"Test Windows PowerShell wrapper postflight\" and \"Test PowerShell 7 wrapper postflight and parity\". Run the cross-platform node steps on Windows node too.\n   - A red step is a finding unless an open or today's-DONE row already covers it. Evidence is the failing command and its first error lines.\n2. The build-plugin job: `./gradlew buildPlugin`, `./gradlew test`, and the \"Verify packaged JetBrains onboarding\" step.\n   - The accepted gate route is cmd.exe gradlew.bat under the jetbrains-gradle lease. Acquire it with moe.acquire_resource and release it after each run.\n   - A red step there is a finding.\n\nALREADY KNOWN (do not refile)\n- The postflight worktree serena-ignore cases: e45da220, WORKING. If the PS postflight stops at the worktree suite, say so and use MOE_WORKTREE_ONLY to reach the later sections.\n- literal-project-path G2: 6b3ab9d8, waiting on 62ec51f1.\n- local-runner-bridge I1/I3 flake: 20f59bc9.\n- register.js and register.test.js: fixed at 3cd127c0.\n- The VS Code lint error: fixed at 68356e66.\n\nSKIP\n- The lanes of hunts #1-#21 (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Files open rows hold. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start. At filing time:\n  - 62ec51f1's scripts/moe-agent.ps1, scripts/tests/postflight-vm-route.ps1 and scripts/tests/parity-check.{sh,ps1};\n  - e45da220's scripts/tests/postflight-worktree.cjs.\n  Running those tests is fine. A fix row on a held file gets dependsOn the holder and a placement note.\n- Never build, install or test in the shared checkout: its packages/moe-daemon/dist is the live runtime.\n\nEVIDENCE BAR. Same as hunts #2-#21. One of:\n- a failing command and its error lines at HEAD fec9a842 or later, run outside the shared checkout;\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING, with a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\" with the steps run and their exit codes, in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted with every Windows and gradle step run and its exit code. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites a failing command and its error lines from a run at HEAD fec9a842 or later outside the shared checkout, or another hunt-standard piece of evidence. Gradle runs are made under the jetbrains-gradle lease.",
+    "No filed row duplicates the known items above, a row filed on 11-03 or 11-04, or a file an open row holds without a dependsOn and a placement note. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 520.7,
+  "comments": [
+    {
+      "id": "comment-e1c3961573524a1e8d9db43d748e232a",
+      "author": "governor-e6142a94",
+      "content": "@architect-67c762f6 Governor answer to your lane-2 question (#governors msg-42239e48). I'm re-sending it here because the chat reply didn't route. Go with (b). When lane 1 is done, mention me and I'll acquire jetbrains-gradle for task-7a3640da and reply once I hold it. Run buildPlugin, test and the packaged-onboarding step back to back from your D: snapshot (cmd.exe gradlew.bat), then mention me as soon as the last one ends so I release it. If a JetBrains row queues for the lease meanwhile, I'll ask you to pause after the current run.",
+      "timestamp": "2026-11-04T10:14:13.753Z"
+    },
+    {
+      "id": "comment-e74d0d6008854fd48acbdf878e1275e1",
+      "author": "governor-e6142a94",
+      "content": "@architect-67c762f6 Lane 2 answer, re-sent here because the chat reply didn't route. The daemon refused my acquire: `[NOT_ALLOWED] Task task-7a3640da... is claimed by architect-67c762f6, not governor-e6142a94`. acquire_resource is fenced to the task's holder, so a governor can't take the lease for your row. Please take (a): report lane 2 as not run, and don't run Gradle without the lease. For coverage, QA gates ran ./gradlew test under the lease today at about 09:04Z (9c67c6b6) and about 10:05Z (dbdc22f6), and both passed. buildPlugin and packaged onboarding are left for the human as a pre-PR check. Please also add \"a governor can't acquire for a task it doesn't hold\" to mem:gotcha-architect-cannot-take-gradle-lease. Carry on with lane 1.",
+      "timestamp": "2026-11-04T10:39:15.335Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T10:02:51.220Z",
+  "updatedAt": "2026-11-04T12:42:30.750Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T10:03:21.768Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-67c762f6@2026-11-04T10:03:19Z",
+    "at": "2026-11-04T12:42:30.750Z"
+  }
+}

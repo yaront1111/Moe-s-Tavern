@@ -1,0 +1,230 @@
+{
+  "id": "task-b071e3bfa4a642c2bea91bec16bd8e49",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: JetBrains protected seat launch starts the wrapper's interpreter by bare name (`bash` / `powershell`) in a terminal whose cwd is the project, so a Command Prompt terminal runs <project>\\powershell.bat and a '.' or in-project PATH entry runs <project>/bash",
+  "description": "Found in the 2026-11-03 client hunt (governor msg-33787f69). This is the IDE-side twin of task-0d9ebe5b.\n\nUnder the PROTECTED profile, resolveContext selects the installed wrapper and its env, including MOE_RUNTIME_PROTECTED=1, MOE_DAEMON_PATH and MOE_PROXY_PATH. The selection is selectProtectedAgentRuntime (TerminalAgentLauncher.kt:98-121): sh first on macOS/Linux, ps1 first on Windows. But the line typed into the terminal starts the wrapper's interpreter by name:\n- POSIX: buildBashCommand (:738) returns `<env> bash '<installed>/scripts/moe-agent.sh' --role ...`.\n- Windows: powerShellLine (:641, :649) returns `powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand <b64>`.\n\ncreateTerminalWidget (:776-790) opens the tab with cwd = the project (createLocalShellWidget(basePath, ...)). The line then goes to the user's configured terminal shell through executeCommand, and that shell resolves the first word:\n- Command Prompt searches the current directory first. Verified on this host at HEAD edc27e14: in a folder holding powershell.bat, `cmd /c \"powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ZQB4AGkAdAA=\"` printed the plant's output (`project powershell ran`). A PowerShell terminal shell resolved the real powershell. Fixture: /mnt/d/moe-scratch/0d9ebe5b-arch/cmdproj.\n- bash and zsh search PATH, so a '.', empty, relative or in-project entry reaches <project>/bash. That is the task-0d9ebe5b repro shape.\n\nSo repository content runs as the protected seat's first process, holding the protected env, before any wrapper guard runs. Meanwhile docs/ARCHITECTURE.md (Protected control plane) says the plugin runs \"never the project's copies or a PATH lookup\".\n\nFix direction (the planner decides):\n- Under PROTECTED only, start the interpreter by an absolute path outside the project. On POSIX that could be /bin/bash, the shebang moe-agent.sh itself uses; when it is missing, refuse with a dialog and start no terminal. On Windows it could be %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, the path the wrappers already use for the Git guard. Check either one with RuntimeSelectionPolicy's outside-the-project rule.\n- Check what the WSL-agents path (buildWslBashCommand, bashWrapPowerShell) does under PROTECTED.\n- LEGACY lines stay byte-identical.\n\nDocs: task-0d9ebe5b currently holds docs/ARCHITECTURE.md and docs/TROUBLESHOOTING.md. The epic final task (task-f3f364a6) owns the protected-bullet sweep, so this row changes code and tests only.",
+  "definitionOfDone": [
+    "Under PROTECTED, every launch line JetBrains types (POSIX bash, Windows PowerShell, and the WSL path if PROTECTED allows it) starts the wrapper's interpreter by an absolute path outside the project. No PATH or current-directory lookup by the terminal shell can select a project file. A missing interpreter refuses with a dialog and starts no terminal.",
+    "LEGACY launch lines are byte-identical to today's, and the existing TerminalAgentLauncherTest rows stay green unchanged.",
+    "New TerminalAgentLauncherTest rows pin the protected interpreter for each script kind and fail on today's bytes (RED recorded). Windows `gradlew.bat test --rerun`, run from WSL through cmd.exe under the jetbrains-gradle lease, is green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED). Edit moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt only (JUnit 4, TemporaryFolder rule), with the Edit tool. Do not touch existing rows: PINNED_LEGACY (the 16-row byte pin) is the legacy-unchanged regression.\n\nP1, any host: protectedInterpreter on a POSIX host.\n- Create an outside `bash` file in temporaryFolder and a sibling `project` folder.\n- `TerminalAgentLauncher.protectedInterpreter(ScriptKind.BASH, wslAgents = false, basePath = project.path, windows = false, systemRoot = null, bash = outside.path)` returns `ProtectedInterpreter.Ready(outside.toPath().toRealPath().toString())`.\n- Each of these returns `ProtectedInterpreter.Refused` with a reason that names the path: a `project/bin/bash` file; a missing path; a directory.\n- `ScriptKind.POWERSHELL` with windows = false refuses.\n\nP2, Windows host only: `Assume.assumeTrue(SystemInfo.isWindows)`. Also assume-skip the positive rows when temporaryFolder.root's real path has any character outside [A-Za-z0-9:\\\\._-].\n- Lay out `<sysroot>/System32/WindowsPowerShell/v1.0/powershell.exe`.\n- POWERSHELL with wslAgents = false returns Ready(the real path with every '\\\\' replaced by '/'), e.g. `C:/.../sysroot/System32/WindowsPowerShell/v1.0/powershell.exe`.\n- With wslAgents = true it returns Ready(toWslPath(real path)), i.e. `/mnt/c/.../powershell.exe`.\n- Refused cases: systemRoot = null; a sysroot inside the project; a sysroot folder named `sys root` (not typable unquoted).\n- BASH with windows = true and wslAgents = false refuses. BASH with windows = true and wslAgents = true returns Ready(\"/bin/bash\").\n\nP3, any host: protected lines change only the first word. Use buildCommandForTest with protected env (MOE_DAEMON_PATH, MOE_PROXY_PATH, MOE_RUNTIME_PROTECTED=1) and the new `interpreter` argument, compared with the same call with interpreter = null:\n- BASH native, word '/usr/bin/bash': the line equals the legacy line with its first ` bash '` after the env prefix replaced by ` '/usr/bin/bash' '`, and it contains no ` bash '`.\n- POWERSHELL native, word 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe': the line equals `$word -NoProfile -ExecutionPolicy Bypass -EncodedCommand ` + the legacy line's base64, so the decoded script is unchanged.\n- WSL BASH, word '/bin/bash': ` '/bin/bash' '/mnt/...` in place of ` bash '/mnt/...`.\n- WSL POWERSHELL, word '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe': the line starts with that word, never `powershell.exe -NoProfile`, and its base64 equals the legacy line's.\n\nRED: on today's bytes these rows do not compile (no protectedInterpreter, no interpreter parameter). Record that gradle failure for the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Added P1-P3 as eight tests, leaving all existing rows unchanged; extra invalid/missing SystemRoot failure coverage. RED recorded on Windows under jetbrains-gradle: cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <task-worktree>\\moe-jetbrains && .\\gradlew.bat test --rerun\" exited 1, :compileTestKotlin FAILED, unresolved ProtectedInterpreter/protectedInterpreter and no interpreter parameter (BUILD FAILED in 25s), exactly as planned. Work is in wrapper-provisioned workspace.mode=worktree per current docs/roles/worker.md.",
+      "startedAt": "2026-11-03T08:36:26.592Z",
+      "completedAt": "2026-11-03T08:37:50.401Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Selection: moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, Edit tool. Add a pure, injectable resolver next to selectProtectedAgentRuntime (:98).\n\ninternal sealed interface ProtectedInterpreter { data class Ready(val word: String) : ProtectedInterpreter; data class Refused(val reason: String) : ProtectedInterpreter }\ninternal fun protectedInterpreter(kind: ScriptKind, wslAgents: Boolean, basePath: String, windows: Boolean = SystemInfo.isWindows, systemRoot: String? = System.getenv(\"SystemRoot\"), bash: String = \"/bin/bash\"): ProtectedInterpreter\n\nRules:\n- !windows and BASH: validate `bash` with RuntimeSelectionPolicy.installedExecutable(bash, basePath), which already proves an absolute, real, regular file outside the project and never looks a bare name up on PATH. Accepted gives Ready(file.path), the real path, e.g. /usr/bin/bash on a usrmerge host.\n- windows and POWERSHELL: systemRoot null or blank refuses. Otherwise candidate = Paths.get(systemRoot, \"System32\", \"WindowsPowerShell\", \"v1.0\", \"powershell.exe\"), validated the same way. The typed form is file.path with '\\\\' replaced by '/', and it must match ^[A-Za-z]:(/[A-Za-z0-9._-]+)+$, else refuse. The forward-slash spelling was verified typed into cmd.exe, Windows PowerShell 5.1 and Git Bash; the backslash spelling breaks in Git Bash. With wslAgents the word is toWslPath(file.path).\n- windows, wslAgents and BASH: Ready(\"/bin/bash\"). It is typed inside the WSL distro, where it is a fixed system path never under a /mnt project, and the Windows IDE cannot stat it. A distro without it fails in its own shell, and nothing from the project runs. Say that in a one-line comment.\n- Any other combination refuses: a PowerShell wrapper on macOS or Linux, or a bash wrapper on Windows outside WSL agent mode. Both happen only with a damaged install.\n\nError handling: every Rejected maps to this task's own reason. Never pass on installedExecutable's node-labelled text. Each reason names the path and the rule, e.g. `the agent wrapper's interpreter /bin/bash is not an absolute regular file outside the project`, `... holds a character a terminal cannot take unquoted`, `SystemRoot is not set, so Windows PowerShell cannot be found`, `no trusted interpreter runs the installed <kind> wrapper on this host`. Leave RuntimeSelectionPolicy.kt and ProtectedAgentRuntime.Selected unchanged: RuntimeSelectionPolicyTest :1876-1935 and VerifiedLocalLaunchTest compare Selected by equality.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "note": "Added injectable ProtectedInterpreter resolver, reusing installedExecutable for real regular outside-project validation. POSIX uses the real bash path; Windows validates SystemRoot, rejects invalid paths and non-unquoted-safe words, converts to forward slashes or WSL mount. WSL bash uses fixed /bin/bash with explicit non-stat-able-distro comment. Selected and RuntimeSelectionPolicy remain unchanged. Full GREEN deferred to step 4 after builder API wiring in step 3, per plan.",
+      "startedAt": "2026-11-03T08:37:50.429Z",
+      "completedAt": "2026-11-03T08:38:09.171Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Render and wire, TerminalAgentLauncher.kt with the Edit tool. Builders stay pure string functions: no I/O.\n\nRendering:\n- buildBashCommand (:702) gets `interpreter: String? = null`. Its first word after the env prefix is `interpreter?.let { shQuote(it) } ?: \"bash\"`.\n- powerShellLine (:649) becomes `powerShellLine(psCommand, exe: String = \"powershell\")` = \"$exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand \" + base64. buildPowerShellCommand (:601) gets `interpreter: String? = null` and passes `interpreter ?: \"powershell\"`. POWERSHELL_LINE_PREFIX and bashWrapPowerShell stay as they are for legacy lines.\n- buildCommand (:523) gets `interpreter: String? = null`:\n  - WSL with POWERSHELL: interpreter != null builds buildPowerShellCommand(..., interpreter) directly, since the word is already the /mnt path. Null keeps bashWrapPowerShell(buildPowerShellCommand(...)).\n  - WSL with BASH: buildWslBashCommand passes the interpreter through untouched; do not toWslPath it.\n  - Native: passes it through.\n- buildCommandForTest gets the same defaulted parameter.\n\nWiring:\n- AgentContext (:134) gets `val interpreter: String? = null`.\n- In resolveContext (:262), right after the protected selection and before resolveTerminalManager, when `selected != null` run `protectedInterpreter(selected.script.kind, wslAgents, basePath)`:\n  - Refused: `Messages.showErrorDialog(project, ProtectedAgentRuntime.Refused(reason).message, \"Moe\")` and return null. That is one dialog, and no terminal or tab is created.\n  - Ready: carry the word into AgentContext.\n- launchRole (:336) passes ctx.interpreter to buildCommand.\n\nThis covers every seat launch path, since startAgent/startAgents/VM seats all go through resolveContext. LEGACY passes null everywhere, so its lines stay byte-identical. The Accounts tab (buildAccountsCommand) is out of scope and unchanged: it is not a seat launch, and its WSL `node` has no fixed path. Name it as a residual in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "note": "Threaded optional interpreter from protected resolveContext through AgentContext and every launch builder; refusal shows one dialog then returns before resolveTerminalManager. Bash uses shQuote; PowerShell swaps only its prefix word. WSL PowerShell takes the already converted word directly, while null preserves bashWrapPowerShell. Accounts and legacy callers remain unchanged. git diff --check passed. Tests run in the next planned gate.",
+      "startedAt": "2026-11-03T08:38:09.198Z",
+      "completedAt": "2026-11-03T08:38:56.131Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification test gate, once, fresh, from the task worktree after the last tracked edit. The output is the complete_task evidence, labelled Windows (see mem:jetbrains-gate-from-wsl and the task-6d5d3db2 precedent). First take the shared `jetbrains-gradle` lease with moe.acquire_resource, and release it right after the run, and before any report_blocked. Run exactly:\ncd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'\n\nExpected:\n- failures=0 and errors=0.\n- P2 runs, because this gate is Windows.\n- PINNED_LEGACY, RuntimeSelectionPolicyTest's Selected rows and VerifiedLocalLaunchTest pass unchanged.\nPut the step 1 RED output and the step 5 mutant results in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+      ],
+      "note": "Exact planned parity + lint + Windows cmd.exe gradlew.bat test --rerun + JUnit totals gate exited 0 after the last tracked edit (relocated the legacy-profile KDoc back to its function; updated prefix comment). BUILD SUCCESSFUL in 32s; 617 total, 5 skipped, 0 failures/errors. TerminalAgentLauncherTest 52/52 including all 8 new tests (P2 not skipped); RuntimeSelectionPolicyTest 80 total/3 skipped; VerifiedLocalLaunchTest 8/8. Existing PINNED_LEGACY untouched. jetbrains-gradle lease released. Filed out-of-scope Accounts bare-interpreter residual as task-26d9dc26bf334126bfb0bb4e9ed421aa; depends on this row to serialize overlapping files.",
+      "startedAt": "2026-11-03T08:38:56.158Z",
+      "completedAt": "2026-11-03T08:41:14.406Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff, as an attacker.\n\nMutants: at most two, in a `git archive` copy of moe-jetbrains under /mnt/d/moe-scratch, run with the same cmd.exe gradlew.bat command under the jetbrains-gradle lease. Never mutate the worktree. Each must turn a new row red:\n- m1: buildBashCommand ignores the interpreter, so it always types `bash`. P3 must go red.\n- m2: the Windows word keeps backslashes. P2 must go red.\n\nCheck by reading:\n- Every protected launch path reaches the interpreter: native sh, native ps1, WSL sh, the WSL ps1 fallback, VM seats.\n- A refused interpreter returns before resolveTerminalManager/createTerminalWidget.\n- No bare `bash`/`powershell` remains on any protected line.\n- The decoded PowerShell script is unchanged.\n- psQuote/shQuote still guard every value.\n- The typed word survives cmd, PowerShell 5.1/7 and bash.\n- Nothing new reads the repository.\n- Under LEGACY, nothing changes.\n\nKill only PIDs you started yourself, never by pattern. If the review changes any tracked byte, re-run step 4's exact command and use that output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "Adversarial audit traced native bash/PowerShell, both WSL branches, and VM seat contexts through the interpreter. Refusal returns after one dialog before manager/widget creation. No new shared mutable state, processes or file handles; OS executable replacement remains existing trusted-host boundary. Encoded script/quoting unchanged. Checked every pre-existing test row/helper byte-identical to HEAD. Both required mutants killed in /mnt/d/moe-scratch/b071e3bf-mutants.vdZpW4 (git archive plus two-file overlay), under jetbrains-gradle: m1 always-bash exit 1, only P3 bash-word row failed; m2 backslashes exit 1, only P2 forward-slash/WSL row failed. Scratch baseline restored, lease released. No tracked changes after step 4 green gate (617 total/5 skipped/0 failures/errors). Handoff and Windows-test gotcha recorded; Accounts residual filed as task-26d9dc26bf334126bfb0bb4e9ed421aa.",
+      "startedAt": "2026-11-03T08:41:14.441Z",
+      "completedAt": "2026-11-03T08:43:56.206Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 331.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T08:27:16.141Z",
+  "updatedAt": "2026-11-04T19:20:43.717Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T08:27:39.931Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T08:51:39.872Z",
+    "wallClockMs": 1439941
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-fdb2af60",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T08:34:11.060Z",
+  "executionContract": {
+    "intendedBehavior": "Under PROTECTED, every JetBrains agent-seat launch line starts the wrapper's interpreter by an absolute path outside the project, never by a name the terminal shell looks up:\n- POSIX: the real path of /bin/bash.\n- Windows: <SystemRoot>/System32/WindowsPowerShell/v1.0/powershell.exe in forward-slash form.\n- WSL agents: /bin/bash, or the /mnt form of that powershell.exe.\nIf the IDE finds that interpreter missing, not a regular file, inside the project or not typable unquoted, it refuses with one dialog before any terminal opens. LEGACY lines are byte-identical.",
+    "acceptanceCriteria": [
+      "protectedInterpreter returns the real path of an outside bash on POSIX. It refuses a bash inside the project, a missing one, a directory, and a PowerShell wrapper on POSIX.",
+      "On Windows it returns the forward-slash System32 Windows PowerShell path (the /mnt form with WSL agents). It refuses an unset SystemRoot, a SystemRoot inside the project, an untypable path, and a bash wrapper outside WSL agent mode.",
+      "Protected bash, PowerShell, WSL-bash and WSL-PowerShell lines differ from the legacy ones only in the first word, and the decoded PowerShell script is unchanged.",
+      "A refused interpreter shows exactly one dialog, and no terminal tab is created.",
+      "The PINNED_LEGACY 16-row byte pin, RuntimeSelectionPolicyTest and VerifiedLocalLaunchTest pass unchanged.",
+      "The new rows fail on today's bytes, and that RED is recorded."
+    ],
+    "invariants": [
+      "Under PROTECTED no PATH or current-directory lookup by the terminal shell selects the wrapper's interpreter.",
+      "A refusal returns before resolveTerminalManager and createTerminalWidget.",
+      "Builders stay pure string functions; only protectedInterpreter touches the file system."
+    ],
+    "compatibility": [
+      "LEGACY launch lines are byte-identical: interpreter is null, and POWERSHELL_LINE_PREFIX and bashWrapPowerShell are unchanged.",
+      "ProtectedAgentRuntime.Selected and RuntimeSelectionPolicy.kt are unchanged.",
+      "Accounts tab lines (buildAccountsCommand) are unchanged and out of scope.",
+      "The wrappers' argv, env prefix and encoded script are unchanged."
+    ],
+    "approvedScope": [
+      "TerminalAgentLauncher.ProtectedInterpreter (Ready/Refused) and protectedInterpreter(kind, wslAgents, basePath, windows, systemRoot, bash).",
+      "An optional interpreter parameter on buildBashCommand, buildPowerShellCommand, powerShellLine(exe), buildCommand, buildWslBashCommand and buildCommandForTest.",
+      "AgentContext.interpreter, the resolveContext refusal dialog, and launchRole passing the interpreter through.",
+      "TerminalAgentLauncherTest rows P1-P3."
+    ],
+    "reuse": [
+      "RuntimeSelectionPolicy.installedExecutable for the outside-the-project regular-file check.",
+      "toWslPath, shQuote and ProtectedAgentRuntime.Refused(reason).message for the dialog text.",
+      "powerShellLine's base64 framing."
+    ],
+    "sourceAssumptions": [
+      "TerminalAgentLauncher.kt: selectProtectedAgentRuntime :98; AgentContext :134; toWslPath :247; resolveContext :262; launchRole :336; buildCommand :523; buildPowerShellCommand :601; POWERSHELL_LINE_PREFIX :641; powerShellLine :649; buildBashCommand :702 (returns `${envPrefix}bash $scriptArg ...` at :738); shQuote :764; createTerminalWidget :776.",
+      "RuntimeSelectionPolicy.installedExecutable(path, basePath) :451 rejects relative, unprovable-drive, in-project and non-regular paths.",
+      "VerifiedLocalLaunch.preferBash(vmSeat, wslAgents) = !vmSeat && wslAgents (:32).",
+      "The forward-slash C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe ran when typed into cmd.exe, PowerShell 5.1 and Git Bash (verified 2026-11-03)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Add the interpreter to ProtectedAgentRuntime.Selected: rejected. RuntimeSelectionPolicyTest (:1876-1935) and VerifiedLocalLaunchTest compare Selected by equality, so this would rewrite pinned rows in a size-excepted file. A separate pure protectedInterpreter() keeps them untouched.\n2) A trusted-PATH scan for bash, like MoeDaemonSupervisor.nodeOnProtectedPath: rejected for bash. /bin/bash is moe-agent.sh's own shebang and the rule task-0d9ebe5b uses for moe-call.sh, so there is one fixed system bash. node needs a scan only because it has no fixed home.\n3) Open the terminal with an explicit shell command (the JetBrains ShellStartupOptions API): rejected. It needs a reflective, version-dependent API, while the typed line already works across shells.\n4) A backslash Windows path: rejected. Git Bash mangles it; the forward-slash form was verified in cmd.exe, PowerShell 5.1 and Git Bash on this host.",
+    "codebaseInsights": "- resolveContext (:262) is the only funnel. startAgent, startAgents and VM seats all build an AgentContext there, and launchRole (:336) calls buildCommand with it.\n- selectProtectedAgentRuntime picks sh first on POSIX and ps1 first on Windows. VerifiedLocalLaunch.preferBash = !vmSeat && wslAgents.\n- createTerminalWidget opens the tab with cwd = basePath (the project), and the line is typed into the user's configured shell.\n- RuntimeSelectionPolicy.installedExecutable(path, basePath) is the existing check for an absolute, real, regular file outside the project. Its rejection text says 'node executable', so map it to this task's own reasons.\n- The accepted JetBrains gate from WSL is cmd.exe gradlew.bat test --rerun under the jetbrains-gradle lease (mem:jetbrains-gate-from-wsl). task-6d5d3db2's verification is the template.",
+    "risks": "(a) The tests run on the Windows JVM (no Linux JDK); CI may run them on ubuntu. Inject paths instead of relying on /bin/bash existing, and assume-skip the Windows-only rows elsewhere.\n(b) A temp root with a space or another untypable character would make P2's positive rows fail: assume-skip them.\n(c) WSL's /bin/bash cannot be checked from Windows. That branch fails closed in the distro's shell, and nothing from the project runs.\n(d) Do not change POWERSHELL_LINE_PREFIX or bashWrapPowerShell semantics for legacy lines: the PINNED_LEGACY row and the WSL VM-seat row pin them.\n(e) Residual, out of scope: the Accounts tab still types a bare `powershell` (Windows) or `node` (WSL) at the project cwd. Name it in the summary for the epic final task.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/VerifiedLocalLaunch.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "119fce99412b215f0d31e61045bd05a740a4f7b6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T08:34:11.090Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T08:36:26.592Z",
+  "reviewStartedAt": "2026-11-03T08:44:10.556Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nnpm run lint: role-doc lint OK (architect 39/40, worker 30/40, qa 36/40)\n> Task :test\nBUILD SUCCESSFUL in 32s\n11 actionable tasks: 6 executed, 5 up-to-date\nJUnit totals: tests=617 skipped=5 failures=0 errors=0\nWindows JVM: TerminalAgentLauncherTest 52 tests, 0 skipped/failures/errors; RuntimeSelectionPolicyTest 80 tests, 3 skipped, 0 failures/errors; VerifiedLocalLaunchTest 8 tests, 0 skipped/failures/errors. All eight new rows ran, including P2.",
+    "reportedAt": "2026-11-03T08:44:10.556Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt"
+  ],
+  "completionSummary": "Pinned PROTECTED seat interpreters across native POSIX/Windows, WSL and VM routes; validation refuses before terminal creation with one dialog. LEGACY lines, Selected shape, RuntimeSelectionPolicy and existing tests remain unchanged. Added 8 P1-P3 tests. RED: Windows gradlew.bat test --rerun exited 1 at compileTestKotlin for missing resolver/types/interpreter parameter (25s). Fresh final Windows gate: parity and lint pass; 617 tests total, 5 skipped, 0 failures/errors (612 passed); TerminalAgentLauncherTest 52/52, P2 ran, PINNED_LEGACY unchanged. Both scratch mutants killed: m1 always-bash failed P3; m2 backslash executable failed P2; each exit 1, one expected new-row failure. Logs and XML: /mnt/d/moe-scratch/b071e3bf-mutants.vdZpW4. No tracked edits after final green gate; resource released. Accounts tab remains out of scope, tracked in follow-up task-26d9dc26bf334126bfb0bb4e9ed421aa. Serena handoff and gotcha saved.",
+  "commits": [
+    {
+      "sha": "68d519279b47c85e7339cbdb6f7e936bcccf0d59",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T08:34:16Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T08:46:03.894Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T08:46:26Z",
+    "at": "2026-11-03T08:52:33.444Z"
+  },
+  "completedAt": "2026-11-03T08:51:39.872Z",
+  "reviewCompletedAt": "2026-11-03T08:51:39.872Z",
+  "reviewSummary": "Completion 68d51927 (tree 0f839f48 = candidate) is pushed to moe/work-2026-10-24 and origin. Diff: 2 files, +205/-21, net 184. Test file +119/-0, so nothing deleted or weakened.\n\nRe-ran task.verification in place under the jetbrains-gradle lease (moe-jetbrains/src identical to the commit):\n- parity and lint pass; Windows gradlew.bat test --rerun BUILD SUCCESSFUL.\n- 617 tests, 5 skipped, 0 failures/errors.\n- TerminalAgentLauncherTest 52/52, 0 skipped: all 8 P1-P3 rows ran, P2 included.\n- RuntimeSelectionPolicyTest 80 (3 skipped), VerifiedLocalLaunchTest 8/8.\n\nDoD1:\n- protectedInterpreter yields the real outside /bin/bash (shQuoted) on POSIX, the forward-slash System32 powershell.exe on Windows (regex-typable), and /bin/bash or the /mnt powershell.exe under WSL. Every other combination refuses.\n- On refusal resolveContext shows one dialog and returns before resolveTerminalManager. startAgent, startAgents and VM seats all use resolveContext.\n- Probe in a dir planted with powershell.bat and bash: bare `powershell` in cmd ran the plant, but the forward-slash word ran the real PowerShell in cmd, PowerShell 5.1 and Git Bash (PATH=.:). Under WSL with PATH=.:, bare bash ran the plant, while '/bin/bash' and the /mnt powershell.exe word ran the real interpreters.\n\nDoD2: a null interpreter keeps the bare `bash`/`powershell` words. The default exe reproduces POWERSHELL_LINE_PREFIX, bashWrapPowerShell is unchanged, and PINNED_LEGACY plus all existing rows pass untouched.\n\nDoD3: RED was a compile failure, as planned, and the worker's mutants m1/m2 were killed by P3/P2.\n\nScope matches the plan: RuntimeSelectionPolicy and Selected unchanged, no docs (the epic final owns them), Accounts residual is task-26d9dc26.\n\nNon-blocking: the POSIX word skips requireSafeArg, but it is a trusted host path. The Regex could be a constant.",
+  "requiredCheckAtDone": null
+}

@@ -83,12 +83,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 19d3fc0c has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "reopenReason": "Worktree switch done (19:14Z): the control checkout is on moe/control at 0d8422ce, worktreeMode is on, and doctor exits 0. The drain park is over. Completion 19d3fc0c is in moe/control's history, so QA reviews the landed bytes.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "LOW",
@@ -96,7 +96,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:50:00.342Z",
-  "updatedAt": "2026-11-02T18:34:03.428Z",
+  "updatedAt": "2026-11-04T19:20:43.751Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:53:46.877Z",
@@ -106,11 +106,14 @@
     "firstClaimAt": "2026-11-02T17:58:01.666Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:15:59.440Z",
+    "wallClockMs": 4677774
   },
   "contextFetchedBy": [
     "architect-fda9823f",
-    "worker-4c1da905"
+    "worker-4c1da905",
+    "qa-7328a40d"
   ],
   "tier": "standard",
   "effort": "high",
@@ -245,12 +248,20 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-4c1da905@2026-11-02T18:18:18Z",
-    "at": "2026-11-02T18:22:41.576Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-02T19:13:55Z",
+    "at": "2026-11-02T19:16:38.104Z"
   },
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-02T18:34:03.428Z",
-  "blockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 19d3fc0c has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode."
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion 19d3fc0c has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T19:15:59.440Z",
+  "reviewCompletedAt": "2026-11-02T19:15:59.440Z",
+  "reviewSummary": "Reviewed landed completion 19d3fc0c (in moe/control, this worktree-mode control checkout at 0d8422ce). moe-vscode diff is net about 84 LOC (package.json -10, README +1/-2, CHANGELOG +3, new test +93), under the size cap. Re-ran checkRefs myself: (1) RED at a3269a28: only C1 fails, 'declared in package.json with no getConfiguration reader in src: moe.agentCommand, moe.chat.notifications.soundEnabled'; C2-C4 pass. (2) Missing package.json (ENOENT) and empty-properties package.json both fail C1 with their reason. (3) contributes.configuration equals a3269a28's minus exactly the two properties; README settings section equals a3269a28's minus the two rows, with exactly the six remaining keys ('DoD1-2 ok'). (4) task.verification re-run verbatim (git archive HEAD + 4 files, env -i, node v24.21.0, npm ci, lint, compile, test): 587 tests, 583 pass, 4 skipped, 0 fail, 'gate exit: 0' (up from the worker's 581 because peer task-550847ba's tests have since landed). In place, the new test passes 4/4. Also checked: the commit touches no moe-vscode/src byte, no existing test, no package-lock.json; package.json parses; the test's sha256 matches the architect's reference; it uses node builtins only, fixtures under os.tmpdir() removed in finally, nothing caught, so an unreadable or empty package.json cannot pass. No forbidden patterns in added lines. The two keys now appear only in CHANGELOG/README/the new test, plus JetBrains ChatPanel.kt:115, whose own key is intentionally untouched. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

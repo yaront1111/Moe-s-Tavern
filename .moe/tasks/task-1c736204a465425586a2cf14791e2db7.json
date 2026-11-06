@@ -1,0 +1,41 @@
+{
+  "id": "task-1c736204a465425586a2cf14791e2db7",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #18): file 2-4 evidence-backed bug rows from the pending daemon swap's startup path (migrations, backfills, heal, restart purge and reattach on today's .moe/), the wrapper side of Claude account rotation, and the metrics surfaces (list_metrics, task metrics stamping, the analyze/usage/baseline scripts)",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04, after hunt #17 closed.\n\nWHY. At filing time 1 architect and 2 workers are idle. The board holds 3 PLANNING rows (all claimed), 2 WORKING, 3 in REVIEW and 1 BACKLOG row that is dependency-gated, so it drains in about 30-40 min without new rows.\n\nLANE. Search in this order of preference:\n1. The pending live-daemon swap's startup path. The human is due to swap the live daemon from edc27e14 (pid 36176) to the staged build of 2a1c5a36 at D:\\projexts\\moe-rebuild-2a1c5a36, which is 80 DONE daemon commits newer.\n   - Audit what that daemon does to THIS board's .moe/ at its first start: src/migrations (v1_to_v2 .. v5_to_v6), src/state/backfills, legacyTaskBackfill, massDeletionHeal, and the restart purge and reattach (purgeAllWorkers, the held-seat reattach, attempt and lease records).\n   - Look for a record written by edc27e14 that the new daemon misreads, drops, resets or rewrites at startup: tasks, attempts, workers, resources/leases, receipts, chat cursors or proposals.\n   - Method: boot the staged build on a COPY of today's .moe/, the way /mnt/d/moe-scratch/governor/smoke-daemon.ps1 does (its own port, isolated HOME). Diff the records before and after the boot, and compare the same boot of an edc27e14 build.\n   - HARD LIMITS: never build, npm ci or test inside D:\\projexts\\moe-rebuild-2a1c5a36, because it is the swap target. Never point a second daemon at the live .moe/. Never stop or signal pid 36176 or its supervisor. Make your own clone or snapshot for any build.\n2. The wrapper side of Claude account rotation: scripts/moe-account-lease.mjs, usage-session.mjs, usage-receipt.mjs, usage-report.mjs, prompt-cache*.mjs, and the moe-account-switch mod in scripts/mods. Hunt #13 covered only the daemon side.\n   - Today's switch is a live sample. acct-1 reached 91% and the 06:40Z #governors banner moved every seat to acct-2; compare the logs and the lease files against what those scripts claim.\n   - Look for a lease never released, two seats on one lease, a switch decided on stale usage, or a seat left on a spent account.\n   - Do not edit or re-lease the live accounts file (~/.moe/claude-accounts.json); read it, or use MOE_ACCOUNTS_FILE pointed at a copy.\n3. The metrics surfaces: moe.list_metrics; the task metrics stamping (firstClaimAt, plannedStepCount, plannedDistinctFileCount, executedStepCount, wallClockMs, doneAt) across reopen, release, re-claim, the landing-retry route and BLOCKED; and scripts/analyze-task-metrics.mjs, analyze-usage.mjs and baseline-*.mjs run read-only against a copy of today's .moe/. Look for a count that goes wrong after a reopen or release, or a script that crashes or misreports on today's record shapes (worktree-mode records, ARCHIVED rows, 1000+ tasks).\n\nSKIP.\n- The lanes of hunts #1-#17 (read the archived hunt-row titles) and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Every file an open row holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start. At filing time those are:\n  - scripts/moe-agent.{sh,ps1}, scripts/CLAUDE.md and docs/plans/2026-10-30-per-task-worktrees.md;\n  - scripts/tests/{postflight-fake-proxy.js, postflight-owner-scope.test.mjs, postflight-worktree.cjs, postflight-vm-route.ps1, parity-check.sh, parity-check.ps1};\n  - docs/roles/{governor,worker,architect}.reference.md and packages/moe-daemon/src/generated/initFiles.ts;\n  - packages/moe-daemon/src/commands/{doctor.test.ts, doctorWorktree.ts} and docs/TROUBLESHOOTING.md;\n  - once their plans land: index.ts and its test (78fa7110), the JetBrains daemon supervisor and models files (fe811130, 8383080c), and doctor.ts (d7b24cab).\n  - docs/MCP_SERVER.md is shared by section (ruling msg-71db57ac).\n- The verified-local profile is refused by design, so a gap there counts only if it affects the legacy profile.\n\nEVIDENCE BAR. Same as hunts #2-#17. One of:\n- a repro on HEAD 821478d6 or later, run in a snapshot outside the shared checkout (never build or test in place; the shared checkout's packages/moe-daemon/dist is the live runtime);\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note instead. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. A lane-1 finding that should hold the swap goes in #governors at once with an @governor-e6142a94 mention, before you file anything else.\n3. Post the ids, or \"nothing real\", in #governors and mention governor-e6142a94.\n4. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way, the outcome is posted in #governors with a mention of governor-e6142a94, and any lane-1 finding that should hold the daemon swap is posted first.",
+    "Every filed row cites its evidence: a repro on HEAD 821478d6 or later run outside the shared checkout, a failure line from today's logs, or a doc/code file:line pair with a call or test that shows the difference. The staged swap build, the live .moe/, the live daemon and the live accounts file were never modified.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 493.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:04:19.509Z",
+  "updatedAt": "2026-11-04T08:17:13.561Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T07:07:45.344Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-c33f294e@2026-11-04T07:07:42Z",
+    "at": "2026-11-04T08:17:13.561Z"
+  }
+}

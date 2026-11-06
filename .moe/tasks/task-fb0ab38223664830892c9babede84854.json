@@ -1,0 +1,199 @@
+{
+  "id": "task-fb0ab38223664830892c9babede84854",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: no MoeDaemonSupervisorTest row pins that a surviving old supervisor root refuses a Windows Restart Daemon (OldTree.survivor() includes roots)",
+  "description": "Test gap found by RF04's QA (qa-952969be, comment-6125c6f7 on task-f3f364a6) and handed to CQ-RF07. The code is correct at 28df02f7, but a mutant that drops `roots` from MoeDaemonSupervisor.OldTree.survivor() passes every existing MoeDaemonSupervisorTest row. Without that term, a supervisor root that survives TerminateProcess could respawn `_run` after Restart Daemon reports success. QA's probes QA1-QA4 (a surviving root in both profiles; a PROTECTED STOP_FAILED signals nothing and gates starts; NOT_STARTED_HERE while a tree is retained; pid 0/-1 is never looked up or signalled) are in /mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch with mutant-roots-survivor.log. Adopt them as permanent rows. This is test-only; no production change is expected.",
+  "definitionOfDone": [
+    "MoeDaemonSupervisorTest gains rows equivalent to QA1-QA4; the QA1 row fails when `roots` is dropped from OldTree.survivor() and passes on the unchanged production code.",
+    "No production byte changes; `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && .\\gradlew.bat test --rerun\"` exits 0 under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Port QA's probes as permanent rows (test only).\n\nSource: /mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch, which holds QA1-QA4, written against RF04's tree. It no longer applies at its old hunk: `git apply --check` fails at :1143. Every member it uses still exists in the WinRestart fixture at f7b077f7:\n- proc(pid, parent, startSec, survives), own, stop, restart, starts, service, verified(), self, signals(), stops, events and lookup;\n- TreeHandle.alive and kills;\n- survivor() and restartRefusal();\n- S, R, D, STOP_FAILED and NOT_STARTED_HERE.\n\nInsert the four test bodies verbatim right after the W35 row, before the private volumeSpelling helper. Rename them into the file's W numbering, keeping QA's wording:\n- W36 a root that survives its kill refuses and gates starts in both profiles (QA1)\n- W37 a protected stop failure signals nothing, gates starts, and a later restart clears it (QA2)\n- W38 an unverified protected daemon refusal keeps the retained tree and signals nothing (QA3)\n- W39 a non-positive daemon json pid is never looked up or signaled on Windows (QA4)\n\nAbove W36, add one comment line naming the gap. No other row lets a supervisor ROOT survive: every other `survives = true` handle is D, Q, P or a pid reuser. So dropping `roots` from OldTree.survivor() passed the whole suite (RF04 QA, task-f3f364a6).\n\nThen run only this class, GREEN, on the unchanged production code:\n- Hold the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). If it is busy, call moe.report_blocked with that resourceId. Release it on every path.\n- From the worktree root: W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\".\n- Keep the --tests value unquoted (mem:gotcha-jetbrains-gradle-from-wsl).\n\nIf a probe fails on the unchanged code, the current production behavior wins. Adjust only that row's assertions to the current, correct behavior and keep its intent: W36 must still pin the surviving root. Record why in the step note. Never touch production bytes (DoD 2).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Added W36-W39 (QA1-QA4 verbatim bodies, renamed) plus one comment line after W35. Class run on unchanged production: 87 tests, 0 failures/errors/skipped. No probe needed adjusting.",
+      "startedAt": "2026-11-03T03:05:04.182Z",
+      "completedAt": "2026-11-03T03:06:04.654Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Mutation proof (DoD 1). Run it in a scratch snapshot, never in the worktree.\n\nFrom the worktree root, under the lease, run /mnt/d/moe-scratch/fb0ab382-plan/mutant.sh byte for byte; its sha256 is in SHA256SUMS there. The script:\n1. archives HEAD's moe-jetbrains into /mnt/d/moe-scratch/fb0ab382-mutant. A test-only snapshot needs no packages dist (mem:gotcha-jetbrains-snapshot-gradle-test);\n2. copies in your test file;\n3. rewrites `(runs + roots + tree + watched)` to `(runs + tree + watched)` in the snapshot's MoeDaemonSupervisor.kt, and asserts there is exactly one hit;\n4. runs the class.\n\nThe Gradle run must exit non-zero, and W36 must be the only failed row. On 2026-10-30 QA's run of the probes against the same mutant showed 77 tests and 1 failure, QA1.\n\nKeep the console tail for the completion summary. Remove the snapshot afterwards; it is only your own scratch directory.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "mutant.sh (sha256 verified): mutant gradle exit=1, 87 tests completed, 1 failed = W36 only. Snapshot removed.",
+      "startedAt": "2026-11-03T03:06:05.503Z",
+      "completedAt": "2026-11-03T03:06:45.554Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once, before moe.complete_task (DoD 2).\n\nUnder the jetbrains-gradle lease, run the checkRef from the worktree root, byte for byte as /mnt/d/moe-scratch/fb0ab382-plan/verify.sh. It runs, in order:\n- parity-check;\n- lint;\n- the DoD's `gradlew.bat test --rerun` through cmd.exe in this worktree's moe-jetbrains. This is the Windows form of the DoD command, because WSL has no JDK;\n- the JUnit XML totals, which fail on any failure or error.\nIts fresh output is the complete_task evidence.\n\nAlso show that `git diff --stat $(git merge-base HEAD moe/work-2026-10-24) -- moe-jetbrains/src/main` prints nothing: no production byte changed.\n\nRelease the lease on every path. Never run clean. Never pattern-kill a Gradle or Java process.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "verify.sh exit 0; JUnit totals tests=598 skipped=0 failures=0 errors=0; git diff --stat vs merge-base on moe-jetbrains/src/main prints nothing. Lease released.",
+      "startedAt": "2026-11-03T03:06:45.584Z",
+      "completedAt": "2026-11-03T03:07:25.493Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review: one pass over this task's diff.\n(a) Each new row fails for a real reason. W36 fails under the roots mutant (step 2). For W37-W39, read OldTree and stopDaemonForRestart and confirm that each row asserts something the code produces, not a fixture default: the refusal text, the absence of kill: events, the gated starts.\n(b) Nothing leaks into other rows: only new rows were added, and no fixture or helper changed.\n(c) The rows are deterministic: no real sleeps, and no real pid other than self.\n(d) The error handling path of each refusal: its exact message comes from survivor() or restartRefusal().\n(e) The diff touches only MoeDaemonSupervisorTest.kt.\nRecord the GREEN run, the mutant result and the gate totals in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "Self-review: diff is +68/-0 in MoeDaemonSupervisorTest.kt only; no fixture/helper change; no sleeps; W36 proven by mutant; W37-W39 assert refusal text via restartRefusal()/survivor(), absence of kill: events, and gated starts (all GREEN on unchanged production).",
+      "startedAt": "2026-11-03T03:07:26.456Z",
+      "completedAt": "2026-11-03T03:07:34.535Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\": CQ-RF07 residual (MoeDaemonSupervisorTest gap for surviving supervisor roots).",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 319.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:45.607Z",
+  "updatedAt": "2026-11-04T19:20:43.514Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T22:26:20.099Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T03:01:50.632Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T03:16:51.271Z",
+    "wallClockMs": 900639
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-8cf0816c",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T03:04:16.927Z",
+  "executionContract": {
+    "intendedBehavior": "Four new rows, W36-W39, ported from RF04 QA's probes QA1-QA4, pin four behaviours of the Windows Restart Daemon in MoeDaemonSupervisorTest:\n- W36 (QA1): a supervisor root that survives its kill refuses the restart and gates starts, in both profiles.\n- W37 (QA2): a protected stop failure signals nothing and gates starts, and a later restart clears it.\n- W38 (QA3): an unverified protected daemon refusal keeps the retained tree and signals nothing.\n- W39 (QA4): a non-positive daemon.json pid is never looked up or signaled.\nProduction code is unchanged.",
+    "acceptanceCriteria": [
+      "W36-W39 pass on the unchanged production code.",
+      "W36 fails when `roots` is dropped from OldTree.survivor() (mutant.sh), and it is the only failed row.",
+      "The verify.sh gate exits 0 with JUnit failures + errors = 0.",
+      "No byte under moe-jetbrains/src/main changes."
+    ],
+    "invariants": [
+      "Production code (moe-jetbrains/src/main) is byte-identical to the fork base."
+    ],
+    "compatibility": [
+      "The existing rows W1-W35, N1-N2 and RP* are unchanged."
+    ],
+    "approvedScope": [
+      "MoeDaemonSupervisorTest.kt: four new @Test rows after W35, plus one comment line. No fixture or helper change."
+    ],
+    "reuse": [
+      "QA's probe bodies (qa-probes.patch) and the existing WinRestart and TreeHandle fixture, unchanged."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonSupervisor.kt (f7b077f7): OldTree.survivor() at :435 is `(runs + roots + tree + watched).firstOrNull(::running)`. The roots are terminated and awaited at :386-387.",
+      "MoeDaemonSupervisorTest.kt: WinRestart at :1300, TreeHandle at :1374, restartRefusal and survivor at :1413-1418, and the constants S/R/D/STOP_FAILED/NOT_STARTED_HERE at :1548-1556. The W35 row starts at :1270.",
+      "No existing row makes the root S survive: every `survives = true` handle is D, Q, P or a reuser."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=/mnt/d/moe-scratch/fb0ab382-mutant && rm -rf \"$S\" && mkdir -p \"$S\" && git archive HEAD moe-jetbrains | tar -x -C \"$S\" && cp moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt \"$S/moe-jetbrains/src/test/kotlin/com/moe/services/\" && M=\"$S/moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt\" && sed -i 's/(runs + roots + tree + watched)/(runs + tree + watched)/' \"$M\" && [ \"$(grep -c '(runs + tree + watched)' \"$M\")\" = 1 ] && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\fb0ab382-mutant\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonSupervisorTest --rerun\"; echo \"mutant gradle exit=$? (must be non-zero, with W36 the only FAILED row)\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Applying the patch as is: rejected, because the hunk moved and `git apply --check` fails. Port the four bodies verbatim instead.\n- Mutating in the worktree and reverting: rejected, because a checkpoint could capture the mutant. The scratch snapshot keeps production bytes untouched.",
+    "codebaseInsights": "- The fixture API the probes use is unchanged since RF04.\n- The architect seat cannot take the jetbrains-gradle lease (it has no acquire_resource tool), so there is no prototype run. QA's 2026-10-30 runs showed 77/77 green on the unchanged code and 1 failure (QA1) under the mutant.",
+    "risks": "- Later rows (W27-W35) may have changed retained-tree semantics. If a probe fails on the unchanged code, adjust only its assertions to the current behavior and record it, as step 1 says.\n- The lease may be busy: report_blocked with the resourceId.",
+    "keyFiles": [
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "/mnt/d/moe-scratch/qa-rf04-qa-952969be/qa-probes.patch"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "384f0c555fb49c9afc6aa85f60fc701c46b37a3e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T03:04:16.953Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T03:05:04.182Z",
+  "reviewStartedAt": "2026-11-03T03:07:40.081Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 28s\n11 actionable tasks: 2 executed, 9 up-to-date\nJUnit totals: tests=598 skipped=0 failures=0 errors=0",
+    "reportedAt": "2026-11-03T03:07:40.081Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+  ],
+  "completionSummary": "Test-only: added W36-W39 (RF04 QA probes QA1-QA4) to MoeDaemonSupervisorTest after W35, plus one comment line (+68/-0, one file). GREEN on unchanged production: class run 87 tests, 0 failures. Mutant (mutant.sh, `(runs + roots + tree + watched)` -> `(runs + tree + watched)`): gradle exit 1, 87 tests, 1 failed = W36 only. Gate (verify.sh): parity-check + lint OK, gradlew.bat test --rerun BUILD SUCCESSFUL, JUnit totals tests=598 skipped=0 failures=0 errors=0. git diff --stat vs merge-base on moe-jetbrains/src/main prints nothing. Lease released.",
+  "commits": [
+    {
+      "sha": "ba67fa972862b3a8ce1adfd318df0f611a0bba93",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T03:04:16Z",
+      "paths": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T03:08:28.167Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T03:14:26Z",
+    "at": "2026-11-03T03:17:06.623Z"
+  },
+  "completedAt": "2026-11-03T03:16:51.271Z",
+  "reviewCompletedAt": "2026-11-03T03:16:51.271Z",
+  "reviewSummary": "Reviewed completion ba67fa97 (on moe/control, moe/work-2026-10-24 and the task branch). Diff is +68/-0 in one file, MoeDaemonSupervisorTest.kt (rows W36-W39 plus one comment line, inserted after W35). Production is untouched: `git diff --stat ba67fa97^ ba67fa97 -- moe-jetbrains/src/main` prints nothing. I compared the four row bodies against RF04 QA's qa-probes.patch (QA1-QA4); they match apart from the QA->W renames. No fixture, helper or existing row changed, so no test was weakened or deleted. Under the jetbrains-gradle lease I re-ran the gate (verify.sh, sha256 verified): parity-check and lint passed, `gradlew.bat test --rerun` was BUILD SUCCESSFUL, and the JUnit totals were tests=598 skipped=0 failures=0 errors=0. The moe-jetbrains tree was clean at HEAD, so the in-place run covered exactly the landed bytes. The MoeDaemonSupervisorTest class report shows 87 tests, 0 failures, and W36, W37, W38 and W39 each present and passing. I also re-ran mutant.sh (sha256 verified), which drops `roots` from OldTree.survivor() in a scratch snapshot with the new test file: gradle exit 1, 87 tests completed, 1 failed, and the only FAILED row is W36. That meets DoD 1 and acceptance criterion 2. The scratch snapshot is removed and the lease is released. Not an epic-final task and no rail waives size; at +68 it is well under 400. Rows W37-W39 pass on current production and assert specific refusal text, absent kill: events and gated starts. Only W36 was required to be mutation-proven.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,236 @@
+{
+  "id": "task-d154d1983b8b4b0588fac4a54b833f41",
+  "epicId": "epic-be924fb8",
+  "title": "docs: once the agy port lands, the marketplace descriptions (plugin.xml, moe-vscode/package.json) still say \"Gemini CLI\", and SCHEMA.md still says every worker is recorded as CLAUDE",
+  "description": "Two stale-text leftovers, both found by architect-cd0ac706 while planning task-cb378fd8 (comment-c89e23e8). Evidence is at edc3e937.\n\n1. Marketplace descriptions. Once task-c199e177 and task-cb378fd8 (the PR #208 port) land, gemini mode runs only Antigravity (agy), and cb378fd8 relabels the JetBrains Agents menu and the VS Code quick-pick to match. The store-facing text still names the Gemini CLI:\n   - moe-jetbrains/src/main/resources/META-INF/plugin.xml:8 (\"an AI agent task board for Claude Code, Codex, Gemini CLI and Grok Build\")\n   - plugin.xml:16 (\"launch Claude Code, Codex, Gemini CLI or Grok Build per role from the Agents menu\")\n   - moe-vscode/package.json:4 (\"run Claude Code, Codex, Gemini CLI and Grok Build through a shared Kanban board\")\n2. docs/SCHEMA.md:1177 says \"record every worker as 'CLAUDE' today; CODEX / GEMINI / GROK are reserved values\". This has been stale since task-0b40957c. The proxy now passes the launcher's MOE_WORKER_TYPE as workerType on claim_next_task/join_team, and the daemon records it as worker.type.\n\nText only: no behavior change.",
+  "definitionOfDone": [
+    "plugin.xml (both spots) and moe-vscode/package.json's description name the CLIs exactly as the labels task-cb378fd8 landed (Antigravity where gemini mode is meant), with every other word unchanged.",
+    "docs/SCHEMA.md's WorkerType note states what is recorded today: the source (MOE_WORKER_TYPE via the proxy's workerType on claim_next_task/join_team), the field (worker.type) and the values actually produced. Each claim is checked against the code it names, with file:line in the completion summary.",
+    "No other file changes. The gate is checkRefs[0]: content checks for the new and old strings plus validation that both manifests still parse (plugin.xml as XML, package.json as JSON). It finishes in under 20 minutes on this host (GLOBAL gate-budget rail)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Marketplace descriptions: swap 'Gemini CLI' for the gemini-mode label task-cb378fd8 landed, in exactly three places, every other byte unchanged.\nFirst read the label L from the landed code: `sed -n 's/^moe.panel.provider.gemini=//p' moe-jetbrains/src/main/resources/messages/MoeBundle.properties` (planned value `Antigravity`, mem:task-task-cb378fd8a608489c81edc56bff9c2ecc-handoff). Confirm moe-vscode/src/extension.ts's gemini quick pick reads `{ label: '<L>', description: lastProvider === 'gemini' ...` and TerminalAgentLauncher.kt has `GEMINI(\"<L>\", \"gemini\")`.\nError handling: if L is empty, still `Gemini`, or the three disagree, task-cb378fd8 did not land as planned: moe.report_blocked naming task-cb378fd8 (blockedOnTaskIds: []), edit nothing.\nThen three Edit-tool replacements (each old string occurs exactly once at edc3e937; cb378fd8 leaves both files alone):\n- moe-jetbrains/src/main/resources/META-INF/plugin.xml :8: 'an AI agent task board for Claude Code, Codex, Gemini CLI and Grok Build.' -> 'an AI agent task board for Claude Code, Codex, Antigravity and Grok Build.'\n- plugin.xml :16: 'launch Claude Code, Codex, Gemini CLI or Grok Build per role from the Agents menu' -> 'launch Claude Code, Codex, Antigravity or Grok Build per role from the Agents menu'\n- moe-vscode/package.json :4 description: 'run Claude Code, Codex, Gemini CLI and Grok Build through' -> 'run Claude Code, Codex, Antigravity and Grok Build through'\nWrite L verbatim if it is not `Antigravity`. Use the bare label, not 'Antigravity (agy)': the DoD names the labels; '(agy)' is README prose. Keep 'Claude Code', 'Codex', 'Grok Build', the em dashes, the CDATA block, the version and the JSON layout byte-identical; do not touch package-lock.json, <change-notes> or any other description. These three lines are the only Gemini mention in either file (grep -i gemini).\nOut of scope by DoD ('No other file changes'): moe-vscode/README.md, the packages/*/package.json and README.md descriptions, and docs/index.html still say 'Gemini CLI'; they are reported to the governor in comment-a9525846. Do not edit them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-vscode/package.json"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-vscode/package.json"
+      ],
+      "note": "L=Antigravity (MoeBundle.properties provider.gemini; extension.ts:323; TerminalAgentLauncher.kt:208). 3 replacements.",
+      "startedAt": "2026-11-04T20:56:24.750Z",
+      "completedAt": "2026-11-04T20:56:38.229Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/SCHEMA.md: rewrite the stale WorkerType NOTE (stale since task-0b40957c). With the Edit tool, replace the two column-0 lines under `type WorkerType =` that start `// NOTE: the daemon cannot see which CLI a worker runs —` and `// record every worker as 'CLAUDE' today;` with exactly these seven column-0 lines:\n// NOTE: worker.type is the CLI a seat reports; the daemon cannot check which CLI really runs.\n// The launchers (scripts/moe-agent.{sh,ps1}) export MOE_WORKER_TYPE from the CLI they start:\n// CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE). moe-proxy adds it as workerType\n// to claim_next_task and join_team unless the call sets its own. The daemon keeps an exact,\n// case-sensitive name and records any other value as 'CLAUDE'. An omitted workerType keeps an\n// existing record's type and makes a new record 'CLAUDE'. A governor record that\n// enter_governance rebuilds after a purge is 'CLAUDE' until the seat reports again.\nNothing else in the file changes: the four union lines stay as landed (including cb378fd8's GEMINI comment), as does the blank line before `type WorkerStatus`.\nTrace every claim to code and record the landed file:line for the summary (DoD 2). The edc3e937 lines are below; re-read them at the tip, because task-c199e177 shifts the launcher lines:\n(1) reported, not verified: WORKER_TYPE_SCHEMA joinTeam.ts:41-46, plus docs/MCP_SERVER.md 'Informational only: it is unauthenticated'.\n(2) launcher export: moe-agent.sh:632-647 (CLI_TYPE from the command's base name, the `case` sets MOE_WORKER_TYPE, `export`) and moe-agent.ps1:1219-1231 ($cliType.ToUpperInvariant()); c199e177 adds `agy` to the gemini branch of both.\n(3) any other command is CLAUDE: sh `*) MOE_WORKER_TYPE=CLAUDE`; ps1 default `$cliType = \"claude\"` (:1220).\n(4) moe-proxy: utils.ts:289 WORKER_TYPE_TOOLS (CLAIM_TOOL plus the join_team spellings), :302-322 injectWorkerType (a blank env sends nothing :307; the caller's own key wins :316), called at index.ts:734.\n(5) exact name else CLAUDE: joinTeam.ts:9 WORKER_TYPES, :12-14 normalizeWorkerType.\n(6) omitted: refreshWorkerType returns on undefined (joinTeam.ts:28); new records get normalizeWorkerType(params.workerType) at joinTeam.ts:79 and claimNextTask.ts:829.\n(7) governor rebuild: enterGovernance.ts:89-91 `type: 'CLAUDE'`, refreshed by the next join_team (joinTeam.ts:97) or claim_next_task (claimNextTask.ts:484/:508).\nError handling: if a claim does not hold at the landed tip, reword only that clause. Keep the lead-in '// NOTE: worker.type', the column-0 `// ` form and the tokens the gate requires (MOE_WORKER_TYPE, workerType, claim_next_task, join_team, moe-proxy, CODEX, GEMINI, GROK, 'CLAUDE'), and say what changed in the summary. The text above matches no pattern the SCHEMA.md doc-contract tests forbid (util/daemonGitDocs.test.ts NEVER_RUNS_GIT; util/taskTimeBudgetDocs.test.ts seed/budget/check+firstClaimAt|wallClockMs), so do not add such words.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "All 7 claims verified at tip; none reworded.",
+      "startedAt": "2026-11-04T20:56:38.969Z",
+      "completedAt": "2026-11-04T20:56:52.230Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE after steps 1-2, from this task's worktree root in WSL bash (xmllint is /usr/bin/xmllint; Git Bash has none): executionContract.checkRefs[0], verbatim. Its fresh output is the complete_task verification (command = that text, exitCode 0, outputTail). Expect last line `OK`, exit 0; the dry run took about 0.3 s, far under the 20-minute gate budget.\nWhat it checks, in order:\n- B = MERGE_HEAD during a LANDING-RETRY merge, else the merge base with MOE_LAND_TARGET;\n- the label L from MoeBundle.properties is set, is not Gemini, and matches the VS Code quick pick;\n- plugin.xml is well-formed XML (xmllint) and package.json parses (node require);\n- no 'Gemini' is left in either file;\n- each file with ', L ' mapped back to ', Gemini CLI ' is byte-identical to B's copy (every other word unchanged);\n- SCHEMA.md minus the WorkerType block's column-0 // lines equals B's;\n- the new note starts '// NOTE: worker.type', has no 'reserved' remnant and holds the 9 tokens;\n- `git diff --name-only $B` is exactly the three files.\nDry-run in a clone with cb378fd8's labels simulated: RED before the edits (it prints the three Gemini lines), GREEN after them, 14 mutants red, and the resume path green only through MERGE_HEAD.\nError handling for a red run (fix the text, never the check):\n- printed Gemini lines: a replacement was missed;\n- `cmp: - /dev/fd/63 differ: byte N, line M`: another byte of that file changed;\n- a `diff` hunk: SCHEMA.md changed outside the NOTE lines;\n- a bare token name: the note lacks it;\n- rc=1 with no output: the label check, the lead-in, a 'reserved' remnant or the file scope (`git diff --name-only $B`).\n- A red label check is a cb378fd8 problem: moe.report_blocked, not an edit.\nQA re-run: in a clone detached at the completion sha with MOE_LAND_TARGET=<sha>^ exported (mem:decision-doc-row-checkrefs-worktree-mode). On the control checkout without it, B is HEAD, which already holds the change, so the map-back cmp is red by design.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] OK, rc 0",
+      "startedAt": "2026-11-04T20:56:53.037Z",
+      "completedAt": "2026-11-04T20:57:09.513Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review), scoped to this row's diff: `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the working tree.\n- Exactly 3 files: plugin.xml -2/+2, package.json -1/+1, SCHEMA.md -2/+7; no .moe/ path.\n- Read the two marketplace sentences as a store visitor would. 'Antigravity' is also the IDE moe-vscode targets; the DoD mandates the label, so keep it and do not add '(agy)'.\n- Re-trace each of the seven note claims at the landed tip: would any be false for a codex, grok or agy seat, or for a seat launched without the wrappers (no MOE_WORKER_TYPE, so nothing is sent)?\n- xmllint cannot see HTML inside the CDATA; the map-back cmp is what guards those bytes.\nThen write the complete_task summary: the label source (file:line of the bundle key and the extension.ts quick pick); the three replacements; the seven note claims, each with its landed file:line; the gate output; and the out-of-scope 'Gemini CLI' mentions handed to the governor (comment-a9525846).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-vscode/package.json"
+      ],
+      "note": "Self-review: 3 files, +10/-5; claims hold for codex/grok/agy seats; a wrapper-less seat sends nothing (utils.ts:307).",
+      "startedAt": "2026-11-04T20:57:10.339Z",
+      "completedAt": "2026-11-04T20:57:18.470Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cb378fd8a608489c81edc56bff9c2ecc"
+  ],
+  "priority": "LOW",
+  "order": 539.7,
+  "comments": [
+    {
+      "id": "comment-a9525846210c49c28134756eeb8377fc",
+      "author": "architect-67c762f6",
+      "content": "Follow-up for @governor-e6142a94, found while planning this row and outside its scope (the DoD says \"No other file changes\"). At edc3e937, once task-cb378fd8 and this row land, these store-facing texts still say \"Gemini CLI\":\n- moe-vscode/README.md:3 and :25. vsce packs this file as the VS Code Marketplace / Open VSX page body. Note that :3 already says \"for VS Code and Antigravity\", so a plain swap would name Antigravity twice; \"Antigravity (agy)\" may read better there.\n- packages/moe-daemon/package.json:4 and packages/moe-proxy/package.json:4 (the npm descriptions), plus packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 (the npm pages).\n- docs/index.html:21, :49 and :129 (the project site).\nLeft alone on purpose: moe-vscode/CHANGELOG.md:43 (history), and .gitignore:56 plus scripts/moe-agent.sh:11645/:11651 (comments; the launcher belongs to task-c199e177).\nI have not filed a row for these; that is your call.",
+      "timestamp": "2026-11-04T18:57:13.884Z"
+    },
+    {
+      "id": "comment-8ce9a30d49364974b39791dffae43003",
+      "author": "governor-e6142a94",
+      "content": "Governor, 20:57Z, a wording hint for this row's worker, carried from the duplicate task-ee7509fb (worker-5772dacf, found during cb378fd8). Name the CLI \"Antigravity (agy)\", as README.md does after cb378fd8 (d35f2bc3). Leave the IDE name \"VS Code / Antigravity\" and the `gemini` command id unchanged. Repro: `grep -n 'Gemini CLI' moe-jetbrains/src/main/resources/META-INF/plugin.xml moe-vscode/package.json` returns 3 lines today, and 0 once this row is done.",
+      "timestamp": "2026-11-04T20:55:27.674Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T18:43:01.164Z",
+  "updatedAt": "2026-11-04T21:03:59.379Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T18:43:07.388Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T21:03:34.512Z",
+    "wallClockMs": 8427124
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "architect-2a219562",
+    "worker-a408f113",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T18:59:22.444Z",
+  "executionContract": {
+    "intendedBehavior": "Text only, no behavior change. The JetBrains plugin.xml description (two places) and moe-vscode/package.json's description name gemini mode by the provider label task-cb378fd8 landed (Antigravity) instead of 'Gemini CLI'. docs/SCHEMA.md's WorkerType NOTE says what worker.type records today: the CLI the seat reports through the launchers' MOE_WORKER_TYPE and moe-proxy's workerType on claim_next_task/join_team, normalized by the daemon to CLAUDE, CODEX, GEMINI or GROK.",
+    "acceptanceCriteria": [
+      "plugin.xml :8 reads 'an AI agent task board for Claude Code, Codex, <L> and Grok Build.' and :16 reads 'launch Claude Code, Codex, <L> or Grok Build per role from the Agents menu'; package.json's description reads 'AI agent task board: run Claude Code, Codex, <L> and Grok Build through a shared Kanban board with human plan approval'. <L> is the landed moe.panel.provider.gemini value (Antigravity).",
+      "No 'Gemini' remains in either manifest, and every other byte matches the base.",
+      "The WorkerType NOTE is the seven prescribed lines (or a claim-preserving rewording) naming MOE_WORKER_TYPE, moe-proxy, workerType, claim_next_task, join_team, worker.type and the values CLAUDE/CODEX/GEMINI/GROK. The old 'reserved values' note is gone, and nothing else in SCHEMA.md changes.",
+      "plugin.xml is well-formed XML and package.json parses as JSON.",
+      "The diff touches exactly docs/SCHEMA.md, moe-jetbrains/src/main/resources/META-INF/plugin.xml and moe-vscode/package.json, and the completion summary cites file:line for every note claim."
+    ],
+    "invariants": [
+      "No code, test, script or build file changes, and no .moe/ path.",
+      "The plugin id, name, version and vendor, and the JSON keys and key order of package.json, are unchanged.",
+      "The four WorkerType union lines are byte-identical to the base."
+    ],
+    "compatibility": [
+      "Marketplace text only: no MCP tool contract, wire shape or .moe/ state changes (epic rails).",
+      "The provider id/command 'gemini' and every saved setting stay; only display text changes."
+    ],
+    "approvedScope": [
+      "plugin.xml description sentences at :8 and :16",
+      "moe-vscode/package.json `description`",
+      "docs/SCHEMA.md WorkerType NOTE comment lines"
+    ],
+    "reuse": [
+      "The worktree-mode doc-row gate pattern from mem:decision-doc-row-checkrefs-worktree-mode (merge-base B, values derived from landed code, strip-diff). xmllint and node's JSON require do the parse checks, so no new script file is needed."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/joinTeam.ts:9-14 WORKER_TYPES + normalizeWorkerType keep an exact case-sensitive CLAUDE/CODEX/GEMINI/GROK, else 'CLAUDE'. :23-39 refreshWorkerType skips undefined (:28). :79 sets a new record's type.",
+      "packages/moe-daemon/src/tools/claimNextTask.ts :484/:508 refresh the type, and :829 sets the auto-registered type.",
+      "packages/moe-daemon/src/tools/enterGovernance.ts:89-91 rebuilds a purged governor record with type 'CLAUDE'.",
+      "packages/moe-proxy/src/utils.ts:289 WORKER_TYPE_TOOLS; :302-322 injectWorkerType (a blank env sends nothing :307; the caller's key wins :316). packages/moe-proxy/src/index.ts:734 calls it with process.env.MOE_WORKER_TYPE.",
+      "scripts/moe-agent.sh:632-647 and scripts/moe-agent.ps1:1219-1231 derive MOE_WORKER_TYPE from the command's base name (codex/gemini/grok, else CLAUDE); task-c199e177 adds agy to the gemini branch.",
+      "task-cb378fd8's plan sets moe.panel.provider.gemini=Antigravity, GEMINI(\"Antigravity\", \"gemini\") and the VS Code quick-pick label 'Antigravity'. It leaves plugin.xml, package.json and the SCHEMA NOTE lines alone.",
+      "No test reads the two descriptions: WorktreeExclusionTest only matches the listener registration in plugin.xml."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD ${MOE_LAND_TARGET:-HEAD}) && R=moe-jetbrains/src/main/resources P=$R/META-INF/plugin.xml J=moe-vscode/package.json S=docs/SCHEMA.md && L=$(sed -n 's/^moe.panel.provider.gemini=//p' $R/messages/MoeBundle.properties) && [[ $L && $L != Gemini ]] && grep -qF \"'$L', d\" moe-vscode/src/extension.ts && xmllint --noout $P && node -e \"require('./$J')\" && ! grep -n Gemini $P $J && for f in $P $J; do sed \"s/, $L /, Gemini CLI /\" $f | cmp - <(git show $B:$f) || exit 1; done && r='/^type WorkerT/,/^type WorkerS/' && diff <(git show $B:$S | sed \"$r{/^\\/\\//d}\") <(sed \"$r{/^\\/\\//d}\" $S) && N=$(sed -n \"$r{/^\\/\\//p}\" $S) && [[ $N == \"// NOTE: worker.type\"* && $N != *reserved* ]] && for t in MOE_WORKER_TYPE workerType claim_next_task join_team moe-proxy CODEX GEMINI GROK \"'CLAUDE'\"; do [[ $N == *\"$t\"* ]] || { echo $t; exit 1; }; done && [ \"$(git diff --name-only $B | xargs)\" = \"$S $P $J\" ] && echo OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Label form. The plan uses 'Antigravity', the bundle, enum and VS Code quick-pick label that cb378fd8 lands, rather than README's 'Antigravity (agy)' prose, because the DoD says 'exactly as the labels'.\n- The gate derives L from the landed bundle at run time instead of hard-coding 'Antigravity'. cb378fd8 has not landed yet, and a QA-driven relabel there then re-anchors this gate without a re-plan (mem:decision-doc-row-checkrefs-worktree-mode).\n- Fixing every remaining 'Gemini CLI' (moe-vscode/README.md, the npm package descriptions and READMEs, docs/index.html) is out of scope ('No other file changes'). They are reported to the governor in comment-a9525846.\n- A full-epic regression because isEpicFinal is true: rejected. The flag is the highest-order fallback of a rolling 300+ row epic with no finalTaskId. The DoD and the 20-min gate-budget rail fix this gate, and the landing's qualityGate (parity-check + lint) still runs on the merged tree.\n- Gradle buildPlugin or vsce package to validate the manifests: rejected. The DoD asks for parse validation, which xmllint well-formedness and node's JSON require cover, and no test reads these strings.",
+    "codebaseInsights": "- The worker.type pipeline:\n  - the launcher sets MOE_WORKER_TYPE (sh :632-647, ps1 :1219-1231);\n  - moe-proxy's injectWorkerType forwards it (utils.ts:289 and :302-322; called at index.ts:734);\n  - the daemon's normalizeWorkerType/refreshWorkerType (joinTeam.ts:9-39) record it on join_team (:79, :97) and claim_next_task (claimNextTask.ts:484, :508, :829).\n- enter_governance (:89-91) rebuilds a purged governor record as CLAUDE.\n- The SCHEMA NOTE has been stale since task-0b40957c (f107447).\n- The gate's input files and the bundle are LF with eol=lf and no BOM, so sed and cmp are byte-exact on every checkout.\n- plugin.xml's description is HTML inside CDATA: xmllint checks the XML structure, not that HTML.",
+    "risks": "- QA on the control checkout without MOE_LAND_TARGET=<sha>^: B=HEAD already holds the change, so the map-back cmp is red by design. Re-run in a clone at the sha.\n- A LANDING-RETRY resume: the gate uses MERGE_HEAD as B. The dry run proved it; without it, the scope and cmp checks go red.\n- 'Antigravity' is also the IDE name the VS Code extension targets, so the VS Code description reads 'run Claude Code, Codex, Antigravity and Grok Build'. The DoD mandates the label.\n- c199e177 shifts the launcher line numbers, so cite the landed ones.\n- If cb378fd8's QA relabels (e.g. to 'Antigravity (agy)'), use the landed value verbatim; the gate follows it.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+      "moe-vscode/package.json",
+      "docs/SCHEMA.md",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-vscode/src/extension.ts",
+      "packages/moe-daemon/src/tools/joinTeam.ts",
+      "packages/moe-proxy/src/utils.ts",
+      "packages/moe-daemon/src/tools/enterGovernance.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "edc3e937ef390df064eccf1ffde6f1a813130d55",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T18:59:22.487Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T21:01:55Z",
+    "at": "2026-11-04T21:03:59.379Z"
+  },
+  "workStartedAt": "2026-11-04T20:56:24.750Z",
+  "reviewStartedAt": "2026-11-04T20:57:25.911Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD ${MOE_LAND_TARGET:-HEAD}) && R=moe-jetbrains/src/main/resources P=$R/META-INF/plugin.xml J=moe-vscode/package.json S=docs/SCHEMA.md && L=$(sed -n 's/^moe.panel.provider.gemini=//p' $R/messages/MoeBundle.properties) && [[ $L && $L != Gemini ]] && grep -qF \"'$L', d\" moe-vscode/src/extension.ts && xmllint --noout $P && node -e \"require('./$J')\" && ! grep -n Gemini $P $J && for f in $P $J; do sed \"s/, $L /, Gemini CLI /\" $f | cmp - <(git show $B:$f) || exit 1; done && r='/^type WorkerT/,/^type WorkerS/' && diff <(git show $B:$S | sed \"$r{/^\\\\/\\\\//d}\") <(sed \"$r{/^\\\\/\\\\//d}\" $S) && N=$(sed -n \"$r{/^\\\\/\\\\//p}\" $S) && [[ $N == \"// NOTE: worker.type\"* && $N != *reserved* ]] && for t in MOE_WORKER_TYPE workerType claim_next_task join_team moe-proxy CODEX GEMINI GROK \"'CLAUDE'\"; do [[ $N == *\"$t\"* ]] || { echo $t; exit 1; }; done && [ \"$(git diff --name-only $B | xargs)\" = \"$S $P $J\" ] && echo OK",
+    "exitCode": 0,
+    "outputTail": "OK",
+    "reportedAt": "2026-11-04T20:57:25.911Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+    "moe-vscode/package.json",
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "Text only, 3 files, +10/-5. Label L=Antigravity (MoeBundle.properties moe.panel.provider.gemini; extension.ts:323 quick pick; TerminalAgentLauncher.kt:208 GEMINI(\"Antigravity\",\"gemini\")). plugin.xml:8 and :16 and moe-vscode/package.json:4 now say Antigravity instead of Gemini CLI, all else byte-identical. SCHEMA.md WorkerType NOTE rewritten to the 7 prescribed lines (:1176-1182). Claims vs code: (1) reported not verified: joinTeam.ts WORKER_TYPE_SCHEMA ~:41; (2) launcher export: moe-agent.sh:646-647 (gemini|agy -> GEMINI via :639), moe-agent.ps1:1232 (cmdBase agy/gemini -> gemini, ToUpperInvariant); (3) other command CLAUDE: sh:646 `*)`, ps1:1219 default \"claude\"; (4) moe-proxy utils.ts:289 WORKER_TYPE_TOOLS, :302-322 injectWorkerType (blank env :307, caller key wins :316), index.ts:734; (5) joinTeam.ts:9 WORKER_TYPES, :12-14 normalizeWorkerType; (6) omitted keeps type: joinTeam.ts:28 refreshWorkerType returns on undefined; new record: joinTeam.ts:79, claimNextTask.ts:829; (7) enterGovernance.ts:91 type 'CLAUDE', refreshed at joinTeam.ts:97, claimNextTask.ts:484/:508. No claim reworded. Gate checkRefs[0]: OK, rc 0. Out of scope 'Gemini CLI' mentions remain (moe-vscode/README.md, packages/* package.json+README, docs/index.html) per comment-a9525846.",
+  "commits": [
+    {
+      "sha": "bcedcb268e237da0c58627e42a372f41a9b4838b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T20:55:09Z",
+      "paths": [
+        "docs/SCHEMA.md",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-vscode/package.json"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T20:58:24.827Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T21:03:34.512Z",
+  "reviewCompletedAt": "2026-11-04T21:03:34.512Z",
+  "reviewSummary": "Reviewed completion bcedcb26 (on moe/work-2026-10-24, pushed): 3 files, +10/-5 (docs/SCHEMA.md, plugin.xml, moe-vscode/package.json); no code, test, script or .moe path. Re-ran checkRefs[0] byte-exact (extracted from the task JSON) AND the worker's task.verification command in a `git clone --shared` detached at the sha with MOE_LAND_TARGET=<sha>^: both print OK, rc 0 (0.35 s). The two differ only by an equivalent extra backslash level inside double quotes. Hand checks: no CR in the diff; xmllint ok; package.json parses; 'Gemini' gone from both manifests; label L=Antigravity matches MoeBundle.properties:24, extension.ts:323, TerminalAgentLauncher.kt:208; the map-back cmp proves every other byte of plugin.xml/package.json is unchanged. The four WorkerType union lines are untouched. The old 'reserved values' note is gone. Traced every note claim to code at the sha: moe-agent.sh:632-647 and moe-agent.ps1:1219-1232 export MOE_WORKER_TYPE (agy/gemini -> GEMINI, other -> CLAUDE); moe-proxy utils.ts:289/:302-322 (blank env sends nothing, caller key wins) + index.ts:734; joinTeam.ts:9-14 exact case-sensitive else CLAUDE; refreshWorkerType skips undefined (:28); new record normalizeWorkerType (joinTeam.ts:79, claimNextTask.ts:829); refresh at joinTeam.ts:97 and claimNextTask.ts:484/:508; enterGovernance.ts:91 'CLAUDE'. Added lines match none of the daemonGitDocs/taskTimeBudgetDocs doc-contract patterns. Governor's '(agy)' hint not applied: DoD and checkRef mandate the bare landed label, and the worker's choice is right. Out-of-scope 'Gemini CLI' leftovers (README/npm/docs/index.html) correctly deferred to comment-a9525846.",
+  "requiredCheckAtDone": null
+}

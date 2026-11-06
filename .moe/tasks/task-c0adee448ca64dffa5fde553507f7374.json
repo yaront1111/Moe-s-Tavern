@@ -1,0 +1,168 @@
+{
+  "id": "task-c0adee448ca64dffa5fde553507f7374",
+  "epicId": "epic-be924fb8",
+  "title": "docs: DEVELOPMENT.md's Plugin Bundling layout (:253-258) says daemon/ and proxy/ ship \"node_modules minus .bin\" and leaves scripts/moe-serena-ignore.mjs out, though since 864103f3/c76a8bf8 both bundles ship only the lockfiles' production packages (the vsix built from bc4793cf has 30 of the daemon's 65 node_modules entries, no typescript, vitest, tsx or @types) and since 5f731334 the shared manifest ships moe-serena-ignore.mjs",
+  "description": "Filed by hunt #20 (task-9f3eac6d), lane 2: both IDE bundles compared with each other and with the docs that describe them.\n\nPROBLEM\n- docs/DEVELOPMENT.md:253-254 describe daemon/ and proxy/ as \"dist minus *.test.* / *.spec.*, its package.json, node_modules minus .bin\". That stopped being true on 11-02, with task-864103f3 (JetBrains) and task-c76a8bf8 (VS Code).\n  - Since then each bundle copies only its lockfile's production packages: every packages-map entry not marked `\"dev\": true`, each without its own nested node_modules.\n  - JetBrains: build.gradle.kts `productionPackages` and prepareSandbox's `daemonPackages`/`proxyPackages` loops.\n  - VS Code: moe-vscode/scripts/bundle-assets.mjs `productionPackages` (:67-89) and its copy loop (:242-246).\n  - So devDependencies never ship.\n- docs/DEVELOPMENT.md:255-258 list the bundled scripts without moe-serena-ignore.mjs.\n  - scripts/bundle-manifest.json:20 has shipped it in both bundles since 5f731334 (task-c6a24053, 11-03).\n  - The wrappers load it: moe-agent.sh `$SCRIPT_DIR/moe-serena-ignore.mjs`, and moe-agent.ps1 names it 4 times.\n- The rest of the block matches the manifest and both bundlers, :261 (\"mods/ # everything except *.test.ts and .claude-plugin/types/\") included.\n  - The compiled register.js and register.test.js that still ship belong to task-d27edf88's rework, not to this row.\n\nEVIDENCE (HEAD bc4793cf; lines unchanged at acea850b)\n- ci.yml's \"Package the VS Code extension and smoke-test its bundle\" step, run in a snapshot, built a 1467-file vsix (bundled/), identical to the staged moe-vscode/bundled.\n- Listing: /mnt/d/moe-scratch/hunt-9f3eac6d/bundles/moe-vscode-vsix-files.txt.\n  - `grep -c '^extension/bundled/scripts/moe-serena-ignore.mjs$'` gives 1.\n  - `grep -cE '^extension/bundled/daemon/node_modules/(typescript|vitest|tsx|@types|@vitest)/'` gives 0.\n- packages/moe-daemon/node_modules after ci.yml's `npm install` holds 65 entries, including those 5: bundles/installed-daemon-node_modules.txt.\n- bundled/daemon/node_modules holds 30: bundles/vsix-daemon-node_modules.txt.\n- JetBrains reads the same manifest and applies equivalent rules. The Kotlin and JS lockfile parsers match, and none of the 132 shipped manifest files matches a Gradle default exclude. So the JetBrains zip carries the same set; it was not built (no JDK in WSL).\n\nFIX DIRECTION\n- Edit docs/DEVELOPMENT.md only.\n  - Lines 253-254: say node_modules holds only the lockfile's production packages (no devDependencies, no .bin), and name where the rule lives, for example \"(the lockfile rule in build.gradle.kts and bundle-assets.mjs)\".\n  - Line 257 or 258: add moe-serena-ignore.mjs.\n- Keep the tree format.\n- Do not touch scripts/CLAUDE.md: its :41 bundle sentence matches the manifest.\n\nFILES: docs/DEVELOPMENT.md only. Not held by any open row (lanes.js -v at 09:36Z).\nPLACEMENT: no dependsOn.",
+  "definitionOfDone": [
+    "`grep -n 'minus .bin' docs/DEVELOPMENT.md` no longer matches the daemon/ or proxy/ layout lines, and those lines say node_modules holds only the lockfile's production packages (no devDependencies).",
+    "`grep -n 'moe-serena-ignore.mjs' docs/DEVELOPMENT.md` matches a line inside the \"## Plugin Bundling\" layout block.",
+    "The row's diff touches only docs/DEVELOPMENT.md, and `npm run lint` at the repo root exits 0 in a git-archive snapshot of the fix commit."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit docs/DEVELOPMENT.md's \"## Plugin Bundling\" layout block with your own Edit tool (DoD 1 and 2). Exactly three lines change; keep the tree format and column alignment.\n\n(a) Lines 253-254 (daemon/ and proxy/): replace `node_modules minus .bin` with `node_modules with only its lockfile's production packages (no devDependencies, no .bin)`. The rest of each line stays as it is: `# moe-daemon dist minus *.test.* / *.spec.*, its package.json, ...` and the proxy twin.\n\n(b) Line 258: `│   ├── moe-account-lease.mjs` becomes `│   ├── moe-account-lease.mjs, moe-serena-ignore.mjs`.\n\nWhere the facts come from:\n- scripts/bundle-manifest.json:20 ships moe-serena-ignore.mjs.\n- Both bundlers copy each lockfile's non-dev packages without their nested node_modules: moe-jetbrains/build.gradle.kts productionPackages (:81-96, copy loops :287-302) and moe-vscode/scripts/bundle-assets.mjs productionPackages (:60-89). So .bin, which is no lockfile package key, and every devDependency (typescript, vitest, tsx, @types) never ship.\n\nRules:\n- Touch nothing else in the file. :261's mods/ line and the paragraph at :267 already match the manifest.\n- Do not edit scripts/CLAUDE.md; its bundle sentence (:41) is correct.\n- This is a docs-only change: no code, no error handling paths and no runtime behaviour change.\n- The only automated reader is packages/moe-daemon/src/util/daemonGitDocs.test.ts, which fails on any line saying the daemon never runs git. The gate greps for that wording too, so do not add it.\n- A worked example of the exact edit, validated in a scratch clone, is in step 2's reference run.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "startedAt": "2026-11-04T09:55:15.658Z",
+      "completedAt": "2026-11-04T09:55:20.157Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, once (DoD 1-3). From the task worktree, run the checkRefs command exactly as written. Its fresh output (the three 'OK: docs/roles/...' lint lines and 'exit: 0') is moe.complete_task's verification evidence.\n\nThe command checks, in order:\n- the row's diff is exactly docs/DEVELOPMENT.md (`git diff --name-only HEAD`);\n- then, in a git-archive snapshot of HEAD with the edited file overlaid (the fix commit's content), nothing in the file still says `minus .bin`;\n- the Plugin Bundling block has exactly 2 `├── daemon|proxy/` lines that say 'production packages ... no devDependencies';\n- the block names moe-serena-ignore.mjs;\n- no line says the daemon never runs git (the daemonGitDocs.test.ts guard);\n- `npm run lint` at the snapshot root exits 0.\n\nThe command was validated in a scratch clone at 95d91dc2. It exits 1 with no edit, and exits 0 with the edit above (lint: architect 39, worker 30, qa 36 lines).\n\nOn failure, fix the doc; never edit the gate. Never run npm install or a build in the shared checkout (project rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-11-04T09:55:20.909Z",
+      "completedAt": "2026-11-04T09:55:27.654Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Self-review, the final step and brief for a 3-line doc fix. Re-read the edited layout block against scripts/bundle-manifest.json (the scripts `files` list, the local-runner and mods excludes, docs/roles, docs/skills) and against both bundlers' daemon/proxy copies.\n\nCheck:\n- every bundled script file has a line or glob in the block;\n- the block names no script the manifest lacks;\n- the daemon/proxy wording matches both productionPackages rules: non-dev entries, nested node_modules excluded;\n- the `├──`/`│` tree characters and alignment survived the edit (open the rendered block).\n\nIf anything changed during this review, re-run step 2's command before moe.complete_task. Put one line in the completion summary naming the three changed lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "startedAt": "2026-11-04T09:55:27.961Z",
+      "completedAt": "2026-11-04T09:55:31.035Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 518.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:36:28.989Z",
+  "updatedAt": "2026-11-04T19:20:45.573Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:44:05.443Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T09:57:53.808Z",
+    "wallClockMs": 828365
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-a0305b0b",
+    "qa-25f21f0a"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:46:02.073Z",
+  "executionContract": {
+    "intendedBehavior": "docs/DEVELOPMENT.md's Plugin Bundling layout matches what both IDE bundles ship. daemon/ and proxy/ carry only their lockfile's production packages (no devDependencies, no .bin), and the scripts list includes moe-serena-ignore.mjs. This is a docs-only change: no code, test or error handling path changes.",
+    "acceptanceCriteria": [
+      "`grep -n 'minus .bin' docs/DEVELOPMENT.md` prints nothing, and the daemon/ and proxy/ layout lines both say node_modules holds only the lockfile's production packages (no devDependencies).",
+      "The '## Plugin Bundling' block names moe-serena-ignore.mjs on the scripts lines.",
+      "The diff is exactly docs/DEVELOPMENT.md, and `npm run lint` exits 0 in a snapshot of HEAD with the edited file overlaid."
+    ],
+    "invariants": [
+      "Only the three layout lines change (253, 254, 258 at acea850b); the tree format and every other line of the file stay byte-identical.",
+      "No line in docs/DEVELOPMENT.md says the daemon never runs git (packages/moe-daemon/src/util/daemonGitDocs.test.ts)."
+    ],
+    "compatibility": [
+      "scripts/CLAUDE.md:41 and scripts/bundle-manifest.json are unchanged; the doc now agrees with them and with build.gradle.kts / bundle-assets.mjs productionPackages."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && [ \"$(git diff --name-only HEAD)\" = docs/DEVELOPMENT.md ] && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp docs/DEVELOPMENT.md \"$S/docs/DEVELOPMENT.md\" && cd \"$S\" && B=$(sed -n '/^## Plugin Bundling/,/^## [^P]/p' docs/DEVELOPMENT.md) && ! grep -n 'minus .bin' docs/DEVELOPMENT.md && [ \"$(printf '%s\\n' \"$B\" | grep -cE '^├── (daemon|proxy)/ .*production packages.*no devDependencies')\" = 2 ] && printf '%s\\n' \"$B\" | grep -n 'moe-serena-ignore.mjs' && ! grep -nEi 'never (runs|executes|touches) git|runs no git|does not run git' docs/DEVELOPMENT.md && npm run lint >lint.log 2>&1; E=$?; tail -3 \"${S:-.}/lint.log\" 2>/dev/null; echo \"exit: $E\"; exit $E )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Adding a paragraph that explains the lockfile rule below the tree: not chosen. The DoD wants the layout lines themselves to say it, and the paragraph at :267 already says the daemon/proxy copies stay in each build. (2) Naming the rule's code locations inline in the tree lines: skipped, because the lines are already long. The planning step cites build.gradle.kts and bundle-assets.mjs for the worker and QA instead. (3) Also editing scripts/CLAUDE.md: rejected; its :41 sentence matches the manifest (hunt #20 checked it).",
+    "codebaseInsights": "- The bundle manifest (scripts/bundle-manifest.json) drives the scripts and docs copies in both builds.\n- daemon/proxy node_modules use productionPackages in build.gradle.kts:81-96 and bundle-assets.mjs:60-89: non-dev lockfile entries, each copied without its nested node_modules.\n- The only test that reads DEVELOPMENT.md is daemonGitDocs.test.ts, a never-runs-git phrasing guard.",
+    "risks": "- The tree uses box-drawing characters (├── │). An editor that normalises them, or a stray trailing space, breaks the gate's grep and the rendering. Edit only the text after `#` on 253/254 and append to 258.\n- In worktree mode the task worktree holds only this file's diff; the gate's first check fails if anything else is dirty there.",
+    "keyFiles": [
+      "docs/DEVELOPMENT.md",
+      "scripts/bundle-manifest.json",
+      "moe-jetbrains/build.gradle.kts",
+      "moe-vscode/scripts/bundle-assets.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "95d91dc2107433a2f1b95a2b7882427d4d7c898d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:46:02.109Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:55:15.658Z",
+  "reviewStartedAt": "2026-11-04T09:55:33.167Z",
+  "verification": {
+    "command": "checkRefs command from the task's executionContract (git diff check, snapshot overlay, greps, npm run lint)",
+    "exitCode": 0,
+    "outputTail": "13:│   ├── moe-account-lease.mjs, moe-serena-ignore.mjs\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nexit: 0",
+    "reportedAt": "2026-11-04T09:55:33.167Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/DEVELOPMENT.md"
+  ],
+  "completionSummary": "Changed three lines in docs/DEVELOPMENT.md's Plugin Bundling layout. The daemon/ and proxy/ lines now say node_modules holds only the lockfile's production packages (no devDependencies, no .bin). The scripts line now lists moe-serena-ignore.mjs next to moe-account-lease.mjs.",
+  "commits": [
+    {
+      "sha": "f91809b6af0108a27d2e67ba41799d11b25158b3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T09:54:05Z",
+      "paths": [
+        "docs/DEVELOPMENT.md"
+      ],
+      "recordedBy": "architect-2a219562",
+      "recordedAt": "2026-11-04T09:56:39.309Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T09:56:52Z",
+    "at": "2026-11-04T09:58:18.724Z"
+  },
+  "completedAt": "2026-11-04T09:57:53.808Z",
+  "reviewCompletedAt": "2026-11-04T09:57:53.808Z",
+  "reviewSummary": "Reviewed completion f91809b6 (on moe/control HEAD and moe/work-2026-10-24): `git show` = docs/DEVELOPMENT.md only, +3/-3, exactly the daemon/, proxy/ and scripts layout lines; tree format kept, nothing else touched. Re-ran the checkRefs in a `git archive f91809b6` snapshot (.moe excluded) under env -i: 'minus .bin' absent; Plugin Bundling block has 2 daemon|proxy lines saying 'production packages ... no devDependencies'; block names moe-serena-ignore.mjs (line 13 of block); no 'daemon never runs git' wording; `npm run lint` exit 0 (architect 39, worker 30, qa 36 lines). Checked the facts against source: scripts/bundle-manifest.json:20 ships moe-serena-ignore.mjs; vscode bundle-assets.mjs productionPackages skips `dev:true` and its copy loop filters nested node_modules; build.gradle.kts productionPackages (:81-96) and copy loops (:291-300, exclude node_modules/**) do the same, so wording is accurate for both bundles. scripts/CLAUDE.md untouched. DoD 1-3 met. Docs-only, 6 changed lines; no size issue. Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,238 @@
+{
+  "id": "task-83cf11f5dc51483aac6f926c65876975",
+  "epicId": "epic-be924fb8",
+  "title": "bug: list_metrics doneCount, the dashboard's totalCompleted and per-epic completed count only status DONE while avgWallClockMs includes ARCHIVED rows, so a Done-column Clear zeroes \"completed\" for delivered work and the aggregates disagree",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. It edits util/metrics.ts, the same file as task-5d739855 (the sinceIso fix), so it waits on that row. The governor promotes it once 5d739855 is DONE.\n\nPROBLEM. Archiving a delivered task (the IDE's Done-column Clear) drops it from every \"completed\" count, while the same row still feeds avgWallClockMs. Today 205 live ARCHIVED rows carry doneAt, and none of them counts as completed.\n\nEVIDENCE (util/metrics.ts at 8ca8d389):\n- :71 `if (task.status === 'DONE') { doneCount += 1; … }`.\n- :186 per-epic `completed: agg.doneCount`, and :197 `totalCompleted: overall.doneCount`. avgWallClockMs is computed over rows that include ARCHIVED.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_metricsArchived.test.ts with its .output.txt. \"counts a delivered-then-archived task consistently across doneCount, firstPass% and avgWallClockMs\" fails.\n\nDECISION (governor reading; the planner may refine it with evidence). \"Completed\" means delivered: a row in DONE, or a row in ARCHIVED with metrics.doneAt (or another landed-delivery marker). An ARCHIVED row that never reached DONE (shelved) is not completed. Apply the same set to doneCount, firstPass%, per-epic completed, totalCompleted and avgWallClockMs, so the aggregates agree.",
+  "definitionOfDone": [
+    "doneCount, firstPass%, per-epic completed, totalCompleted and avgWallClockMs all count the same delivered set: DONE rows plus ARCHIVED rows that reached DONE. A shelved ARCHIVED row that never reached DONE counts in none of them.",
+    "The ported hunt repro passes, and the existing metrics and list_metrics tests stay green in a snapshot outside the shared checkout. MCP_SERVER.md or SCHEMA.md wording on \"completed\" is updated only if the file is free per lanes.js."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). Use your Edit/Write tools, never a shell write (rail).\n\n(a) Append this block at the END of packages/moe-daemon/src/util/metrics.test.ts. It reuses the file's Task type import, CREATED_AT, UPDATED_AT and epicTitle. Its `row` helper is local to this describe, so it does not clash with the sinceIso block's own `row`. Change no existing line.\n```ts\n// Completed means delivered (task-83cf11f5): a DONE row, or an ARCHIVED row that\n// reached DONE (qa_approve stamped metrics.doneAt and archiving keeps it). doneCount,\n// firstPassApprovalPct, avgWallClockMs and the dashboard's totalCompleted, per-epic\n// completed and per-epic avgWallClockMs all count that one set. A shelved ARCHIVED row\n// and an in-flight row count in none of them, even with a stale wallClockMs.\ndescribe('delivered set: DONE plus ARCHIVED rows that reached DONE', () => {\n  function row(id: string, status: string, epicId: string, metrics: Record<string, unknown>): Task {\n    return { id, epicId, title: `fixture ${id}`, status, createdAt: CREATED_AT, updatedAt: UPDATED_AT, metrics } as unknown as Task;\n  }\n  const DONE_AT = '2026-09-10T00:30:00.000Z';\n  const done = row('task-done', 'DONE', 'epic-a', { doneAt: DONE_AT, wallClockMs: 1000, rejectCount: 0 });\n  const archivedDone = row('task-archived-done', 'ARCHIVED', 'epic-a', { doneAt: DONE_AT, wallClockMs: 9000, rejectCount: 1 });\n  const shelved = row('task-shelved', 'ARCHIVED', 'epic-b', { wallClockMs: 99000, rejectCount: 0 });\n  const working = row('task-working', 'WORKING', 'epic-b', { wallClockMs: 50000, rejectCount: 0 });\n\n  it('(d1) doneCount, firstPassApprovalPct and avgWallClockMs count DONE plus archived-after-DONE rows only', () => {\n    expect(computeMetricsAggregate([done, archivedDone, shelved, working])).toMatchObject({\n      taskCount: 4, doneCount: 2, firstPassApprovalPct: 50, avgWallClockMs: 5000,\n    });\n  });\n\n  it('(d2) the dashboard totalCompleted and the per-epic completed and avgWallClockMs use the same set', () => {\n    const dashboard = computeDashboardAggregate([done, archivedDone, shelved, working], epicTitle);\n    expect(dashboard).toMatchObject({ totalCompleted: 2, firstPassApprovalPct: 50, avgWallClockMs: 5000 });\n    expect(dashboard.perEpic).toEqual([\n      { epicId: 'epic-a', epicTitle: 'Metrics fixture epic', completed: 2, avgReopenCount: 0, avgWallClockMs: 5000 },\n      { epicId: 'epic-b', epicTitle: 'Metrics fixture epic', completed: 0, avgReopenCount: 0, avgWallClockMs: undefined },\n    ]);\n  });\n\n  it('(d3) an ARCHIVED row counts only when its doneAt is a non-blank string', () => {\n    expect(computeMetricsAggregate([\n      row('task-a', 'ARCHIVED', 'epic-a', { doneAt: DONE_AT }),\n      row('task-b', 'ARCHIVED', 'epic-a', { doneAt: '' }),\n      row('task-c', 'ARCHIVED', 'epic-a', { doneAt: '  ' }),\n      row('task-d', 'ARCHIVED', 'epic-a', { doneAt: 1234 }),\n    ]).doneCount).toBe(1);\n  });\n\n  it('(d4) only shelved rows: nothing is completed and the dashboard keeps its empty state', () => {\n    expect(computeMetricsAggregate([shelved])).toMatchObject({ doneCount: 0, firstPassApprovalPct: 0, avgWallClockMs: 0 });\n    const dashboard = computeDashboardAggregate([shelved], epicTitle);\n    expect(dashboard.totalCompleted).toBe(0);\n    expect(dashboard.firstPassApprovalPct).toBeUndefined();\n    expect(dashboard.avgWallClockMs).toBeUndefined();\n  });\n});\n```\n\n(b) Create packages/moe-daemon/src/tools/listMetrics.delivered.test.ts with exactly this content. It ports the hunt repro /mnt/d/moe-scratch/hunt-afe61cc0/B/zzHuntB_metricsArchived.test.ts: same fixture, same doneCount 2 / avgWallClockMs 5000 expectation. Its `as never` casts are dropped (TaskMetrics types these fields), and (p2) is added.\n```ts\nimport { describe, it, expect, beforeEach, afterEach } from 'vitest';\nimport { ToolTestHarness } from './toolTestHarness.js';\nimport { listMetricsTool } from './listMetrics.js';\n\n// Ported from the 11-03 hunt repro (task-afe61cc0, zzHuntB_metricsArchived.test.ts)\n// for task-83cf11f5. Archiving a delivered task (the IDE's Done-column Clear) kept it\n// in avgWallClockMs but dropped it from doneCount and firstPassApprovalPct.\ndescribe('list_metrics counts a delivered-then-archived task as completed', () => {\n  const h = new ToolTestHarness();\n  beforeEach(() => h.init());\n  afterEach(() => h.cleanup());\n\n  type Aggregate = { taskCount: number; doneCount: number; avgWallClockMs: number; firstPassApprovalPct: number };\n  const t0 = '2026-11-01T10:00:00.000Z';\n  const delivered = { firstClaimAt: t0, doneAt: '2026-11-01T10:00:01.000Z', wallClockMs: 1000, rejectCount: 0 };\n\n  async function aggregate(): Promise<Aggregate> {\n    await h.state.load();\n    const res = await listMetricsTool(h.state).handler({}, h.state) as { aggregate: Aggregate };\n    return res.aggregate;\n  }\n\n  it('(p1) counts a delivered-then-archived task consistently across doneCount, firstPass% and avgWallClockMs', async () => {\n    h.setupMoeFolder();\n    h.createEpic();\n    h.createTask({ id: 'task-done', status: 'DONE', order: 1, metrics: delivered });\n    h.createTask({ id: 'task-archived', status: 'ARCHIVED', order: 2,\n      metrics: { firstClaimAt: t0, doneAt: '2026-11-01T10:00:09.000Z', wallClockMs: 9000, rejectCount: 0 } });\n    expect(await aggregate()).toMatchObject({ taskCount: 2, doneCount: 2, avgWallClockMs: 5000, firstPassApprovalPct: 100 });\n  });\n\n  it('(p2) a shelved ARCHIVED task that never reached DONE counts in none of them', async () => {\n    h.setupMoeFolder();\n    h.createEpic();\n    h.createTask({ id: 'task-done', status: 'DONE', order: 1, metrics: delivered });\n    h.createTask({ id: 'task-shelved', status: 'ARCHIVED', order: 2, metrics: { firstClaimAt: t0, rejectCount: 2 } });\n    expect(await aggregate()).toMatchObject({ taskCount: 2, doneCount: 1, avgWallClockMs: 1000, firstPassApprovalPct: 100 });\n  });\n});\n```\n\nThen run the RED gate (the second checkRef) from your worktree root. It must print RED-AT-BASE: `Tests  5 failed | 12 passed (17)`, with exactly (d1)-(d4) and (p1) failing against ab9b5237's metrics.ts. That matches the architect's dry run.\n\n(p2) passes at base on purpose: it kills an over-broad rule. In the architect's mutant run:\n- counting every ARCHIVED row failed (d1)-(d4) and (p2);\n- a truthy or untrimmed doneAt check failed (d3);\n- DONE-only failed (d1)-(d3) and (p1).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/listMetrics.delivered.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/metrics.test.ts",
+        "packages/moe-daemon/src/tools/listMetrics.delivered.test.ts"
+      ],
+      "note": "Added (d1)-(d4) to metrics.test.ts and the new listMetrics.delivered.test.ts with (p1)-(p2). RED gate against ab9b5237's metrics.ts printed 'Tests  5 failed | 12 passed (17)' and RED-AT-BASE, with (d1)-(d4) and (p1) failing.",
+      "startedAt": "2026-11-03T22:30:43.751Z",
+      "completedAt": "2026-11-03T22:31:17.278Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix goes in packages/moe-daemon/src/util/metrics.ts only. Use your Edit tool.\n\n(a) In `interface MetricsAggregate`, put `/** Delivered rows: DONE, or ARCHIVED after reaching DONE (see isDelivered). */` on the line above `doneCount: number;`.\n\n(b) Directly above the `/**` that opens computeMetricsAggregate's doc comment (`Compute aggregate metrics across the given tasks...`), add:\n```ts\n/**\n * Completed, for every aggregate here (doneCount, firstPassApprovalPct,\n * avgWallClockMs, and the dashboard's totalCompleted and per-epic completed):\n * a DONE row, or an ARCHIVED row that reached DONE. qa_approve stamps\n * metrics.doneAt, the startup backfill fills it on a DONE row without one,\n * util/reopen.ts strips it on reopen and archiving keeps it, so on an ARCHIVED\n * row it marks delivered work. A shelved ARCHIVED row never had one.\n */\nfunction isDelivered(task: Task): boolean {\n  if (task.status === 'DONE') return true;\n  const doneAt = task.metrics?.doneAt;\n  return task.status === 'ARCHIVED' && typeof doneAt === 'string' && doneAt.trim() !== '';\n}\n```\n\n(c) In computeMetricsAggregate's loop:\n- Change `if (task.status === 'DONE') {` to `if (isDelivered(task)) {`.\n- Move the `if (typeof m.wallClockMs === 'number' && Number.isFinite(m.wallClockMs)) { ... }` block INSIDE that branch, after the two firstPass lines.\n- Put these two comment lines right before it: `// Wall-clock averages the same delivered rows, so a stale value on a` and `// shelved or in-flight row never leaks into it.`\n\nNothing else changes:\n- taskCount, avgReopenCount, totalRejectCount, totalExecutedStepCount and totalToolCalls still sum every filtered row.\n- filterTasksForMetrics (5d739855's sinceIso key), toPerTaskMetric, computeDashboardAggregate and tools/listMetrics.ts stay byte-identical.\n- The dashboard follows through computeMetricsAggregate: totalCompleted = overall.doneCount, per-epic completed = agg.doneCount, and firstPassApprovalPct is omitted while doneCount is 0.\n- Field names and reply shapes are unchanged (epic rail: no MCP contract break).\n\nError handling: this is a pure function over in-memory rows, so no new error handling is needed. A row without metrics reads `{}`. A missing, non-string or blank doneAt is simply not delivered: it is never parsed, so it cannot throw. No I/O and no new throw path are added.\n\nCheck: run the GREEN gate (first checkRef). In the architect's /tmp dry run of this exact edit, tsc was clean and 4 files / 61 tests passed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts"
+      ],
+      "note": "Added isDelivered and moved the wall-clock sum inside the delivered branch. GREEN gate: tsc clean, 4 files / 61 tests passed.",
+      "startedAt": "2026-11-03T22:31:18.188Z",
+      "completedAt": "2026-11-03T22:31:40.756Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs, only if the file is free (DoD 2).\n\nRun `node /mnt/d/moe-scratch/governor/lanes.js -v` and check whether any open row other than 83cf11f5 lists docs/MCP_SERVER.md. When this was planned, b7203d89 and a024ac57 did, both in REVIEW.\n\nIf one does, make no edit. Complete this step with no modifiedFiles, and post one #general line: `task-83cf11f5: MCP_SERVER.md list_metrics/GET_METRICS completed wording left for a follow-up: held by <ids>`.\n\nIf it is free, use your Edit tool to make exactly these six edits and nothing else. Each old line is unique in the file.\n(1) list_metrics Returns. Old: `    firstPassApprovalPct,           // 0..100; first-pass = DONE with rejectCount===0`. New: `    firstPassApprovalPct,           // 0..100; first-pass = delivered (see Notes) with rejectCount===0`.\n(2) list_metrics Notes. Insert a new bullet directly after the bullet that starts `- Per-task entries are sorted newest-first by`:\n`- **Delivered** is the completed set: a `DONE` row, or an `ARCHIVED` row that reached DONE (it keeps the `metrics.doneAt` that `moe.qa_approve` stamped; a reopen strips it). `doneCount`, `firstPassApprovalPct` and `avgWallClockMs` count only delivered rows, and so do `GET_METRICS`' `totalCompleted`, per-epic `completed` and `avgWallClockMs`. A shelved `ARCHIVED` row that never reached DONE, and every in-flight row, count only in `taskCount`, `avgReopenCount` and the totals.`\n(3) GET_METRICS. Old: `    firstPassApprovalPct?: number,     // omitted when no DONE tasks`. New: `    firstPassApprovalPct?: number,     // omitted when no delivered tasks (list_metrics Notes)`.\n(4) Old: `    avgWallClockMs?: number,           // omitted when no completed tasks have wall-clock data`. New: `    avgWallClockMs?: number,           // omitted when no delivered tasks have wall-clock data`.\n(5) Old: `    totalCompleted?: number,`. New: `    totalCompleted?: number,           // delivered tasks (list_metrics doneCount)`.\n(6) Old: `      completed: number,`. New: `      completed: number,               // delivered tasks in this epic`.\n\ndocs/SCHEMA.md needs no change: its TaskMetrics block defines doneAt and wallClockMs only, and has no completed wording.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "lanes.js -v listed docs/MCP_SERVER.md only on this row, so I made exactly the six planned edits.",
+      "startedAt": "2026-11-03T22:31:41.777Z",
+      "completedAt": "2026-11-03T22:32:11.594Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once.\n\nRun the GREEN gate (first checkRef) verbatim. It is complete_task's verification and takes about 2 min, because it runs npm ci in a fresh /tmp snapshot. Never run npm or vitest in the checkout (rail). Expect `npx tsc --noEmit` clean, then `Test Files  4 passed (4)` and `Tests  61 passed (61)`. The count moves only if a peer adds tests to those files.\n\nThen run the RED gate (second checkRef) once more. It must still print RED-AT-BASE, because it pins ab9b5237's metrics.ts. Quote its output in your completion summary.\n\nError handling for a red run:\n- If a governanceFeatures or defensiveBatch test fails, re-run it in a second snapshot with HEAD's metrics.ts overlaid.\n- If it fails there too, it is pre-existing. Do not edit those files: report it in #general and call moe.report_blocked with the evidence.\n- If it fails only with your change, fix metrics.ts. Never weaken a test.\n\nLeave nothing inside the checkout. The snapshots live in /tmp.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN gate: tsc clean, 4 files / 61 tests passed. RED gate at ab9b5237's metrics.ts: 'Tests  5 failed | 12 passed (17)', RED-AT-BASE. Both ran in /tmp snapshots.",
+      "startedAt": "2026-11-03T22:32:12.474Z",
+      "completedAt": "2026-11-03T22:32:35.929Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`. Fix any finding, then re-run step 4's gates.\n\n(1) Scope. Only these changes:\n- metrics.ts: the doneCount JSDoc, isDelivered, and the loop;\n- metrics.test.ts: the appended block only;\n- the new listMetrics.delivered.test.ts;\n- docs/MCP_SERVER.md, only if step 3 found it free, and then only the six edits.\n\n(2) One delivered set. doneCount, approvalCount (the firstPass% denominator), the firstPass numerator, and the wallClock sum and count all sit inside the same `isDelivered` branch. taskCount, avgReopenCount and the three totals still cover every row.\n\n(3) Edge rows:\n- a DONE row without doneAt still counts, on status alone;\n- an ARCHIVED row with an empty, whitespace or non-string doneAt does not;\n- a reopened row lost its doneAt (util/reopen.ts), so it is out until re-approved;\n- a WORKING or BLOCKED row with a stale wallClockMs is out.\n\n(4) Wire shape. Every field name and type in list_metrics and GET_METRICS is unchanged. firstPassApprovalPct is still an integer 0..100, and the dashboard still omits its optional fields at zero.\n\n(5) Known residual, by design. Say it in the completion summary:\n- A row moved to DONE without qa_approve may carry no doneAt (only qa_approve and the startup backfill write it), so once archived it drops out of completed. On this board all 573 DONE rows carry doneAt.\n- The 6 ARCHIVED 2026-02-08 rows with reviewCompletedAt but empty metrics predate metrics. They stay out, because qa_reject also stamps reviewCompletedAt.\n\nThen call moe.complete_task with step 4's evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/metrics.ts",
+        "packages/moe-daemon/src/util/metrics.test.ts",
+        "packages/moe-daemon/src/tools/listMetrics.delivered.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of git diff: scope is the planned files only. One isDelivered branch covers doneCount, both firstPass terms and the wall-clock sum and count. Totals and avgReopenCount still cover every row. No wire-shape change. Nothing to fix.",
+      "startedAt": "2026-11-03T22:32:36.879Z",
+      "completedAt": "2026-11-03T22:32:45.384Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Its only prerequisite, 5d739855 (list_metrics sinceIso key), reached DONE at 22:05:50Z (QA_APPROVED, completion ab9b5237), so plan against the landed util/metrics.ts at the tip. The governor's reading of the definition from filing time still applies: \"completed\" = DONE plus ARCHIVED rows that reached DONE. The human can drag this row back to BACKLOG to veto.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-5d7398551e5940ba8a3dcadf54c45b50"
+  ],
+  "priority": "LOW",
+  "order": 434.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:16.002Z",
+  "updatedAt": "2026-11-04T19:20:44.770Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T22:06:40.467Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:18:50.983Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:35:51.657Z",
+    "wallClockMs": 1020674
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-2dc72348",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:29:09.552Z",
+  "executionContract": {
+    "intendedBehavior": "util/metrics.ts counts one delivered set for every completed aggregate: a DONE row, or an ARCHIVED row that reached DONE, meaning an ARCHIVED row with a non-blank string metrics.doneAt. That set is used by list_metrics' doneCount, firstPassApprovalPct (denominator and numerator) and avgWallClockMs, and by GET_METRICS' totalCompleted, firstPassApprovalPct, avgWallClockMs, per-epic completed and per-epic avgWallClockMs. A shelved ARCHIVED row and an in-flight row count in none of them, even with a stale wallClockMs. taskCount, avgReopenCount and the totals still cover every filtered row.",
+    "acceptanceCriteria": [
+      "DoD 1: (d1)-(d4) and (p1)-(p2) pass. Take a DONE row (wall 1000, rejectCount 0), an ARCHIVED row with doneAt (wall 9000, rejectCount 1), a shelved ARCHIVED row and a WORKING row, the last two both with a stale wallClockMs. For that set, computeMetricsAggregate gives taskCount 4, doneCount 2, firstPassApprovalPct 50 and avgWallClockMs 5000. The dashboard gives totalCompleted 2, per-epic completed 2 and 0, and per-epic avgWallClockMs 5000 and undefined.",
+      "DoD 2: the ported hunt repro (p1) passes, and metrics.test.ts, governanceFeatures.test.ts and defensiveBatch.test.ts stay green in a /tmp snapshot (GREEN checkRef). Against ab9b5237's metrics.ts the new tests give exactly 5 failed | 12 passed (17) (RED checkRef). MCP_SERVER.md is edited only if lanes.js shows it free. SCHEMA.md needs no change."
+    ],
+    "invariants": [
+      "Field names, types and units of list_metrics.aggregate and GET_METRICS are unchanged. firstPassApprovalPct stays an integer 0..100, and optional dashboard fields stay undefined when empty.",
+      "filterTasksForMetrics (5d739855's sinceIso key), toPerTaskMetric, and the per-task list and its sort are unchanged.",
+      "A DONE row counts whatever its metrics hold. An ARCHIVED row counts only with a non-blank string metrics.doneAt."
+    ],
+    "compatibility": [
+      "Legacy rows load unchanged: there is no migration and no write. Pre-metrics ARCHIVED rows (empty metrics) stay out of completed, as before."
+    ],
+    "approvedScope": [
+      "util/metrics.ts: the MetricsAggregate.doneCount JSDoc, a module-local isDelivered(task), and the computeMetricsAggregate loop.",
+      "Tests: an appended describe block in metrics.test.ts and a new tools/listMetrics.delivered.test.ts.",
+      "docs/MCP_SERVER.md: the list_metrics and GET_METRICS comment lines plus one Notes bullet, only if lanes.js shows the file free."
+    ],
+    "reuse": [
+      "computeDashboardAggregate keeps deriving totalCompleted and per-epic completed from computeMetricsAggregate, so one predicate covers both endpoints.",
+      "Existing test scaffolding: the metrics.test.ts fixtures, and ToolTestHarness for the port."
+    ],
+    "sourceAssumptions": [
+      "util/metrics.ts:71-81 (ab9b5237): doneCount and approvalCount key on status === 'DONE', while the wallClockMs sum runs over every row.",
+      "metrics.doneAt is written only by tools/qaApprove.ts:194 and by state/backfills/backfillTaskMetrics.ts:110 (DONE rows only). util/reopen.ts:61-63 strips it. archiveTask.ts and WebSocketServer ARCHIVE_DONE_TASKS (:907-917), the Done-column Clear, keep it.",
+      "Live board on 2026-11-04: all 573 DONE rows carry doneAt and wallClockMs, and 205 ARCHIVED rows carry doneAt (all of them with wallClockMs). 165 ARCHIVED rows carry neither: shelved rows, plus 6 pre-metrics 2026-02-08 rows whose reviewCompletedAt qa_reject also writes."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/util/metrics.ts $P/util/metrics.test.ts $P/tools/listMetrics.delivered.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/util/metrics.test.ts src/tools/listMetrics.delivered.test.ts src/tools/governanceFeatures.test.ts src/__e2e__/defensiveBatch.test.ts",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/util/metrics.test.ts $P/tools/listMetrics.delivered.test.ts \"$S\" && git show ab9b52372a4075bc9e25ddea1e46e2d0f99c4e02:$P/util/metrics.ts > \"$S/$P/util/metrics.ts\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/util/metrics.test.ts src/tools/listMetrics.delivered.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests |^ FAIL \" \"$S/l\"; grep -aqE \"^ +Tests +5 failed \\| 12 passed \\(17\\)\" \"$S/l\" && for k in d1 d2 d3 d4 p1; do grep -aqF \"> ($k) \" \"$S/l\" || exit 1; done && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Mark ARCHIVED rows as delivered by reviewCompletedAt or landing.lastCompletion. Rejected: qa_reject also stamps reviewCompletedAt, and a completion can land and then be rejected. (2) Stamp doneAt at archive time, or on every move to DONE in the store. Rejected as scope: it changes write paths for a gap with no live instance (all 573 DONE rows carry doneAt). (3) Keep avgWallClockMs over every row that has a wallClockMs. Rejected: the DoD wants one set, and since reopen strips wallClockMs the change only moves stale or hand-made data. (4) Export isDelivered. Not needed: the aggregates exercise it.",
+    "codebaseInsights": "Both endpoints share computeMetricsAggregate. list_metrics (tools/listMetrics.ts) calls it directly. GET_METRICS (WebSocketServer.ts:985-996) reaches it through computeDashboardAggregate. So one predicate in the loop fixes doneCount, firstPassApprovalPct, avgWallClockMs, totalCompleted, and per-epic completed and avgWallClockMs together.\n\ntsconfig excludes *.test.ts, so tsc checks only the source, and vitest does not type-check.\n\nThe architect's /tmp dry run of exactly this plan's code:\n- RED: 5 failed | 12 passed (17), failing (d1)-(d4) and (p1).\n- GREEN: tsc clean, 61/61 tests over 4 files in about 2 s.\n- Four mutants killed: any-ARCHIVED, truthy doneAt, untrimmed doneAt, and DONE-only.",
+    "risks": "When planned, docs/MCP_SERVER.md was held by b7203d89 and a024ac57 (both in REVIEW). Step 3 therefore depends on lanes.js at run time, per the DoD.\n\nResidual, by design:\n- A row moved to DONE without qa_approve may carry no doneAt, so once archived it leaves completed.\n- The 6 pre-metrics ARCHIVED rows stay out.\nNeither case has a reliable marker today.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/metrics.ts",
+      "packages/moe-daemon/src/util/metrics.test.ts",
+      "packages/moe-daemon/src/tools/listMetrics.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/util/reopen.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "52185bb4c612299e93be14233863a8efd37bb7fc",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:29:09.581Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:30:43.751Z",
+  "reviewStartedAt": "2026-11-03T22:32:51.624Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/util/metrics.ts $P/util/metrics.test.ts $P/tools/listMetrics.delivered.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/util/metrics.test.ts src/tools/listMetrics.delivered.test.ts src/tools/governanceFeatures.test.ts src/__e2e__/defensiveBatch.test.ts",
+    "exitCode": 0,
+    "outputTail": "tsc --noEmit clean; Test Files  4 passed (4); Tests  61 passed (61). RED gate at ab9b5237 metrics.ts: Tests  5 failed | 12 passed (17) -> RED-AT-BASE",
+    "reportedAt": "2026-11-03T22:32:51.624Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/metrics.test.ts",
+    "packages/moe-daemon/src/tools/listMetrics.delivered.test.ts",
+    "packages/moe-daemon/src/util/metrics.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "util/metrics.ts now counts one delivered set (DONE, or ARCHIVED with a non-blank string metrics.doneAt) for doneCount, firstPassApprovalPct, avgWallClockMs, and for the dashboard's totalCompleted and per-epic completed and avgWallClockMs. A shelved ARCHIVED row and an in-flight row with a stale wallClockMs count in none of them. taskCount, avgReopenCount and the totals still cover every filtered row. Tests: (d1)-(d4) appended to metrics.test.ts, and listMetrics.delivered.test.ts with (p1), the ported hunt repro, and (p2). docs/MCP_SERVER.md got the six planned wording edits; lanes.js showed it free. GREEN gate, run in a /tmp snapshot: tsc clean, 4 files / 61 tests passed. RED gate against ab9b5237's metrics.ts: 'Tests  5 failed | 12 passed (17)', RED-AT-BASE, with (d1)-(d4) and (p1) failing. Known residual, by design: a row moved to DONE without qa_approve may carry no doneAt (only qa_approve and the startup backfill write it), so once archived it drops out of completed; all 573 DONE rows on this board carry doneAt. The 6 pre-metrics ARCHIVED 2026-02-08 rows stay out, because qa_reject also stamps reviewCompletedAt.",
+  "commits": [
+    {
+      "sha": "2f03c0f6a8220a17fc50098cf7721138d956c6c8",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T22:29:18Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/listMetrics.delivered.test.ts",
+        "packages/moe-daemon/src/util/metrics.test.ts",
+        "packages/moe-daemon/src/util/metrics.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T22:34:08.170Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:34:11Z",
+    "at": "2026-11-03T22:36:23.113Z"
+  },
+  "completedAt": "2026-11-03T22:35:51.657Z",
+  "reviewCompletedAt": "2026-11-03T22:35:51.657Z",
+  "reviewSummary": "Reviewed recorded completion 2f03c0f6 (on moe/work-2026-10-24, control HEAD; reviewed paths clean). Size 4 files +115/-10 (net 105). metrics.ts adds module-local isDelivered (DONE, or ARCHIVED with non-blank string metrics.doneAt); doneCount, firstPass num/den and the wallClock sum/count all sit in that one branch; taskCount, avgReopenCount and totals still span every row. computeDashboardAggregate, filterTasksForMetrics, toPerTaskMetric, listMetrics.ts untouched, so totalCompleted and per-epic completed/avgWallClockMs follow; wire shape unchanged; only consumers are listMetrics.ts and WS GET_METRICS. Re-ran task.verification verbatim in a /tmp git-archive snapshot (nothing run in the shared checkout): tsc clean; 4 files / 61 tests passed (metrics, listMetrics.delivered, governanceFeatures, defensiveBatch). Re-ran RED checkRef against ab9b5237 metrics.ts: 'Tests 5 failed | 12 passed (17)', exactly (d1)-(d4)+(p1), RED-AT-BASE, so tests are mutation-resistant (exact-value asserts; (p2)/(d3) kill over-broad and untrimmed doneAt). DoD1 verified by (d1)(d2)(d4)(p2): shelved ARCHIVED and in-flight rows with stale wallClockMs count nowhere. DoD2: ported hunt repro (p1) passes, existing tests green; MCP_SERVER.md got six one-line wording edits in list_metrics/GET_METRICS blocks (lanes.js showed it free at edit time; dd1e00f8 now lists it, disjoint hunks, collision thread answered). SCHEMA.md untouched as planned. No weakened tests. Complexity pass: nothing to cut. Residual by design: a row moved to DONE without qa_approve may lack doneAt and drops out once archived; 6 pre-metrics 2026-02-08 ARCHIVED rows stay out.",
+  "requiredCheckAtDone": null
+}

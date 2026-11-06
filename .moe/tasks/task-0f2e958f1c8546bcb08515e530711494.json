@@ -1,0 +1,267 @@
+{
+  "id": "task-0f2e958f1c8546bcb08515e530711494",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains Release Agent never sends force, so releasing a task whose seat is mid-step (a hung or crashed worker) is refused STEP_LEASE_HELD and the board has no override, although /ws forwards force for exactly this (c593eb13)",
+  "description": "Filed by defect hunt 11-03 #4 (task-130a6a5c). Evidence is from HEAD 430e4620.\n\nPROBLEM\nA seat that hangs or crashes mid-step leaves its task WORKING and assigned, with one step IN_PROGRESS. That is exactly the task a human releases from the board. The daemon refuses that release unless the caller passes `force`. The JetBrains plugin never sends it, and nothing in the plugin lets the user opt in.\n\nDaemon (emitter and acceptor):\n- packages/moe-daemon/src/server/WebSocketServer.ts:735-745 (case 'RELEASE_TASK'). The comment reads \"Forward `force` so the board keeps a way past the step lease. ... without this the documented human override would be unreachable from the UI that most needs it. Absent/false still means 'refuse a leased row' — the human opts in explicitly.\" The code then passes `force: message.payload.force === true` to release_task. This came in with c593eb13 (2026-08-20).\n- packages/moe-daemon/src/util/claimGuards.ts:265-277 assertNoLiveLease: `if (force) return; if (!task.assignedWorkerId) return; ... const step = inProgressStep(task); if (!step) return; throw new MoeError(... 'pass force:true to override a confirmed-dead holder', ..., STEP_LEASE_HELD)`. The /ws call has no workerId, so assertReleaseCaller (:290-293) is a no-op and the lease check is the one that bites.\n- The /ws ERROR frame carries only operation, codeName and message. error.context is never spread (WebSocketServer.ts:39-55, allowlist = the two plan revisions), so the plugin cannot read the holder, the step or the taskId from the refusal.\n\nPlugin (consumer):\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt:147-156 `fun releaseTask(taskId: String, reason: String? = null)`. The payload is {taskId, reason?}, then `sendMessage(\"RELEASE_TASK\", payload)`. There is no `\"force\"` anywhere under moe-jetbrains/src/main/kotlin.\n- Every entry point ends there:\n  - the card's context menu, TaskCard.kt:345-347 then onReleaseAgent;\n  - MoeToolWindowPanel.kt:547-557 handleReleaseAgent: a Yes/No dialog, then `service.releaseTask(task.id, MoeBundle.message(\"moe.message.releasedInUI\"))`;\n  - TaskDetailDialog.kt:725-739, the Release Agent action, with the same dialog and call;\n  - MoeProjectService.kt:555, the pass-through.\n- The confirmation text (MoeBundle.properties:102) promises \"The task stays claimable where it is ... and the agent goes idle\". For a mid-step task the daemon refuses, the user gets a generic ERROR balloon (MoeToolWindowPanel.kt:349-355), and the hung seat keeps the task.\n- The only workaround is to drag the card to Backlog or Planning, which takes the task out of its column.\n\nEVIDENCE\n- Repro: a daemon vitest drives the real /ws server and sends the plugin's exact frames. First CLIENT_HELLO as in MoeCommandSender.sendClientHello, then `RELEASE_TASK {taskId, reason:\"Released from board\"}`, against a task that is WORKING, assigned to w-mid, with step-1 IN_PROGRESS.\n- Command: `cd /tmp/hunt-130a-A/packages/moe-daemon && npx vitest run src/server/releaseForce.repro.test.ts --reporter=verbose`. Verbatim output:\n  ```\n  JetBrains frame reply: {\"type\":\"ERROR\",\"operation\":\"RELEASE_TASK\",\"codeName\":\"STEP_LEASE_HELD\",\"message\":\"[STEP_LEASE_HELD] Task task-1 is leased by w-mid with step step-1 IN_PROGRESS; pass force:true to override a confirmed-dead holder\"}\n  force:true reply: {\"type\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":null}\n   Tests  2 passed (2)\n  ```\n  The second case is the same frame plus force:true, and it releases the row.\n- Saved in /mnt/d/moe-scratch/hunt-130a/A/: releaseForce.repro.test.ts and releaseForce.repro.output.txt. The filer re-ran it at 17:05Z with the same result.\n- task-9f6a725f (VSC-6, VS Code) left force out only \"because JetBrains never sends it\". That is a parity argument, not a product decision. The daemon comment and the c593eb13 message both say the board is meant to have the override.\n\nFIX DIRECTION (plugin-only; the daemon is already correct)\n- MoeCommandSender.releaseTask gains `force: Boolean = false`. Add `\"force\": true` to the payload only when it is set. The default frame must stay byte-identical: {taskId, reason?} with no force key.\n- Decide whether to force from the rendered state, before sending. A refusal cannot be correlated, because the ERROR frame has no taskId.\n  - Add a small pure helper, headless-testable, that mirrors assertNoLiveLease. For an assigned task with an IN_PROGRESS implementationPlan step, it returns (holder, stepId). Otherwise it returns null.\n  - When it returns a value, show a second, explicit confirmation that names the holder and the step and says a force release is for a holder you believe is dead. Send force:true only on Yes. Declining sends nothing.\n  - When it returns null, the release is unchanged and sends no force key.\n- Apply this to both entry points: handleReleaseAgent, which the card menu uses, and TaskDetailDialog's Release Agent action. Prefer routing the dialog through one shared handler over duplicating the logic.\n- If the board was stale (a step started after the render), the daemon still refuses and the existing balloon shows. That is acceptable.\n\nOut of scope: moe-vscode/** (a VS Code twin can be filed separately), any daemon change, docs/MCP_SERVER.md.\n\nFILES (planner to confirm):\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt\n- services/MoeProjectService.kt\n- toolwindow/MoeToolWindowPanel.kt\n- toolwindow/TaskDetailDialog.kt\n- src/main/resources/messages/MoeBundle.properties (the new confirmation text)\n- a new test modelled on moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderAccountsTest.kt\n\nGate: `./gradlew test` needs the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease; for traps see mem:gotcha-gradle-jetbrains-shared-box).",
+  "definitionOfDone": [
+    "A new headless JetBrains unit test asserts the exact RELEASE_TASK frame MoeCommandSender sends. The default call has payload {taskId, reason} and no \"force\" key. The force path has \"force\": true. A blank reason still omits \"reason\", as today.",
+    "A pure helper decides when a force release is needed, and it is unit-tested. An assigned task with an IN_PROGRESS step yields that holder and stepId, mirroring claimGuards.ts assertNoLiveLease. An unassigned task, or a plan with no IN_PROGRESS step (only PENDING/COMPLETED, or empty), yields null, and the plain no-force release is used.",
+    "Both entry points (the card menu, through MoeToolWindowPanel.handleReleaseAgent, and TaskDetailDialog's Release Agent action) send force:true only after a second, explicit confirmation that names the holder and step. Declining it sends no frame, and a non-mid-step release is unchanged.",
+    "`moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun`, run under the jetbrains-gradle lease, passes, and build/test-results show the new test classes executed with 0 failures"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1: RELEASE_TASK gets an opt-in force key, and the default frame stays byte-identical. Reference bytes are in /mnt/d/moe-scratch/plan-0f2e/ (outside the repo, uncompiled: an architect seat cannot hold the jetbrains-gradle lease, so your first gated compile proves them). Copy them with the Edit/Write tools only (project rail), never git apply. TEST FIRST: create moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderReleaseTest.kt from MoeCommandSenderReleaseTest.kt (sha256 71a123a0c93b0efd1282cd5fc6e3f10d48eae6e2460823afdde23b75eac55344). It uses the same capturing-transport fixture as MoeCommandSenderAccountsTest and has 4 tests. (1) The default release frame is byte-identical, with no force key: releaseTask(\"task-1\",\"Released from board\") and the same call with force = false both equal the raw string {\"type\":\"RELEASE_TASK\",\"payload\":{\"taskId\":\"task-1\",\"reason\":\"Released from board\"}}. (2) A forced release adds force true after the reason: the same frame ending ,\"force\":true}}. (3) A blank or missing reason is still omitted, with or without force: no reason, \"   \", null with force and \"\" with force. (4) A disconnected release sends nothing and reports the lost connection: onDisconnected fires once. Compare RAW strings, not parsed JSON. Byte identity is the requirement, and Gson writes keys in insertion order with no whitespace. RED before the edit: compileTestKotlin fails with No parameter with name 'force'. THEN apply edits.md section 1 (sha256 9865bb976d182965033d8a87f86831fd63b690cca4ec6151a78f8fae132c5d64) to MoeCommandSender.releaseTask (lines 147-156): signature `fun releaseTask(taskId: String, reason: String? = null, force: Boolean = false)`, a short KDoc, and `if (force) { addProperty(\"force\", true) }` AFTER the reason block, so the key order is taskId, reason, force. Section 2: MoeProjectService.releaseTask (line 555) gains the same `force: Boolean = false` and passes it to commandSender.releaseTask(taskId, reason, force). The defaults keep every existing caller compiling unchanged, including PlanApprovalContractTest:214 throwing.releaseTask(\"task-1\", \"reason\"). Error handling does not change and must stay so: ensureConnected() still returns early, with onDisconnected fired once, when disconnected, and sendMessage still swallows a throwing transport (the best-effort contract in the class KDoc).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderReleaseTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderReleaseTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+      ],
+      "note": "MoeCommandSenderReleaseTest copied byte-exact (sha256 71a123a0 matches reference). releaseTask gains force: Boolean = false in MoeCommandSender (force key appended after reason, only when true) and MoeProjectService (passes through). Compile/test run deferred to the single step-4 gated run per plan; RED is by construction (the force named arg did not exist) and will be re-proven by mutant M1 in step 5.",
+      "startedAt": "2026-11-03T17:28:46.168Z",
+      "completedAt": "2026-11-03T17:29:17.712Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2 and the logic of DoD 3. Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt from /mnt/d/moe-scratch/plan-0f2e/BoardRelease.kt (sha256 773ae56cb8ffec3f71bcf4e6582c178f952a2f7265613c6eaae1a4c7b85cc5b2). It is shaped like BoardApproval.kt: a pure decision, an internal headless flow, and an EDT adapter. It contains: data class StepLease(holder, stepId); enum Outcome {CANCELLED, RELEASED, FORCE_RELEASED, STALE}; and internal const FORCE_MESSAGE_KEY, FORCE_TITLE_KEY and STALE_MESSAGE_KEY. `fun stepLease(task: Task?): StepLease?` mirrors packages/moe-daemon/src/util/claimGuards.ts assertNoLiveLease and inProgressStep for a caller with no workerId, which is the /ws path. It returns a lease only for a non-empty assignedWorkerId (isNullOrEmpty, matching JS falsiness), on the FIRST implementationPlan step whose status is IN_PROGRESS (the daemon uses find). Otherwise it returns null. `internal fun release(rendered, confirmRelease, confirmForce, latest, send, stale): Outcome` works like this. A blank assignee gives CANCELLED and asks nothing. If the first confirmation is declined: CANCELLED. With no lease it calls send(false) and returns RELEASED, the unchanged plain frame. With a lease it asks confirmForce(lease); declined: CANCELLED. Then it fails closed: if stepLease(latest()) != the confirmed lease, it calls stale(lease), returns STALE and sends nothing. Otherwise it calls send(true) and returns FORCE_RELEASED. `fun releaseRendered(project, service, task): Outcome` is the EDT-only adapter. It starts with check(SwingUtilities.isEventDispatchThread()). The first Yes/No reuses the existing moe.message.releaseAgent text, its title and the question icon. The second is a Yes/No with the WARNING icon and MoeBundle.message(FORCE_MESSAGE_KEY, lease.holder, lease.stepId, task.title). The other parameters: latest = { service.getState()?.tasks?.firstOrNull { it.id == task.id } }; send = service.releaseTask(task.id, MoeBundle.message(\"moe.message.releasedInUI\"), force); stale = Messages.showWarningDialog(project, the STALE text, the FORCE title). Why the cache read: the ERROR frame has no taskId, so the decision comes from the rendered task before sending, as the description says. But MoeNotificationService.ViewTaskAction can open TaskDetailDialog with a snapshot hours old, and force must never reach a different live seat. The cache read never picks what is sent. Bundle: insert the 3 lines from edits.md section 3 right after `moe.message.releaseAgentTitle=Release Agent` in MoeBundle.properties. Use pure ASCII and no apostrophe, because MessageFormat reads a single quote as an escape; the file is LF. Create moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt from the reference (sha256 2bd2fba4da7f77bd5d2b46cc3af32c87a53859885fff3f13fd7f6557308302d9), 10 tests. stepLease: the holder plus the first IN_PROGRESS step; null for a null task, a null or empty assignee, an empty plan, and a PENDING/COMPLETED-only plan. The flow drives a REAL MoeCommandSender, so each case asserts exact frames. The plain path sends only the plain frame and never asks about force. Mid-step sends force only after the second question received StepLease(w-mid, step-2), also when latest is an equal-lease copy. Declining either question sends nothing. A lease that changed while confirming (another holder, another step, no step, unassigned, missing) sends nothing and shows the stale warning. An unassigned or blank rendered task asks nothing. Then 2 source guards (step 3 turns the wiring guard green) and a bundle guard that loads /messages/MoeBundle.properties as java.util.Properties. Never call MoeBundle from a test (mem:pattern-jetbrains-headless-pure-render-helper). Test names must not contain . : ; / < > [ ] or a backslash (mem:gotcha-kotlin-test-names-no-dot). Error handling: there are no new exception paths. A non-EDT call throws IllegalStateException from check(), and the card's safeCallback turns that into an error balloon. If the board was stale and a step started after the render, the plain release still gets the daemon's STEP_LEASE_HELD and the existing ERROR balloon, which the description accepts. A confirmed force whose lease has changed sends nothing and says so.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "note": "BoardRelease.kt (sha 773ae56c) and BoardReleaseTest.kt (sha 2bd2fba4) are byte-exact copies of the reference. Added 3 bundle keys after releaseAgentTitle. They are pure ASCII with no apostrophe, and the file is LF with 0 CR. The wiring guard goes green in step 3; the compile and test run is the single step-4 gate.",
+      "startedAt": "2026-11-03T17:29:18.477Z",
+      "completedAt": "2026-11-03T17:30:56.620Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3 wiring: route both entry points through the shared handler, and change nothing else. In MoeToolWindowPanel.kt (edits.md section 4, lines 547-558), the body of handleReleaseAgent becomes `BoardRelease.releaseRendered(project, service, task)` plus a one-line comment. KEEP the exact name `fun handleReleaseAgent(task: Task)`. BoardApprovalTest:144 slices handleNext up to \"fun handleReleaseAgent(\", and the card-menu route stays unchanged: TaskCard.kt:345-347, then TaskColumn, then `onReleaseAgent = { task -> handleReleaseAgent(task) }`. In TaskDetailDialog.kt, the Release Agent action (edits.md section 5, lines 727-738) becomes `if (BoardRelease.releaseRendered(project, service, task) != BoardRelease.Outcome.CANCELLED) close(OK_EXIT_CODE)`. Declining either question keeps the dialog open, as declining does today. RELEASED, FORCE_RELEASED and STALE close it; a STALE snapshot is proven old, so the user reopens it fresh. The action stays gated by `!task.assignedWorkerId.isNullOrBlank()`. BoardRelease is in the same package, so no import is needed. Messages stays imported, because both files still use it. Do not write the text service.releaseTask( anywhere except BoardRelease.kt, comments included: the wiring guard walks src/main/kotlin and expects that call text only there. TaskCard.kt, TaskColumn.kt and MoeNotificationService.kt need no edit; the notification-opened dialog inherits the flow. Out of scope: moe-vscode/**, any daemon change, docs/MCP_SERVER.md. The architect applied sections 1-5 plus BoardRelease.kt to a git-archive copy of 19d5e67a and evaluated every source-guard condition of BoardReleaseTest (the slices, the walk and the bundle values) with a string harness: all pass. The existing BoardApprovalTest handleNext slice stays bounded.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "note": "handleReleaseAgent (name kept) and TaskDetailDialog's Release Agent action now both route through BoardRelease.releaseRendered. The dialog closes unless the outcome is CANCELLED. Only BoardRelease.kt now contains the text service.releaseTask( under src/main/kotlin. Messages is still used in both files.",
+      "startedAt": "2026-11-03T17:30:57.650Z",
+      "completedAt": "2026-11-03T17:31:20.526Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "DoD 4 verification gate, run ONCE after steps 1-3. First acquire the lease: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note } (mem:convention-jetbrains-gradle-lease). Run the checkRef from the worktree root exactly as written (copy also in /mnt/d/moe-scratch/plan-0f2e/checkref.txt, sha256 8dce2b831231183c2a89a8a79a9b9ca666862377fdc0ada828f581dd87a2633f). Then call moe.release_resource, even on failure. The checkRef runs `moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun` through cmd.exe; gradlew.bat lives in moe-jetbrains/ (mem:gotcha-gradle-jetbrains-shared-box section 2c). It prints BUILD SUCCESSFUL/FAILED, the module XML totals, and each new class's counts. It exits non-zero on a build failure, or when either new class's XML is missing or shows failures/errors. The architect dry-ran it: it parses, it prints the counts for existing classes, and it exits 1 when the two new XMLs are absent. Expected green: MoeCommandSenderReleaseTest tests=4 and BoardReleaseTest tests=10, each with failures=0 errors=0. The module total should be the base plus 14; the base at 19d5e67a is about 635 tests with 6 skipped, from the control checkout's 16:26Z results. Error handling for a red run: compile errors cascade, so read the FIRST Kotlin error. `> Task :test UP-TO-DATE` means nothing ran, so never accept it. An exit 1 with green XML can be the Gradle daemon MessageIOException IPC flake: grep the daemon log and rerun once. Never run cleanTest or --rerun-tasks on shared output. This run's fresh output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The checkRef ran under the jetbrains-gradle lease (acquired 17:31:23Z) and exited 0. Output: BUILD SUCCESSFUL in 1m 15s; xml tests=649 skipped=6 failures=0 errors=0 (base 635 + 14). MoeCommandSenderReleaseTest tests=4 and BoardReleaseTest tests=10, each with failures=0 errors=0. compileKotlin, compileTestKotlin and test all executed (11 executed, not UP-TO-DATE). The XML is stamped 17:33:07Z. The lease is kept for step 5's mutants and released after them.",
+      "startedAt": "2026-11-03T17:31:21.921Z",
+      "completedAt": "2026-11-03T17:33:20.117Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. The epic is a rolling bucket, and isEpicFinal comes from the highest-order fallback. So the review covers this task, and step 4's full plugin suite is the regression gate; only moe-jetbrains changes. Mutants run under the jetbrains-gradle lease, in a copy outside the checkout (mem:gotcha-jetbrains-qa-mutants-in-archive-copy). Run `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m-0f2e`, then `cp --parents` every path that `git status --porcelain -- moe-jetbrains` lists. Run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\m-0f2e\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.toolwindow.BoardReleaseTest --tests com.moe.services.MoeCommandSenderReleaseTest --rerun\"` once per mutant. M1: MoeCommandSender adds addProperty(\"force\", force) unconditionally, so the default-frame tests must fail. M2: release() asks confirmForce but ignores the answer, so 'declining either confirmation sends no frame' must fail. M3: drop the stepLease(latest()) re-check, so 'a lease that changed while confirming sends nothing' must fail. M4: TaskDetailDialog calls service.releaseTask directly again, so 'card menu and Task Detail both release through the shared handler' must fail. Restore each mutant, then sha256-compare the copy to the worktree. Never mutate the worktree itself: a crash mid-mutant would land the mutant. Also check by reading the diff. Two clicks cannot overlap, because the dialogs are modal. A blank or null assignee asks nothing. The force text names the holder and the step. No apostrophe or non-ASCII character reached the bundle. The default frame has no force key. The diff stays near +350 net LOC, under the 400 review cap. If this review changes any byte, re-run step 4's exact command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Mutants ran in the archive copy /mnt/d/moe-scratch/m-0f2e under the jetbrains-gradle lease, using harness /mnt/d/moe-scratch/m-0f2e-harness/mutate.py. Each mutant asserts its anchor count == 1 and that the restore sha matches. All 4 were killed:\n- M1 (force key unconditional) failed 3 tests: the default frame, blank-reason, and plain path in BoardReleaseTest.\n- M2 (confirmForce answer ignored) failed: declining either confirmation sends no frame.\n- M3 (latest re-check dropped) failed: a lease that changed while confirming sends nothing.\n- M4 (TaskDetailDialog calls service.releaseTask directly) failed: card menu and Task Detail both release through the shared handler.\nAfter the run, sha256 -c of all 116 moe-jetbrains/src files showed the copy equals the worktree, and the worktree is unchanged since the step-4 gate. The lease was then released.\nDiff read results:\n- The default frame has no force key, and force is appended last.\n- Both entry points were already gated by !assignedWorkerId.isNullOrBlank() (TaskCard.kt:345, TaskDetailDialog.kt:726), so release()'s blank-assignee CANCELLED is defensive only.\n- Dialogs are modal on the EDT, so two clicks cannot overlap.\n- Theoretical, accepted: a residual TOCTOU window between the latest() re-check and the send. The daemon remains the authority, and the window is milliseconds.\n- The bundle lines are ASCII with no apostrophe. A title containing { or ' is safe, because MessageFormat substitutes args without parsing them.\n- Net LOC is about +348 (runtime and bundle +136/-20, tests +232), under the 400 cap.\nNo bytes changed, so step 4's run stands as the verification evidence.",
+      "startedAt": "2026-11-03T17:33:21.215Z",
+      "completedAt": "2026-11-03T17:35:30.322Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 382.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:04:41.013Z",
+  "updatedAt": "2026-11-04T19:20:44.299Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:09:02.638Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:40:39.006Z",
+    "wallClockMs": 1896368
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-ed0f6a9e",
+    "qa-af7be174"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:27:14.559Z",
+  "executionContract": {
+    "intendedBehavior": "Release Agent works from the JetBrains board card menu and from Task Detail even when the task's seat hung or crashed mid-step. If the task the user clicked (the rendered snapshot) has an assignee and an IN_PROGRESS plan step, the existing confirmation is followed by a second, explicit warning. That warning names the holder and the step, and says a force release is only for a holder believed dead. Yes sends RELEASE_TASK with force:true, but only while the plugin's newest cached copy of the task still shows that same holder and step. Otherwise nothing is sent, and a warning says the task changed. No sends nothing. Every other release sends exactly the frame it sends today: {taskId, reason}, with no force key.",
+    "acceptanceCriteria": [
+      "MoeCommandSenderReleaseTest asserts the raw RELEASE_TASK frames. The default call (and force = false) sends {taskId, reason} with no force key. force = true appends \"force\":true. A blank or missing reason is omitted with and without force.",
+      "BoardRelease.stepLease returns StepLease(holder, first IN_PROGRESS stepId) for an assigned task. It returns null for a null task, a null or empty assignee, an empty plan, or a plan with only PENDING/COMPLETED steps.",
+      "BoardRelease.release, driven with a real MoeCommandSender, behaves as follows. A non-mid-step release sends only the plain frame and never asks about force. A mid-step release sends force only after confirmForce received the holder and step. Declining either confirmation sends no frame. A lease that changed between the confirmation and the send yields STALE with no frame.",
+      "MoeToolWindowPanel.handleReleaseAgent (the card menu) and the Release Agent action in TaskDetailDialog both call BoardRelease.releaseRendered(project, service, task), and service.releaseTask( appears only in BoardRelease.kt.",
+      "The checkRef passes under the jetbrains-gradle lease. The XML for both new test classes shows failures=0 errors=0."
+    ],
+    "invariants": [
+      "force:true is sent only after the second confirmation, and only while the cached task still shows the confirmed holder and step.",
+      "Declining either confirmation sends no frame.",
+      "stepLease mirrors claimGuards.ts assertNoLiveLease/inProgressStep for a caller with no workerId: a non-empty assignee plus the first IN_PROGRESS step.",
+      "The decision comes from the rendered snapshot. The cache read is only a fail-closed re-check and never chooses what is sent.",
+      "service.releaseTask( is called only from BoardRelease.kt."
+    ],
+    "compatibility": [
+      "The default RELEASE_TASK frame stays byte-identical: {\"type\":\"RELEASE_TASK\",\"payload\":{\"taskId\":...,\"reason\":...}}, with reason omitted when blank and no force key.",
+      "Existing callers compile unchanged because the new parameter is defaulted. This includes PlanApprovalContractTest's throwing.releaseTask(\"task-1\", \"reason\").",
+      "The daemon's /ws RELEASE_TASK contract (WebSocketServer.ts forwards force only when it === true) is consumed as-is. No daemon, moe-vscode or docs/MCP_SERVER.md change.",
+      "The existing bundle keys moe.message.releaseAgent, releaseAgentTitle and releasedInUI keep their text.",
+      "fun handleReleaseAgent(task: Task) keeps its name, because it is a BoardApprovalTest source-slice anchor."
+    ],
+    "approvedScope": [
+      "MoeCommandSender.releaseTask(taskId, reason?, force: Boolean = false) and MoeProjectService.releaseTask(taskId, reason?, force: Boolean = false)",
+      "New object com.moe.toolwindow.BoardRelease: StepLease, Outcome, stepLease(Task?), internal release(...), releaseRendered(project, service, task), internal const FORCE_MESSAGE_KEY / FORCE_TITLE_KEY / STALE_MESSAGE_KEY",
+      "Bodies of MoeToolWindowPanel.handleReleaseAgent and TaskDetailDialog's Release Agent DialogWrapperAction",
+      "New MoeBundle keys moe.message.releaseAgentForce, moe.message.releaseAgentForceTitle, moe.message.releaseAgentForceStale",
+      "New tests MoeCommandSenderReleaseTest (com.moe.services) and BoardReleaseTest (com.moe.toolwindow)"
+    ],
+    "reuse": [
+      "BoardApproval.kt is the shape copied for BoardRelease: an object with a pure decide, an internal headless dispatch, and the EDT approveRendered.",
+      "MoeProjectService.getState() supplies the cached task. Messages.showYesNoDialog and showWarningDialog are used as they already are in MoeToolWindowPanel and AccountsPanel.",
+      "Test fixtures reused: MoeCommandSenderAccountsTest's capturing transport, the source() guard helper from BoardApprovalTest/DoneColumnClearTest, and a bundle guard loaded through java.util.Properties."
+    ],
+    "sourceAssumptions": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt:147-156: releaseTask builds {taskId, reason?} and has no force.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts:735-750: case RELEASE_TASK passes force: message.payload.force === true to release_task.",
+      "packages/moe-daemon/src/util/claimGuards.ts:253-283: inProgressStep finds the first IN_PROGRESS step. assertNoLiveLease passes for force, an unassigned task, the caller's own row, or no IN_PROGRESS step; otherwise it throws STEP_LEASE_HELD.",
+      "The /ws ERROR frame carries only operation, codeName and message (WebSocketServer.ts:39-55), so a refusal cannot be tied to a task.",
+      "MoeToolWindowPanel.kt:547-558 handleReleaseAgent and TaskDetailDialog.kt:725-739 Release Agent each show their own Yes/No and call service.releaseTask directly.",
+      "MoeNotificationService.kt:138 (ViewTaskAction) also opens TaskDetailDialog, with the snapshot taken when the notification was posted.",
+      "MoeProjectService.getState(): MoeState? is at line 728. MoeJson parses implementationPlan into a non-null list and defaults a step status to PENDING.",
+      "moe-jetbrains/build.gradle.kts strips the IntelliJ platform from the test task, so no DialogWrapper or MoeBundle runs in unit tests. Source guards and java.util.Properties are used instead."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in services.MoeCommandSenderReleaseTest toolwindow.BoardReleaseTest; do X=$R/TEST-com.moe.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Send force on every board release. Rejected: it would bypass the step lease that protects live seats. (2) Retry with force after a STEP_LEASE_HELD ERROR. Impossible: the /ws ERROR frame carries no taskId (the allowlist at WebSocketServer.ts:39-55 holds only plan revisions). (3) Pass TaskDetailDialog a callback into the panel's local handleReleaseAgent. Rejected: MoeNotificationService.ViewTaskAction also opens the dialog, without callbacks. A shared object reaches every opener, as BoardApproval already does for Approve. (4) One combined dialog for mid-step tasks. Rejected: the DoD asks for a second, explicit confirmation. (5) Decide from service.getState() rather than the rendered task. Rejected per the task description and BoardApproval's rendered-snapshot rule. The cache is read only as a fail-closed re-check before force, because a notification-opened dialog can show an hours-old holder, and force must never strip a different live seat.",
+    "codebaseInsights": "BoardApproval.kt is the template: a pure decide(), an internal dispatch() with injected effects for headless tests, and an EDT-only approveRendered. Plugin unit tests run on a bare JVM with JUnit 4 and no IntelliJ Application. Consequences: MoeBundle cannot be called from a test (load MoeBundle.properties with java.util.Properties instead), and UI wiring is pinned with source guards (substringAfter/substringBefore anchors, plus a check that throws when the source file is missing). JUnit creates a fresh test instance per method, so capture lists reset. Kotlin internal declarations are visible from the test source set. Gson's JsonObject.toString() writes keys in insertion order with no whitespace, so raw-string equality proves byte identity. The worktree is LF. The bundle already holds non-ASCII values elsewhere; add none.",
+    "risks": "MessageFormat: one apostrophe in a new bundle value silently drops text, so use none (the bundle guard checks). Test names cannot contain . : ; / < > [ ] or a backslash. Removing or renaming fun handleReleaseAgent breaks BoardApprovalTest's handleNext slice. `> Task :test UP-TO-DATE` executes nothing, so use --rerun and read the XML. An architect could not compile the reference bytes; the first gated run is the compile check. Read the first Kotlin error, because they cascade. Mutate only in an archive copy, never the worktree. The diff is about +350 net LOC (runtime about +115, tests about +232) against the 400 review cap, so keep KDoc short if fixes grow it. A VS Code twin (task-9f6a725f VSC-6 left force out on JetBrains parity) is out of scope and may be filed separately.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardApproval.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderAccountsTest.kt",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6d6bdc517720e56e57a755a76bc9e5b33158eb65",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:27:14.588Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:28:46.168Z",
+  "reviewStartedAt": "2026-11-03T17:35:51.517Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; for c in services.MoeCommandSenderReleaseTest toolwindow.BoardReleaseTest; do X=$R/TEST-com.moe.$c.xml; echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X)\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; exit $r",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 1m 15s\nxml tests=649 skipped=6 failures=0 errors=0\nservices.MoeCommandSenderReleaseTest: tests=\"4\" skipped=\"0\" failures=\"0\" errors=\"0\"\ntoolwindow.BoardReleaseTest: tests=\"10\" skipped=\"0\" failures=\"0\" errors=\"0\"\n(run under the jetbrains-gradle lease, 17:31-17:33Z; Gradle log: > Task :compileKotlin, :compileTestKotlin, :test, 11 actionable tasks: 11 executed, not UP-TO-DATE)",
+    "reportedAt": "2026-11-03T17:35:51.517Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderReleaseTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+  ],
+  "completionSummary": "JetBrains Release Agent can now force-release a task whose seat is mid-step. The change is plugin-only.\n- MoeCommandSender.releaseTask and MoeProjectService.releaseTask gain `force: Boolean = false`. The force key is appended after reason only when true, so the default frame {taskId, reason?} is byte-identical.\n- New com.moe.toolwindow.BoardRelease, shaped like BoardApproval:\n  - stepLease(Task?) mirrors claimGuards.ts assertNoLiveLease for a caller with no workerId: a non-empty assignee plus the FIRST IN_PROGRESS step.\n  - internal release() is the headless flow. A non-mid-step release sends the plain frame without asking about force. A mid-step release asks a second warning question that names the holder, the step and the title. It then fails closed if the cached task (service.getState()) no longer shows the same lease: STALE with a warning, and no frame. It sends force:true only on Yes. Declining either question sends nothing.\n  - releaseRendered() is the EDT adapter.\n- MoeToolWindowPanel.handleReleaseAgent (the card menu, name kept) and TaskDetailDialog's Release Agent both call BoardRelease.releaseRendered. The dialog stays open on CANCELLED. service.releaseTask( now appears only in BoardRelease.kt.\n- Three new ASCII bundle keys: releaseAgentForce, releaseAgentForceTitle and releaseAgentForceStale.\n- Tests:\n  - MoeCommandSenderReleaseTest (4) compares raw frames.\n  - BoardReleaseTest (10) covers stepLease cases and the flow driven through a real MoeCommandSender, with exact frames. It also has 2 source guards and a bundle Properties guard.\n- Gate: gradlew test --rerun under the jetbrains-gradle lease, 649 tests (base 635 + 14), 0 failures, 6 skipped.\n- Mutants M1-M4 were run in the archive copy /mnt/d/moe-scratch/m-0f2e and all were killed by the expected tests.\n- No daemon, moe-vscode or docs change. Net LOC is about +348.",
+  "commits": [
+    {
+      "sha": "1cf76839eb7ee4a08a67b9af253c8fc65ce403d4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T17:27:23Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeCommandSender.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardRelease.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeCommandSenderReleaseTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardReleaseTest.kt"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T17:37:12.909Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-74d9e1c7@2026-11-03T17:09:01Z",
+    "at": "2026-11-03T18:14:45.435Z"
+  },
+  "completedAt": "2026-11-03T17:40:39.006Z",
+  "reviewCompletedAt": "2026-11-03T17:40:39.006Z",
+  "reviewSummary": "Reviewed completion 1cf76839: its tree is d1d392bb, the candidate's treeSha, and it is on origin/moe/work-2026-10-24 after a fresh fetch.\n- Diff: the 8 declared files, +368/-20 (net 348). No daemon, vscode or docs change.\n\nGate: re-ran the checkRef verbatim in the control checkout. HEAD was 1cf76839 and moe-jetbrains was clean. It ran under the jetbrains-gradle lease, 17:38-17:39Z, and exited 0:\n- BUILD SUCCESSFUL; xml tests=649, skipped=6, failures=0, errors=0.\n- MoeCommandSenderReleaseTest ran 4 tests and BoardReleaseTest 10, each with 0 failures and 0 errors.\n- The compile and test tasks executed, and the XML is fresh (17:39:30Z).\n\nDoD:\n1. The raw-frame test shows the default call and force=false are byte-identical with no force key. force=true appends \"force\":true. A blank or missing reason is omitted with and without force.\n2. stepLease matches claimGuards assertNoLiveLease and inProgressStep (both read): a non-empty assignee plus the first IN_PROGRESS step. Its null cases are tested.\n3. The card menu (handleReleaseAgent, name kept) and the Task Detail action both call BoardRelease.releaseRendered. A grep and the source guard confirm service.releaseTask( appears only in BoardRelease.kt. The flow test drives a real sender:\n   - force is sent only after the second confirmation, which names the holder and the step;\n   - declining either confirmation sends nothing;\n   - a lease that changed gives STALE with no frame.\n4. The gate is green.\n\nAdversarial read:\n- The cache re-check fails closed and never chooses what is sent.\n- The bundle keys are ASCII with no apostrophe.\n- check() keeps the call on the EDT.\n- The worker's mutants M1-M4 were killed.\n- The complexity pass found nothing to cut.\n\nFollow-up: the VS Code twin (VSC-6) is not filed.",
+  "requiredCheckAtDone": null
+}

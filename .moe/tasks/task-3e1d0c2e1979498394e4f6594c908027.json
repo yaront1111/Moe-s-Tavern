@@ -1,0 +1,268 @@
+{
+  "id": "task-3e1d0c2e1979498394e4f6594c908027",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_epic, update_epic, delete_epic and delete_task record no actor on EPIC_CREATED / EPIC_UPDATED / EPIC_DELETED / TASK_DELETED (update_epic even deletes the proxy-injected workerId), so get_activity_log by workerId misses every epic edit and every task delete (last members of the c05bf92d / 2e3012b9 actor family)",
+  "description": "Filed by governor-e6b40560 from item (a) of defect hunt #7 (task-44785c82, architect-1dd28c7c, #governors msg-2dd55925). The hunt held it back until task-68a47060 landed, because both touch StateManager createEpic. 68a47060 is now DONE (9d08bab8).\n\nPROBLEM (verified by reading moe/work-2026-10-24 at cc84c88a)\n- tools/createEpic.ts, tools/deleteEpic.ts and tools/deleteTask.ts never read params.workerId. They call state.createEpic(input), state.deleteEpic(epicId) and state.deleteTask(taskId), and none of those takes an actor.\n- tools/updateEpic.ts:52 runs `delete raw.workerId` (its comment says \"update_epic doesn't use it\") before strict-field validation, then calls state.updateEpic(epicId, updates).\n- StateManager.ts createEpic (:1244), updateEpic (:1285) and deleteEpic (:1310) append EPIC_CREATED, EPIC_UPDATED and EPIC_DELETED without actorWorkerId, the last parameter of appendActivity (:552). deleteTask (:674) does the same for TASK_DELETED.\n- Every sibling already records the caller:\n  - create_task (c05bf92d): StateManager.createTask(input, actorWorkerId)\n  - report_blocked, request_replan, archive_task and submit_plan_critique (2e3012b9)\n  - the review loop (d981e0b0)\n  - add_comment, amend_plan_step and release_task (e977c32b)\n  - archive_epic (1064df99 / b9119a93)\n\nEFFECT\nget_activity_log { workerId } omits every epic a seat creates, edits or deletes, and every task delete. A per-seat audit cannot see who deleted a row or rewrote an epic.\n\nREPRO\n/mnt/d/moe-scratch/hunt-44785c82/A/epicDeleteActor.test.ts, a vitest file meant for packages/moe-daemon/src/tools/. Seat 'architect-c' makes a create_task baseline call, then create_epic, update_epic, delete_epic and delete_task. get_activity_log { workerId: 'architect-c' } should return [EPIC_CREATED, EPIC_DELETED, EPIC_UPDATED, TASK_CREATED, TASK_DELETED]. It returns only TASK_CREATED.\n\nFIX SHAPE (the architect decides)\n- Thread an optional actorWorkerId through StateManager createEpic, updateEpic, deleteEpic and deleteTask into appendActivity, the way createTask does.\n- Pass params.workerId from all four tools.\n- update_epic keeps workerId out of the epic's stored fields and out of its strict-field check, but uses it as the actor.\n- Everything else about the events, payloads included, stays as it is.\n\nGate: narrow, per the standing epic-be924fb8 ruling (msg-bbf4f109). Run the four tools' test files plus the ported repro.",
+  "definitionOfDone": [
+    "create_epic, update_epic, delete_epic and delete_task record the caller's workerId as the actor on EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, so get_activity_log { workerId } returns all four; a call without workerId still succeeds and records no actor.",
+    "update_epic still refuses unknown fields and never stores workerId on the epic, but no longer discards it as the actor.",
+    "A daemon regression test (the hunt repro ported into packages/moe-daemon/src/tools/) fails before the fix and passes after it, and the existing createEpic, updateEpic, deleteEpic and deleteTask test files still pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the regression test FIRST: port the hunt repro into packages/moe-daemon/src/tools/epicDeleteActor.test.ts. A validated reference is at /mnt/d/moe-scratch/plan-3e1d0c2e/epicDeleteActor.test.ts: RED at 207fc682, GREEN on the reference fix, 10/10 mutants killed. Read it, then write the file with the session's own editing tool (Write on a Claude seat, apply_patch on a codex exec seat). Never cp or shell-write it into the tree, and never write it through a subagent: those leave no TOOL witness. Keep the four case titles' prefixes exactly `(a1) `..`(a4) `, because checkRef `red` greps the FAIL lines for (a1) and (a2). Use ToolTestHarness, an awaited flushActivityLog before every log read, and getActivityLogTool for the per-seat query (mem:gotcha-task-event-actor-inventory, Test pattern section).\n- (a1) Seat 'architect-c': a create_task baseline, then create_epic, update_epic {title}, delete_epic and delete_task, each with workerId. get_activity_log { workerId: 'architect-c' }, filtered to the five event types and sorted, must equal [EPIC_CREATED, EPIC_DELETED, EPIC_UPDATED, TASK_CREATED, TASK_DELETED]. Soft asserts: after update_epic the epic has no workerId key, either in memory (state.getEpic) or in .moe/epics/<id>.json. The payloads are unchanged: EPIC_UPDATED changedFields [['title']], EPIC_DELETED payload [{ title: 'Renamed' }], TASK_DELETED [[taskId, { title }]].\n- (a2) delete_epic { cascadeDelete: true, workerId: 'governor-g' } on an epic holding one task. The cascaded TASK_DELETED and the EPIC_DELETED both carry 'governor-g', and that seat's query returns [EPIC_DELETED, TASK_DELETED].\n- (a3) update_epic { epicId, title, bogus, workerId } still rejects /bogus/ (INVALID_INPUT). The epic stays deep-equal to its structuredClone from before the call, and no EPIC_UPDATED exists.\n- (a4) Caller-less: the four tools without workerId all succeed, and every event's workerId is absent (mapped to null). state.createEpic({ title, workerId: 'smuggled-seat' } as unknown as Partial<Epic>), the raw payload that WebSocketServer's CREATE_EPIC passes as the only argument, also records null. Seats 'unknown', 'agent' and 'smuggled-seat' get none of the five events.\nRun the test once against the unfixed sources (checkRef `red` does exactly that, at the pinned base). Expect (a1) and (a2) to fail and (a3) and (a4) to pass: that is the DoD's fails-before evidence. Error handling in the test: every log read follows an awaited flushActivityLog, so a pending append can never fake a pass or a fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/epicDeleteActor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/epicDeleteActor.test.ts"
+      ],
+      "note": "Wrote tools/epicDeleteActor.test.ts with Write (cases (a1)-(a4), from the validated reference). checkRef red at 207fc682: FAIL (a1), FAIL (a2), 'Tests 2 failed | 2 passed (4)', RED-AT-BASE, exit 0.",
+      "startedAt": "2026-11-03T19:00:49.746Z",
+      "completedAt": "2026-11-03T19:01:40.841Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "State layer: thread an optional trailing `actorWorkerId?: string` into appendActivity's 7th argument (state/activityLog.ts:37 and :83). It is the same channel taskStore.createTask has used since c05bf92d.\n- StateManager.createEpic(input, actorWorkerId?): the EPIC_CREATED appendActivity (~:1279) gains `, actorWorkerId`. Add the c05bf92d comment: the actor is a parameter, never read from `input`, because WebSocketServer's CREATE_EPIC passes its raw /ws payload as `input`.\n- StateManager.updateEpic(epicId, updates, actorWorkerId?): EPIC_UPDATED (~:1300) gains `, actorWorkerId`.\n- StateManager.deleteEpic(epicId, actorWorkerId?): the cascade loop calls `this.deleteTask(task.id, actorWorkerId)`, and EPIC_DELETED becomes `appendActivity('EPIC_DELETED' as ActivityEventType, { title: epic.title }, undefined, undefined, undefined, undefined, actorWorkerId)`. Keep the epic slot undefined so the event keeps its current shape: no top-level epicId, payload { title }.\n- The StateManager.deleteTask delegator (~:674) and taskStore.deleteTask(state, taskId, actorWorkerId?) (~:690) pass the actor to TASK_DELETED (~:743). Change both signatures in lockstep, as the 'signatures generated from the extracted functions' comment requires.\nLeave every other caller actor-less and byte-identical:\n- the board's /ws DELETE_TASK, CREATE_EPIC, UPDATE_EPIC and DELETE_EPIC (WebSocketServer.ts:651-688; a human, with no seat id);\n- archive_epic's updateEpic to status ARCHIVED (archiveEpic.ts:92);\n- the rail-proposal updateEpic (StateManager.ts:1434).\nNever substitute a placeholder ('unknown', 'agent', the assignee) for a missing actor. An explicit '' passes through, as on the sibling sites. Error handling: the existing error handling is unchanged. The audit append stays best-effort (appendActivity never throws into the caller), and every existing refusal keeps its order: Project not loaded, Epic not found, Task not found, the closeOpenAttempts failure that aborts a delete before any change, and non-ENOENT unlink errors. Edit with the session's own editing tool (Edit on a Claude seat, apply_patch on a codex exec seat), never a shell write. /mnt/d/moe-scratch/plan-3e1d0c2e/reference-fix.diff is the runtime change the gate went green on (+29/-24 over 6 files). Use it as a reference only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts"
+      ],
+      "note": "Optional trailing actorWorkerId on StateManager createEpic/updateEpic/deleteEpic (cascade passes it to deleteTask)/deleteTask delegator and taskStore.deleteTask, into appendActivity's 7th arg. EPIC_DELETED keeps the epic slot undefined (no top-level epicId). WebSocketServer, archiveEpic.ts:92 and the rail-proposal updateEpic untouched; no test spies on these methods' arg lists.",
+      "startedAt": "2026-11-03T19:01:43.524Z",
+      "completedAt": "2026-11-03T19:02:29.892Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Tools: pass the caller to the state layer. Each inputSchema gains `workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of <EVENT>' }`, an additive change like archiveEpic.ts:41 and createTask.ts:42. Each params type gains `workerId?: string`.\n- create_epic: `state.createEpic({...}, params.workerId)`.\n- delete_epic: `state.deleteEpic(params.epicId, params.workerId)`. Its tasksInEpic count and the cascadeDelete refusal stay as they are.\n- delete_task: `state.deleteTask(params.taskId, params.workerId)`.\n- update_epic: replace `const raw = ...; delete raw.workerId;` and its 'update_epic doesn't use it' comment with `const { workerId, ...raw } = (args || {}) as Record<string, unknown>;`, plus a comment that workerId is the EPIC_UPDATED actor, never an epic field. Do NOT add workerId to allowedFields; the set and the strict loop stay unchanged. Any other unknown field is then still refused with INVALID_INPUT before any write, and workerId never reaches `updates` (validateEpicUpdates would refuse it there). Pass `workerId as string | undefined` as updateEpic's third argument. The caller's args object is no longer mutated.\nPass the bare params.workerId everywhere, never a fallback. Error handling: missingRequired, notFound, notAllowed and invalidInput keep their order and messages, and a refused call writes nothing and records no event. (a3) and the existing updateEpic.test.ts case 'rejects unknown epic update fields' pin this. Edit with the session's own editing tool, never a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createEpic.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts",
+        "packages/moe-daemon/src/tools/deleteTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createEpic.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts",
+        "packages/moe-daemon/src/tools/deleteTask.ts"
+      ],
+      "note": "Each of the four tools gains an optional workerId schema property and passes bare params.workerId to the state layer. update_epic now splits workerId off via destructuring (args no longer mutated); allowedFields and the strict loop unchanged.",
+      "startedAt": "2026-11-03T19:02:30.754Z",
+      "completedAt": "2026-11-03T19:03:07.935Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs: record the contract in docs/MCP_SERVER.md. Add `workerId?: string` to the Parameters blocks of moe.create_epic (~:1854), moe.update_epic (~:1885), moe.delete_task (~:1917) and moe.delete_epic (~:1942), mirroring moe.archive_epic's block. Each line's comment reads 'caller (auto-injected by moe-proxy); recorded as the actor of <EVENT>', with these events:\n- create_epic: EPIC_CREATED;\n- update_epic: EPIC_UPDATED, followed by 'never stored on the epic';\n- delete_task: TASK_DELETED;\n- delete_epic: EPIC_DELETED and each cascaded TASK_DELETED.\nAdd the comma that the previous last field now needs. delete_task's one-line `{ taskId: string }` becomes `{ taskId: string, workerId?: string }` with its comment, or a two-field block. Touch nothing else in those sections; update_epic's status-enum drift is out of scope. Edit docs/MCP_SERVER.md with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat, never Serena (it ignores docs/) and never a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added workerId?: string to the Parameters blocks of moe.create_epic, moe.update_epic, moe.delete_task (now a two-field block) and moe.delete_epic, with the trailing commas. Nothing else in those sections touched.",
+      "startedAt": "2026-11-03T19:03:08.885Z",
+      "completedAt": "2026-11-03T19:03:32.807Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification gate, run once after steps 1-4. From the task worktree root, run checkRef `green` exactly as written in executionContract.checkRefs.\n- It snapshots HEAD's packages/moe-daemon with mktemp and overlays the 7 owned code and test paths.\n- It then runs npm ci, `tsc --noEmit`, a tsc pass over the new test file (tt.json), and vitest over 8 files: the new test file, the three createEpic test files, updateEpic, deleteEpic, deleteTask and state/StateManager.test.\n- Expected: 'Test Files 8 passed (8)' and exit 0.\n- It is the complete_task verification.command, with its printed lines as outputTail.\nThen run checkRef `red` once. Quote its printed lines in the completion summary: FAIL (a1), FAIL (a2), 'Tests 2 failed | 2 passed (4)' and RED-AT-BASE.\nThe gate is narrow per the standing epic-be924fb8 ruling (msg-bbf4f109) that the row cites. Never run npm in the shared checkout; both commands work only in mktemp snapshots. Error handling for a red run: on a nonzero exit, read ../v.log (or ../r.log) beside the snapshot's package, fix the owned files, and rerun the whole command. Never cite a partial or edited command. Never weaken an (a1)-(a4) assertion to get green; change one only if you can show it contradicts the DoD.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef green (snapshot of HEAD 99d39004 + 7 owned paths): tsc --noEmit and tt.json clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0. checkRef red at 207fc682: FAIL (a1), FAIL (a2), 'Tests 2 failed | 2 passed (4)', RED-AT-BASE, exit 0.",
+      "startedAt": "2026-11-03T19:03:33.464Z",
+      "completedAt": "2026-11-03T19:04:37.796Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review (load the adversarial-self-review skill), over this task's own diff only:\n1. `git diff --stat` against the fork point lists exactly the 8 owned paths.\n2. The diff adds no `?? 'unknown'`, no `|| 'agent'` and no assignee fallback, and reads no actor from `input`, `updates` or a /ws payload. No added line contains a project.json globalRails.forbiddenPatterns string.\n3. EPIC_DELETED still has no top-level epicId and keeps the payload { title }. The TASK_DELETED, EPIC_UPDATED and EPIC_CREATED payloads are unchanged.\n4. update_epic does not mutate args, still refuses unknown fields, and never lets workerId into allowedFields or `updates`.\n5. WebSocketServer.ts, archiveEpic.ts and the rail-proposal path are untouched.\n6. Concurrency: the tools run under McpAdapter's global state mutex, and nothing new is shared or cached.\n7. Null and empty: an absent workerId records no actor. An explicit '' passes through, like the siblings; normalizing it belongs to appendActivity and is out of scope.\nFix anything you find, then rerun checkRef `green` before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review over own diff: exactly 8 owned paths (7 modified + new test); no 'unknown'/'agent'/assignee fallback, no actor read from input/updates/ws payload, no forbiddenPatterns string in added lines; EPIC_DELETED still epic-slot undefined with payload {title}; other payloads unchanged; update_epic destructures (args not mutated), allowedFields/strict loop unchanged, `__proto__`-named own key still refused as before; WebSocketServer.ts and archiveEpic.ts untouched (git diff --quiet). Concurrency: all four tools run under McpAdapter's global mutex, nothing new shared. Theoretical only: a non-string workerId passes through uncoerced, the same as every sibling site; normalizing it belongs to appendActivity (out of scope). No fixes needed, so the step-5 green run stands.",
+      "startedAt": "2026-11-03T19:04:38.739Z",
+      "completedAt": "2026-11-03T19:05:01.111Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 403.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:42:33.313Z",
+  "updatedAt": "2026-11-04T19:20:44.488Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:42:52.720Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:20:28.601Z",
+    "wallClockMs": 2255881
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-7328a40d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:59:15.828Z",
+  "executionContract": {
+    "intendedBehavior": "moe.create_epic, moe.update_epic, moe.delete_epic and moe.delete_task record the caller's workerId (auto-injected by moe-proxy) as the top-level workerId of EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, including every TASK_DELETED a delete_epic cascade writes, so get_activity_log { workerId } returns them. A call without workerId still succeeds and records no actor, and so do the board's /ws CREATE_EPIC, UPDATE_EPIC, DELETE_EPIC and DELETE_TASK. update_epic still refuses unknown fields and never stores workerId on the epic; it now uses workerId as the actor instead of deleting it. Event payloads and every other event field stay as they are.",
+    "acceptanceCriteria": [
+      "get_activity_log { workerId: X } returns the EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED events written by X's create_epic, update_epic, delete_epic (cascaded TASK_DELETED included) and delete_task calls.",
+      "A call without workerId succeeds, and its event has no workerId. Seats 'unknown' and 'agent' match none of these events.",
+      "update_epic { ..., workerId, <unknown field> } is refused with INVALID_INPUT naming the unknown field and writes nothing. A successful update_epic leaves no workerId key on the stored epic, in memory or in .moe/epics/<id>.json.",
+      "packages/moe-daemon/src/tools/epicDeleteActor.test.ts fails at 207fc682 on (a1) and (a2) and passes after the fix. The createEpic*, updateEpic, deleteEpic, deleteTask and state/StateManager test files still pass."
+    ],
+    "invariants": [
+      "The actor comes only from the tool's own params.workerId. It is never read from input, updates or a /ws payload, and never replaced by a placeholder ('unknown', 'agent', the assignee).",
+      "The EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED payloads and their taskId/epicId fields are unchanged. EPIC_DELETED still has no top-level epicId.",
+      "update_epic's allowedFields set and its strict-field refusal are unchanged. workerId never reaches updates or the stored epic.",
+      "Refusals keep their order and write nothing, and appendActivity stays best-effort."
+    ],
+    "compatibility": [
+      "Every new parameter is optional and trailing, so WebSocketServer.ts:651-688, archiveEpic.ts:92 and StateManager.ts:1319/1434 compile and behave as before.",
+      "The MCP tool contracts only gain an optional workerId property. No field is removed or renamed.",
+      "No .moe/ file format changes: the events use only the existing optional top-level workerId field."
+    ],
+    "approvedScope": [
+      "StateManager.createEpic(input, actorWorkerId?: string), updateEpic(epicId, updates, actorWorkerId?: string), deleteEpic(epicId, actorWorkerId?: string) (its cascade passes the actor to deleteTask) and deleteTask(taskId, actorWorkerId?: string)",
+      "taskStore.deleteTask(state, taskId, actorWorkerId?: string), which records the TASK_DELETED actor",
+      "The optional inputSchema.properties.workerId and its handler pass-through in tools/createEpic.ts, updateEpic.ts, deleteEpic.ts and deleteTask.ts",
+      "docs/MCP_SERVER.md: a workerId?: string line in each of the four tools' Parameters blocks"
+    ],
+    "reuse": [
+      "appendActivity's existing actorWorkerId parameter (state/activityLog.ts:37 and :83), the channel taskStore.createTask has used since c05bf92d",
+      "ToolTestHarness, flushActivityLog and getActivityLogTool, as in tools/createCommitActor.test.ts",
+      "The hunt repro /mnt/d/moe-scratch/hunt-44785c82/A/epicDeleteActor.test.ts, extended in /mnt/d/moe-scratch/plan-3e1d0c2e/epicDeleteActor.test.ts"
+    ],
+    "sourceAssumptions": [
+      "tools/updateEpic.ts:52 runs `delete raw.workerId` before the allowedFields strict loop, and the handler calls state.updateEpic at :94.",
+      "tools/createEpic.ts:38, tools/deleteEpic.ts:46 and tools/deleteTask.ts:29 call state.createEpic, state.deleteEpic and state.deleteTask without an actor.",
+      "StateManager.ts: createEpic at :1244 (EPIC_CREATED append :1279), updateEpic at :1285 (:1300), deleteEpic at :1310 (cascade this.deleteTask :1319; the EPIC_DELETED append at :1338 passes no epic), and the deleteTask delegator at :674.",
+      "state/taskStore.ts: deleteTask at :690, with the TASK_DELETED append at :743.",
+      "state/activityLog.ts:83 sets workerId = worker?.id || proposal?.workerId || actorWorkerId.",
+      "state/validators.ts:555: validateEpicUpdates rejects unknown fields, so a workerId inside updates would be refused.",
+      "McpAdapter does not validate tool args against inputSchema, so the proxy-injected workerId already reaches every handler."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && S=$(mktemp -d) && git archive HEAD $P | tar -x -C $S && cp --parents $P/src/state/{StateManager,taskStore}.ts $P/src/tools/{createEpic,updateEpic,deleteEpic,deleteTask,epicDeleteActor.test}.ts $S && cd $S/$P && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/epicDeleteActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run tools/epicDeleteActor tools/createEpic tools/updateEpic tools/deleteEpic tools/deleteTask state/StateManager.test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && R=$(mktemp -d) && git archive 207fc6827406795e91fb00c9dfe974d51da8bfa1 $P | tar -x -C $R && cp --parents $P/src/tools/epicDeleteActor.test.ts $R && cd $R/$P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && { npx vitest run tools/epicDeleteActor > ../r.log 2>&1; [ $? = 1 ]; } && grep -aE \"^ +Tests |^ FAIL \" ../r.log && grep -aqE \"^ FAIL .*> \\(a1\\) \" ../r.log && grep -aqE \"^ FAIL .*> \\(a2\\) \" ../r.log && echo RED-AT-BASE'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Split the row in two: epic CRUD in one, delete_task in the other, as hunt #7 suggested past 5 files. Rejected: the governor filed one row with one DoD, the delete_epic cascade couples the two halves, and the epic-CRUD half alone is still 6 files. (2) Read the actor from input or updates. Rejected: the board's /ws passes raw payloads, and a payload must not name its own actor (the c05bf92d rule). (3) Normalize '' or non-string actors. Out of scope: appendActivity is a shared surface (mem:gotcha-task-event-actor-inventory). (4) Also give an actor to archive_epic's own EPIC_UPDATED (status ARCHIVED, archiveEpic.ts:92) and to the rail-proposal EPIC_UPDATED. Both are outside the governor's four-tool fix shape. The archive_epic one is flagged to the governor as a residual; this row's new updateEpic parameter turns it into a one-argument follow-up. (5) Add epicId to EPIC_DELETED. Rejected: the row says everything else about the events stays as it is.",
+    "codebaseInsights": "appendActivity(event, payload, task, worker, proposal, epic, actorWorkerId) is the only actor channel. An event's top-level workerId is worker?.id || proposal?.workerId || actorWorkerId, and get_activity_log { workerId } filters on that field alone. EPIC_DELETED is appended without the epic entity, so it has no top-level epicId; tests find it by event type. McpAdapter passes args raw, with no schema validation, so delete_task and delete_epic already receive the proxy's workerId and ignore it.\n\nDry-run on 2026-11-03 around 18:55Z, from a scratch tree with GIT_DIR pointing at the repo:\n- checkRef red printed 'Tests 2 failed | 2 passed (4)' and RED-AT-BASE, exit 0.\n- checkRef green on the unfixed sources exited 1 (2 failed | 187 passed).\n- checkRef green on the reference fix printed 'Test Files 8 passed (8)' and 'Tests 189 passed (189)', exit 0, in about 10s.\n- /mnt/d/moe-scratch/plan-3e1d0c2e/mutants.cjs: 10 mutants, each killed by the named case.",
+    "risks": "1. The red checkRef pins base 207fc682 and greps '^ FAIL .*> (a1) ' and '(a2) ', so keep those title prefixes.\n2. The green overlay is an explicit list. A renamed test file or any extra owned source must be added to it, or the snapshot runs stale bytes.\n3. Write the test with your editing tool, never `cp` it from /mnt/d/moe-scratch, or the path lands unwitnessed.\n4. The package tsconfig excludes tests, which is why tt.json type-checks the new file. A cast to Partial<Epic> with an extra key needs `as unknown as`.\n5. Optional mutation pass for QA: in an external snapshot, after npm ci, run `node /mnt/d/moe-scratch/plan-3e1d0c2e/mutants.cjs <snap>/packages/moe-daemon`. Its 10 mutants are anchored on the reference fix's text. It prints ALL-MUTANTS-KILLED-AS-EXPECTED when the code matches that text; 'ANCHOR COUNT' means the worker's text differs, not that a test is weak.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/tools/createCommitActor.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "99d390047c6b23217ed2cbfa1aa14605842530ee",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:59:15.861Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:16:37Z",
+    "at": "2026-11-03T19:21:11.873Z"
+  },
+  "workStartedAt": "2026-11-03T19:00:49.746Z",
+  "reviewStartedAt": "2026-11-03T19:05:25.280Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && S=$(mktemp -d) && git archive HEAD $P | tar -x -C $S && cp --parents $P/src/state/{StateManager,taskStore}.ts $P/src/tools/{createEpic,updateEpic,deleteEpic,deleteTask,epicDeleteActor.test}.ts $S && cd $S/$P && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/epicDeleteActor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run tools/epicDeleteActor tools/createEpic tools/updateEpic tools/deleteEpic tools/deleteTask state/StateManager.test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p tt.json\n Test Files  8 passed (8)\n      Tests  189 passed (189)",
+    "reportedAt": "2026-11-03T19:05:25.280Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/epicDeleteActor.test.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/taskStore.ts",
+    "packages/moe-daemon/src/tools/createEpic.ts",
+    "packages/moe-daemon/src/tools/updateEpic.ts",
+    "packages/moe-daemon/src/tools/deleteEpic.ts",
+    "packages/moe-daemon/src/tools/deleteTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "create_epic, update_epic, delete_epic and delete_task now record the caller's workerId as the top-level actor on EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED and TASK_DELETED, including each TASK_DELETED a delete_epic cascade writes.\n- State layer: StateManager createEpic/updateEpic/deleteEpic, the deleteTask delegator and taskStore.deleteTask each take an optional trailing actorWorkerId, passed as appendActivity's 7th argument. EPIC_DELETED keeps the epic slot undefined, so it still has no top-level epicId and its payload stays { title }.\n- Tools: each schema gains an optional workerId, and each tool passes the bare params.workerId with no fallback. update_epic splits workerId off with `const { workerId, ...raw } = args`, so args are no longer mutated, and allowedFields and the strict-field loop are unchanged.\n- Callers left unchanged and actor-less: the board's /ws paths, archiveEpic.ts:92 and the rail-proposal updateEpic.\n- Docs: a workerId?: string line in the four Parameters blocks of docs/MCP_SERVER.md.\n- Test: tools/epicDeleteActor.test.ts, cases (a1)-(a4).\n\nGate checkRef green: tsc clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0.\nGate checkRef red at 207fc682 printed:\n- FAIL ... > (a1) get_activity_log { workerId } returns the seat's create, update and delete events\n- FAIL ... > (a2) a delete_epic cascade records the caller on each TASK_DELETED and on EPIC_DELETED\n- 'Tests 2 failed | 2 passed (4)'\n- RED-AT-BASE\n\nResiduals (not this row):\n- archive_epic's own EPIC_UPDATED (archiveEpic.ts:92) is still actor-less; it is now a one-argument follow-up.\n- A non-string or '' workerId passes through uncoerced, the same as every sibling site.",
+  "commits": [
+    {
+      "sha": "f8b8d60cc6e836a8eea0ad2e5abbae9bed3f1f30",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T18:59:26Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/taskStore.ts",
+        "packages/moe-daemon/src/tools/createEpic.ts",
+        "packages/moe-daemon/src/tools/deleteEpic.ts",
+        "packages/moe-daemon/src/tools/deleteTask.ts",
+        "packages/moe-daemon/src/tools/epicDeleteActor.test.ts",
+        "packages/moe-daemon/src/tools/updateEpic.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T19:16:37.822Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T19:20:28.601Z",
+  "reviewCompletedAt": "2026-11-03T19:20:28.601Z",
+  "reviewSummary": "Reviewed completion f8b8d60c on moe/work-2026-10-24 (pushed). Parent af8ca2bb and tree cf4b68a2 match candidate cand-138f1499. 8 files, +131/-28 (about 103 net LOC), exactly the 8 declared paths; owned paths are clean against HEAD.\n\nRe-run in /tmp snapshots:\n- task.verification (green) verbatim: tsc clean, 'Test Files 8 passed (8)', 'Tests 189 passed (189)', exit 0.\n- checkRef red at 207fc682: FAIL (a1), FAIL (a2), 'Tests 2 failed | 2 passed (4)', RED-AT-BASE.\n- Adjacent: archiveEpic*, getActivityLog, the three *Actor tests, WebSocketServer*, McpAdapter: 12 files, 198 tests, all passed.\n\nMutation check of epicDeleteActor.test.ts. Killed: actor dropped from EPIC_CREATED, EPIC_UPDATED, EPIC_DELETED, the cascade or TASK_DELETED; dropped in any of the four tools; createEpic reading the actor from input; an 'unknown'/'agent' fallback; update_epic not splitting workerId off. Survived, not blocking: (1) workerId in allowedFields, behaviour-equivalent; (2) passing the epic to the EPIC_DELETED append, which would add a top-level epicId. The code keeps it undefined, but no test pins that shape; an optional one-line follow-up.\n\nDoD:\n1. All four tools pass a bare params.workerId into appendActivity's 7th argument, with no placeholder. A caller-less call records null; (a4) covers it, including the /ws-style createEpic with a smuggled workerId.\n2. update_epic destructures workerId: args are not mutated, and allowedFields and the strict loop are unchanged. (a3): an unknown field is refused and nothing is written. (a1): the stored epic has no workerId, in memory or on disk.\n3. Red before, green after; the existing test files pass.\n\nInvariants hold: the /ws paths, archiveEpic.ts:92 and the rail-proposal updateEpic are untouched; payloads are unchanged; no forbiddenPatterns string; the four MCP_SERVER.md lines are present. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

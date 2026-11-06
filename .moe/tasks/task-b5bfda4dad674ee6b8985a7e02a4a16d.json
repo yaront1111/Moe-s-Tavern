@@ -1,0 +1,184 @@
+{
+  "id": "task-b5bfda4dad674ee6b8985a7e02a4a16d",
+  "epicId": "epic-be924fb8",
+  "title": "docs: SCHEMA.md \"ID Generation\" documents 8-hex ids from a randomUUID().split('-')[0] generator, but the daemon has minted 32-hex ids since 0aab4d36, step ids are step-N and worker ids come from MOE_WORKER_ID",
+  "description": "Filed by defect hunt 11-03 #4 (task-130a6a5c). Evidence is from HEAD 430e4620.\n\nPROBLEM\ndocs/SCHEMA.md:2146-2166 (\"## ID Generation\") is the normative statement of the id format, and it no longer matches the code:\n- :2148 says \"All IDs use a prefix + short UUID format:\".\n- :2150-2154 show `const uuid = crypto.randomUUID().split('-')[0]; // First 8 chars`.\n- :2156-2165 give 8-char examples, including `// Worker:   \"worker-w1x2y3z4\"` and `// Step:     \"step-s1t2u3v4\"`.\n\nWhat the code does:\n- packages/moe-daemon/src/util/ids.ts:3-10: `const uuid = crypto.randomUUID().replace(/-/g, ''); return \\`${prefix}-${uuid}\\`;`. That is `<prefix>-<32 lowercase hex>`, and it has been since 0aab4d36 (2026-06-30). The comment at :4-7 gives the reason: 32-bit ids collide at thousands of entities.\n- Ids minted before that keep their 8-hex form and are still live. This board has epic-be924fb8, proj-3830fac7 and chan-b6d8273b, and 167 of the 893 .moe/tasks files have an 8-char id.\n- Step ids are positional: packages/moe-daemon/src/tools/submitPlan.ts:509 ``stepId: `step-${idx + 1}` ``.\n- Worker ids are chosen by the seat (MOE_WORKER_ID, set by the launchers). No non-test code calls generateId('worker'); it appears only in util/ids.test.ts:20.\n- The non-test generateId prefixes are proj, epic, task, team, prop, evt, chan, msg, dec, comment, attempt, ctxreceipt, cand, review, check, dispatch and receipt. Of these, the section never names team, comment, attempt, ctxreceipt, cand, review, check, dispatch or receipt.\n- SCHEMA.md contradicts itself: it already says `<32 hex>` at :1313 (attempt), :1342 (ctxreceipt), :1392 (cand), :1442 (review), :1487 (check), :1566 (dispatch) and :1611 (receipt).\n- task-4d7074c0 (ARCHIVED) saw the drift and deliberately left it (\"I left the stale `## ID Generation` examples alone\"). No row has filed it until now.\n\nConsequence: tooling written to the documented shape, such as `task-[0-9a-f]{8}\\b`, matches no id minted since June, for example task-85529f6caa8e44bc8198f15a0b105d34. Tooling written to 32 hex alone would miss the legacy ids. The daemon's own parser accepts both: packages/moe-daemon/src/tools/reportBlocked.ts:32 `/(?<![a-z0-9_-])task-[0-9a-f]{6,}\\b/gi`.\n\nEVIDENCE\nThese are the doc/code line pairs above. Two checks run from the repo root at HEAD:\n1. `sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -cE \"split\\('-'\\)\\[0\\]|First 8 chars\"` prints `1`.\n2. The prefix-coverage loop in DoD 2 prints 9 lines: `missing attempt`, `missing cand`, `missing check`, `missing comment`, `missing ctxreceipt`, `missing dispatch`, `missing receipt`, `missing review` and `missing team`.\n\nFIX DIRECTION\nThis is docs-only. Rewrite the \"## ID Generation\" section of docs/SCHEMA.md so that it states:\n- the real generator, `<prefix>-<32 lowercase hex>`, from util/ids.ts;\n- that ids minted before 0aab4d36 (2026-06-30) keep their 8-hex form and stay valid, so consumers must accept both (as reportBlocked.ts:32 does);\n- that step ids are `step-<n>`, assigned in plan order;\n- that worker ids are chosen by the seat (MOE_WORKER_ID), never minted by generateId;\n- one example per non-test generateId prefix.\n\nThe illustrative 8-char ids in the example JSON elsewhere in SCHEMA.md (for example :307 and :671) are out of scope. One sentence in the section saying those examples are abbreviated is enough. Change no code and no other doc.\n\nFILES: docs/SCHEMA.md (only the \"## ID Generation\" section).",
+  "definitionOfDone": [
+    "From the repo root, `sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -cE \"split\\('-'\\)\\[0\\]|First 8 chars\"` prints 0",
+    "From the repo root, `for p in $(grep -rhoE \"generateId\\('[a-z]+'\\)\" packages/moe-daemon/src --include=*.ts --exclude=*.test.ts | sed -E \"s/generateId\\('([a-z]+)'\\)/\\1/\" | sort -u); do sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md | grep -q \"\\\"$p-\\|\\`$p-\\|$p-<\" || echo \"missing $p\"; done` prints nothing (at HEAD it prints 9 missing prefixes)",
+    "The section states all four facts: the 32-lowercase-hex form (util/ids.ts:8); legacy 8-hex ids from before 0aab4d36 staying valid; step ids being `step-<n>` (submitPlan.ts:509); and worker ids coming from the seat's MOE_WORKER_ID rather than generateId",
+    "`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") --stat` names only docs/SCHEMA.md, and every hunk falls inside the \"## ID Generation\" section"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Rewrite the body of docs/SCHEMA.md's \"## ID Generation\" section from the architect's verified reference text. Use the Edit tool only: the rail forbids shell writes and `git apply`.\n\nLAYOUT at HEAD 585fedc6:\n- :2146 is the heading `## ID Generation` and :2147 is blank. Both stay.\n- :2148 is `All IDs use a prefix + short UUID format:` and :2149 is blank.\n- :2150-2154 are a ```typescript fence with the old generator.\n- :2155 is blank, :2156 is `// Examples:`, :2157-2166 are ten 8-char example comments, and :2167 is the closing fence.\n- :2168 is blank and :2169 is the `---` separator before `## Validation Rules`. Leave both untouched.\n\nEDIT: replace :2148 through the closing fence at :2167 with lines 3-40 of /mnt/d/moe-scratch/plan-b5bf/section.md. That is everything after its heading line and the blank line that follows it.\n- section.md's sha256 is d6a988fd148c5d8c39d6ac0842ac853061d056e91ecdfdcc263ac8758c6ae00c, and it is 40 lines.\n- Copy it byte for byte. Its example ids are random 32-hex strings; keep them as written.\n- /mnt/d/moe-scratch/plan-b5bf/fix.diff (sha256 7dccef8fbb80153b695321867b60a5af4c3ac09f236e2863bc225d929477b7d2) is the same change as a unified diff, already checked with `git apply --check` against 585fedc6. Use it to compare, never to apply.\n- mem:decision-architect-dry-run-reference-files explains the method.\n\nThe new text states:\n- (a) generateId mints `<prefix>-<32 lowercase hex>` (packages/moe-daemon/src/util/ids.ts:8), and why: 32-bit ids collide.\n- (b) a 17-row Prefix / Entity / Example table: proj, epic, task, team, prop, evt, chan, msg, dec, comment, attempt, ctxreceipt, cand, review, check, dispatch, receipt.\n- (c) Candidate, Review, CheckRun and CheckDispatch may take a caller-supplied id, as their interfaces in SCHEMA.md say.\n- (d) legacy 8-hex ids from before 0aab4d36 (2026-06-30) stay valid. Consumers accept both, as tools/reportBlocked.ts:32 `task-[0-9a-f]{6,}` does.\n- (e) step ids are `step-<n>` in plan order (tools/submitPlan.ts:509).\n- (f) worker ids come from the seat's MOE_WORKER_ID. The launchers default it to `<role>-<8 hex>` (scripts/moe-agent.sh:917-921, scripts/moe-agent.ps1:460-465), overridable with `--worker-id` or `-WorkerId`, and the daemon never mints one.\n- (g) one sentence saying the example ids elsewhere in the doc are short placeholders.\n\nBefore pasting, confirm the facts still hold at your HEAD:\n- `grep -rhoE \"generateId\\('[a-z]+'\\)\" packages/moe-daemon/src --include=*.ts --exclude=*.test.ts | sort -u` lists exactly those 17 prefixes;\n- ids.ts:8;\n- submitPlan.ts:509.\n\nError handling:\n- If the Edit's old_string no longer matches because the section changed after 585fedc6, re-read the section by its heading. Replace exactly from the line after the heading's blank line through the section's closing fence, and never touch text outside it.\n- If a new non-test generateId prefix has appeared, add a table row for it, with its interface name and a fresh 32-hex example.\n- If a cited code fact changed, write the sentence to match the code and say so in complete_step.\n\nDo not edit the 8-char placeholder ids elsewhere in SCHEMA.md (for example :307 and :671). They are out of scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Pasted reference section; facts rechecked (17 prefixes).",
+      "startedAt": "2026-11-03T17:12:21.309Z",
+      "completedAt": "2026-11-03T17:12:43.911Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify and run the one self-review. Make no edits unless something is red.\n\n1. From your worktree root, run the checkRef exactly as given in the executionContract. It must print `ID-GENERATION-OK` and exit 0. That fresh output is the complete_task evidence.\n   - The checkRef asserts that the section has no `split('-')[0]` and no `First 8 chars`, that every non-test generateId prefix appears in it, that it contains `<32 lowercase hex>`, `0aab4d36`, `step-<n>` and `MOE_WORKER_ID`, that it has exactly 2 fence lines, and that no file other than docs/SCHEMA.md differs from the merge base.\n   - Dry-run numbers on a scratch copy: exit 0 on the candidate. Exit 1 on HEAD 585fedc6, which has the old text and 9 missing prefixes. Exit 1 for the mutant that drops the `step-<n>` wording, and for the mutant that drops the `review-` row. So a green run is not a harness slip.\n2. Run `git diff -U0 -- docs/SCHEMA.md | grep '^@@'`. Every hunk must lie between the `## ID Generation` heading and the `---` separator. The dry run gave 4 hunks: -2148, -2152, -2155,12, and -2168,0 +2157,30.\n\nSelf-review checklist:\n- The markdown renders: one ```typescript block, and a table with a header, a separator and 17 rows.\n- No line inside the section is exactly `---`. Such a line would end the DoD sed range early and hide the rest of the section from the test.\n- The heading text is unchanged.\n- Every factual sentence matches its code line (ids.ts:8, submitPlan.ts:509, reportBlocked.ts:32, moe-agent.sh:917-921 and moe-agent.ps1:460-465, and `git show 0aab4d36 -- packages/moe-daemon/src/util/ids.ts`).\n- No other file or section changed.\n- What would I be embarrassed by if a tool author copied the regex or table straight from this doc?\n\nError handling for a red run:\n- `missing <prefix>`: add that prefix's row.\n- Fence count not 2: fix the fences inside the section.\n- Scope check red (another path differs from the merge base): find out why, and restore that path's merge-base bytes with Edit, never with a checkout of shared files.\n- Then re-run the checkRef until it is green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "checkRef green; hunks all inside section; no edits.",
+      "startedAt": "2026-11-03T17:12:44.826Z",
+      "completedAt": "2026-11-03T17:12:47.275Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 381.7,
+  "comments": [
+    {
+      "id": "comment-63cd63f7f5b74f81aaedd3bc92a6b700",
+      "author": "architect-1dd28c7c",
+      "content": "Count correction from the filer (task-130a6a5c hunt). The PROBLEM paragraph says \"167 of the 893 .moe/tasks files have an 8-char id\". The exact figures at 17:03Z are: 163 files match ^task-[0-9a-f]{8}\\.json$, 655 match ^task-[0-9a-f]{32}\\.json$, and 896 directory entries in all (the rest are hand-named ids like task-bug-crit-1.json and one *.tmp). The finding is unchanged, because legacy 8-hex ids are live. Don't put either count into SCHEMA.md; the doc only needs to say both forms exist.",
+      "timestamp": "2026-11-03T17:03:07.357Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:02:49.230Z",
+  "updatedAt": "2026-11-04T19:20:44.290Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:05:48.104Z",
+    "plannedStepCount": 2,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 2,
+    "doneAt": "2026-11-03T17:15:25.178Z",
+    "wallClockMs": 577074
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-33f67e5b",
+    "qa-93f9625e"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:11:21.472Z",
+  "executionContract": {
+    "intendedBehavior": "docs/SCHEMA.md's \"## ID Generation\" section states the id formats the daemon actually produces. Newly minted ids are <prefix>-<32 lowercase hex> from util/ids.ts generateId, with a row per non-test prefix. Legacy 8-hex ids from before 0aab4d36 stay valid. Some delivery records accept caller-supplied ids. Step ids are positional step-<n>. Worker ids come from the seat's MOE_WORKER_ID. No code changes.",
+    "acceptanceCriteria": [
+      "The section contains neither \"split('-')[0]\" nor \"First 8 chars\"",
+      "Every non-test generateId('<prefix>') prefix appears in the section as \"<prefix>- or `<prefix>- or <prefix>-<",
+      "The section states the 32-lowercase-hex form, legacy 8-hex validity (0aab4d36), step-<n> step ids, and MOE_WORKER_ID-sourced worker ids",
+      "Only docs/SCHEMA.md changes, and only inside the ID Generation section"
+    ],
+    "invariants": [
+      "The `## ID Generation` heading line and the `---` separator that ends the section are unchanged, and no line inside the section is exactly `---`",
+      "Nothing outside the section changes, and no code or other doc changes"
+    ],
+    "compatibility": [
+      "Docs-only. The placeholder 8-char ids in SCHEMA.md's example JSON elsewhere stay as they are; the new section says they are placeholders"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/ids.ts:8 `crypto.randomUUID().replace(/-/g, '')`, widened from `.split('-')[0]` in 0aab4d36 (2026-06-30)",
+      "Non-test generateId prefixes at 585fedc6: proj, epic, task, team, prop, evt, chan, msg, dec, comment, attempt, ctxreceipt, cand, review, check, dispatch, receipt. generateId('worker') and generateId('proposal') appear only in util/ids.test.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts:509 stepId `step-${idx + 1}`; tools/reportBlocked.ts:32 TASK_ID_IN_REASON_RE `task-[0-9a-f]{6,}`",
+      "scripts/moe-agent.sh:917-921 and scripts/moe-agent.ps1:460-465 default MOE_WORKER_ID to <role>-<8 hex>; overrides are -w/--worker-id and -WorkerId; packages/moe-proxy/src/utils.ts injectWorkerId supplies it as the default workerId",
+      "docs/SCHEMA.md interfaces Candidate, Review, CheckRun and CheckDispatch document caller-supplied ids; no migration under packages/moe-daemon/src/migrations rewrites entity ids"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(sed -n '/^## ID Generation/,/^---$/p' docs/SCHEMA.md) && test \"$(printf '%s\\n' \"$S\" | grep -cE \"split\\('-'\\)\\[0\\]|First 8 chars\")\" = 0 && M=$(for p in $(grep -rhoE \"generateId\\('[a-z]+'\\)\" packages/moe-daemon/src --include=*.ts --exclude=*.test.ts | sed -E \"s/generateId\\('([a-z]+)'\\)/\\1/\" | sort -u); do printf '%s\\n' \"$S\" | grep -q \"\\\"$p-\\|\\`$p-\\|$p-<\" || echo \"missing $p\"; done) && test -z \"$M\" && printf '%s\\n' \"$S\" | grep -q '<32 lowercase hex>' && printf '%s\\n' \"$S\" | grep -q '0aab4d36' && printf '%s\\n' \"$S\" | grep -q 'step-<n>' && printf '%s\\n' \"$S\" | grep -q 'MOE_WORKER_ID' && test \"$(printf '%s\\n' \"$S\" | grep -c '^```')\" = 2 && test -z \"$(git diff --name-only \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\" | grep -vx docs/SCHEMA.md)\" && echo ID-GENERATION-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "I considered rewriting every 8-char placeholder id in SCHEMA.md's example JSON (proj-a1b2c3d4, task-t1u2v3w4, and others) and rejected it. The row scopes the change to the normative section, and touching dozens of examples would bloat the diff. One sentence in the section now says those examples are placeholders. I also considered a 'Minted in <file>' column and dropped it, because it would drift with every store refactor; the DoD's grep is the live call-site list. I considered citing validateEntityId as the daemon's id check and left it out: only one tool uses it, so the claim would overreach.",
+    "codebaseInsights": "The row description's line numbers are off by one. The examples are :2157-2166, the closing fence is :2167, and `---` is :2169. The step text has the exact layout at 585fedc6. comment-63cd63f7 corrects the file counts in the description, and neither count belongs in the doc. Live legacy ids on this board include proj-3830fac7, epic-be924fb8 and chan-b6d8273b, and 163 task files still have 8-hex ids. Scratch dry run: /mnt/d/moe-scratch/plan-b5bf/ holds section.md, fix.diff, checkref.txt (823 chars), schema.candidate.md and examples.txt; repo/ is a git-archive copy with the candidate applied.",
+    "risks": [
+      "A line that is exactly `---` inside the new section would end the DoD sed range early and hide the rest of the section from the checks; section.md has none.",
+      "If the Edit tool's old_string spans the code fence, copy the fence lines exactly, because the checkRef counts exactly 2 fence lines.",
+      "MOE_LAND_TARGET may be unset in the session. The scope check then compares against HEAD, which still catches uncommitted stray paths."
+    ],
+    "keyFiles": [
+      "docs/SCHEMA.md",
+      "packages/moe-daemon/src/util/ids.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c4121a4b8330864a7df88b6ee6ec3b9a2b5dc970",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:11:21.501Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:12:21.309Z",
+  "reviewStartedAt": "2026-11-03T17:12:49.940Z",
+  "verification": {
+    "command": "checkRef from executionContract (ID-GENERATION-OK)",
+    "exitCode": 0,
+    "outputTail": "ID-GENERATION-OK\nexit=0",
+    "reportedAt": "2026-11-03T17:12:49.940Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "Rewrote docs/SCHEMA.md \"## ID Generation\": 32-hex generator, 17-prefix table, caller-supplied ids, legacy 8-hex (0aab4d36), step-<n>, MOE_WORKER_ID worker ids, placeholder note. Docs only.",
+  "commits": [
+    {
+      "sha": "19d5e67a8e14c73f6aaf94f0256166b1f9040e6b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T17:11:26Z",
+      "paths": [
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T17:13:42.018Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T17:14:10Z",
+    "at": "2026-11-03T17:15:55.602Z"
+  },
+  "completedAt": "2026-11-03T17:15:25.178Z",
+  "reviewCompletedAt": "2026-11-03T17:15:25.178Z",
+  "reviewSummary": "Reviewed completion 19d5e67a (on moe/control HEAD and moe/work-2026-10-24; recorded completion, pushed). Diff: docs/SCHEMA.md only, +32/-14, 4 hunks all inside \"## ID Generation\" (heading and closing '---' untouched).\n\nRe-ran checkRef pieces on the commit's blob (shared tree is dirty with .moe files, so scope check = git diff --name-only 19d5e67a^ 19d5e67a):\n- DoD1: 0 matches for split('-')[0] / \"First 8 chars\".\n- DoD2: prefix loop prints nothing; the 17 non-test generateId prefixes each have a table row.\n- DoD3: section has <32 lowercase hex>, 0aab4d36, step-<n>, MOE_WORKER_ID.\n- DoD4: only docs/SCHEMA.md changed; 2 fence lines; one '---' (the terminator).\n- Cited facts verified: ids.ts:8, submitPlan.ts:509 step-${idx+1}, reportBlocked.ts:32 {6,}, moe-agent.sh:917-921 / .ps1:460-465 <role>-<8 hex>, -WorkerId param, proxy injectWorkerId, 0aab4d36 (2026-06-30). Entity names match SCHEMA.md interfaces.\n- Gate: parity-check.sh PASS, npm run lint exit 0.\n\nNon-blocking: attemptStore.ts:278 also accepts a caller-supplied attempt id, so the \"also accept a caller-supplied id\" sentence (Candidate/Review/CheckRun/CheckDispatch, per their interfaces) is not exhaustive; no DoD covers it, so not rejected. Docs-only; no code or tests touched.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,254 @@
+{
+  "id": "task-a251cd63d34f40f48843993fe772f3b4",
+  "epicId": "epic-be924fb8",
+  "title": "feat(jetbrains): the board's Done column renders only its newest 200 cards (land the human's BoardDoneCap work)",
+  "description": "Land the human's JetBrains Done-column cap. The human wrote it in their own Claude session and decided on 2026-11-05 (about 07:20Z) that it ships with the next work→main merge. The bytes are finished but not on the work branch. They are in commit 1f1913db, kept at refs/backup/governor/control-1f1913db and also saved as /mnt/d/moe-scratch/governor/control-1f1913db-20261105T070403Z.patch.\n\nWHAT IT DOES. Every DONE task is a Swing card (a handful of components and listeners) rebuilt on each board change, so a long-lived board rebuilds hundreds of them. BoardDoneCap.visible(tasks, DONE_COLUMN_CAP = 200) keeps the newest 200 DONE cards, ordered by updatedAt, else completedAt, else createdAt, then the higher order. A missing stamp counts as oldest. The kept cards stay in the column's own order. The column header counts the hidden cards too, and a footer line names them: \"+ {0} older done tasks not shown — Clear Done archives them\" (MoeBundle moe.column.doneHidden). Task gains createdAt, updatedAt and completedAt, which MoeJson parses at both task parse sites. The Done column's render fingerprint includes the hidden count.\n\nTAKE EXACTLY THESE 8 PATHS from that commit, and nothing else:\n- moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt\n- moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt (new)\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt\n- moe-jetbrains/src/main/resources/messages/MoeBundle.properties\n- moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt (new)\n- moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt\nWrite them into the task worktree with read-only git, keeping the bytes exact: `git show refs/backup/governor/control-1f1913db:<path> > <path>`. Since 1f1913db, no commit on the target touches moe-jetbrains. Never take the commit's other two paths. scripts/moe-agent.sh there is a corrupted leftover (NUL bytes, and it reverts e53f5a5c), and 2026-10-24-ai-code-quality-and-context.md only gains a stray blank line.\n\nKeep the human's design and bytes. Change something only where the build, ./gradlew test or QA requires it, and name each change and its reason in the step note. VS Code parity is not part of this row.\n\nCONTROL CHECKOUT. D:/projexts/moes holds the same 8 files as byte-identical uncommitted edits, which the governor STAGED so that this row's landing fast-forwards control over them unchanged. Work only in the task worktree, and never touch the control checkout. If you had to change any of the 8 files, say so in the completion note, so the governor can clear that path's staged copy before the control follow.",
+  "definitionOfDone": [
+    "Exactly the 8 listed moe-jetbrains paths change against the target, with the bytes of refs/backup/governor/control-1f1913db except where a fix is named in a step note. No other path changes.",
+    "With more than 200 DONE tasks, the Done column renders only the newest 200 (updatedAt, else completedAt, else createdAt, then the higher order) in the column's own order. The header count includes the hidden tasks, and the footer line names how many are hidden. With 200 or fewer, nothing is hidden and there is no footer. BoardDoneCapTest covers both cases.",
+    "MoeJson parses createdAt, updatedAt and completedAt at both task parse sites, and an absent field parses to null. MoeJsonTest covers it.",
+    "./gradlew test and ./gradlew buildPlugin pass in moe-jetbrains for the task worktree's tree, with the jetbrains-gradle lease held for the run."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Task timestamps: the model field, both MoeJson parse sites and their MoeJsonTest case, as the exact bytes of R.\n\nGROUND RULES for steps 1-2:\n- Work only in your task worktree W (`git rev-parse --show-toplevel`, i.e. /mnt/d/projexts/moes/.worktrees/task-a251cd63d34f40f48843993fe772f3b4).\n- Never edit /mnt/d/projexts/moes/moe-jetbrains/**. That is the control checkout, where the governor STAGED byte-identical copies of these 8 files so that this row's landing fast-forwards over them. An edit there is MOE_WORKTREE_STRAY_EDIT.\n- R = 1f1913dbcc364738d83646c1c6a281d2395e61d1 (= refs/backup/governor/control-1f1913db). Its parent 2e9682f9 has the same moe-jetbrains tree as the target (no target commit touches moe-jetbrains since), so R's hunks apply verbatim.\n- Read R only with read-only git: `git diff 2e9682f9 $R -- <path>`, `git show $R:<path>`.\n- Write with your own editing tool (Claude Edit/Write, or apply_patch in a codex seat). The description's `git show ... > <path>` redirect is a shell write into the tree, which the global rail forbids. checkRefs[0] proves byte identity instead.\n- Take nothing else from R: its scripts/moe-agent.sh is corrupt (NUL bytes, reverts e53f5a5c), and its 2026-10-24-ai-code-quality-and-context.md change is a stray blank line.\n\nEDITS (each anchor occurs exactly once in the base; checked in planning):\n(a) moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, end of `data class Task`. `    val delivery: TaskDelivery? = null` gains a comma, then add R's comment line `    // Daemon ISO 8601 stamps (docs/SCHEMA.md Task): the Done column keeps its newest cards by them.` and the lines `    val createdAt: String? = null,`, `    val updatedAt: String? = null`, and `    val completedAt: String? = null`. They come last with null defaults, so every existing Task(...) call still compiles.\n(b) moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt, both Task constructors: parseTasks (~:447, 16-space indent, followed by a 12-space `)`) and parseTask (~:672, 12-space indent, followed by an 8-space `)`). In each, `delivery = parseDelivery(obj)` gains a comma, then add `createdAt = obj.getStringOrNull(\"createdAt\"),`, `updatedAt = obj.getStringOrNull(\"updatedAt\"),` and `completedAt = obj.getStringOrNull(\"completedAt\")` at the same indent. The existing lenient getStringOrNull (MoeJson.kt:45) maps an absent, null or non-primitive value to null.\n(c) moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt: insert R's 15-line test `task timestamps read verbatim through both parse paths and absent ones are null` directly after the line `    /** A task payload with [members] spliced in verbatim as extra JSON object members. */`, exactly where R has it. That puts the KDoc above the test: keep it (see planningNotes.risks). The test uses the existing bothPaths/blockerTaskJson helpers and imports (assertEquals, assertNull).\n\nAfter each file, `[ \"$(git hash-object -- <path>)\" = \"$(git rev-parse $R:<path>)\" ]` must hold.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Applied R's (1f1913db) hunks with Edit, no shell writes: Task gains createdAt/updatedAt/completedAt (trailing, null defaults) + R's comment; both MoeJson Task constructors (parseTasks, parseTask) read the three via getStringOrNull; MoeJsonTest gains R's 'task timestamps read verbatim...' case at R's exact position (KDoc wart kept, per plan). git hash-object equals git rev-parse R:<path> for all 3 files (OK x3), LF only. No change to the human's bytes. RED-proof for the test comes from step-4 mutant M5; compile/test run in step 3.",
+      "startedAt": "2026-11-05T10:32:51.201Z",
+      "completedAt": "2026-11-05T10:34:10.683Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The Done-column cap: BoardDoneCap and its test, the panel wiring, the column header and footer, and the bundle key, as the exact bytes of R. Same ground rules as step 1.\n\n(a) Write moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt (32 lines) and moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt (69 lines, 4 tests) with the exact content of `git show $R:<path>` (ASCII, LF, final newline).\n- DONE_COLUMN_CAP = 200.\n- BoardDoneCap.visible(tasks, cap) returns (tasks, 0) when tasks.size <= cap.\n- Otherwise it keeps the `cap` newest by `updatedAt ?: completedAt ?: createdAt ?: \"\"` descending, then the higher `order`, stable on a full tie. It returns them in input order, together with the count it left out.\n\n(b) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt, 4 hunks:\n- createTaskColumn gains `hiddenCount: Int = 0` after `isDone: Boolean = false` (anchor: `                isDone: Boolean = false\\n            ): TaskColumn {`).\n- Its TaskColumn(...) call passes `hiddenCount = hiddenCount` after `epicSortByDate = epicSortByDate`.\n- In updateColumn, `val columnTasks = tasks.filter { displayStatus(it.status) == config.status }` becomes R's `val statusTasks = ...`, its 3 comment lines, and `val (columnTasks, hiddenCount) = if (config.isDone) BoardDoneCap.visible(statusTasks, BoardDoneCap.DONE_COLUMN_CAP) else statusTasks to 0`. The fingerprint gains `|hidden=$hiddenCount` right after `$taskFingerprint`.\n- updateColumn's createTaskColumn(...) call passes `hiddenCount = hiddenCount` after `isDone = config.isDone`.\nThese edits keep BoardApprovalTest's source slices green: `boardTaskFingerprint(columnTasks)` still comes before `columnFingerprints[config.status] == fingerprint`, and the `val fingerprint =` line still contains `|approvals=$approvalFingerprint`. They leave DoneColumnClearTest's onClearColumn slice untouched.\n\n(c) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt, 4 hunks:\n- `import com.moe.util.MoeBundle` after `import com.moe.toolwindow.BoardMoves`.\n- The constructor's `epicSortByDate` param gains a comma, followed by R's KDoc line and `private val hiddenCount: Int = 0`.\n- In the header, `val total = tasks.size + hiddenCount`, and countText is built from `total`.\n- Before `        val body = JPanel(BorderLayout())`, R's `if (hiddenCount > 0) { listPanel.add(JBLabel(MoeBundle.message(\"moe.column.doneHidden\", hiddenCount)).apply { ... }) }` block (BoardStyles.textSecondary, JBUI.Fonts.smallFont(), JBUI.Borders.empty(4, 2)), formatted exactly as in R.\n\n(d) moe-jetbrains/src/main/resources/messages/MoeBundle.properties: after `moe.column.clearDone=Clear Done`, add `moe.column.doneHidden=+ {0} older done tasks not shown — Clear Done archives them`, with the em dash U+2014 in UTF-8 exactly as in R. The file is UTF-8 with LF line endings and already holds non-ASCII values. No test loads this key through java.util.Properties.\n\nThen run checkRefs[0] from W. It must print SCOPE-BYTES-OK.\n\nIf the build, the tests or QA later force a change to any of the 8 files:\n- make the minimal fix;\n- name the path, the change and the reason in this step's note and in the completion note (the governor must clear that path's staged copy in control before the control follow);\n- checkRefs[0] will then print `BYTES: <that path>` as its only failure. Say so.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+      ],
+      "note": "Wrote BoardDoneCap.kt and BoardDoneCapTest.kt with Write (R's exact content); applied R's 4 MoeToolWindowPanel hunks, 4 TaskColumn hunks and the moe.column.doneHidden bundle line (em dash U+2014) with Edit. No shell writes, no change to the human's bytes. checkRefs[0] from W (MOE_LAND_TARGET=moe/work-2026-10-24, exported by the wrapper): `SCOPE-BYTES-OK base=7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2`, rc=0. That means exactly the 8 R paths change and every one hashes to R's blob.",
+      "startedAt": "2026-11-05T10:34:12.812Z",
+      "completedAt": "2026-11-05T10:35:58.309Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate: run the full moe-jetbrains `gradlew test` and `buildPlugin` on W's tree, under the jetbrains-gradle lease.\n\n1. Take the lease: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"a251 gate: snapshot test+buildPlugin\" } (mem:convention-jetbrains-gradle-lease). If it is queued, use moe.wait_for_resource, or moe.report_blocked with resourceId \"jetbrains-gradle\". Hold it through step 4.\n\n2. From W, run the two checkRefs joined, each byte-exact in its own subshell: `( <checkRefs[0]> ) && ( <checkRefs[1]> )` (mem:gotcha-joined-checkrefs-need-subshells). Submit that exact string, with its exit code and output tail, as complete_task's verification. The wrapper exports MOE_LAND_TARGET. Without it, checkRefs[0] fails loudly with `SCOPE:`; it never passes vacuously.\n\n3. What checkRefs[1] does:\n- snapshots W's tree (git archive of the merge-base plus the 8 files) into a fresh /mnt/d/moe-scratch/a251-XXXXXX and prints `S=<dir>`;\n- runs Windows `npm ci` and `npm run build` for moe-daemon and moe-proxy there, because buildPlugin's requireBundledAssets needs their dist and node_modules (never in W or the control checkout: global rail);\n- runs Windows `gradlew.bat test --rerun buildPlugin` with GRADLE_OPTS=-Xmx512m, because WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl);\n- asserts that BoardDoneCapTest ran 4 tests with 0 skipped, 0 failures and 0 errors, that the MoeJsonTest timestamps case ran, and that a plugin zip was built.\nExpect about 3-6 min. The archive and both npm builds took 12 s in the planning dry run.\n\n4. If Gradle exits red with \"Could not receive a message from the daemon\", that is the IPC flake (mem:gotcha-gradle-jetbrains-shared-box): check the Gradle daemon log and rerun once. The Jansi \"cleanup\" OutOfMemoryError line is noise.\n\n5. Never kill the shared Gradle daemon or any process you did not start. Keep S for step 4's mutants. Afterwards, remove every scratch dir you created by its printed path (`rm -rf <that exact path>`), never by glob.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I took the jetbrains-gradle lease (granted 10:36:01Z) and am holding it for step 4. From W I ran the joined `( checkRefs[0] ) && ( checkRefs[1] )`, each ref byte-exact, with the wrapper's MOE_LAND_TARGET=moe/work-2026-10-24. It exited 0 and printed \"SCOPE-BYTES-OK base=7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2\", \"S=/mnt/d/moe-scratch/a251-tg6xOv\", \"BUILD SUCCESSFUL in 1m 55s\" (13 actionable tasks: 13 executed), \"moe-jetbrains/build/distributions/moe-jetbrains-0.8.0.zip\" and \"GATE-OK /mnt/d/moe-scratch/a251-tg6xOv\". Results in S: 47 test classes, 706 tests, 6 skipped, 0 failures, 0 errors. BoardDoneCapTest ran 4 tests with 0 skipped, 0 failures and 0 errors. The MoeJsonTest case 'task timestamps read verbatim through both parse paths and absent ones are null' ran. There was no IPC flake. The log is /mnt/d/moe-scratch/a251-gate-20261105T103634Z.log, and S stays in place for the step-4 mutants.",
+      "startedAt": "2026-11-05T10:36:00.335Z",
+      "completedAt": "2026-11-05T10:39:04.983Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this diff, with five mutants. Load the adversarial-self-review skill.\n\nScope: the 8 paths only. The epic is a rolling bucket whose sibling rows each landed with their own gates, so there is no epic-wide diff to sweep.\n\n1. Re-prove the scope from W. `git status --porcelain` must list only the 8 paths. `git -C /mnt/d/projexts/moes status --porcelain -- moe-jetbrains` must still show the governor's 8 staged copies, untouched.\n\n2. Run the mutants in the step-3 snapshot S, under the still-held lease, one at a time. For each one:\n- make an exact-anchor replace in S, asserting count == 1;\n- run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <wslpath -w S>\\moe-jetbrains && .\\gradlew.bat test --tests <class> --rerun\"`;\n- judge it from the exit code and the failing test names in the console, not from an XML mtime window (mem:gotcha-jetbrains-mutant-harness-false-fresh-xml); /mnt/d/moe-scratch/m-0f2e-harness/mutate.py is a reusable runner;\n- restore the file with `git show $R:<path> > $S/<path>` (scratch only) and check its hash.\nThe mutants:\n- M1, BoardDoneCap.kt: `compareByDescending<Task> {` -> `compareBy<Task> {`. Kills `over the cap keeps the newest by updatedAt in input order and counts the rest`.\n- M2: `.thenByDescending { it.order }` -> `.thenBy { it.order }`. Kills `equal stamps prefer the higher order and are otherwise stable`.\n- M3: `it.updatedAt ?: it.completedAt ?: it.createdAt` -> `it.updatedAt ?: it.createdAt ?: it.completedAt`. Kills `completedAt then createdAt stand in for a missing updatedAt`.\n- M4: `return shown to tasks.size - shown.size` -> `return shown to 0`. Kills the over-cap hidden count.\n- M5, MoeJson.kt parseTask site (:676; the leading newline plus the 12-space indent make the anchor unique): `\\n            createdAt = obj.getStringOrNull(\"createdAt\"),` -> `\\n            createdAt = null,`. Kills the MoeJsonTest timestamps case on path parseTask.\nReport each verdict in the step note. A survivor is a finding to report; it is not a reason to change the human's bytes unless QA requires it.\n\n3. Swing has no headless test, so trace the UI half of DoD 2 by source:\n- the TaskColumn header is `tasks.size + hiddenCount`;\n- the footer appears only when hiddenCount > 0;\n- MoeToolWindowPanel caps only the Done column, with BoardDoneCap.DONE_COLUMN_CAP = 200;\n- the column fingerprint carries `|hidden=`.\n\n4. Checklist:\n- error handling: the stamps go through the existing lenient getStringOrNull, so a malformed, non-string or JSON-null stamp parses to null instead of throwing, and visible() then sorts it oldest. BoardDoneCap has no IO and no failure path. The footer JBLabel receives only MoeBundle text (no agent text). updateBoard's existing per-column try/catch still covers the whole Done path;\n- updateBoard runs inside invokeLater on the EDT, so nothing runs concurrently;\n- an empty list, or one of 200 or fewer, returns (tasks, 0) and shows no footer;\n- the stamps compare as strings, which holds because the daemon writes them with UTC toISOString;\n- Clear Done still archives every DONE task in scope: DoneColumnClear.archiveCount counts the full list, and the capped list is non-empty whenever anything is hidden;\n- with a search active, the hidden count covers only the matching DONE tasks.\n\n5. Release jetbrains-gradle (moe.release_resource) on every path, and delete your scratch dirs. In the completion note, state whether any of the 8 files differs from R (expected: none).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review, scoped to the 8 paths.\n\n1. Scope:\n- In W, `git status` lists exactly the 8 paths (6 M, plus the 2 new files untracked).\n- Control `/mnt/d/projexts/moes` still shows the governor's 8 STAGED copies (6 M, 2 A), untouched. Each control index blob equals R's blob (idx-ok x8).\n\n2. Mutants. All ran in snapshot S under the held lease, judged by exit code and console FAILED lines. There were no compile errors, and each mutant was restored and its sha checked. All 5 were KILLED:\n- M1 (compareBy): exit 1. 'over the cap keeps the newest...' and 'completedAt then createdAt...' FAILED.\n- M2 (thenBy order): exit 1. 'equal stamps prefer the higher order...' FAILED.\n- M3 (createdAt before completedAt): exit 1. 'completedAt then createdAt stand in...' FAILED.\n- M4 (hidden count 0): exit 1. 3 of the 4 BoardDoneCapTest cases FAILED.\n- M5 (MoeJson parseTask createdAt = null): exit 1. The MoeJsonTest timestamps case FAILED with 'AssertionError: parseTask expected:', i.e. on the parseTask path.\n- After the run, all 8 S files hashed equal to R.\n\n3. UI trace by source:\n- TaskColumn.kt:107 `val total = tasks.size + hiddenCount`, and the header shows total (with ` / wip` when a WIP limit is set).\n- TaskColumn.kt:184 adds the footer only `if (hiddenCount > 0)`, using MoeBundle moe.column.doneHidden.\n- MoeToolWindowPanel.kt:725 caps only `config.isDone`. Every other column gets `statusTasks to 0`.\n- BoardDoneCap.kt:12 sets DONE_COLUMN_CAP = 200.\n- MoeToolWindowPanel.kt:727's fingerprint carries `|hidden=$hiddenCount`.\n- The updateColumn calls stay inside the existing try/catch (:749).\n\n4. Checklist:\n- Stamps are read through the lenient getStringOrNull, so a malformed, non-string or null stamp parses to null and sorts oldest.\n- No IO or failure path is added.\n- Everything runs on the EDT inside invokeLater, so nothing runs concurrently.\n- A list that is empty or within the cap returns (tasks, 0) and shows no footer.\n- Clear Done is unaffected: DoneColumnClear.archiveCount counts the full DONE list, and the capped list is non-empty whenever anything is hidden, so the ✕ stays.\n- Under a search, the hidden count covers only the matching DONE tasks.\n\nTheoretical notes, not fixed (they are the human's design):\n(a) Stamps compare as strings. That holds because the daemon writes UTC toISOString with millis; a stamp without millis would sort as newer than a millis stamp from the same second.\n(b) visible() keys the kept set on id, so duplicate ids could miscount. Daemon ids are unique.\n(c) DONE_COLUMN_CAP = 200 is pinned only by reference, since the tests use cap 2 and a 201 mutant would survive. The Swing header and footer have no headless test.\n(d) The outer board fingerprint omits updatedAt, so a re-sort driven only by an updatedAt change waits for the next board change.\n\n5. Cleanup:\n- I released jetbrains-gradle and removed S (/mnt/d/moe-scratch/a251-tg6xOv) by its exact path.\n- I kept /mnt/d/moe-scratch/a251-harness (16 KB: mutate.py, mutants.log and gate.log) so QA can re-run the mutants: `python3 -I mutate.py <S>`.\n- None of the 8 files differs from R.",
+      "startedAt": "2026-11-05T10:39:07.163Z",
+      "completedAt": "2026-11-05T10:40:35.087Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 545.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T07:23:29.022Z",
+  "updatedAt": "2026-11-05T10:49:23.784Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T10:00:27.783Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-05T10:48:54.116Z",
+    "wallClockMs": 2906333
+  },
+  "contextFetchedBy": [
+    "architect-2d0f1f37",
+    "worker-c2615068",
+    "qa-a22d53a1"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T10:31:03.721Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains board's Done column renders at most BoardDoneCap.DONE_COLUMN_CAP = 200 cards. It keeps the newest DONE tasks by updatedAt, else completedAt, else createdAt (a missing stamp counts as oldest), with the higher order winning a tie, and lays them out in the column's own order. The header counts every DONE task in the column, hidden ones included. A footer line, '+ N older done tasks not shown — Clear Done archives them', names the hidden count and is absent when nothing is hidden. Task gains createdAt, updatedAt and completedAt; both MoeJson task parse sites read them, and an absent one is null. The row lands the human's commit 1f1913db for exactly 8 moe-jetbrains paths, byte-identical.",
+    "acceptanceCriteria": [
+      "Against the target, exactly the 8 listed moe-jetbrains paths change, each byte-identical to 1f1913db unless a fix is named in a step note. checkRefs[0] prints SCOPE-BYTES-OK.",
+      "More than cap DONE tasks: BoardDoneCap.visible keeps the cap newest (updatedAt, else completedAt, else createdAt, then the higher order) in input order and returns the hidden count. Cap or fewer: it returns (tasks, 0). BoardDoneCapTest's 4 cases pass.",
+      "MoeToolWindowPanel caps only the Done column, at DONE_COLUMN_CAP = 200. TaskColumn's header shows tasks.size + hiddenCount. The moe.column.doneHidden footer renders only when hiddenCount > 0. The Done column fingerprint includes the hidden count.",
+      "MoeJson parseTasks and parseTask both read createdAt, updatedAt and completedAt, and an absent field parses to null. The MoeJsonTest case 'task timestamps read verbatim through both parse paths and absent ones are null' passes.",
+      "The full moe-jetbrains `gradlew test` and `buildPlugin` pass on a snapshot of W's tree, run with the jetbrains-gradle lease held (checkRefs[1] prints GATE-OK)."
+    ],
+    "invariants": [
+      "Only the 8 listed moe-jetbrains paths change; all other paths stay byte-identical to the target.",
+      "The control checkout /mnt/d/projexts/moes and its staged copies are never edited.",
+      "R's scripts/moe-agent.sh and 2026-10-24-ai-code-quality-and-context.md are never taken.",
+      "Every column except Done renders uncapped."
+    ],
+    "compatibility": [
+      "Task's new constructor params come last and default to null, so every existing Task(...) call compiles unchanged.",
+      "Task JSON without the stamps (legacy .moe/ state, older daemons) parses to null.",
+      "No wire, MCP or daemon change. The plugin reads only fields the daemon already writes (docs/SCHEMA.md Task).",
+      "Clear Done is unchanged: DoneColumnClear.archiveCount still counts the full DONE list, and ARCHIVE_DONE_TASKS also archives the hidden cards.",
+      "No VS Code change; parity is out of scope for this row."
+    ],
+    "approvedScope": [
+      "Task.createdAt, Task.updatedAt, Task.completedAt (Models.kt; trailing String? params defaulting to null)",
+      "MoeJson.parseTasks and MoeJson.parseTask: the three stamps via the existing getStringOrNull",
+      "object BoardDoneCap { const val DONE_COLUMN_CAP = 200; fun visible(tasks: List<Task>, cap: Int): Pair<List<Task>, Int> }",
+      "MoeToolWindowPanel.updateBoard: createTaskColumn(hiddenCount), updateColumn statusTasks/columnTasks/hiddenCount, and the `|hidden=` column fingerprint segment",
+      "TaskColumn(hiddenCount: Int = 0): header total, and the footer JBLabel from MoeBundle moe.column.doneHidden",
+      "MoeBundle.properties key moe.column.doneHidden",
+      "Tests: BoardDoneCapTest (4 cases); MoeJsonTest 'task timestamps read verbatim through both parse paths and absent ones are null'"
+    ],
+    "reuse": [
+      "MoeJson.getStringOrNull (MoeJson.kt:45) for lenient stamp reads.",
+      "The MoeJsonTest helpers bothPaths and blockerTaskJson for both-path assertions.",
+      "DoneColumnClear for the Clear Done count (unchanged).",
+      "BoardStyles.textSecondary, JBUI.Fonts.smallFont() and JBUI.Borders.empty for the footer, as CreateTaskDialog and AccountsPanel already use them."
+    ],
+    "sourceAssumptions": [
+      "`git log 2e9682f9..moe/work-2026-10-24 -- moe-jetbrains` is empty (target tip 7a48aa92), and 2e9682f9 is the parent of 1f1913db.",
+      "All 8 blobs at 1f1913db have LF line endings (.gitattributes `* text=auto eol=lf`). Control's index and working tree equal R for all 8 (verified 2026-11-05).",
+      "BoardApprovalTest.kt:250-256 and :265-271 and DoneColumnClearTest.kt:70-76 pin MoeToolWindowPanel source slices, and R's edits keep them valid.",
+      "No test loads moe.column.doneHidden through java.util.Properties: the whole-bundle scans filter on moe.accounts.*, moe.delivery.* and moe.managedVm.code.*.",
+      "moe-jetbrains/gradle.properties sets no org.gradle.caching, and build.gradle.kts sets no ignoreFailures. A fresh snapshot therefore executes every task, and a failing test fails the build.",
+      "requireBundledAssets (build.gradle.kts:119) runs only in prepareSandbox, so buildPlugin needs packages/moe-daemon and packages/moe-proxy dist and node_modules, and `test` does not."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && R=1f1913dbcc364738d83646c1c6a281d2395e61d1 && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && P=$(git diff --name-only $R^ $R -- moe-jetbrains) && [ \"$(echo \"$P\" | wc -l)\" = 8 ] && C=$({ git diff --name-only \"$B\"; git ls-files -o --exclude-standard; } | sort -u) && { [ \"$C\" = \"$(echo \"$P\" | sort)\" ] || { echo \"SCOPE: $C\"; false; }; } && f=0 && for p in $P; do [ \"$(git hash-object -- \"$p\")\" = \"$(git rev-parse \"$R:$p\")\" ] || { echo \"BYTES: $p\"; f=1; }; done && [ $f = 0 ] && echo \"SCOPE-BYTES-OK base=$B\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && R=1f1913dbcc364738d83646c1c6a281d2395e61d1 && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && S=$(mktemp -d /mnt/d/moe-scratch/a251-XXXXXX) && echo \"S=$S\" && git archive \"$B\" | tar -x -C \"$S\" && cp --parents $(git diff --name-only $R^ $R -- moe-jetbrains) \"$S\"/ && cd \"$S\" && SW=$(wslpath -w \"$S\") && cmd.exe /d /c \"cd /d $SW\\packages\\moe-daemon && call npm ci && call npm run build && cd /d $SW\\packages\\moe-proxy && call npm ci && call npm run build\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $SW\\moe-jetbrains && .\\gradlew.bat test --rerun buildPlugin\" && X=moe-jetbrains/build/test-results/test && grep -q 'tests=\"4\" skipped=\"0\" failures=\"0\" errors=\"0\"' $X/TEST-com.moe.toolwindow.BoardDoneCapTest.xml && grep -q 'name=\"task timestamps read verbatim' $X/TEST-com.moe.util.MoeJsonTest.xml && ls moe-jetbrains/build/distributions/*.zip && echo \"GATE-OK $S\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) `git show R:<path> > <path>`, as the description spells it. Rejected because it is a shell write into the tree, which the global rail forbids. In worktree mode the rail's stated consequence (a contested HELD path) cannot happen (scripts/CLAUDE.md, 'Attribution in W'). Edit/Write still satisfies both the rail and the description, and checkRefs[0] mechanically proves byte identity, which is the description's real requirement.\n(2) `git cherry-pick 1f1913db` or `git checkout R -- <paths>`. Rejected: the cherry-pick would bring in the corrupt scripts/moe-agent.sh and the stray .md line, and the checkout is a git write that also stages.\n(3) Splitting the row into stamps and cap. Rejected: BoardDoneCapTest needs the Task stamps, and the governor staged all 8 files in control for a single fast-forward. Eight files exceed the 5-file soft cap (a warning only); the row is about 170 LOC of finished code.\n(4) Running buildPlugin inside W. Rejected: it needs npm ci and a build in W's packages, the daemon's prebuild may rewrite tracked generated files, and every dirty W path lands. The gate therefore runs in a /mnt/d/moe-scratch snapshot, matching the rail that npm runs only in a snapshot outside the repo.\n(5) The epic-final full sweep. Scoped down: epic-be924fb8 is a rolling bucket of 300+ rows, each landed and QA'd on its own. Full regression of the one affected package (all of moe-jetbrains `test` plus buildPlugin) is the right scope, and it fits the 20-minute gate rail.",
+    "codebaseInsights": "- Planning dry run, in a --shared clone at target tip 7a48aa92 with the 8 R blobs overlaid:\n  - checkRefs[0] went green. Five mutants all went red: an extra modified file, a byte change, a missing new file, R's junk scripts/moe-agent.sh, and an untracked extra file.\n  - A CRLF copy still passes, because hash-object normalizes as the landing does.\n  - With no MOE_LAND_TARGET after a commit, it fails loudly (`SCOPE:` empty). In QA mode, a clone at the sha with MOE_LAND_TARGET=<sha>^, it goes green.\n  - The joined `( ref0 ) && ( ref1 )` with ref0 red returns 1, and ref1 never runs.\n  - checkRefs[1] up to Gradle (archive, cp, Windows npm ci and build for daemon and proxy through cmd.exe from WSL) took 12 s. gradlew.bat comes out of git archive as CRLF.\n  - Gradle itself was not run: an architect cannot take the jetbrains-gradle lease (mem:gotcha-architect-cannot-take-gradle-lease).\n- Every symbol R uses exists at the base: getStringOrNull, BoardStyles.textSecondary, MoeBundle.message(key, vararg), JBUI.Fonts.smallFont(), TaskColumn's listPanel, the MoeJsonTest imports, and the bothPaths and blockerTaskJson helpers.\n- The only open rows besides this one are task-1a8f1d0e (BLOCKED, daemon test) and task-ee10405f (PLANNING, wrapper). Neither touches moe-jetbrains, so there is no merge-tree conflict risk.\n- Byte lengths: checkRefs[0] is 594 chars and checkRefs[1] is 955, both under the 1000 cap, so run them byte-exact. The joined command is 1561 chars.",
+    "risks": "- Known cosmetic wart in the human's bytes: the new MoeJsonTest case sits between blockerTaskJson's KDoc (`/** A task payload with [members] ... */`) and that function, so the KDoc now heads the test. It has no compile or test effect. Keep it unless QA requires the move. If it moves, name it in the step and completion notes: MoeJsonTest.kt then differs from R, and the governor must unstage control's copy.\n- DONE_COLUMN_CAP = 200 is pinned only by reference: the tests use cap 2, so a 201 mutant would survive. The Swing header and footer have no headless test. Both are coverage notes and are traced by source in step 4. The DoD names the over-cap and under-cap cases, and BoardDoneCapTest covers both.\n- The outer board fingerprint does not include updatedAt. A DONE task whose updatedAt alone moves (for example a landing row recorded on it) re-sorts only at the next board change. That is the human's design and harmless; note it, do not change it.\n- QA re-run:\n  - In the control checkout MOE_LAND_TARGET is unset, so B=HEAD, and checkRefs[0] fails on control's .moe/ dirt.\n  - Run both refs instead in `git clone -q --shared --no-checkout <control> $T/w`, detached at the completion sha, with MOE_LAND_TARGET=<sha>^, holding the jetbrains-gradle lease.\n  - `git clone` does not copy refs/backup/*, which is why the refs name the full sha; it resolves through alternates.\n  - QA also reviews `git diff <sha>^ <sha>` against `git diff 2e9682f9 1f1913db -- moe-jetbrains`.\n- Gradle hazards:\n  - The IPC flake 'Could not receive a message from the daemon': read the daemon log and rerun once.\n  - Keep GRADLE_OPTS=-Xmx512m (client OOM on the huge %TEMP%).\n  - Never pattern-kill, and never kill the shared Gradle daemon.\n  - Release the lease on every path.\n  - Each ref1 run creates a new /mnt/d/moe-scratch/a251-* dir of a few hundred MB. Remove only your own, by the printed path.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt (new, from 1f1913db)",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt (new, from 1f1913db)",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt (unchanged; Clear Done count)",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardApprovalTest.kt (source-slice guards on updateColumn)",
+      "moe-jetbrains/build.gradle.kts (requireBundledAssets for buildPlugin)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T10:31:03.754Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a22d53a1@2026-11-05T10:43:03Z",
+    "at": "2026-11-05T10:49:23.784Z"
+  },
+  "workStartedAt": "2026-11-05T10:32:51.201Z",
+  "reviewStartedAt": "2026-11-05T10:41:25.324Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && R=1f1913dbcc364738d83646c1c6a281d2395e61d1 && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && P=$(git diff --name-only $R^ $R -- moe-jetbrains) && [ \"$(echo \"$P\" | wc -l)\" = 8 ] && C=$({ git diff --name-only \"$B\"; git ls-files -o --exclude-standard; } | sort -u) && { [ \"$C\" = \"$(echo \"$P\" | sort)\" ] || { echo \"SCOPE: $C\"; false; }; } && f=0 && for p in $P; do [ \"$(git hash-object -- \"$p\")\" = \"$(git rev-parse \"$R:$p\")\" ] || { echo \"BYTES: $p\"; f=1; }; done && [ $f = 0 ] && echo \"SCOPE-BYTES-OK base=$B\" ) && ( cd \"$(git rev-parse --show-toplevel)\" && R=1f1913dbcc364738d83646c1c6a281d2395e61d1 && B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && S=$(mktemp -d /mnt/d/moe-scratch/a251-XXXXXX) && echo \"S=$S\" && git archive \"$B\" | tar -x -C \"$S\" && cp --parents $(git diff --name-only $R^ $R -- moe-jetbrains) \"$S\"/ && cd \"$S\" && SW=$(wslpath -w \"$S\") && cmd.exe /d /c \"cd /d $SW\\packages\\moe-daemon && call npm ci && call npm run build && cd /d $SW\\packages\\moe-proxy && call npm ci && call npm run build\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $SW\\moe-jetbrains && .\\gradlew.bat test --rerun buildPlugin\" && X=moe-jetbrains/build/test-results/test && grep -q 'tests=\"4\" skipped=\"0\" failures=\"0\" errors=\"0\"' $X/TEST-com.moe.toolwindow.BoardDoneCapTest.xml && grep -q 'name=\"task timestamps read verbatim' $X/TEST-com.moe.util.MoeJsonTest.xml && ls moe-jetbrains/build/distributions/*.zip && echo \"GATE-OK $S\" )",
+    "exitCode": 0,
+    "outputTail": "MOE_LAND_TARGET=moe/work-2026-10-24\nSCOPE-BYTES-OK base=7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2\nS=/mnt/d/moe-scratch/a251-tg6xOv\n...\n> Task :compileTestKotlin\n> Task :prepareSandbox\n> Task :testClasses\n> Task :test\n> Task :buildPlugin\n\nBUILD SUCCESSFUL in 1m 55s\n13 actionable tasks: 13 executed\nmoe-jetbrains/build/distributions/moe-jetbrains-0.8.0.zip\nGATE-OK /mnt/d/moe-scratch/a251-tg6xOv\nEXIT=0\n[snapshot test-results: 47 classes, 706 tests, 6 skipped, 0 failures, 0 errors; BoardDoneCapTest tests=4 skipped=0 failures=0 errors=0; jetbrains-gradle lease held 10:36:01Z-release after step 4. qualityGate `bash scripts/tests/parity-check.sh && npm run lint` in W: PASS parity-check.sh, role-doc lint OK, rc 0]",
+    "reportedAt": "2026-11-05T10:41:25.324Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties"
+  ],
+  "completionSummary": "This lands the human's JetBrains Done-column cap from commit 1f1913db: exactly its 8 moe-jetbrains paths, byte-identical to R. None of the 8 files differs from R, so the governor's staged copies in control (index blobs == R, verified) need no clearing. R's corrupt scripts/moe-agent.sh and its stray .md line were not taken. The bytes were written with Edit/Write, not a shell redirect.\n\nBehaviour:\n- Task gains createdAt, updatedAt and completedAt (trailing, defaulting to null). MoeJson parseTasks and parseTask read them through getStringOrNull.\n- BoardDoneCap.visible keeps the newest 200 DONE tasks (updatedAt, else completedAt, else createdAt, then the higher order) in the column's own order.\n- The header counts the hidden tasks, and the moe.column.doneHidden footer shows only when something is hidden. The fingerprint carries |hidden=. Only the Done column is capped.\n\nVerification:\n- The joined `( checkRefs[0] ) && ( checkRefs[1] )` exited 0, printing SCOPE-BYTES-OK and GATE-OK. Under the jetbrains-gradle lease: full gradlew test --rerun plus buildPlugin, 706 tests with 0 failures and 6 skipped, BoardDoneCapTest 4/4, the MoeJsonTest timestamps case ran, and the plugin zip was built.\n- qualityGate (parity-check plus lint) passed.\n\nSelf-review:\n- 5 mutants, all KILLED: compareBy, thenBy, the stamp-fallback swap, the hidden count set to 0, and parseTask createdAt set to null.\n- Coverage notes, left as the human's design: the cap of 200 is pinned only by reference, and the Swing header/footer were traced by source only.",
+  "commits": [
+    {
+      "sha": "25720e94bbb2b60cbd10de09b1ed47caaa5dfefa",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c2615068@2026-11-05T10:31:22Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardDoneCap.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardDoneCapTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-c2615068",
+      "recordedAt": "2026-11-05T10:42:41.679Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-05T10:48:54.116Z",
+  "reviewCompletedAt": "2026-11-05T10:48:54.116Z",
+  "reviewSummary": "Reviewed completion 25720e94 (on moe/work-2026-10-24 and origin, parent 7a48aa92). Diff: 8 files, +157/-10 (net 147).\n\nDoD1 scope+bytes: git diff C^ C names exactly the 8 listed moe-jetbrains paths, and each blob equals R=1f1913db's. moe-jetbrains tree at C equals R's. R's scripts/moe-agent.sh and the .md were not taken. No target commit touched moe-jetbrains since R^.\n\nGate re-run: task.verification extracted verbatim from the task record, run in a git clone --shared detached at C with MOE_LAND_TARGET=C^, jetbrains-gradle lease held. EXIT 0: SCOPE-BYTES-OK base=7a48aa92, BUILD SUCCESSFUL (13 tasks executed), moe-jetbrains-0.8.0.zip, GATE-OK. Snapshot results: 47 classes, 706 tests, 6 skipped, 0 failures, 0 errors. BoardDoneCapTest 4/4, MoeJsonTest 37/37 incl. the timestamps case, BoardApprovalTest 25/25, DoneColumnClearTest 5/5. qualityGate (parity-check + lint) rc 0 in the clone.\n\nDoD2: BoardDoneCap.visible keeps the cap newest (updatedAt > completedAt > createdAt, missing oldest, higher order on tie) in input order with the hidden count; <=cap returns (tasks,0). updateColumn caps only isDone at DONE_COLUMN_CAP=200, fingerprint carries |hidden=. TaskColumn header = tasks.size+hiddenCount, footer only when hiddenCount>0. Clear Done unaffected: archiveCount counts the full DONE list, and the capped list is non-empty whenever anything is hidden.\nDoD3: both parse sites read the 3 stamps via getStringOrNull. Independent QA mutant (parseTasks updatedAt=null, a site the worker did not mutate) is KILLED by the timestamps test.\nDoD4: test + buildPlugin green under the lease (above).\n\nNon-blocking notes (human's design): cap 200 pinned only by reference; Swing header/footer have no headless test; ISO stamps compare as strings; outer board fingerprint omits updatedAt. Scratch dirs removed, lease released.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

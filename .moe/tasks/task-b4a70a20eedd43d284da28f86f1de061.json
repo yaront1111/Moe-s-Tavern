@@ -1,0 +1,271 @@
+{
+  "id": "task-b4a70a20eedd43d284da28f86f1de061",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code's epic detail panel sends its typed edits and an Archived status in one UPDATE_EPIC frame, toasts \"updated\" and disposes before the reply, so since 09529122 (task-625c7cfe) a refused save loses every edit with no message, and its error-context allowlist drops the epicId the daemon sends (VS Code twin of task-048bfae2)",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577. It waits in BACKLOG on its JetBrains twin, task-048bfae2, because JetBrains is the primary IDE: the VS Code fix should mirror whatever save/archive split 048bfae2 lands. The governor promotes it once 048bfae2 is DONE.\n\nPROBLEM\n- moe-vscode/src/panels/EpicDetailPanel.ts:291 offers Archived in the epic status combo. The save handler (:96-114) puts the typed title, description, architectureNotes and epicRails together with that status in one updateEpic (UPDATE_EPIC) frame (:110). It then shows `Epic \"<title>\" updated.` (:111) and disposes the panel (:112) without waiting for the reply.\n- Since 09529122 (task-625c7cfe), an UPDATE_EPIC to ARCHIVED runs archive_epic's guards. With any PLANNING, AWAITING_APPROVAL or WORKING row in the epic, the daemon refuses the whole frame (NOT_ALLOWED \"archive epic not allowed: ... in-flight task(s)\"). Every typed edit is lost, and the user has already been told it was saved. On a quiet epic the same pick archives every task with no confirmation.\n- The refusal reaches no surface. MoeDaemonClient.ts:99-114 (allowlistedErrorContext) keeps only taskId, expectedPlanRevision and currentPlanRevision. It drops the epicId that the daemon's /ws error frame carries (WebSocketServer.ts:1216) and that types/moe.ts:533-544 declares, so nothing can tie the error to the epic.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/B/zzHuntB_vscodeRefusals.test.cjs test 1, run at HEAD 942717bc in a snapshot; output in zzHuntB_vscodeRefusals.run.txt.\n- FRAME SENT carries title, description, notes, rails and status ARCHIVED.\n- The \"updated\" toast is shown before the reply, and the panel is disposed.\n- onError fires with [NOT_ALLOWED] archive epic not allowed..., and no error toast follows.\nThe panel code is unchanged at d5431577.\n\nFIX DIRECTION\nMirror task-048bfae2's landed design. Read its plan and completion first. At minimum:\n- don't claim success before the reply;\n- keep the panel open (or the edits recoverable) on a refusal, and show the daemon's message;\n- don't let a status pick silently ride along with the field edits: an archive goes through its own confirmed action;\n- carry epicId through allowlistedErrorContext so the error can be attributed.\nError handling: surface the refusal message, never a raw frame. Test it in moe-vscode's node test suite (npm test there, run in a snapshot outside the shared checkout).\n\nFILES\nmoe-vscode/src/panels/EpicDetailPanel.ts, moe-vscode/src/services/MoeDaemonClient.ts, and one moe-vscode test file. No daemon change.",
+  "definitionOfDone": [
+    "Saving the VS Code epic panel with Archived on an epic that has an in-flight row shows the daemon's refusal message. It shows no \"updated\" toast, and the typed edits are not lost (the panel stays open or the edits are re-applied). A moe-vscode test drives the save against a refusing daemon frame.",
+    "Archiving from the panel is a separate, confirmed action: one status pick can no longer archive every task alongside an unrelated field edit. This mirrors task-048bfae2's JetBrains behavior.",
+    "allowlistedErrorContext passes a string epicId through, covered by a unit test. moe-vscode npm test and npm run compile pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Client (DoD 3): let a string epicId cross the error-context allowlist, and make updateEpic report delivery. In moe-vscode/src/services/MoeDaemonClient.ts: (a) DaemonErrorContext gains `epicId?: string`; its doc comment and allowlistedErrorContext's comment say four keys instead of three. (b) allowlistedErrorContext copies source.epicId only when `typeof source.epicId === 'string'` (the rule taskId already has). Every other key and every non-string epicId still never cross, the received object is still never spread, and a context with nothing left is still omitted. The daemon already sends it (packages/moe-daemon/src/server/WebSocketServer.ts, handlePluginMessage catch: context.epicId from the frame's payload) and src/types/moe.ts already declares it, so nothing else changes on the wire or in the types. (c) updateEpic returns sendMessage's boolean (false = nothing was sent), with one doc line saying a caller that gates UI on delivery must check it; EpicDetailPanel is its only caller. In moe-vscode/tests/plan-approval-client.test.cjs, which pins today's drop and must change with the allowlist (an allowlist extension; no assertion weakened): the 'a modern top-level ERROR frame reaches the error event fully correlated' test now asserts the exact key set ['currentPlanRevision','epicId','expectedPlanRevision','taskId'] and context.epicId === 'epic-1', replacing its 'epicId is deliberately not promoted' assertion. assertMismatchPayload is shared with the legacy nested-frame test, whose context has no epicId, so give it the expected key list and keep an exact key-set check in both. The 'unrelated daemon context keys are never promoted into the public payload' test expects exactly those four keys. Add a test row named exactly `EC1 allowlist: <rest>`: a context of only {epicId:'epic-1'} yields a context with exactly that key and value; each non-string epicId (1, null, true, {}, ['epic-1']) alone yields no context property at all; taskId plus a non-string epicId yields exactly ['taskId']. Event objects are vm-realm objects: compare Object.keys or JSON, never deepStrictEqual against a host literal (mem:gotcha-vscode-panel-strict-require-map). Error handling is unchanged in kind: a malformed context never throws, it is filtered key by key. Edit with your own editor tool (Edit on Claude, apply_patch on codex exec), never a shell write (project rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ],
+      "note": "allowlistedErrorContext now passes a string epicId (DaemonErrorContext.epicId added, docs say four keys); updateEpic returns sendMessage's boolean. plan-approval-client.test.cjs: the two epicId-drop tests updated with exact key sets, assertMismatchPayload takes the expected key list, new row EC1. 29/29 pass in that file (run via NODE_PATH, no npm in the shared checkout).",
+      "startedAt": "2026-11-04T00:20:02.150Z",
+      "completedAt": "2026-11-04T00:20:40.472Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Panel save decision (DoD 2, JetBrains parity). First read `git show 19af5ca6 -- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicDetailDialog.kt`, mem:decision-ide-epic-archive-split-save and mem:gotcha-epic-update-archive. All edits are in moe-vscode/src/panels/EpicDetailPanel.ts. Add no new value import: the new test loads this panel under node:vm with a require map that offers only `vscode` (`import type` is fine). Do not change media/epicDetail.js, and leave the 'create', 'delete' and 'cancel' cases as they are.\n(1) Texts. Copy these JetBrains MoeBundle.properties values exactly as module constants: moe.message.archiveEpicTitle ('Archive Epic', also the confirm button label), moe.message.archiveEpic (the confirm text; {0} epic title, {1} count) and moe.message.archiveEpicInFlight (its two `\\n` escapes become real newlines; {0} epic title, {1} the list). Fill {0}/{1} in one pass with a replace callback, so a title containing `{1}` or `$&` is inserted verbatim and never re-scanned. Add a constant for moe.archive_epic's IN_FLIGHT statuses (PLANNING, AWAITING_APPROVAL, WORKING), citing packages/moe-daemon/src/tools/archiveEpic.ts.\n(2) In the 'save' case keep the title check, the field normalization, and where epicId and the chosen status come from exactly as today. Decide from the NEWEST cache: the epic is client.currentState's epic with that id, else the one in the snapshot the panel opened with (this.state); the tasks are client.currentState's, else this.state's, else none; only tasks whose epicId is this epic count. Then:\n(a) Not an archive move: the chosen status is not 'ARCHIVED', or the epic is in neither cache (the daemon refuses a deleted epic and plain-updates an archived one), or the epic is already ARCHIVED. Send ONE frame exactly as today: updates {title, description, architectureNotes, epicRails, status}, in that key order.\n(b) An archive move while this epic has a PLANNING, AWAITING_APPROVAL or WORKING task: send nothing. `await vscode.window.showWarningMessage(inFlightText, { modal: true })` with {0} the cached epic title and {1} those tasks' titles in cache order, one '- <title>' line each, joined by '\\n'. The panel stays open with the typed edits.\n(c) Any other archive move: `await vscode.window.showWarningMessage(confirmText, { modal: true }, 'Archive Epic')` with {0} the cached epic title and {1} String(the number of this epic's tasks whose status is not ARCHIVED; BACKLOG, REVIEW, BLOCKED and DONE all count). Ask even when that number is 0. Any answer but 'Archive Epic' sends nothing and keeps the panel open. On confirm, send the field edits WITHOUT a status key: updates {title, description, architectureNotes, epicRails}. Step 3 sends the status-only frame (updates {status:'ARCHIVED'}) only after the daemon echoes these fields, so a refused field save never archives anything.\nError handling for this step: a dismissed modal sends nothing; a modal that rejects lands in the handler's existing catch ('Epic operation failed: ...'); a false updateEpic is handled in step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "note": "EpicDetailPanel: JetBrains texts as module constants, one-pass fillPlaceholders, IN_FLIGHT_STATUSES; handleSave decides from the newest cache (non-archive / already-ARCHIVED / missing epic = today's one frame with the same key order; in-flight = modal with nothing sent; else confirm modal then fields-only frame). tsc passes in a scratch copy (symlinked node_modules, removed). No new value import (import type only).",
+      "startedAt": "2026-11-04T00:21:32.682Z",
+      "completedAt": "2026-11-04T00:22:17.330Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Panel reply handling (DoD 1): never claim success before the daemon answers. /ws has no correlation id, but ERROR is only ever a direct reply and carries operation plus context.epicId (step 1), so match replies by epic id. In moe-vscode/src/panels/EpicDetailPanel.ts keep one private pendingSave record {epicId, title, stage: 'save' | 'fields' | 'archive'}: 'save' is a one-frame save, 'fields' the archive's field frame, 'archive' the status frame. Set it only after updateEpic returned true. title is that save's trimmed typed title. In the constructor subscribe to client.onEpicUpdated, client.onError and client.onConnectionChanged, and push the disposables into this.disposables. Rules:\n(a) An EPIC_UPDATED payload whose id equals pendingSave.epicId (read it with optional chaining: the client fires payloads unvalidated). At 'fields': send {status:'ARCHIVED'} through updateEpic and move to 'archive'. At 'archive': only a payload with status 'ARCHIVED' settles the save: showInformationMessage('Epic \"<title>\" archived.'), then dispose. The field frame's own broadcast and reply echoes are ignored. At 'save': showInformationMessage('Epic \"<title>\" updated.'), then dispose. Never compare echoed field values: validateEpicUpdates truncates long fields.\n(b) onError with operation 'UPDATE_EPIC' and context?.epicId === pendingSave.epicId: clear pendingSave and showErrorMessage('Epic \"<title>\" was saved but not archived: ' + event.message) at 'archive', else ('Epic \"<title>\" was not saved: ' + event.message). The panel stays open, so Save can be retried. Show event.message, never a raw frame. Ignore every other error (another epic, another operation, no context).\n(c) onConnectionChanged to anything but 'connected' while a save is pending: clear it and showWarningMessage('Lost the connection to the Moe daemon before it confirmed the save of epic \"<title>\". Your edits are still in this panel.').\n(d) A Save while pendingSave is set sends nothing, opens no modal and shows showInformationMessage('Still waiting for the Moe daemon to answer the last save of epic \"<title>\".'). One save is in flight at a time.\n(e) updateEpic false on the first frame: showWarningMessage('Not connected to Moe daemon — epic was not saved.') and nothing is pending. updateEpic false for the status frame: if that save is still pending, clear it and showWarningMessage('Not connected to Moe daemon — epic was saved but not archived.'). A throwing socket has already fired onConnectionChanged and warned through (c), so check first that the save is still pending, to show one message, not two.\nError handling: every refusal, send failure and connection loss ends in exactly one message and leaves the panel open with the edits; only a matching echo disposes it. Add a short comment naming the accepted limit: on the one-frame path, a foreign update of the same epic that reaches the daemon in the few ms before this frame would count as the echo.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts"
+      ],
+      "note": "Reply handling is in EpicDetailPanel (written alongside step 2, same file): pendingSave {epicId,title,stage}, constructor subscriptions to onEpicUpdated/onError/onConnectionChanged pushed into this.disposables; onEpicEcho (fields -> status frame, archive only on ARCHIVED, save -> updated toast), onSaveRefused (UPDATE_EPIC + context.epicId, daemon message shown), onConnection (lost-connection warning once), still-waiting guard (pending or open modal), updateEpic-false handling for both frames with the throwing-socket single-message check. Accepted-limit comment added on onEpicEcho.",
+      "startedAt": "2026-11-04T00:22:22.203Z",
+      "completedAt": "2026-11-04T00:23:18.191Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Tests: create moe-vscode/tests/epic-archive.test.cjs with the Write tool. Use production sources only: the real MoeDaemonClient and EpicDetailPanel, transpiled with ts.transpileModule (CommonJS, ES2020, esModuleInterop) and run under node:vm with strict require maps (client: vscode, ws, fs, path, net, child_process; panel: vscode only). Model it on openLive() in tests/task-release.test.cjs: RecordingEventEmitter, a fake ws that records sent frame strings, `_connectionState = 'connected'`, STATE_SNAPSHOT seeding through client['handleMessage'], recorded showWarningMessage/showInformationMessage/showErrorMessage with scripted modal answers, a panel stub that counts dispose(), a fresh module per open, and client.dispose() in finally. Also model it on /mnt/d/moe-scratch/hunt-d5d58972/B/zzHuntB_vscodeRefusals.test.cjs: reuse its DAEMON_EPIC_REFUSAL frame, the daemon's verbatim in-flight refusal. Read the three texts from moe-jetbrains/src/main/resources/messages/MoeBundle.properties as UTF-8 (turn `\\n` into newlines). Build expected strings by splitting on {0}/{1}, independently of the production substitution. Pin frames as exact JSON strings. Each row's name starts exactly `EA<n> <word>: ` as listed, and each row must fail on today's panel:\nEA1 refusal: (DoD 1) the cache shows only BACKLOG and DONE tasks (stale: the daemon has a WORKING one). Save with Archived and a typed title, description, notes and rails, then confirm: exactly the fields-only frame is sent, and no toast is shown. An EPIC_UPDATED echo sends exactly one more frame, {status:'ARCHIVED'}. The daemon's NOT_ALLOWED frame (context {epicId}) then gives errors == [['Epic \"<typed title>\" was saved but not archived: ' + its message]], no info toast, and no dispose. A second Save afterwards asks again: the panel is still usable.\nEA2 in-flight: PLANNING, AWAITING_APPROVAL and WORKING rows of this epic, plus a BACKLOG row and another epic's WORKING row. One modal warning appears with the bundle text listing exactly this epic's three titles in cache order. It has two arguments (no button). Nothing is sent, no toast, no dispose. Each of the three statuses alone also blocks. The decision follows the newest cache: a TASK_UPDATED after the panel opened that moves a row into WORKING blocks, and one that moves the only WORKING row to BACKLOG lets the confirm through.\nEA3 confirm: the count covers only this epic's tasks that are not ARCHIVED (BACKLOG, REVIEW, BLOCKED and DONE give 4; its ARCHIVED row and another epic's rows are left out). An epic with no tasks still asks, with 0. A cached title containing {1} and $& is inserted verbatim. Dismissing sends nothing, shows no toast and does not dispose.\nEA4 archive: confirm sends the fields frame; the echo sends the status frame. A further EPIC_UPDATED that is not ARCHIVED, and TASK_UPDATED rows, change nothing. An EPIC_UPDATED with status ARCHIVED gives infos == [['Epic \"<title>\" archived.']] and exactly one dispose. Later frames change nothing.\nEA5 fields-refused: the daemon refuses the fields frame (ERROR UPDATE_EPIC, context {epicId}). errors == [['Epic \"<title>\" was not saved: ' + message]]. The status frame is never sent, not even after a later EPIC_UPDATED. No dispose.\nEA6 plain: PLANNED, ACTIVE and COMPLETED picks (with in-flight rows present), and Archived on an already-ARCHIVED epic, each send exactly today's single frame (all four fields plus the chosen status). No modal, and no toast before the reply. The echo gives 'Epic \"<title>\" updated.' and one dispose. A correlated ERROR instead gives '... was not saved: ...', no info and no dispose.\nEA7 one-save: a Save while one is pending sends nothing, opens no modal and shows the still-waiting info. Errors for another epic, for another operation or with no context, and an EPIC_UPDATED for another epic, are all ignored.\nEA8 connection: Save while disconnected gives 'Not connected to Moe daemon — epic was not saved.', no frame and no dispose. A disconnect while a save is pending gives the lost-connection warning once, and a later echo neither sends nor disposes. A send failure at the status frame (set client['_connectionState'] = 'disconnected' before delivering the fields echo) gives 'Not connected to Moe daemon — epic was saved but not archived.'.\nCompare vm-realm objects by JSON, for example JSON.stringify(warnings[0][1]) === '{\"modal\":true}'. Assert an array's length before indexing it, so a missing modal fails an assertion rather than throwing a TypeError (mem:convention-vscode-renderer-tests). Clear every timer the client arms in finally. Keep the file compact, about 250 lines, so the whole task diff stays under QA's 400 net-changed-line oversize rule.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/epic-archive.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/epic-archive.test.cjs"
+      ],
+      "note": "Created moe-vscode/tests/epic-archive.test.cjs: rows EA1-EA8 over the real MoeDaemonClient + EpicDetailPanel under node:vm (strict require maps), texts read from MoeBundle.properties, frames pinned as exact JSON strings, fresh module and client.dispose per open. 8/8 pass locally (NODE_PATH to the shared typescript, no npm run); the RED proof against base sources is step 6.",
+      "startedAt": "2026-11-04T00:23:19.747Z",
+      "completedAt": "2026-11-04T00:25:02.569Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run once. From the task worktree root, run exactly the command in executionContract.checkRefs. It is the complete_task evidence, and QA re-runs it:\n( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/mb4a.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts tests/{epic-archive,plan-approval-client}.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ E[AC][1-9] [a-z-]+: ' ../v.log); echo \"EA1-EA8+EC1 rows passed: $C ($L)\"; [ \"$C\" = 9 ] )\nThe command archives HEAD of the whole repo (the new test reads moe-jetbrains' MoeBundle.properties). It overlays the four task files, because your edits may still be uncommitted. Then it runs npm ci, npm test and npm run compile under nvm Node v24.21.0 in that snapshot. Never run npm in the shared checkout (project rail). The architect dry-ran it at 0f56d3a7 with placeholder rows: 772 tests, 0 failures, compile OK, 9 rows counted. Green means exit 0, 'ℹ fail 0' and 'EA1-EA8+EC1 rows passed: 9 (<dir>)'. Error handling for a red run: the command prints the snapshot dir and the last 40 log lines. Read <dir>/v.log, fix the cause in the worktree, and re-run the whole command; never edit the snapshot. A count other than 9 means a row is misnamed (each must start exactly 'EA<n> <word>: ' or 'EC1 allowlist: ') or failing. When done, remove the /tmp/mb4a.* dir the command printed, by its literal path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs command run fresh from the task worktree in a git-archive snapshot (env -i, nvm v24.21.0, npm ci + npm test + npm run compile): exit 0, ℹ tests 772, pass 762, fail 0, skipped 10, tsc compile clean, 'EA1-EA8+EC1 rows passed: 9'. Snapshot dir removed.",
+      "startedAt": "2026-11-04T00:27:29.915Z",
+      "completedAt": "2026-11-04T00:27:48.376Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's own diff, as the last step (load the adversarial-self-review skill).\n(1) RED proof: each new row must fail on today's code. Run this command and paste its output into the completion summary:\n( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && M=$(mktemp -d /tmp/rb4a.XXXX) && cd \"$M\" && mkdir -p moe-vscode/src/panels moe-vscode/src/services moe-vscode/tests moe-jetbrains/src/main/resources/messages && cp \"$R/moe-jetbrains/src/main/resources/messages/MoeBundle.properties\" moe-jetbrains/src/main/resources/messages/ && cp \"$R\"/moe-vscode/tests/{epic-archive,plan-approval-client}.test.cjs moe-vscode/tests/ && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts; do git -C \"$R\" show \"$B:moe-vscode/$f\" > \"moe-vscode/$f\" && ! cmp -s \"moe-vscode/$f\" \"$R/moe-vscode/$f\" || exit 1; done && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap moe-vscode/tests/*.test.cjs > red.log 2>&1; grep '^not ok' red.log; echo \"not ok: $(grep -c '^not ok' red.log), ok: $(grep -c '^ok' red.log) ($M)\" )\nExpect exactly 11 'not ok' lines: EA1 to EA8, EC1, and the two plan-approval-client tests updated in step 1 ('a modern top-level ERROR frame reaches the error event fully correlated' and 'unrelated daemon context keys are never promoted into the public payload'). Every other row must pass. A row that passes on the base proves nothing: tighten it. Remove the /tmp/rb4a.* dir the command prints.\n(2) Size: run `git diff --numstat \"$(git merge-base HEAD moe/work-2026-10-24)\" -- moe-vscode` plus `wc -l moe-vscode/tests/epic-archive.test.cjs`. The net total must stay under 400 changed lines, or QA rejects the diff as oversized.\n(3) Check each case: two Saves at once (the guard), an echo from another epic or another client, the panel closed while a save is pending, a refused fields frame (no status frame), a stale cache (the daemon's message is shown), an epic missing from both caches, a title containing {0}, {1} or $&, a throwing socket (one message, not two), and a non-string epicId.\n(4) Confirm that no added line contains a project.json globalRails.forbiddenPatterns string, and that EpicDetailPanel.ts gained no value import.\nIf anything changes, re-run step 5 and use that fresh output as the complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/panels/EpicDetailPanel.ts",
+        "moe-vscode/tests/plan-approval-client.test.cjs",
+        "moe-vscode/tests/epic-archive.test.cjs"
+      ],
+      "note": "Adversarial review done. RED proof against base sources (merge-base copies of EpicDetailPanel.ts and MoeDaemonClient.ts): exactly 11 'not ok' (EA1-EA8, EC1, 'a modern top-level ERROR frame reaches the error event fully correlated', 'unrelated daemon context keys are never promoted into the public payload'), 26 ok. Size: git diff --numstat vs merge-base = +424/-33, net 391 (<400); epic-archive.test.cjs is 253 lines. No forbidden pattern in any added line; EpicDetailPanel.ts imports only add a type import (Epic). Cases checked: two Saves at once (pendingSave + confirming flag, EA7 incl. a Save during the open modal), another epic's error/echo ignored (EA7), refused fields frame never sends status (EA5), stale cache shows the daemon message (EA1), epic missing from both caches stays one frame (EA6 epic-9 case), title with {1}/$& inserted verbatim (EA3), throwing socket at the status frame gives one message (EA8), non-string epicId dropped (EC1). Theoretical, not fixed: a daemon that never answers while the socket stays up leaves the save pending until the panel is closed. No source or test edit after the step-5 run, so that run stands as the completion evidence.",
+      "startedAt": "2026-11-04T00:27:50.980Z",
+      "completedAt": "2026-11-04T00:28:42.897Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG by the governor: its only prerequisite, JetBrains twin task-048bfae2, is DONE (completion 19af5ca6). That was the promotion trigger stated in this row's description, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Planner: mirror the design 19af5ca6 landed. It added EpicArchive.kt and EpicArchiveTest.kt and changed EpicDetailDialog.kt and MoeBundle.properties. Run `git show 19af5ca6` to see how JetBrains now splits the archive from the field save and confirms it. Then apply the same split in moe-vscode/src/panels/EpicDetailPanel.ts, plus the epicId pass-through in MoeDaemonClient.ts's allowlistedErrorContext.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-048bfae2d60c4a7bbfbcb7b2f68a3b1e"
+  ],
+  "priority": "MEDIUM",
+  "order": 462.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:34:21.111Z",
+  "updatedAt": "2026-11-04T19:20:45.020Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T23:59:30.368Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:59:54.131Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T05:26:35.766Z",
+    "wallClockMs": 19601635
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-33f67e5b",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T00:18:49.564Z",
+  "executionContract": {
+    "intendedBehavior": "In the VS Code epic detail panel, Save with the Archived status on an epic that is not archived yet no longer travels with the field edits. If the newest cache shows a PLANNING, AWAITING_APPROVAL or WORKING task of the epic, nothing is sent and a modal names those tasks (the JetBrains 19af5ca6 text). Otherwise a modal asks 'Archive epic X and its N task(s)?'. On confirm, the field edits go first, without a status. A status-only ARCHIVED frame follows only after the daemon echoes them. No save claims success before the daemon answers: the panel shows its toast and closes only on the matching EPIC_UPDATED echo. Any correlated UPDATE_EPIC refusal shows the daemon's message and leaves the panel open with the edits. Every other save stays one frame, byte-identical to today's. The client's error-context allowlist now passes a string epicId, so the refusal can be tied to the epic.",
+    "acceptanceCriteria": [
+      "Stale cache, archive refused by the daemon (DoD 1): 'Epic \"<title>\" was saved but not archived: <daemon message>' is shown, no updated/archived toast appears, and the panel stays open (EA1).",
+      "Cached in-flight rows: no frame is sent, one modal with the bundle in-flight text lists exactly those rows, and the panel stays open (EA2). DoD 1's daemon message is the stale-cache path, the only one where a frame is sent; with a fresh cache the JetBrains rule (send nothing, name the rows) applies.",
+      "An archive needs the confirm modal with the count of the epic's tasks that are not ARCHIVED; declining sends nothing (EA3, DoD 2).",
+      "A confirmed archive sends a fields frame without a status, then a status-only frame after the echo. Only an ARCHIVED echo gives the success toast and closes the panel (EA4). A refused fields frame never sends the status frame (EA5).",
+      "Saves that are not an archive move, and saves of an already-ARCHIVED epic, stay one frame identical to today's, with the toast only after the echo (EA6).",
+      "One save is in flight at a time, and uncorrelated errors and echoes are ignored (EA7). A disconnect or a failed send warns once and keeps the panel open (EA8).",
+      "allowlistedErrorContext passes a string epicId and drops non-strings (EC1). The updated allowlist tests keep exact key sets.",
+      "The gate (npm test and npm run compile in a snapshot) passes with the 9 named rows."
+    ],
+    "invariants": [
+      "An Archived pick never travels in the same frame as field edits for an epic that is not ARCHIVED.",
+      "No updated or archived toast and no dispose before a matching EPIC_UPDATED echo.",
+      "Every refusal, failed send and connection loss gives exactly one message and leaves the panel open.",
+      "Only a string epicId crosses the allowlist; the daemon's context object is never spread.",
+      "EpicDetailPanel.ts gains no value import."
+    ],
+    "compatibility": [
+      "No daemon, wire or schema change: UPDATE_EPIC already accepts partial updates, the daemon already sends context.epicId, and src/types/moe.ts already declares it.",
+      "Saves that are not an archive move send frames byte-identical to today's (same keys, same order).",
+      "The other onError subscribers (BoardViewProvider, TaskDetailPanel, PlanReviewPanel) read only operation and taskId, so an extra epicId key changes none of them.",
+      "updateEpic's new boolean return is additive; EpicDetailPanel is its only caller.",
+      "The JetBrains English is copied exactly, per the shared-strings decision (mem:decision-vscode-plugin-reuse)."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/panels/EpicDetailPanel.ts: the 'save' case of handleMessage, a private pendingSave field, constructor subscriptions to client.onEpicUpdated, onError and onConnectionChanged, module constants for three MoeBundle texts and the IN_FLIGHT statuses, and a one-pass placeholder helper.",
+      "moe-vscode/src/services/MoeDaemonClient.ts: DaemonErrorContext.epicId, allowlistedErrorContext, and updateEpic's return type (boolean).",
+      "moe-vscode/tests/plan-approval-client.test.cjs: the two tests that pin the epicId drop, assertMismatchPayload's expected key list, and row EC1.",
+      "moe-vscode/tests/epic-archive.test.cjs (new): rows EA1 to EA8."
+    ],
+    "reuse": [
+      "JetBrains EpicArchive.plan/save rules and bundle texts from 19af5ca6 (mem:decision-ide-epic-archive-split-save).",
+      "The openLive harness pattern of tests/task-release.test.cjs and the hunt repro frame in /mnt/d/moe-scratch/hunt-d5d58972/B/zzHuntB_vscodeRefusals.test.cjs.",
+      "The existing client events onEpicUpdated, onError and onConnectionChanged. The only new client surface is updateEpic's boolean return."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts case 'UPDATE_EPIC' runs applyEpicUpdate under withMutex and replies EPIC_UPDATED to the sender. Its catch sends ERROR {message, operation:'UPDATE_EPIC', code, codeName, context:{epicId}}. StateManager.updateEpic also broadcasts EPIC_UPDATED to every plugin client, so a successful update reaches the sender twice.",
+      "packages/moe-daemon/src/tools/updateEpic.ts applyEpicUpdate: status ARCHIVED on an epic that is not ARCHIVED runs archiveEpicTool first; an already-ARCHIVED epic gets a plain update. validateEpicUpdates truncates long title, description and notes values.",
+      "packages/moe-daemon/src/tools/archiveEpic.ts: IN_FLIGHT = PLANNING, AWAITING_APPROVAL, WORKING. Its refusal reads '[NOT_ALLOWED] archive epic not allowed: Epic \"<id>\" has N in-flight task(s) ...' (code -32003).",
+      "moe-vscode/src/services/MoeDaemonClient.ts: onEpicUpdated fires for EPIC_CREATED and EPIC_UPDATED before the cache write. sendMessage returns false when not connected; on a throwing socket it fires onError without context, then onConnectionChanged('disconnected'), then returns false. currentState is the live cache object.",
+      "moe-vscode/src/providers/BoardViewProvider.ts and src/extension.ts open the panel with daemonClient.currentState, so the panel's this.state is the live cache until a new STATE_SNAPSHOT replaces it. sendStateSnapshot drops ARCHIVED epics and tasks.",
+      "moe-jetbrains MoeBundle.properties keys moe.message.archiveEpicTitle, archiveEpic and archiveEpicInFlight, landed in 19af5ca6."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/mb4a.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts tests/{epic-archive,plan-approval-client}.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ E[AC][1-9] [a-z-]+: ' ../v.log); echo \"EA1-EA8+EC1 rows passed: $C ($L)\"; [ \"$C\" = 9 ] )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Copy JetBrains exactly: send the fields and status frames back to back and close on send. Rejected for VS Code: DoD 1 requires the daemon's refusal to be shown, which needs the panel's onError subscriber alive until the reply, and back-to-back frames archive the epic even when the fields frame is refused (a rail over MAX_EPIC_RAIL_CHARS, for example). (2) Send the status frame only after the fields echo. Chosen: a refused field save never archives, and the field frame still lands first, as the JetBrains rule requires. (3) Match the echo against the sent field values. Rejected: validateEpicUpdates truncates long fields, so a match could hang forever. (4) A correlation id on /ws. Out of scope: no daemon change. (5) Send anyway when the cache already shows in-flight rows, so the daemon's message is what is shown. Rejected: JetBrains rule 1 (send nothing, name the rows) is the parity DoD 2 asks for. DoD 1's daemon message is the stale-cache case, which EA1 drives with the daemon's verbatim refusal frame.",
+    "codebaseInsights": "/ws has no correlation id, but ERROR is only ever a direct reply and carries operation plus context.epicId, so a refusal can be tied to its epic exactly. A successful UPDATE_EPIC reaches the sender twice: the StateManager.updateEpic broadcast, then the direct reply. An archive also broadcasts TASK_UPDATED for each archived task. The panel's this.state is the live client.currentState object until a new STATE_SNAPSHOT replaces it, and snapshots drop ARCHIVED epics and tasks, so an epic missing from both caches is deleted (the daemon refuses) or archived (a plain update is right). Two existing plan-approval-client tests pin today's epicId drop and must change; that is an allowlist extension with exact key sets kept. MANUAL_TESTS.md has no epic-panel section, and no docs or contract change applies.",
+    "risks": "(a) On the one-frame path, a foreign update of the same epic that reaches the daemon a few ms before our frame would count as the echo. Accepted and noted in a code comment. (b) Closing the panel before the fields echo means the status frame is never sent; the user closed it, so that is fine. (c) A stale cache, or a daemon-only hold such as a finalizing landing, can still refuse the archive after the fields landed. That gives EA1's message, by design. (d) Size: the whole diff must stay under 400 net changed lines (QA's oversize rule): about 120 runtime lines and about 250 test lines. (e) vm-realm objects fail deepStrictEqual against host literals; compare by JSON. (f) A new value import in the panel breaks the strict require map. (g) The in-flight text says 'dialog'; it is kept verbatim as the shared English. (h) A throwing socket fires onConnectionChanged before updateEpic returns false: show one message, not two.",
+    "keyFiles": [
+      "moe-vscode/src/panels/EpicDetailPanel.ts",
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/plan-approval-client.test.cjs",
+      "moe-vscode/tests/task-release.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/EpicArchive.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "1d830f7533874499d650e16b478005a18e8ba1f7",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T00:18:49.594Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:20:02.150Z",
+  "reviewStartedAt": "2026-11-04T00:28:52.703Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/mb4a.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in src/panels/EpicDetailPanel.ts src/services/MoeDaemonClient.ts tests/{epic-archive,plan-approval-client}.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ E[AC][1-9] [a-z-]+: ' ../v.log); echo \"EA1-EA8+EC1 rows passed: $C ($L)\"; [ \"$C\" = 9 ] )",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 772\nℹ pass 762\nℹ fail 0\nℹ skipped 10\nEA1-EA8+EC1 rows passed: 9 (/tmp/mb4a.dFN6)\n(npm run compile / tsc -p ./ ran clean in the same chain; exit 0)",
+    "reportedAt": "2026-11-04T00:28:52.703Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/tests/plan-approval-client.test.cjs",
+    "moe-vscode/src/panels/EpicDetailPanel.ts",
+    "moe-vscode/tests/epic-archive.test.cjs"
+  ],
+  "completionSummary": "VS Code epic detail panel: an Archived pick no longer travels with the field edits, and no save claims success before the daemon answers (twin of JetBrains 19af5ca6). EpicDetailPanel.handleSave decides from the newest cache: in-flight rows => modal naming them, nothing sent; else a confirm modal with the non-ARCHIVED count, then a fields-only frame, then a status-only {status:'ARCHIVED'} frame only after the daemon echoes the fields; non-archive saves, already-ARCHIVED epics and epics in neither cache stay one frame identical to today's. The toast and dispose happen only on the matching EPIC_UPDATED echo; a correlated UPDATE_EPIC refusal shows 'Epic \"<t>\" was [saved but] not [archived|saved]: <daemon message>' and keeps the panel with the edits; one save in flight (pendingSave + confirming), one message per failed send / lost connection. MoeDaemonClient: allowlistedErrorContext passes a string epicId, updateEpic returns the send boolean. Tests: new tests/epic-archive.test.cjs rows EA1-EA8 (real client + panel under node:vm), plan-approval-client.test.cjs updated (2 tests keep exact key sets, row EC1). Gate (checkRefs, git-archive snapshot, nvm 24.21.0): npm test 772 tests, 762 pass, 0 fail, 10 skipped; npm run compile clean; 9 EA/EC rows passed. RED proof on base sources: exactly 11 'not ok' (EA1-EA8, EC1, the 2 updated allowlist tests), 26 ok. Size: +424/-33, net 391 (<400). No daemon/wire/schema change, no value import added to the panel, no forbidden pattern. Accepted limits: a foreign same-epic echo in the ms before a one-frame save counts as the echo; a daemon that never answers leaves the save pending until the panel closes. Handoff and gotcha in Serena (task-...-handoff, gotcha-vscode-epic-panel-save-replies).",
+  "commits": [
+    {
+      "sha": "d1062cb05d383d9d947d4843cbeaa4fde89626cf",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-04T00:18:51Z",
+      "paths": [
+        "moe-vscode/src/panels/EpicDetailPanel.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/epic-archive.test.cjs",
+        "moe-vscode/tests/plan-approval-client.test.cjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-04T00:29:50.024Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T05:24:24Z",
+    "at": "2026-11-04T05:27:05.557Z"
+  },
+  "completedAt": "2026-11-04T05:26:35.766Z",
+  "reviewCompletedAt": "2026-11-04T05:26:35.766Z",
+  "reviewSummary": "Reviewed landed completion d1062cb0 (contained in control HEAD, on moe/work-2026-10-24): 4 files, +424/-33, net 391 (<400). Re-ran task.verification verbatim in a git-archive snapshot (nvm Node 24.21.0, env -i): exit 0, tests 772 / pass 762 / fail 0 / skipped 10, npm run compile clean, 9 EA/EC rows passed. Independent RED proof with base copies of EpicDetailPanel.ts + MoeDaemonClient.ts: exactly 11 'not ok' (EA1-EA8, EC1, 2 updated allowlist tests), 26 ok, so no row passes vacuously. DoD1: stale-cache archive sends fields-only then status-only after the echo; daemon refusal shows 'was saved but not archived: <daemon message>', no 'updated' toast, panel stays open (EA1); no toast/dispose before a matching EPIC_UPDATED (EA6). DoD2: Archived never rides with field edits for a non-ARCHIVED epic; cached in-flight rows give a modal naming them, nothing sent (EA2); else confirm modal with non-ARCHIVED count, decline sends nothing (EA3); JetBrains 19af5ca6 texts match MoeBundle.properties. DoD3: allowlistedErrorContext passes a string epicId only (EC1 + exact-key-set tests); updateEpic returns the send boolean. Daemon check: WebSocketServer UPDATE_EPIC catch sends context.epicId and replies EPIC_UPDATED. Rails: no forbidden pattern in added lines, only an `import type` added to the panel, no daemon/wire change, scope within approvedScope. Double-click guard (EA7), throwing socket gives one message (EA8), refused fields frame never sends status (EA5). Non-blocking accepted limits: foreign same-epic echo just before a one-frame save counts as the echo; a silent daemon leaves the save pending until the panel closes; lost-connection text says edits remain even if the fields frame landed (plan's verbatim text).",
+  "requiredCheckAtDone": null
+}

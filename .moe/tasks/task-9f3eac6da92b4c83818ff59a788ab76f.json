@@ -1,0 +1,41 @@
+{
+  "id": "task-9f3eac6da92b4c83818ff59a788ab76f",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #20): file 2-4 evidence-backed bug rows from a CI dry run of moe/work-2026-10-24's tip (every Linux job step of .github/workflows/ci.yml, run in a snapshot) and from the two IDE bundles' contents against each other and the docs that describe them",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04.\n\nWHY\n- At filing time, 3 of 4 coders are about to go idle, and only small rows are queued.\n- Today's VS Code lint breaker (task-0181f915, now DONE) went unnoticed for a day. No row gate runs the whole CI, and main changes only through pull requests, so the next PR to main runs every CI step for the first time since a000b817.\n- A step that is red at the tip is cheap, hard evidence.\n\nLANE, in order of preference\n1. CI dry run at HEAD a654bbb4 or later.\n   - In a git-archive snapshot outside the shared checkout, with Linux node_modules from `npm ci` inside the snapshot, run each Linux step of .github/workflows/ci.yml as written:\n     - root `npm run lint` (the role-doc linter);\n     - daemon and proxy `npm ci`, `npm run build` and `npm run test:coverage`;\n     - claude-plugin build and tests;\n     - moe-vscode `npm ci`, `npm run lint`, `npm run compile`, `npm test`, then the package-and-smoke step;\n     - the fresh-project onboarding and installer steps (build-all-platforms, ubuntu leg);\n     - `bash scripts/tests/parity-check.sh`;\n     - last, because it is slow: the Bash landing and postflight steps.\n   - Skip the JetBrains gradle job (WSL has no JDK) and the PowerShell-only steps.\n   - Every red step that no open or today's-DONE row already covers is a finding. Evidence is the failing command plus its first error lines.\n2. The two IDE bundles.\n   - VS Code: moe-vscode/scripts/bundle-assets.mjs and the onboarding.mjs bundle-mode checks. JetBrains: the copy specs in moe-jetbrains/build.gradle.kts and the \"Verify packaged JetBrains onboarding\" step.\n   - Compare what each bundle ships (scripts, scripts/mods, role docs, skills, daemon and proxy) with what the other ships, and with scripts/CLAUDE.md:41 (\"both IDE bundles ship scripts/mods/** minus *.test.ts and the engine-written .claude-plugin/types/\") and docs/DEVELOPMENT.md:261.\n   - Evidence: a bundle built in a snapshot and listed, or a copy-spec line that contradicts the docs or the twin.\n\nALREADY KNOWN (do not refile)\n- scripts/mods/moe-account-switch/hooks/register.js and register.test.js are being deleted by task-d27edf88's rework, which is in REVIEW. If the onboarding bundle step fails on them, that is not a finding.\n- Recurrence is task-17fd6fb7 (tsconfig noEmit).\n- The VS Code lint fix is DONE (0181f915).\n\nSKIP\n- The lanes of hunts #1-#19 (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Files open rows hold. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start. At filing time:\n  - scripts/moe-agent.ps1, scripts/tests/postflight-vm-route.ps1 and scripts/tests/parity-check.{sh,ps1} (62ec51f1). Running parity-check is fine; a fix row on it gets a placement note.\n  - d27edf88's claimNextTask.ts, accountTools.test.ts, the mod's register.ts and register.test.ts, and docs/MCP_SERVER.md (shared by section, ruling msg-71db57ac).\n  - a160251a's scripts/CLAUDE.md, packages/moe-daemon/CLAUDE.md, accountStore.ts and docs/TROUBLESHOOTING.md.\n  - 7e9ba059's docs/roles/architect*.md and packages/moe-daemon/src/generated/initFiles.ts.\n  - 17fd6fb7's two mod tsconfig.json files.\n  - 9c67c6b6's JetBrains DaemonIdentity files once it is planned.\n- Never build, install or test in the shared checkout: its packages/moe-daemon/dist is the live runtime.\n\nEVIDENCE BAR. Same as hunts #2-#19. One of:\n- a repro on HEAD a654bbb4 or later, run in a snapshot outside the shared checkout;\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note instead. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\" with the list of steps you ran and their exit codes, in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted with the CI steps run and their exit codes. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites its evidence: a failing command and its error lines from a snapshot at HEAD a654bbb4 or later run outside the shared checkout, a failure line from today's logs, or a doc/code file:line pair with a call or test that shows the difference.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04 or the known items above. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 511.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:49:20.356Z",
+  "updatedAt": "2026-11-04T09:50:26.164Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:49:28.240Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-cd0ac706@2026-11-04T08:49:25Z",
+    "at": "2026-11-04T09:50:26.164Z"
+  }
+}

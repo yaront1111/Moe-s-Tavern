@@ -1,0 +1,249 @@
+{
+  "id": "task-3ab5be0d699843b0bbfd9216fc88661c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the VS Code board's left arrow never moves a WORKING, REVIEW or DONE card: on WORKING (and Task Detail's Previous) it asks /ws for WORKING to AWAITING_APPROVAL, which is always refused (twin of the DONE JetBrains fix e44a8daf), and on REVIEW/DONE it calls prompt(), which the webview sandbox answers with null",
+  "description": "Filed by defect hunt 11-03 #5 (task-b7332618). VS Code twin of task-e44a8daf (JetBrains fix 8be13403), plus the same arrow's REVIEW/DONE branch, which is dead for a VS Code-only reason.\n\nPROBLEM\n1. WORKING card.\n- board.js:364 orders the columns BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, DONE.\n- board.js:995 shows the left arrow on every card with statusIdx > 0.\n- navTask (board.js:1152-1155) posts `updateTaskStatus` with `workflowOrder[idx - 1]`. For WORKING that is AWAITING_APPROVAL.\n- The post goes BoardViewProvider.ts:99 → MoeDaemonClient.ts:1160 → UPDATE_TASK.\n- /ws judges the move by set_task_status's own table (WebSocketServer.ts:496-504). setTaskStatus.ts:51 reads `WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED']`, so /ws replies ERROR.\n- The client only logs the ERROR (MoeDaemonClient.ts:2132). The board's onError acts on APPROVE_TASK refusals only (BoardViewProvider.ts:40-46). So the click does nothing visible.\n- Task Detail's Previous does the same: TaskDetailPanel.ts:540 has its own workflowOrder, and :566-567 calls `updateTaskStatus(this.taskId, workflowOrder[idx - 1])`.\n\n2. REVIEW or DONE card.\n- navTask (board.js:1147-1151) calls `prompt('Reason for reopening:')` inside the webview.\n- VS Code's webview frames are sandboxed without allow-modals: microsoft/vscode main 73db368c, src/vs/workbench/contrib/webview/browser/webviewElement.ts:430 and pre/index.html:1078-1086. Local copies are in /mnt/d/moe-scratch/hunt-b733/.\n- In such a document prompt() returns null without showing anything (HTML Standard, \"cannot show simple dialogs\"). So this arrow never reopens anything.\n- TaskDetailPanel.ts:555 already asks for the reopen reason host-side, with vscode.window.showInputBox.\n\nEVIDENCE\nAll runs are on 19d5e67a (the moe/work-2026-10-24 tip, past 585fedc6), in snapshots outside the checkout. The re-run recipe is /mnt/d/moe-scratch/hunt-b733/notes.md.\n\n- moe-vscode, the production media/board.js under node:vm:\n    NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/zz-hunt-b733-board.test.cjs\n  B1 is `not ok`. The WORKING card renders data-direction=\"prev\", and the arrow posts `[{\"type\":\"updateTaskStatus\",\"taskId\":\"task-w\",\"status\":\"AWAITING_APPROVAL\"}]`.\n  C2 is `not ok`. With the sandbox's answers, the arrow on a REVIEW card posts nothing (`reopenPosts: 0`). (board.output.txt)\n\n- daemon: copy zzHuntB733WorkingPrev.test.ts into packages/moe-daemon/src/server/ and run `npx vitest run src/server/zzHuntB733WorkingPrev.test.ts`. Result: 1 passed.\n  It sends the board's exact frame for a WORKING task, {type:'UPDATE_TASK', payload:{taskId, updates:{status:'AWAITING_APPROVAL'}}}. The reply is ERROR 'Cannot move task from WORKING to AWAITING_APPROVAL. Allowed: REVIEW, PLANNING, BACKLOG, BLOCKED', and the task stays WORKING.\n\n- Chromium: headless Chrome on modal-probe.html, which nests VS Code's two sandbox token lists.\n  modal-probe.dom.txt: RESULT {\"deleteConfirm\":false,\"archiveConfirm\":false,\"reopenPrompt\":null}\n  modal-probe.stderr.txt: \"Ignored call to 'prompt()'. The document is sandboxed, and the 'allow-modals' keyword is not set.\"\n\nFIX DIRECTION\nUse one \"previous move\" rule on both surfaces, mirroring JetBrains BoardMoves.previous (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt, 8be13403):\n- WORKING and AWAITING_APPROVAL → PLANNING;\n- PLANNING → BACKLOG;\n- REVIEW and DONE → reopen;\n- anything else (BACKLOG, BLOCKED, ARCHIVED, unknown) → no left arrow.\nEvery status target must be in setTaskStatus.ts VALID_TRANSITIONS[from]. The WORKING arrow skips the AWAITING_APPROVAL column on purpose, because /ws refuses that move; say so in a comment.\n\nCollect the reopen reason host-side. The webview posts only the intent (the taskId). BoardViewProvider then asks with vscode.window.showInputBox and calls reopenTask only for a non-blank answer, the same as TaskDetailPanel.ts:555. Remove prompt() from board.js.\n\nFILES\n- moe-vscode/media/board.js: navTask and the left-arrow visibility at :995 only.\n- moe-vscode/src/providers/BoardViewProvider.ts: its 'reopenTask' case only.\n- moe-vscode/src/panels/TaskDetailPanel.ts: the 'prev'/'next' message case only.\n- one new moe-vscode/tests/*.test.cjs.\n\nHunk ownership, so no dependsOn is needed:\n- The sibling hunt row for the board's Delete and Done-column clear owns board.js's card-menu Delete, archiveDone and the clear-button markup, plus BoardViewProvider's deleteTask and archiveDoneTasks cases.\n- task-e9a25fbf owns TaskDetailPanel.ts renderSteps.\n\nThe gate snapshot must be the full tree: mem:gotcha-vscode-tests-need-full-repo-snapshot.",
+  "definitionOfDone": [
+    "The board's left arrow and Task Detail's Previous send UPDATE_TASK status PLANNING for a WORKING or AWAITING_APPROVAL task, and BACKLOG for a PLANNING task. No status either control can send falls outside packages/moe-daemon/src/tools/setTaskStatus.ts VALID_TRANSITIONS[from]. BACKLOG and BLOCKED cards render no left arrow.",
+    "The left arrow on a REVIEW or DONE card reaches the extension host. The host asks for the reason with vscode.window.showInputBox and sends REOPEN_TASK only for a non-blank answer. `grep -n \"prompt(\" moe-vscode/media/board.js` prints nothing.",
+    "A new moe-vscode node test runs the production media/board.js (under node:vm), BoardViewProvider.ts and TaskDetailPanel.ts (transpiled) for those cases and passes. `npm ci && npm test && npm run compile` passes in moe-vscode in a full-repo git-archive snapshot outside the checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: create moe-vscode/tests/board-previous-move.test.cjs with the Write tool. Never cp it into the tree: a shell write leaves no TOOL witness.\n\nREFERENCE: /mnt/d/moe-scratch/plan-3ab5/board-previous-move.test.cjs is the architect's dry-run copy at 1cf76839. With the fix it ran 7/7 green; with the three base production files, PM1 passed and PM2-PM7 failed. Reuse it, but write the file yourself.\n\nHARNESS: copy it from tests/approval-paths.test.cjs.\n- Copy runModule, RecordingEventEmitter, the createHost() shape and openBoard/openDetail. The real MoeDaemonClient, PlanReviewPanel, TaskDetailPanel and BoardViewProvider are transpiled with ts.transpileModule and run under node:vm, and a fake connected socket records every frame.\n- Extend createHost's vscode.window with `showInputBox(options)`. It records options and resolves the next queued answer, or undefined.\n- loadBoard runs the raw media/board.js under node:vm. Its context records every `prompt(...)` call, both as a global and on window. It exposes `prev(id)` (calls navTask with 'prev') and `card(task)`, which returns `renderTaskCard(task, [], task.status)`'s HTML string.\n- Parse VALID_TRANSITIONS from ../packages/moe-daemon/src/tools/setTaskStatus.ts with a regex. Assert the parsed table is not empty.\n- Do NOT copy the hunt repro's DOM-element stub (/mnt/d/moe-scratch/hunt-b733). It defines a property named after the markup-injection DOM property, and no added line may contain a project.json globalRails.forbiddenPatterns string. renderTaskCard returns a string, so no DOM-write stub is needed.\n\nROWS. Keep these exact id prefixes: checkRef [1] greps `PM[0-9]` from the TAP output. STATUSES is BACKLOG, PLANNING, AWAITING_APPROVAL, WORKING, REVIEW, DONE, BLOCKED, ARCHIVED and a bogus status.\n- PM1: across STATUSES, exactly PLANNING, AWAITING_APPROVAL, WORKING, REVIEW and DONE render `data-direction=\"prev\"`. This row is a guard and passes at base too.\n- PM2: the board arrow, with the posted message fed to the real provider, puts exactly one frame on the wire: UPDATE_TASK {taskId, updates:{status}}, with PLANNING for WORKING and for AWAITING_APPROVAL, and BACKLOG for PLANNING. For BACKLOG and BLOCKED it sends no frame.\n- PM3: on REVIEW and DONE the board posts exactly [{type:'reopenTask', taskId}] and records no prompt call. The raw board.js text matches no `\\bprompt\\s*\\(`.\n- PM4: the provider gets {type:'reopenTask', taskId, reason:'webview text'}. For the answer '  needs rework  ' showInputBox is asked once and one REOPEN_TASK {taskId, reason:'needs rework'} goes out; the webview-supplied reason is ignored. For '   ' and for undefined, nothing is sent.\n- PM5: Task Detail's 'prev' (openDetail, then send {type:'prev', currentStatus}, then settle) sends PLANNING for WORKING and for AWAITING_APPROVAL, BACKLOG for PLANNING, and nothing for BACKLOG or BLOCKED.\n- PM6: Task Detail on REVIEW and DONE: ' fix it ' sends REOPEN_TASK reason 'fix it', while '  ' and undefined send nothing.\n- PM7: self-contained, with no state shared with other rows. Drive both controls for every status in STATUSES and collect the UPDATE_TASK statuses each one sent. Every target must be in VALID_TRANSITIONS[from].\n\nRun it red before step 2: `NODE_PATH=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")/moe-vscode/node_modules\" node --test --test-reporter=tap tests/board-previous-move.test.cjs` from moe-vscode/. Expected: PM1 ok, PM2-PM7 not ok.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/board-previous-move.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/board-previous-move.test.cjs"
+      ],
+      "note": "Created PM1–PM7 using the production VM/transpile harness (275 lines), with added PM4 checks for malformed task IDs, disconnected sends and rejected host input. Worktree was supplied by the wrapper (workspace.mode=worktree); all edits stay here for wrapper delivery. Ran npm ci --prefer-offline --no-audit --no-fund in this task worktree's moe-vscode first (215 packages, exit 0). Fresh plan command NODE_PATH=\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")/moe-vscode/node_modules\" node --test --test-reporter=tap tests/board-previous-move.test.cjs: exit 1, PM1 passes and exactly PM2–PM7 fail on the expected illegal WORKING target, webview prompt, missing host input, and untrimmed reason assertions.",
+      "startedAt": "2026-11-03T17:47:04.727Z",
+      "completedAt": "2026-11-03T17:49:53.689Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The board: moe-vscode/media/board.js and the 'reopenTask' case of moe-vscode/src/providers/BoardViewProvider.ts. Use Edit only. Reference diff: /mnt/d/moe-scratch/plan-3ab5/fix.diff.\n\nboard.js:\n- Add a top-level `function previousMove(status)` declaration right after `const workflowOrder`. It returns {status:'PLANNING'} for WORKING and AWAITING_APPROVAL, {status:'BACKLOG'} for PLANNING, {reopen:true} for REVIEW and DONE, and null for anything else (BACKLOG, BLOCKED, ARCHIVED, unknown).\n- Give it the comment \"Twin: TaskDetailPanel.ts 'prev' and JetBrains BoardMoves.previous. WORKING goes back to PLANNING, never AWAITING_APPROVAL: /ws refuses WORKING -> AWAITING_APPROVAL.\"\n- In renderTaskCard, make `showPrev` read `previousMove(task.status) !== null` (around :995). Leave showNext, the next arrow and navTask's 'next' branch unchanged.\n- In navTask's 'prev' branch: `const move = previousMove(task.status); if (!move) { return; }`. Then post {type:'reopenTask', taskId} for a reopen (the webview sandbox has no allow-modals, so the host asks for the reason), else {type:'updateTaskStatus', taskId, status: move.status}.\n- Remove the prompt() call. Touch no other board.js hunk: task-8b7f9560 owns the card-menu Delete, archiveDone and the clear-button markup.\n\nBoardViewProvider.ts, the 'reopenTask' case only. task-8b7f9560 owns deleteTask and archiveDoneTasks.\n- Take message.taskId and break unless it is a string.\n- Call `vscode.window.showInputBox({ prompt: 'Reason for reopening', placeHolder: 'Why is this task being reopened?' })`, the same wording as TaskDetailPanel.\n- Then trim the answer. A blank answer or an Esc (undefined) sends nothing. Otherwise call `this.daemonClient.reopenTask(taskId, reason)`.\n- Never use a webview-supplied reason.\n\nError handling:\n- When reopenTask returns false (not connected), show the warning 'Not connected to Moe daemon — task was not reopened.' (TaskDetailPanel's wording).\n- Handle a rejected showInputBox promise with `vscode.window.showErrorMessage('Reopen failed: ' + message)`, so no unhandled rejection escapes the sync message handler.\n\nAfter this step PM1-PM4 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts"
+      ],
+      "note": "Added previousMove twin, used it for visibility and previous navigation, removed webview prompt and passed only the reopen intent. Host validates taskId and collects/normalizes its own reason; blank/Esc is a no-op, disconnected sends warn. A trailing rejection handler on the Thenable chain covers input rejection and exceptions in its success callback, with unknown error typing. Kept sibling-owned delete/archive hunks and approval/next paths unchanged. Fresh node --test --test-reporter=tap --test-name-pattern=\"PM[1-4]:\" tests/board-previous-move.test.cjs (plan NODE_PATH): 4/4 pass, exit 0, including PM4 cancellation, malformed IDs, disconnect and rejection checks.",
+      "startedAt": "2026-11-03T17:49:56.877Z",
+      "completedAt": "2026-11-03T17:50:28.892Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Task Detail: the 'prev'/'next' message case of moe-vscode/src/panels/TaskDetailPanel.ts. Use Edit only. task-e9a25fbf owns renderSteps, so leave it alone.\n- In the prev branch, replace `this.client.updateTaskStatus(this.taskId, workflowOrder[idx - 1])` with the same rule as board.js previousMove: PLANNING goes to BACKLOG, and WORKING and AWAITING_APPROVAL go to PLANNING. Any other status sends nothing (the existing `idx <= 0` and `idx < 0` breaks already cover BACKLOG, BLOCKED and unknown).\n- Comment it \"Twin: media/board.js previousMove and JetBrains BoardMoves.previous. WORKING goes back to PLANNING, never AWAITING_APPROVAL, which /ws refuses from WORKING.\"\n- In the REVIEW/DONE reopen, trim the showInputBox answer (`(await vscode.window.showInputBox({...}))?.trim()`) so a whitespace-only answer sends nothing. Keep its 'Task reopened' and 'Not connected' messages.\n- Leave the 'next' branch, approveRendered and the outer try/catch untouched. Error handling stays in that catch, which turns any throw into the existing 'Task action failed: ...' error.\nAfter this step PM1-PM7 pass. Run the step-1 command: 7/7 ok.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Task Detail Previous now mirrors the board/JetBrains rule (WORKING/AWAITING_APPROVAL→PLANNING, PLANNING→BACKLOG) and trims host input before reopening. Next, approveRendered, the outer catch and sibling-owned renderSteps are unchanged. Fresh step-1 NODE_PATH node --test --test-reporter=tap tests/board-previous-move.test.cjs: 7 tests, 7 pass, 0 fail, exit 0.",
+      "startedAt": "2026-11-03T17:50:32.641Z",
+      "completedAt": "2026-11-03T17:50:45.853Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (once, fresh, from the task worktree). Run the three executionContract.checkRefs joined with ' && ' in this order: [0] GREEN, [1] RED, [2] scope. Submit that exact text, its exit code and the output tail as complete_task's verification.\n- [0] archives the whole repo at HEAD into a mktemp dir. Several moe-vscode suites read sibling trees: mem:gotcha-vscode-tests-need-full-repo-snapshot. It overlays the 4 task files from the worktree and runs `npm ci && npm test && npm run compile` under `env -i` with nvm node v24.21.0. It passes only if the summary has 'ℹ fail 0'. The architect's dry run printed tests 703, pass 693, fail 0, skipped 10.\n- [1] archives the merge-base tree (B) and adds only the new test. It requires the not-ok rows to be exactly PM2 to PM7, and no others.\n- [2] allows only the 4 task files plus .moe/, and no other untracked non-ignored file.\nError handling for a red run:\n- [0] prints the snapshot path and the last 40 log lines. Fix the code, never the assertions.\n- [1] failing means a row no longer fails on base, or a row was renamed. Restore the exact PM ids and the base-failing assertions.\n- [2] failing names the stray path. Revert it.\nNever run npm in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran executionContract.checkRefs[0], [1], [2] verbatim joined with ' && ' from this task worktree, fresh: exit 0. GREEN full-repo archive + four-file overlay + env-isolated npm ci/npm test/npm run compile: 703 tests, 693 pass, 0 fail, 10 skipped. RED merge-base archive with only the new test: exactly PM2 PM3 PM4 PM5 PM6 PM7 fail, no other failures. Scope check passed. Also ran worktree-mode settings.qualityGate fresh: bash scripts/tests/parity-check.sh && npm run lint, exit 0 (parity PASS, all role doc caps OK). No shared checkout npm builds/installs/tests were run.",
+      "startedAt": "2026-11-03T17:50:59.162Z",
+      "completedAt": "2026-11-03T17:51:40.716Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Every target either control can send is in setTaskStatus.ts VALID_TRANSITIONS[from]; PM7 proves it.\n- BLOCKED, BACKLOG, ARCHIVED and unknown cards have no left arrow and send nothing.\n- The AWAITING_APPROVAL -> WORKING approval guard in BoardViewProvider.updateTaskStatus and the next arrow are unchanged.\n- No prompt() is left in board.js.\n- The reopen reason never comes from the webview. A blank or Esc answer sends nothing, and a rejected input box is surfaced, not swallowed.\n- What happens if the task moved between render and click? The board reads currentState, and the daemon still refuses an illegal move.\n- Two quick clicks open two input boxes. Each sends at most one REOPEN_TASK, and the daemon's reopen is idempotent per status.\n- No added line contains a project.json globalRails.forbiddenPatterns string. Only the intended hunks changed (git diff), and the sibling rows' hunks (task-8b7f9560, task-e9a25fbf) are untouched.\nIf you find something, fix it inside the same 4 files and re-run step 4's command before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/board-previous-move.test.cjs",
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts"
+      ],
+      "note": "Loaded adversarial-self-review and read the complete scoped production/new-test diff. No further changes required. PM1/PM2/PM5/PM7 cover visibility, no-op statuses and daemon-legal targets; next/approval guards and both siblings' hunks are untouched. Confirmed no board prompt call, no added forbidden pattern and git diff --check is clean. IDs are validated, webview reasons ignored, blank/Esc no-op, rejected input shown and disconnect warns (PM4); reason text only travels as JSON, no evaluation. Stale board clicks read currentState, daemon validates again; detail retains the existing rendered-status behavior and daemon validation. Concurrent input boxes each send at most once; /ws serializes reopens under its mutex and taskStore rejects a duplicate once the first moves it to BACKLOG (effect-once, not a second success). No new resource lifetime or persistence side effects. Fresh step-4 joined checks remain unchanged/green: 703 tests, 693 pass, 0 fail, 10 skipped, exact six base failures; qualityGate also exit 0.",
+      "startedAt": "2026-11-03T17:52:07.579Z",
+      "completedAt": "2026-11-03T17:53:09.437Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 388.7,
+  "comments": [
+    {
+      "id": "comment-d3b7f4d124ed439f8990319dc49f3fc7",
+      "author": "architect-24611a0a",
+      "content": "Hunt #5 clarification (architect-24611a0a, 17:28Z). The \"sibling hunt row for the board's Delete and Done-column clear\" in FILES is task-8b7f9560. It owns board.js's card-menu Delete, archiveDone and the clear-button markup, plus BoardViewProvider's deleteTask and archiveDoneTasks cases. This row owns navTask, the left-arrow visibility (board.js:995) and the 'reopenTask' case. The hunks are distinct, so both rows can run in parallel.\n\nThe hunt repro's C2 case covers both rows at once: clearPosts belongs to task-8b7f9560, reopenPosts to this row. Treat it as evidence only, not as this row's DoD test.",
+      "timestamp": "2026-11-03T17:27:52.825Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:27:05.532Z",
+  "updatedAt": "2026-11-04T19:20:44.339Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:37:25.780Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:58:26.441Z",
+    "wallClockMs": 1260661
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-26483323",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:45:18.939Z",
+  "executionContract": {
+    "intendedBehavior": "The VS Code board's left arrow and Task Detail's Previous ask only for moves the daemon accepts. WORKING and AWAITING_APPROVAL go back to PLANNING, PLANNING goes to BACKLOG, and REVIEW and DONE reopen. Any other status has no left move, and the board renders no left arrow for it. The reopen reason is asked host-side with vscode.window.showInputBox, because the webview sandbox has no allow-modals. REOPEN_TASK goes out only for a non-blank, trimmed answer.",
+    "acceptanceCriteria": [
+      "WORKING and AWAITING_APPROVAL cards and Task Detail Previous send UPDATE_TASK PLANNING; PLANNING sends BACKLOG.",
+      "BACKLOG and BLOCKED cards render no left arrow and send nothing.",
+      "The REVIEW/DONE left arrow reaches the host, which asks via showInputBox and sends REOPEN_TASK only for a non-blank answer; board.js has no prompt() call."
+    ],
+    "invariants": [
+      "Every UPDATE_TASK status either control sends is in packages/moe-daemon/src/tools/setTaskStatus.ts VALID_TRANSITIONS[from].",
+      "The next arrow, navTask 'next', moveMessage, and the AWAITING_APPROVAL -> WORKING approval guard keep their current behaviour.",
+      "The board never calls prompt(), and the host never uses a reason supplied by the webview.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string."
+    ],
+    "compatibility": [
+      "The webview-to-host message names stay: updateTaskStatus {taskId,status} and reopenTask {taskId}. The host ignores an extra reason field.",
+      "MoeDaemonClient.updateTaskStatus/reopenTask frames are unchanged (UPDATE_TASK {taskId, updates:{status}}, REOPEN_TASK {taskId, reason})."
+    ],
+    "approvedScope": [
+      "media/board.js: new top-level previousMove(status), showPrev in renderTaskCard, and navTask's 'prev' branch.",
+      "BoardViewProvider.ts: the 'reopenTask' message case.",
+      "TaskDetailPanel.ts: the prev branch of the 'prev'/'next' message case.",
+      "tests/board-previous-move.test.cjs: rows PM1-PM7."
+    ],
+    "reuse": [
+      "The harness is copied from tests/approval-paths.test.cjs (runModule, createHost, openBoard, openDetail, loadBoard).",
+      "The rule mirrors JetBrains BoardMoves.previous (8be13403)."
+    ],
+    "sourceAssumptions": [
+      "media/board.js:364 workflowOrder; renderTaskCard (:878) returns an HTML string; showPrev at :995 is `statusIdx > 0`; navTask (:1140-1160) prev calls prompt() for REVIEW/DONE, else posts workflowOrder[idx - 1].",
+      "src/providers/BoardViewProvider.ts:175-177 `case 'reopenTask': this.daemonClient.reopenTask(message.taskId, message.reason)`; its message handler is a sync arrow.",
+      "src/panels/TaskDetailPanel.ts:538-570 'prev'/'next' case: REVIEW/DONE already uses showInputBox; otherwise it calls updateTaskStatus(workflowOrder[idx - 1]).",
+      "setTaskStatus.ts:46-55 VALID_TRANSITIONS: WORKING allows ['REVIEW','PLANNING','BACKLOG','BLOCKED'], AWAITING_APPROVAL allows ['WORKING','PLANNING'], PLANNING allows ['AWAITING_APPROVAL','BACKLOG','BLOCKED','ARCHIVED'].",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt previous(): WORKING/AWAITING_APPROVAL -> PLANNING, PLANNING -> BACKLOG, REVIEW/DONE -> Reopen, else null."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/g3ab5.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in media/board.js src/providers/BoardViewProvider.ts src/panels/TaskDetailPanel.ts tests/board-previous-move.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log && grep -aq '^ℹ fail 0$' ../v.log )",
+      "( R=$(git rev-parse --show-toplevel) && C=$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\") && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/r3ab5.XXXX) && git -C \"$R\" archive \"$B\" moe-vscode packages/moe-daemon/src/tools | tar -x -C \"$L\" && ! cmp -s \"$L/moe-vscode/media/board.js\" \"$R/moe-vscode/media/board.js\" && cp \"$R/moe-vscode/tests/board-previous-move.test.cjs\" \"$L/moe-vscode/tests/\" && cd \"$L/moe-vscode\" && { NODE_PATH=\"$C/moe-vscode/node_modules\" node --test --test-reporter=tap tests/board-previous-move.test.cjs > ../red.log 2>&1; true; } && N=$(grep -o '^not ok [0-9]* - PM[0-9]*' ../red.log | grep -o 'PM[0-9]*' | tr '\\n' ' ') && echo \"RED: $N\" && [ \"$N\" = \"PM2 PM3 PM4 PM5 PM6 PM7 \" ] && [ $(grep -c '^not ok' ../red.log) = 6 ] )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && V=moe-vscode && T=$V/tests/board-previous-move.test.cjs && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$V/media/board.js\" \":(exclude)$V/src/providers/BoardViewProvider.ts\" \":(exclude)$V/src/panels/TaskDetailPanel.ts\" \":(exclude)$T\"; git ls-files --others --exclude-standard -- . ':(exclude).moe' \":(exclude)$T\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) The board posts only an intent and the host computes the move. Rejected: the webview still needs the rule to decide arrow visibility, so a webview copy is unavoidable. Two small twins, plus the JetBrains one, pinned by PM7 against the daemon's own table, is the minimum. (2) A shared src/util module. Rejected: board.js is a plain webview script with no module loader, and the DoD's file list is fixed. (3) Keep webview prompt() with a fallback. Rejected: the sandbox has no allow-modals, so prompt() always answers null (hunt-b733 modal-probe).",
+    "codebaseInsights": "The architect dry-ran the whole plan in a scratch clone at 1cf76839 (/mnt/d/moe-scratch/plan-3ab5: fix.diff, the test, the 3 checkRef texts, gate-dry-run.out.txt, red-at-base.tap.txt). GREEN gate: 703 tests, 693 pass, 0 fail, 10 skipped, GATE_EXIT=0. RED at base: PM2-PM7 not ok, PM1 ok. Fix size is about +37/-16 across the 3 production files; the test is about 250 lines. board.js is a flat script, so its top-level declarations are reachable on the vm context (context.navTask, context.renderTaskCard). The provider's onDidReceiveMessage callback is synchronous, so the reopen ask must be a handled promise chain, not an await.",
+    "risks": [
+      "QA in the control checkout: checkRef [1] needs MOE_LAND_TARGET=<completion>^. Without it, the merge-base of a landed completion is the completion itself, and `! cmp -s` fails. Checkref [2] is vacuous there (B=HEAD), so review `git diff <sha>^ <sha>`. Before re-running [0], confirm `git diff <sha> -- <the 4 files>` is empty.",
+      "Sibling rows task-8b7f9560 (board.js Delete/archiveDone/clear markup; provider deleteTask/archiveDoneTasks) and task-e9a25fbf (TaskDetailPanel renderSteps) edit other hunks of the same files. Keep to the named hunks so the squash landings merge cleanly.",
+      "PM7 must not depend on PM2/PM5 running first: drive both controls inside PM7 itself.",
+      "The new test must not include the hunt repro's DOM stub, which names a forbidden-pattern property."
+    ],
+    "keyFiles": [
+      "moe-vscode/media/board.js",
+      "moe-vscode/src/providers/BoardViewProvider.ts",
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/tests/approval-paths.test.cjs",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ff65204820df7c3e46e46aca94d5b598e8788f06",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:45:18.967Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:47:04.727Z",
+  "reviewStartedAt": "2026-11-03T17:53:50.624Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/g3ab5.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in media/board.js src/providers/BoardViewProvider.ts src/panels/TaskDetailPanel.ts tests/board-previous-move.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log && grep -aq '^ℹ fail 0$' ../v.log ) && ( R=$(git rev-parse --show-toplevel) && C=$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\") && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/r3ab5.XXXX) && git -C \"$R\" archive \"$B\" moe-vscode packages/moe-daemon/src/tools | tar -x -C \"$L\" && ! cmp -s \"$L/moe-vscode/media/board.js\" \"$R/moe-vscode/media/board.js\" && cp \"$R/moe-vscode/tests/board-previous-move.test.cjs\" \"$L/moe-vscode/tests/\" && cd \"$L/moe-vscode\" && { NODE_PATH=\"$C/moe-vscode/node_modules\" node --test --test-reporter=tap tests/board-previous-move.test.cjs > ../red.log 2>&1; true; } && N=$(grep -o '^not ok [0-9]* - PM[0-9]*' ../red.log | grep -o 'PM[0-9]*' | tr '\\n' ' ') && echo \"RED: $N\" && [ \"$N\" = \"PM2 PM3 PM4 PM5 PM6 PM7 \" ] && [ $(grep -c '^not ok' ../red.log) = 6 ] ) && cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && V=moe-vscode && T=$V/tests/board-previous-move.test.cjs && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$V/media/board.js\" \":(exclude)$V/src/providers/BoardViewProvider.ts\" \":(exclude)$V/src/panels/TaskDetailPanel.ts\" \":(exclude)$T\"; git ls-files --others --exclude-standard -- . ':(exclude).moe' \":(exclude)$T\") && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 703\nℹ pass 693\nℹ fail 0\nℹ skipped 10\nRED: PM2 PM3 PM4 PM5 PM6 PM7 \n",
+    "reportedAt": "2026-11-03T17:53:50.624Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/board-previous-move.test.cjs",
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/src/panels/TaskDetailPanel.ts"
+  ],
+  "completionSummary": "Fixed VS Code board left-arrow and Task Detail Previous to use daemon-legal moves; board reopen intent now asks for a trimmed, nonblank reason host-side with explicit disconnect/rejection handling. Added production VM regression tests PM1–PM7 (including malformed IDs and host failures). Fresh joined plan checks exit 0: full archive npm ci/test/compile, 703 tests / 693 pass / 0 fail / 10 skipped; exactly PM2–PM7 fail at base; scope check passes. Worktree qualityGate parity+lint exit 0. Adversarial review clean; sibling-owned hunks unchanged; handoff and gotcha memories saved.",
+  "commits": [
+    {
+      "sha": "bb94ce7e033c52473338d668aef357c4c6303789",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T17:45:22Z",
+      "paths": [
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/tests/board-previous-move.test.cjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T17:55:31.348Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:56:22Z",
+    "at": "2026-11-03T17:58:52.147Z"
+  },
+  "completedAt": "2026-11-03T17:58:26.441Z",
+  "reviewCompletedAt": "2026-11-03T17:58:26.441Z",
+  "reviewSummary": "Reviewed completion bb94ce7e (recorded, pushed, on moe/work-2026-10-24, in HEAD; 4 paths, +312/-16 = 296 net, under 400). Re-ran gates in snapshots outside the checkout: (1) GREEN on full-repo git archive HEAD (7a08e3d9, includes sibling 8b7f9560) + 4 task files overlaid, env -i node v24.21.0, npm ci && npm test && npm run compile: tests 756, pass 746, fail 0, skipped 10, exit 0. (2) RED with MOE_LAND_TARGET=bb94ce7e^ (control checkout, default merge-base already has the fix): merge-base tree + only new test fails exactly PM2-PM7, PM1 ok. (3) Scope: commit touches only board.js, BoardViewProvider.ts, TaskDetailPanel.ts, board-previous-move.test.cjs; sibling hunks untouched; git diff --check clean; no forbidden pattern added. DoD: [1] previousMove sends PLANNING for WORKING/AWAITING_APPROVAL, BACKLOG for PLANNING, nothing/no arrow for BACKLOG/BLOCKED/ARCHIVED/unknown; Task Detail uses same rule; all targets in VALID_TRANSITIONS[from] (PM7 over all statuses, both controls); matches JetBrains BoardMoves.previous. [2] REVIEW/DONE arrow posts only {reopenTask, taskId}; host asks via showInputBox, ignores webview reason, trims, sends REOPEN_TASK only for non-blank, warns if disconnected, surfaces input rejection, ignores non-string taskId (PM4); grep \"prompt(\" board.js prints nothing. [3] new test runs production board.js under node:vm with transpiled provider/panel/client, deepEqual on exact frames. Invariants (next arrow, moveMessage, approval guard) unchanged. Complexity pass: nothing to cut. Not run (not required): JetBrains Gradle, manual VS Code UI click-through.",
+  "requiredCheckAtDone": null
+}

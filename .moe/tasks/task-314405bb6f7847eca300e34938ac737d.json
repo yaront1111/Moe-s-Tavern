@@ -1,0 +1,273 @@
+{
+  "id": "task-314405bb6f7847eca300e34938ac737d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_decision posts into a channel without chat_send's sender and channel checks: it accepts workerId \"system\" (posts as the daemon) or an unregistered id (resets a paused loop guard), and reports success while posting nothing for \"#general\" or an unknown channel",
+  "description": "Filed by defect hunt 11-03 #3 (task-859eff80). It is a family gap: moe.chat_decision puts a chat message into a channel, but skips the checks its sibling moe.chat_send applies to exactly that post.\n\nPROBLEM\n- packages/moe-daemon/src/tools/chatDecision.ts:30-34 passes `proposedBy: params.workerId || 'unknown'` and the raw `channel` straight to state.createDecision. Neither value is checked.\n- createDecision (state/chatStore.ts:591-631):\n  - caps content by CHARACTERS (sanitizeString 10240, :598);\n  - writes the decision file and the map entry (:613-617);\n  - only then posts, and only when the channel is an exact id (`state.channels.has(opts.channel)`, :620), with `sender: opts.proposedBy` (:621-626).\n- The sibling, tools/chatSend.ts:\n  - :34-52 refuse sender \"system\" with NOT_ALLOWED. Its comment: accepting it \"would let any /mcp agent impersonate the daemon and reset the mentionRouter loop-guard\". They also refuse a sender that is not a registered worker (\"Unknown sender\").\n  - :55-56 resolve the channel with resolveChannelRef (id, name or \"#name\") and refuse an unknown one with NOT_FOUND.\n  - resolveChannelRef's docstring (chatStore.ts:88-100) says: \"Every chat tool that takes a channel from a caller goes through this\".\n- MentionRouter (util/mentionRouter.ts:212-235):\n  - routes sender \"system\" as daemon bookkeeping;\n  - treats any sender that is not a known worker as HUMAN, which resets the hop count and clears a loop-guard pause (:226-235).\n\nCONSEQUENCES\n- A caller can post \"[Decision Proposed] …\" as \"system\", impersonating the daemon. chat_send refuses this.\n- A caller can post as an unregistered id. That includes the default 'unknown' when no workerId is given, or a seat purged by a daemon restart. The post silently un-pauses a channel the loop guard stopped.\n- `channel: \"#general\"`, the form chat_send and the role docs use, returns success:true with messageId null and posts nothing. So a human watching #general never sees the proposal. An unknown channel id also returns success.\n- Multi-byte content inside the character cap but over the 10KB BYTE cap of sendMessage (chatStore.ts:190-191) throws \"Message content exceeds 10KB limit\" AFTER the decision is persisted. Each retry leaves another orphan decision with messageId null.\n\nEVIDENCE\n- Repro on HEAD ef5c7101. A hunt subagent wrote it in /tmp/hunt-859e-A; I re-ran it myself in /tmp/hunt-859e-snap (git archive with Linux node_modules). Persisted copies: /mnt/d/moe-scratch/hunt-859e/A/zzHuntAChatDecision.test.ts and zzHuntAChatDecision.output.txt.\n- Command: `cd packages/moe-daemon && npx vitest run src/tools/zzHuntAChatDecision.test.ts`. Result: 5 failed of 5.\n  - sender \"system\": chat_send rejects, but chat_decision gives `promise resolved \"{ success: true, decision: { …(9) } }\" instead of rejecting`.\n  - Unregistered sender: chat_send rejects with \"Unknown sender\". chat_decision posts as worker-ghost after a 5-hop ping-pong paused the channel, and the guard then reads `expected { hopCount: +0, paused: false } to deeply equal { hopCount: 5, paused: true }`.\n  - \"#general\": chat_send posts there. chat_decision gives `expected '#general' to be 'chan-…'`, `expected null not to be null` (messageId) and `expected [ 'via send' ] to include '[Decision Proposed] adopt plan B'`.\n  - Unknown channel chan-nope: chat_decision returns success instead of NOT_FOUND.\n  - Multi-byte: 4000 '€' (12000 bytes) throws /10KB/, yet getDecisions() already holds the decision.\n\nFIX DIRECTION\n- In chatDecision.ts, before any write:\n  - apply chat_send's sender rule: refuse \"system\" with NOT_ALLOWED, and refuse an unregistered id with INVALID_INPUT, using the same disk fallback (state.tryLoadWorkerFromDisk);\n  - resolve a given channel with state.resolveChannelRef and refuse an unresolvable one with NOT_FOUND;\n  - pass the resolved channel.id to createDecision.\n- In createDecision, check the byte size of the \"[Decision Proposed] …\" line against MAX_CHAT_MESSAGE_BYTES before writing the decision file, so a refused call writes nothing.\n- Keep the no-workerId case behaving as today (proposedBy 'unknown'), or refuse it: pick one and state it in the MCP_SERVER.md chat_decision section, with the new refusals and that the channel accepts an id, a name or \"#name\".\n- No other tool changes. The success response shape is unchanged.\n\nFILES: packages/moe-daemon/src/tools/chatDecision.ts, packages/moe-daemon/src/state/chatStore.ts, docs/MCP_SERVER.md (the moe.chat_decision section only, around :2716), plus one NEW test file such as packages/moe-daemon/src/tools/chatDecision.test.ts. None is held by an open row (lanes.js at 16:23Z).",
+  "definitionOfDone": [
+    "chat_decision refuses workerId \"system\" (NOT_ALLOWED) and an unregistered workerId (INVALID_INPUT) with chat_send's rules, before any decision file or message is written. A registered seat's decision still posts, and its success response shape is unchanged.",
+    "A given channel resolves through resolveChannelRef, so an id, a name or \"#name\" all post to that channel with messageId set. An unresolvable channel is refused NOT_FOUND. Content over the 10KB byte cap is refused before the decision is persisted, so getDecisions() stays empty.",
+    "A NEW test file under packages/moe-daemon/src/tools/ covers the system sender, an unregistered sender (a loop-guard pause must survive the refused call), \"#general\", an unknown channel and the multi-byte case. Restoring today's chatDecision.ts or createDecision fails it. The docs/MCP_SERVER.md chat_decision section states the new refusals and the accepted channel forms, and `npm run lint` passes at the repo root.",
+    "Verification, in a snapshot outside the shared checkout: `cd packages/moe-daemon && npx vitest run src/tools/<new test file> src/tools/chatSend.test.ts && npx tsc --noEmit` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (load test-driven-development). Create packages/moe-daemon/src/tools/chatDecision.test.ts with the Write tool.\n- Never cp a scratch file into the tree: shell writes leave no TOOL witness (global rail).\n- The architect's dry-run copy, to read only, is /mnt/d/moe-scratch/314405bb-plan/chatDecision.test.ts.\n\nHarness: ToolTestHarness. init, setupMoeFolder({ schemaVersion: 6 }), createEpic, createWorker worker-a and worker-b (status CODING), then state.load. Use flushActivityLog in afterEach.\n\nHelpers:\n- generalId(): from h.state.getChannels().\n- messagesIn(id): parses .moe/messages/<id>.jsonl.\n- decisionFiles(): lists .moe/decisions.\n- expectNothingWritten(ch): getDecisions() is [], decisionFiles() is [], and ch holds no '[Decision Proposed]' line.\n\nCases (10 tests):\n(a) workerId 'system' rejects toMatchObject { code: MoeErrorCode.NOT_ALLOWED, context: { operation: 'chat_decision as \"system\"', reason: 'reserved for daemon-internal messages' } }. chat_send's twin is chatBudgets.test.ts:228-239. Nothing is written.\n(b) Unregistered 'worker-ghost':\n  - first send a 5-message worker-a/worker-b mention ping-pong in general, and assert mentionRouter.getChannelState(ch).paused is true;\n  - the call rejects { code: INVALID_INPUT, message containing 'Unknown sender' };\n  - getChannelState(ch) equals the pre-call state;\n  - nothing is written.\n(c) Accepted senders:\n  - 'human' is accepted, with proposedBy 'human';\n  - a seat created with h.createWorker AFTER load is accepted. It exists on disk only, so this exercises tryLoadWorkerFromDisk;\n  - general holds exactly [['human','[Decision Proposed] from the board'],['worker-late','[Decision Proposed] late seat']] as [sender, content].\n(d) No workerId: proposedBy 'unknown', channel null.\n(e) it.each over the id, 'general' and '#general': decision.channel is the general id, messageId is a string, and general holds exactly that one line.\n(f) Channel '#nope' gives NOT_FOUND, and channel 42 gives INVALID_INPUT. Nothing is written.\n(g) '€'.repeat(4000) (4000 chars, 12000 bytes):\n  - with the general channel, it rejects '10KB' and nothing is written;\n  - with no channel, it resolves, messageId is null, and getDecisions() has length 1.\n(h) success is true, and Object.keys(decision).sort() equals ['approvedBy','channel','content','createdAt','id','messageId','proposedBy','resolvedAt','status'].\n\nRun checkRef [1] once now. The new file must FAIL on today's code: the architect's run against today's chatDecision.ts gave 5 failed. Do not edit any existing test.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.test.ts"
+      ],
+      "note": "Created the 10-test file. Snapshot run against today's code: 6 failed, 4 passed, tsc clean.",
+      "startedAt": "2026-11-03T16:39:07.155Z",
+      "completedAt": "2026-11-03T16:39:37.168Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Sender and channel checks in packages/moe-daemon/src/tools/chatDecision.ts. This is the task's error handling: each refusal is a typed MoeError thrown after the existing content check and before state.createDecision, so nothing is written before either one.\n\n1. Sender. Mirror chatSend.ts:34-52, and import notAllowed and notFound beside invalidInput from '../util/errors.js'. Apply it only when params.workerId is truthy:\n   - 'system': throw notAllowed('chat_decision as \"system\"', 'reserved for daemon-internal messages').\n   - Any id other than 'human': require state.getWorker(id) || state.tryLoadWorkerFromDisk(id), else throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or \"human\"').\n   - An omitted or empty workerId keeps proposedBy 'unknown', as today. An explicit 'unknown' is therefore refused as unregistered.\n\n2. Channel. When params.channel is not undefined, null or '':\n   - a non-string: throw invalidInput('channel', 'must be a string');\n   - otherwise: const channel = state.resolveChannelRef(params.channel); if (!channel) throw notFound('Channel', params.channel);\n   - pass channel.id to createDecision.\n   An omitted or '' channel passes undefined, so decision.channel is null.\n\nUpdate the two schema descriptions:\n- channel: 'Optional channel to post the decision to: id, or name in either \"general\" or \"#general\" form'.\n- workerId: 'Worker proposing the decision (a registered worker or \"human\")'.\n\nAdd one short comment explaining why: the post is sent under this id, 'system' would impersonate the daemon, and an unregistered id takes MentionRouter's human path (util/mentionRouter.ts:216-235), which resets the loop guard.\n\nKeep the return { success: true, decision } unchanged. Reference: /mnt/d/moe-scratch/314405bb-plan/chatDecision.ts. Type the edit with Edit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts"
+      ],
+      "note": "Sender and channel checks added before createDecision; schema descriptions updated.",
+      "startedAt": "2026-11-03T16:39:37.771Z",
+      "completedAt": "2026-11-03T16:39:48.975Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Byte cap before persisting, in packages/moe-daemon/src/state/chatStore.ts createDecision (:591-640).\n\nRight after `if (!content) throw ...`, and before the decision object and file write:\n- const postTo = opts.channel && state.channels.has(opts.channel) ? opts.channel : null;\n- const postContent = `[Decision Proposed] ${content}`;\n- if postTo is set and Buffer.byteLength(postContent, 'utf-8') > MAX_CHAT_MESSAGE_BYTES (already imported at :37), throw new Error('Message content exceeds 10KB limit').\n\nThat is the exact error sendMessage throws at :190-191. McpAdapter maps a plain Error to -32000 with its message, so chat_send and chat_decision now refuse identically.\n\nThen use postTo and postContent in the existing post block: if (postTo) { sendMessage(state, { channel: postTo, sender: opts.proposedBy, content: postContent, decisionId: decision.id }) ... }.\n\nChange nothing else: not the mutex, not the emit and appendActivity calls, not sendMessage. A decision without a channel still accepts content up to the 10240-char cap at any byte size, because nothing is posted. Add one comment line: the check runs before the write because a later sendMessage throw orphaned the decision with messageId null.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts"
+      ],
+      "note": "Byte-cap check before persisting in createDecision; postTo/postContent reused in the post block.",
+      "startedAt": "2026-11-03T16:39:49.688Z",
+      "completedAt": "2026-11-03T16:39:58.582Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Contract. Edit docs/MCP_SERVER.md, the `### moe.chat_decision` section ONLY (:2716-2733, ending before `### moe.chat_resync`). Other open rows edit other parts of this file, so touch nothing else.\n\nThe architect's exact text is the diff at /mnt/d/moe-scratch/314405bb-plan/MCP_SERVER.md.diff:\n- Intro: 'Propose a decision for human approval. Optionally post it to a chat channel as `[Decision Proposed] <content>`, sent under the proposer's id.'\n- Parameter comments:\n  - channel: 'Optional: channel id, or name in either \"general\" or \"#general\" form';\n  - workerId: 'Optional: proposing worker, a registered worker or \"human\" (omitted: recorded as \"unknown\")'.\n- Returns: unchanged.\n- An Errors list in the file's existing convention (as at :656). Its lead-in is '**Errors.** Every refusal writes nothing: no decision file, no chat message. JSON-RPC code, then `MoeError.codeName`:', followed by four bullets:\n  - `-32003 NOT_ALLOWED`: workerId \"system\" (the moe.chat_send rule);\n  - `-32602 INVALID_INPUT`: workerId is not a registered worker or \"human\", or channel is not a string;\n  - `-32001 NOT_FOUND`: channel matches no channel, or matches a name that more than one channel shares;\n  - `-32000`: the posted line would exceed the 10KB chat message limit (`Message content exceeds 10KB limit`, as moe.chat_send refuses it).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "chat_decision section only: intro, param comments, Errors list.",
+      "startedAt": "2026-11-03T16:39:59.328Z",
+      "completedAt": "2026-11-03T16:40:06.673Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run ONCE (DoD 1-4). Run checkRefs [0] and [1] joined with ' && ' as ONE command from your task worktree. Both start by cd-ing to the repo top, so the cwd does not matter. Its output tail is the complete_task evidence.\n\n- [0] The chat_decision section names NOT_ALLOWED, INVALID_INPUT, NOT_FOUND, #general and 10KB. Then `npm run -s lint` (the read-only role-doc linter) runs and DOC-OK is printed.\n- [1] Builds a git-archive snapshot of your HEAD under mktemp, overlays your four files by an explicit list, then:\n  - runs npm ci with nvm's Linux node under env -i;\n  - runs tsc --noEmit, plus a tt.json typecheck of the new test (the package tsconfig excludes tests);\n  - runs vitest on src/tools/chat (chatBudgets, chatChannelRef, chatDecision, chatRead.cursor, chatSystemFeed, chatWait), registry.test.ts and joinTeam.notification.test.ts.\n\nDoD 4 names src/tools/chatSend.test.ts. That file does not exist: chat_send's tests live in chatBudgets.test.ts, chatChannelRef.test.ts and joinTeam.notification.test.ts, and [1] runs all three.\n\nnpm never runs in the shared checkout (global rail). Put any TMPDIR prefix on the outer command only (mem:convention-daemon-full-suite-gate-checkref, TMPDIR TRAP).\n\nThe architect's dry run at ef5c7101, from a clone with these four files, gave DOC-OK, tsc clean, 8 files and 102 tests passed, exit 0. With today's doc, [0] fails with 'doc lacks NOT_ALLOWED'.\n\nError handling for a red run: fix the code or the new test (never an existing test), then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.test.ts"
+      ],
+      "note": "checkRefs [0]+[1] exit 0: DOC-OK, tsc clean, 8 files / 102 tests passed.",
+      "startedAt": "2026-11-03T16:40:07.609Z",
+      "completedAt": "2026-11-03T16:40:30.700Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new file.\n\n(a) Mutation check, in a scratch copy of the step-5 snapshot. Use cp -al for node_modules after `rm -rf node_modules/.vite`. Run only the new file per mutant; each mutant must fail at least one case. Then restore and confirm 10/10 green, quoting each run's Tests line. The architect's dry run killed all 7 mutants:\n  - M1: today's chatDecision.ts;\n  - M2: today's createDecision;\n  - M3: skip the 'system' branch;\n  - M4: drop the tryLoadWorkerFromDisk fallback;\n  - M5: refuse 'human';\n  - M6: pass params.channel instead of the resolved id;\n  - M7: drop the registered-worker check.\n(b) Nothing is written before a refusal: every throw in chatDecision.ts precedes state.createDecision, and the byte check precedes atomicWriteJson.\n(c) The contract holds:\n  - the success shape and the decision's 9 keys are unchanged;\n  - chatSend.ts, the other chat tools and every other MCP_SERVER.md section are untouched;\n  - the over-cap error text is byte-identical to sendMessage's.\n(d) Edge cases:\n  - workerId '' and channel '' behave as omitted;\n  - an explicit 'unknown' is refused;\n  - an ambiguous channel name is NOT_FOUND, as in chat_send;\n  - two concurrent calls stay safe, because createDecision still runs under state.mutex.\n(e) Size: `git diff --numstat` against the merge-base. Expect about +175/-10: the dry run was +49/-10 for runtime and docs, plus about 125 lines of test.\n\nRecord the review in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatDecision.ts",
+        "packages/moe-daemon/src/tools/chatDecision.test.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review. (a) Mutants M1-M7 all killed in scratch snapshot: M1 5 failed, M2 1, M3 1, M4 1, M5 1, M6 2, M7 1; restored 10/10 green. (b) Every throw in chatDecision.ts precedes createDecision; the byte check precedes atomicWriteJson. (c) Success shape and 9 keys unchanged (tested); chatSend.ts and other tools untouched; over-cap text identical to sendMessage's. (d) workerId '' and channel '' act as omitted; explicit 'unknown' is refused as unregistered; ambiguous name is NOT_FOUND via resolveChannelRef; createDecision still runs under state.mutex. Note: a decision with no channel still accepts >10KB-byte content (nothing posted), as planned. (e) numstat vs merge-base: docs +9/-3, chatStore +10/-3, chatDecision +27/-4, plus a new ~123-line test file.",
+      "startedAt": "2026-11-03T16:40:31.443Z",
+      "completedAt": "2026-11-03T16:40:55.628Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 374.7,
+  "comments": [
+    {
+      "id": "comment-c448a03b088842aaba3ea35aff289137",
+      "author": "architect-74d9e1c7",
+      "content": "Filer and architect correction to DoD 4: there is no packages/moe-daemon/src/tools/chatSend.test.ts. My slip when I filed the row. chat_send's tests live in three files:\n- tools/chatBudgets.test.ts:228-239 pins the \"system\" refusal context;\n- tools/chatChannelRef.test.ts covers the id, name and #name references;\n- tools/joinTeam.notification.test.ts covers Unknown sender.\nPlan checkRef [1] runs all three, plus every src/tools/chat* file and registry.test.ts. Read DoD 4's file list as those files. Everything else in DoD 4 is unchanged: a snapshot outside the shared checkout, vitest, and tsc --noEmit (plus a tt.json typecheck of the new test).",
+      "timestamp": "2026-11-03T16:38:12.786Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:24:11.405Z",
+  "updatedAt": "2026-11-04T19:20:44.226Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:28:58.924Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:43:53.356Z",
+    "wallClockMs": 894432
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-ed0f6a9e",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:38:04.083Z",
+  "executionContract": {
+    "intendedBehavior": "moe.chat_decision applies moe.chat_send's sender and channel rules before it writes anything. workerId \"system\" is refused NOT_ALLOWED, an unregistered workerId is refused INVALID_INPUT, and an unresolvable channel is refused NOT_FOUND. A channel id, a name or \"#name\" posts '[Decision Proposed] <content>' to that channel, and the decision records the canonical id and messageId. A post over the 10KB byte cap is refused with sendMessage's exact error before the decision is persisted. The success response and the caller-less 'unknown' attribution are unchanged.",
+    "acceptanceCriteria": [
+      "A refused chat_decision call writes no decision file, no decisions-map entry and no chat message, and leaves MentionRouter's hop count and pause state for the channel unchanged.",
+      "chat_decision with channel set to the id, 'general' or '#general' posts exactly one '[Decision Proposed] <content>' line there, with decision.channel set to the canonical id and messageId set."
+    ],
+    "invariants": [
+      "No write happens before any refusal.",
+      "chatSend.ts and every other chat tool are unchanged.",
+      "createDecision still runs under state.mutex, with sendMessage taking channelMutex inside it (the existing lock order)."
+    ],
+    "compatibility": [
+      "The response stays { success: true, decision } with the same 9 decision keys.",
+      "An omitted workerId still records proposedBy 'unknown'.",
+      "createDecision keeps its signature; its only caller is chatDecisionTool, through the StateManager wrapper at :944-949.",
+      "The over-cap refusal keeps sendMessage's exact text 'Message content exceeds 10KB limit' (-32000)."
+    ],
+    "approvedScope": [
+      "chatDecisionTool handler and its channel/workerId schema descriptions (packages/moe-daemon/src/tools/chatDecision.ts)",
+      "createDecision in packages/moe-daemon/src/state/chatStore.ts: the byte check before the write, plus the postTo/postContent reuse",
+      "docs/MCP_SERVER.md: the ### moe.chat_decision section only",
+      "new packages/moe-daemon/src/tools/chatDecision.test.ts"
+    ],
+    "reuse": [
+      "chat_send's sender rule (tools/chatSend.ts:34-52) and the error helpers notAllowed, invalidInput and notFound (util/errors.ts)",
+      "state.resolveChannelRef (state/chatStore.ts:88-100, StateManager.ts:842) and state.tryLoadWorkerFromDisk",
+      "MAX_CHAT_MESSAGE_BYTES from util/chatPayload.ts:11, already imported in state/chatStore.ts:37"
+    ],
+    "sourceAssumptions": [
+      "tools/chatDecision.ts:30-34 passes proposedBy params.workerId || 'unknown' and the raw channel to state.createDecision.",
+      "state/chatStore.ts:613-617 writes the decision before :620 posts, and posts only when state.channels.has(opts.channel).",
+      "state/chatStore.ts:190-191: sendMessage throws 'Message content exceeds 10KB limit' when the byte length exceeds MAX_CHAT_MESSAGE_BYTES.",
+      "util/mentionRouter.ts:216-235 routes a sender that is not a known worker as human, which resets hopCounts and clears the pause.",
+      "server/McpAdapter.ts:324-328 maps a non-MoeError to JSON-RPC -32000 with its message.",
+      "toolTestHarness.ts:119-136 createWorker writes the worker file to disk, so a call after state.load() yields a disk-only seat."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && D=$(sed -n '/^### moe.chat_decision/,/^### moe.chat_resync/p' docs/MCP_SERVER.md) && for w in NOT_ALLOWED INVALID_INPUT NOT_FOUND '#general' 10KB; do printf '%s' \"$D\" | grep -qF -- \"$w\" || { echo \"doc lacks $w\"; exit 1; }; done && npm run -s lint && echo DOC-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/chatDecision.ts packages/moe-daemon/src/tools/chatDecision.test.ts packages/moe-daemon/src/state/chatStore.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatDecision.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chat src/tools/registry.test.ts src/tools/joinTeam.notification.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three alternatives were rejected:\n- Extracting a shared sender-check helper from chatSend.ts. That would touch a fourth runtime file and chat_send's tested path for about 8 lines; mirroring the rule with a pointer comment is smaller.\n- Refusing a caller-less call. A raw MCP client without MOE_WORKER_ID would break, and chat_send's own caller-less default ('human') takes the same router path, so today's 'unknown' attribution is kept and documented.\n- Making createDecision resolve channels itself. The tool is the right boundary: createDecision keeps its signature and its defensive channels.has guard.",
+    "codebaseInsights": "Two sibling rules differ on purpose:\n- chat_join allows 'system' (chatJoin.ts:24-33), but chat_send refuses it. chat_decision posts content, so chat_send's rule is the right model.\n- add_comment truncates an over-cap relay instead of refusing (addComment.ts:54-57), but chat_send refuses, so chat_decision copies chat_send.\nThe root `npm run lint` checks only the role-doc line caps, so checkRef [0] greps the chat_decision section itself. The architect's full dry run (code, test, doc diff and both checkRefs) is in /mnt/d/moe-scratch/314405bb-plan/.",
+    "risks": "- DoD 4 names src/tools/chatSend.test.ts, which does not exist; checkRef [1] runs the files that hold chat_send's tests instead.\n- The ping-pong in case (b) needs CODING seats and 5 sends to trip the default maxHops; assert paused true before the refused call, so a harness change cannot make the case vacuous.\n- docs/MCP_SERVER.md is a hot file: edit only the chat_decision section, or landing contests the path.\n- Type every tracked edit with Edit/Write. Copying the scratch reference files into the tree is a shell write with no TOOL witness.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/chatDecision.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/tools/chatBudgets.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d5f36e82d8d7f348c916ab32de636b3aebddc42b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:38:04.112Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:39:07.155Z",
+  "reviewStartedAt": "2026-11-03T16:41:00.434Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && D=$(sed -n '/^### moe.chat_decision/,/^### moe.chat_resync/p' docs/MCP_SERVER.md) && for w in NOT_ALLOWED INVALID_INPUT NOT_FOUND '#general' 10KB; do printf '%s' \"$D\" | grep -qF -- \"$w\" || { echo \"doc lacks $w\"; exit 1; }; done && npm run -s lint && echo DOC-OK && [snapshot: git archive HEAD + overlay of the 4 files; env -i npm ci; npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/chat src/tools/registry.test.ts src/tools/joinTeam.notification.test.ts]",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/qa.md has 36 lines (max 40)\nDOC-OK\nnpm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  8 passed (8)\n      Tests  102 passed (102)\nexit=0",
+    "reportedAt": "2026-11-03T16:41:00.434Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatDecision.test.ts",
+    "packages/moe-daemon/src/tools/chatDecision.ts",
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_decision now applies chat_send's sender and channel rules before any write. workerId \"system\" is refused NOT_ALLOWED and an unregistered workerId is refused INVALID_INPUT (with a disk fallback). A channel id, \"general\" or \"#general\" resolves via resolveChannelRef, and an unknown channel is refused NOT_FOUND. createDecision checks the 10KB byte cap before it persists the decision. The MCP_SERVER.md chat_decision section is updated. The new chatDecision.test.ts has 10 tests, and all 7 mutants were killed.",
+  "commits": [
+    {
+      "sha": "0a6775ae6653576ae110a2801debc68c08a62e09",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T16:38:13Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/chatDecision.test.ts",
+        "packages/moe-daemon/src/tools/chatDecision.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T16:42:01.561Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:42:08Z",
+    "at": "2026-11-03T16:44:29.408Z"
+  },
+  "completedAt": "2026-11-03T16:43:53.356Z",
+  "reviewCompletedAt": "2026-11-03T16:43:53.356Z",
+  "reviewSummary": "Reviewed completion 0a6775ae (on moe/work-2026-10-24) via git show. Size +169/-10, 4 files, under the cap. Scope matches the plan. chatSend.ts and the other chat tools are untouched.\n\nRe-run in a /tmp git-archive snapshot of 0a6775ae, no overlay (env -i npm ci, node 24):\n- Doc grep for NOT_ALLOWED, INVALID_INPUT, NOT_FOUND, #general, 10KB passes. `npm run lint` passes.\n- `tsc --noEmit` and `tsc -p tt.json` are clean.\n- `vitest run src/tools/chat src/tools/registry.test.ts src/tools/joinTeam.notification.test.ts`: 8 files, 102 tests, exit 0. DoD 4's chatSend.test.ts does not exist; the architect's task comment corrects it to chatBudgets, chatChannelRef and joinTeam.notification, all of which ran.\n\nMy mutation check on the new test file: pre-fix chatDecision.ts fails 5 of 10, pre-fix chatStore.ts fails 1 of 10, restored passes 10/10.\n\nDoD:\n1. Sender rules mirror chatSend.ts:34-52: 'system' gives NOT_ALLOWED, an unregistered id gives INVALID_INPUT with the disk fallback, 'human' is accepted. Every refusal precedes createDecision. The success shape is unchanged.\n2. The channel goes through resolveChannelRef. The id, 'general' and '#general' post with messageId set. An unknown channel gives NOT_FOUND. The byte cap is checked before the write with sendMessage's exact text, so getDecisions() stays empty.\n3. Tests cover every named case, including a loop-guard pause surviving the refused call. The doc has the Errors list and the channel forms.\n\nNon-blocking: an omitted workerId with a channel still posts as 'unknown' via MentionRouter's human path. The contract keeps this and the docs state it. A governor may want a follow-up row.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,192 @@
+{
+  "id": "task-85529f6caa8e44bc8198f15a0b105d34",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md says PLANNING/BLOCKED to ARCHIVED is refused (archive_task and set_task_status allow it), omits archive_task's workerId and holder-only refusal, and documents chat_send as returning `routed` instead of routingTargets",
+  "description": "Found by hunt task-859eff80 (architect-74d9e1c7). It was held back because it shares docs/MCP_SERVER.md with task-314405bb. The governor filed it at 16:30Z on 2026-11-03 and accepts the overlap (worktree mode, merge-tree squash, different sections). The citations were re-checked at d5f36e82. Docs only, no code change.\n\nDRIFT (docs/MCP_SERVER.md against the code at d5f36e82):\n1. **set_task_status.** :1635-1641 says \"In-flight states (PLANNING/AWAITING_APPROVAL/WORKING) cannot go straight to ARCHIVED\". The code disagrees: VALID_TRANSITIONS in packages/moe-daemon/src/tools/setTaskStatus.ts:46-54 allows PLANNING → ARCHIVED and BLOCKED → ARCHIVED; only AWAITING_APPROVAL and WORKING are excluded.\n2. **archive_task.**\n   - :1748-1760 says \"Allowed from BACKLOG, REVIEW, or DONE; rejected for in-flight tasks\". The code disagrees: archiveTask.ts:17-18 sets ARCHIVABLE_FROM = BACKLOG, REVIEW, DONE, PLANNING and BLOCKED, with HOLDER_ONLY_FROM = PLANNING and BLOCKED (see archiveTask.ts:10-16). A held PLANNING/BLOCKED row may be archived only by its holder or by a caller with no worker identity (a human).\n   - The Parameters block lists only `{ taskId }`. It omits `workerId` and the holder-only NOT_ALLOWED refusal.\n3. **chat_send.** :2510-2515 documents the result as `routed: string[]` and says \"`routed` array contains all mentioned worker IDs\". chatSend.ts:80-86 returns `routingTargets`, and so does every live call today.\n\nFIX. Edit only those three sections so they match the code: the set_task_status transition paragraph, the archive_task section (allowed-from list, holder-only rule, workerId parameter and its refusal), and the chat_send Returns and Notes. Name codes as the tools throw them, and read the archive_task refusal's code from archiveTask.ts before writing it.\n\nPLACEMENT (no dependsOn edge).\n- task-314405bb edits MCP_SERVER.md's chat_decision section.\n- The complete_step modifiedFiles row filed alongside this one edits the complete_step section.\n- task-6a818a1c edits WebSocketServer.ts and setTaskStatus.ts. Do not change setTaskStatus.ts here, and if 6a818a1c has landed, re-read VALID_TRANSITIONS before writing item 1.\n- Rebase on the target tip before landing.\n\nVERIFICATION. `npm run lint` from the worktree root (the role-doc linter), plus a grep proving the three stale phrases are gone. No code test is needed.",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md's set_task_status paragraph and archive_task section match setTaskStatus.ts VALID_TRANSITIONS and archiveTask.ts ARCHIVABLE_FROM/HOLDER_ONLY_FROM: PLANNING and BLOCKED can be archived, holder-only for a held row. archive_task documents its workerId parameter and its holder-only refusal code as thrown.",
+    "The chat_send section documents `routingTargets` (not `routed`) as returned by chatSend.ts, and no other MCP_SERVER.md section changes.",
+    "`npm run lint` passes, and grep finds neither 'cannot go straight to' (for PLANNING) nor 'routed: string[]' in docs/MCP_SERVER.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Docs only: edit three sections of docs/MCP_SERVER.md with the Edit tool. The rail forbids `git apply` or other shell writes to tracked files.\n\nReference: /mnt/d/moe-scratch/plan-8552/MCP_SERVER.sections.diff (sha256 fb30a189…, 4 hunks). It applies cleanly at 8a53505e, and the exact text in it is what the step-2 check looks for. Copy each new text from it.\n\n(1) ### moe.set_task_status:\n- Transition paragraph (≈:1635-1641): ARCHIVED is reachable from BACKLOG, REVIEW and DONE, and from `PLANNING` and `BLOCKED` to shelve a row that needs no work. Keep the exact phrase \"and from `PLANNING` and `BLOCKED`\".\n- Replace the stale \"In-flight states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to `ARCHIVED`\" with \"`AWAITING_APPROVAL` and `WORKING` cannot go straight to `ARCHIVED`, because a worker may own the task: move it to `BACKLOG` first\". The governor's comment rules this wording valid for DoD 3.\n- BLOCKED transitions paragraph: the exits become \"back to any of them, to `BACKLOG` (manual park), or to `ARCHIVED` (shelving a dead park)\".\n- After the blockedFromStatus 'launder past the plan-approval gate' sentence, add: \"`ARCHIVED` is the exception: a dead park may be shelved whatever it was blocked from.\"\n- Code facts: VALID_TRANSITIONS in packages/moe-daemon/src/tools/setTaskStatus.ts:46-54, and the handler's `newStatus !== 'ARCHIVED'` exemption in its BLOCKED effectiveFrom check. Re-read the table first: task-6a818a1c only exports it and leaves its content unchanged.\n\n(2) ### moe.archive_task (archiveTask.ts):\n- ARCHIVABLE_FROM :17 = BACKLOG, REVIEW, DONE, PLANNING, BLOCKED. HOLDER_ONLY_FROM :18 = PLANNING, BLOCKED.\n- The holder check (≈:64-69) fires only when the row is assigned AND the caller passes a workerId that differs. It throws notAllowed('archive task', …), which is `-32003` / `NOT_ALLOWED` (util/errors.ts:28). AWAITING_APPROVAL and WORKING throw the same code.\n- archiveUpdates clears the block bookkeeping and keeps priorBlockedReason.\n- Rewrite the prose to say all of that:\n  - allowed from BACKLOG, REVIEW or DONE, and \"from `PLANNING` or `BLOCKED`\" for a row with nothing left to do;\n  - a held PLANNING/BLOCKED row only by its holder: another worker's workerId is refused `-32003` / `NOT_ALLOWED`, while an unassigned row or a caller with no workerId (a human) may archive;\n  - AWAITING_APPROVAL/WORKING are refused `-32003` / `NOT_ALLOWED`, so move the task to BACKLOG first with moe.set_task_status. Drop the old \"or release first\": moe.release_task keeps a WORKING task in WORKING;\n  - keep the ATTEMPT_FINALIZING sentence and \"Idempotent. Un-archive with …\";\n  - add one sentence: archiving a BLOCKED row clears its block bookkeeping and keeps the reason as priorBlockedReason.\n- Parameters become a block with `taskId: string,` and `workerId?: string   // Caller (auto-injected by moe-proxy); a held PLANNING/BLOCKED row may only be archived by its holder`.\n- Leave Returns unchanged.\n\n(3) ### moe.chat_send, Returns and Notes only:\n- Returns: `{ success: true, messageId, channel, timestamp, routingTargets: string[] }` (chatSend.ts:80-86).\n- Replace the `routed` note with a `routingTargets` note, from util/mentionRouter.ts:202-320. It lists the worker IDs the message is routed to, after group expansion (`@all`, `@architects`, `@workers`, `@qa`, `@governors`). An agent's message routes only to the seats it mentions other than itself, and to nobody while the loop guard has the channel paused. A human message with no mention routes to every online seat (not IDLE or DEAD).\n- Leave Parameters unchanged.\n\nTouch no other section. task-314405bb (landed 0a6775ae) owns chat_decision, and task-e3d41183 owns complete_step.\nError handling: no code changes, but the doc names each refusal exactly as the tool throws it (`-32003` / `NOT_ALLOWED`; `-32002` / `ATTEMPT_FINALIZING` unchanged). Wrap prose at about 80 columns like the surrounding text, with no trailing spaces. No code test is needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T16:48:47.130Z",
+      "completedAt": "2026-11-03T16:49:07.335Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification: run once, from your task checkout's root. Never `cd /mnt/d/projexts/moes`; see mem:decision-doc-row-checkrefs-worktree-mode. Join the two checkRefs with ' && ':\n\n[1] cd \"$(git rev-parse --show-toplevel)\" && npm run lint\n\n[2] The doc check, verbatim from /mnt/d/moe-scratch/plan-8552/checkref-doc.txt (859 chars). It does six things:\n- B = merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\";\n- sec() extracts one `### moe.<tool>` section joined into one line, and strip() drops the three edited sections;\n- it fails if any PLANNING/BLOCKED '… cannot go straight to' sentence or 'routed: string[]' remains;\n- it needs `routingTargets: string[]` and no `routed` in chat_send;\n- it needs 'and from `PLANNING` and `BLOCKED`' in set_task_status, and 'from `PLANNING` or `BLOCKED`', 'workerId?: string' and '`-32003` / `NOT_ALLOWED`' in archive_task;\n- it diffs every OTHER section against B, then prints DOC-CHECK-OK.\n\nMy dry run: red (exit 1) on today's text, green on the reference edit. A one-character edit in another section turns it red.\n\nExpect the three `OK: docs/roles/…` lint lines, then DOC-CHECK-OK, and exit 0. Submit the joined command, its exit code and the output tail as the complete_task verification. QA in the control checkout: B degrades to HEAD there, so diff `git show <sha>^:docs/MCP_SERVER.md` by hand.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "lint + DOC-CHECK-OK green",
+      "startedAt": "2026-11-03T16:49:15.584Z",
+      "completedAt": "2026-11-03T16:49:16.195Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of your one-file diff (`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") -- docs/MCP_SERVER.md`). Check each item and fix what fails:\n(1) Each new claim traces to a code line: setTaskStatus.ts VALID_TRANSITIONS and the ARCHIVED exemption; archiveTask.ts ARCHIVABLE_FROM, HOLDER_ONLY_FROM, the holder condition (assigned AND caller workerId present AND different) and archiveUpdates; chatSend.ts's return; mentionRouter.ts's routing rules.\n(2) Nothing implies set_task_status is holder-only (it is not), or that release_task un-parks a WORKING row (it does not).\n(3) The hunks fall only inside the set_task_status, archive_task and chat_send sections. The check's strip-diff proves it.\n(4) Backticks are balanced, the wrap is about 80 columns, and no trailing whitespace was added.\n(5) No stale sentence survives in any wrapped form: grep the joined text for 'release first' and 'routed'.\nIf you change anything, re-run step 2's joined command and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review: diff text identical to reference; git diff --check clean; no 'release first'; strip-diff proves only 3 sections changed.",
+      "startedAt": "2026-11-03T16:49:17.124Z",
+      "completedAt": "2026-11-03T16:49:17.869Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 377.7,
+  "comments": [
+    {
+      "id": "comment-da08c17689cb45ab84110a08a7597f38",
+      "author": "governor-e6b40560",
+      "content": "Governor clarification of DoD 3, since a DoD can't be edited and I want no literal-reading reject.\n- Its grep targets the stale PLANNING-inclusive sentence: \"In-flight states (`PLANNING`/`AWAITING_APPROVAL`/`WORKING`) cannot go straight to `ARCHIVED`\".\n- A corrected sentence that keeps the phrase but names only AWAITING_APPROVAL and WORKING (for example \"`AWAITING_APPROVAL` and `WORKING` cannot go straight to `ARCHIVED`\") meets DoD 3.\n- The check is: no line in docs/MCP_SERVER.md says PLANNING (or BLOCKED) cannot go to ARCHIVED, and 'routed: string[]' is gone.\nQA: please read DoD 3 this way.",
+      "timestamp": "2026-11-03T16:29:42.700Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:29:24.547Z",
+  "updatedAt": "2026-11-04T19:20:44.261Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:43:16.269Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T16:52:20.874Z",
+    "wallClockMs": 544605
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-c9368191",
+    "qa-af7be174"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:47:51.141Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md's set_task_status, archive_task and chat_send sections match the code: ARCHIVED is reachable from PLANNING and BLOCKED; archive_task has a workerId parameter and a holder-only `-32003` / `NOT_ALLOWED` refusal; chat_send returns `routingTargets`. No other section changes.",
+    "acceptanceCriteria": [
+      "The set_task_status section says ARCHIVED is reachable from BACKLOG, REVIEW, DONE, PLANNING and BLOCKED. Only AWAITING_APPROVAL and WORKING cannot go straight to ARCHIVED, and BLOCKED to ARCHIVED is exempt from the blockedFromStatus judgment.",
+      "The archive_task section allows PLANNING and BLOCKED, gives the holder-only rule for a held row with its `-32003` / `NOT_ALLOWED` refusal, and lists `workerId?: string` in Parameters.",
+      "The chat_send Returns shows `routingTargets: string[]`, and its Notes describe routingTargets. 'routed: string[]' appears nowhere in the file.",
+      "Every other section is byte-identical to the merge-base.",
+      "`npm run lint` passes."
+    ],
+    "invariants": [
+      "No code changes.",
+      "The chat_decision section (task-314405bb) and the complete_step section (task-e3d41183) are untouched."
+    ],
+    "compatibility": [
+      "Docs only. No tool contract changes, since the docs catch up with shipped behaviour."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md: the ### moe.set_task_status, ### moe.archive_task and ### moe.chat_send sections only"
+    ],
+    "reuse": [
+      "The dry-run reference diff /mnt/d/moe-scratch/plan-8552/MCP_SERVER.sections.diff supplies the exact text."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/setTaskStatus.ts:46-54 VALID_TRANSITIONS: PLANNING and BLOCKED rows include ARCHIVED; AWAITING_APPROVAL and WORKING rows do not.",
+      "packages/moe-daemon/src/tools/archiveTask.ts:17-18 ARCHIVABLE_FROM and HOLDER_ONLY_FROM; :64-69 holds the holder refusal via notAllowed.",
+      "packages/moe-daemon/src/util/errors.ts:28 NOT_ALLOWED = -32003.",
+      "packages/moe-daemon/src/tools/chatSend.ts:80-86 returns { success, messageId, channel, timestamp, routingTargets }.",
+      "packages/moe-daemon/src/util/mentionRouter.ts:202-320 holds the routing rules for human, system and agent senders."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && npm run lint",
+      "cd \"$(git rev-parse --show-toplevel)\" && D=docs/MCP_SERVER.md && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && sec() { awk -v h=\"### moe.$1\" '$0==h{f=1;next} f&&/^### /{exit} f' \"$D\" | tr '\\n' ' '; } && strip() { awk '/^### /{f=($0==\"### moe.set_task_status\"||$0==\"### moe.archive_task\"||$0==\"### moe.chat_send\")} !f'; } && ! tr '\\n' ' ' < \"$D\" | grep -qE '(PLANNING|BLOCKED)[^.]*cannot go straight to' && ! grep -qF 'routed: string[]' \"$D\" && sec chat_send | grep -qF 'routingTargets: string[]' && ! sec chat_send | grep -qF '`routed`' && sec set_task_status | grep -qF 'and from `PLANNING` and `BLOCKED`' && sec archive_task | grep -qF 'from `PLANNING` or `BLOCKED`' && sec archive_task | grep -qF 'workerId?: string' && sec archive_task | grep -qF '`-32003` / `NOT_ALLOWED`' && diff <(git show \"$B:$D\" | strip) <(strip < \"$D\") && echo DOC-CHECK-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- I scoped the fix to the three named sections. I left out set_task_status's Parameters block, which also omits `workerId`, because the row names only the transition paragraph. The BLOCKED exit sentences in the same section are included, since they contradicted BLOCKED to ARCHIVED.\n- The positive checks pin exact phrases from the prescribed text, and the reference diff gives the worker that text. That is the decision memory's 'prescribe an exact lead-in so the check can find it' practice.",
+    "codebaseInsights": "- archiveTask.ts refuses a held PLANNING/BLOCKED row only when the caller supplies a different workerId. A missing workerId means a human, and that caller is allowed.\n- Both of archive_task's refusals are notAllowed, which is -32003 / NOT_ALLOWED.\n- set_task_status exempts ARCHIVED from the blockedFromStatus judgment.\n- chat_send returns the MentionRouter's targets:\n  - agent sender: its mentions minus itself, and none while the channel is paused;\n  - human sender: its mentions, or every non-IDLE, non-DEAD seat when it mentions no one.\n- Root `npm run lint` only lints docs/roles. It was green at HEAD.",
+    "risks": "- Line numbers shift as other rows land in MCP_SERVER.md. Anchor each edit on the quoted text, not on line numbers.\n- MOE_LAND_TARGET must be set for the worker's B, as it is in a worktree CLI. In the control checkout B degrades to HEAD.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/tools/archiveTask.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8a53505e75f2c4f679c2a3104774481b7d88b689",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:47:51.174Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:48:47.130Z",
+  "reviewStartedAt": "2026-11-03T16:49:20.837Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && npm run lint && <doc check from checkRefs>",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nDOC-CHECK-OK",
+    "reportedAt": "2026-11-03T16:49:20.837Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Docs only: MCP_SERVER.md set_task_status, archive_task and chat_send sections now match code (ARCHIVED from PLANNING/BLOCKED, holder-only -32003/NOT_ALLOWED, workerId param, routingTargets).",
+  "commits": [
+    {
+      "sha": "430e462011191e2afd584393b04344e8116156f7",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T16:47:55Z",
+      "paths": [
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T16:50:23.341Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:51:06Z",
+    "at": "2026-11-03T16:52:43.984Z"
+  },
+  "completedAt": "2026-11-03T16:52:20.874Z",
+  "reviewCompletedAt": "2026-11-03T16:52:20.874Z",
+  "reviewSummary": "Reviewed completion 430e4620 (on moe/control, work branch, task branch): +28/-10, docs/MCP_SERVER.md only, net +18. Docs-only, no code/test to run.\n\nRe-run in control checkout (checkRef merge-base degrades to HEAD there, so I diffed vs 430e4620^ by hand):\n- npm run lint exit 0.\n- All doc-check greps pass on the completion blob: no PLANNING/BLOCKED 'cannot go straight to', 'routed: string[]' gone, chat_send has routingTargets: string[] and no `routed`, set_task_status has 'and from `PLANNING` and `BLOCKED`', archive_task has 'from `PLANNING` or `BLOCKED`', 'workerId?: string' and '`-32003` / `NOT_ALLOWED`'.\n- With the 3 edited sections stripped, the rest of the file is byte-identical to 430e4620^ (chat_decision and complete_step untouched). git diff --check clean; no 'release first'.\n\nTraced to code: setTaskStatus.ts:46-54 (PLANNING/BLOCKED -> ARCHIVED; AWAITING_APPROVAL/WORKING not) and :121-123 BLOCKED exemption; archiveTask.ts:17-18 ARCHIVABLE_FROM/HOLDER_ONLY_FROM, holder check (assigned AND caller workerId differs) via notAllowed = -32003 (errors.ts:28), archiveUpdates keeps priorBlockedReason; chatSend.ts:80-86 returns routingTargets; mentionRouter.ts:202-320 matches the Notes (agent routes only to others it mentions, nobody when paused; human with no mention goes to non-IDLE/DEAD seats). Doc does not imply set_task_status is holder-only.\n\nDoD 3 read per governor's comment: the corrected sentence names only AWAITING_APPROVAL and WORKING.\n\nNon-blocking taste note: one line in the BLOCKED transitions paragraph runs ~120 columns vs the ~80 wrap elsewhere. No DoD or rail breach.",
+  "requiredCheckAtDone": null
+}

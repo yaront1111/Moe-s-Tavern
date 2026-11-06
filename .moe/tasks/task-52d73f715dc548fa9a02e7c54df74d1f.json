@@ -1,0 +1,176 @@
+{
+  "id": "task-52d73f715dc548fa9a02e7c54df74d1f",
+  "epicId": "epic-be924fb8",
+  "title": "docs: packages/moe-daemon/README.md documents a `-p` alias the CLI never parses (so `init -p <dir>` initializes the cwd), calls --project required although it falls back to MOE_PROJECT_PATH and the cwd, omits --host, and names MOE_LOG_LEVEL where the logger reads LOG_LEVEL",
+  "description": "Held-back finding (b) from defect hunt #6 (task-cea8fa39, architect-1dd28c7c, msg-0f965eaf). The governor re-checked it at moe/work-2026-10-24 6d6bdc51 at 17:33Z on 2026-11-03.\n\nPROBLEM: packages/moe-daemon/README.md versus the code:\n- :36 says \"`--project, -p` - Project path (required)\". parseArgs (packages/moe-daemon/src/index.ts:58-72) only looks up '--project' (:62); no '-p' is parsed anywhere in the CLI. So `moe-daemon init -p D:\\proj` treats `-p` and the path as stray args and falls through, so the project path resolves to MOE_PROJECT_PATH or process.cwd(). The hunt's repro showed it creating .moe/ in the cwd.\n- \"required\" is also wrong: :66 resolves `--project`, else MOE_PROJECT_PATH, else process.cwd(). The root CLAUDE.md \"Run\" section documents the same order.\n- The start options list (:35-37) omits `--host` (index.ts:64 and :69; it falls back to MOE_BIND_HOST), which the root CLAUDE.md documents.\n- :80 documents `MOE_LOG_LEVEL`, but packages/moe-daemon/src/util/logger.ts:7 reads `process.env.LOG_LEVEL`. Nothing in packages/, docs/ or scripts/ reads MOE_LOG_LEVEL.\n\nFIX DIRECTION (the planner decides): docs-only, in README.md alone.\n- List exactly the flags parseArgs reads (--project, --port, --name for init, --host), with --project's fallback order.\n- Name LOG_LEVEL with its values and default.\n- Do not add a -p alias or rename the env var in code. index.ts is held by task-88673297 (lock-failure exit code), and renaming LOG_LEVEL would break current users.\n\nNarrow row: epic-be924fb8 has no finalTaskId, so isEpicFinal:true on the newest row is the max-order fallback (governor ruling msg-bbf4f109 in #architects). No test suite is needed; the evidence is the mechanical check in DoD 3.",
+  "definitionOfDone": [
+    "packages/moe-daemon/README.md documents no `-p` flag, and its CLI option lists name exactly the flags parseArgs in packages/moe-daemon/src/index.ts reads (--project, --port, --name, --host). --project is described with its fallback order (MOE_PROJECT_PATH, then the cwd), not as required.",
+    "The README's logging entry names LOG_LEVEL (what util/logger.ts:7 reads) with its values and default `info`, and the README no longer mentions MOE_LOG_LEVEL.",
+    "Only packages/moe-daemon/README.md changes. The task evidence shows `grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL' packages/moe-daemon/README.md` printing nothing, and `grep -n \"indexOf('--\" packages/moe-daemon/src/index.ts` listing every flag the README documents."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit packages/moe-daemon/README.md with the Edit tool only. This is a docs-only row: no code, no new test file, and no test suite to run. The architect's dry-run copy of the result is /mnt/d/moe-scratch/plan-52d7/README.proposed.md.\n\nIn \"### Start Daemon\" Options (:35-37):\n- replace `- \\`--project, -p\\` - Project path (required)` with `- \\`--project\\` - Project path. Defaults to \\`MOE_PROJECT_PATH\\`, then the current directory.` (parseArgs, index.ts:62 and :67: --project, else MOE_PROJECT_PATH, else process.cwd());\n- keep the `--port` line;\n- add `- \\`--host\\` - Bind address. Defaults to \\`MOE_BIND_HOST\\`, then \\`127.0.0.1\\`; \\`--host\\` wins over \\`MOE_BIND_HOST\\`. \\`wsl\\` binds loopback plus the WSL adapters. A value other than \\`127.0.0.1\\` is recorded as \\`bindHost\\` in \\`.moe/daemon.json\\` (see \\`docs/CONFIGURATION.md\\`).` (index.ts:65 and :70; the daemon.json write at :876; CONFIGURATION.md:16 and :30);\n- after the list, add a blank line and `\\`init\\` takes the same options.` parseArgs is shared, and init passes port and host to superviseDaemon.\n\nIn \"### Logging\" (:80), replace the `MOE_LOG_LEVEL` line with `- \\`LOG_LEVEL\\` - Log level (\\`debug\\`, \\`info\\`, \\`warn\\`, \\`error\\`). Default: \\`info\\`` (util/logger.ts:7 reads `process.env.LOG_LEVEL || 'info'`).\n\nChange nothing else. Do not add a `-p` alias, and do not rename the env var in code: task-88673297 holds index.ts, and a rename would break LOG_LEVEL users. Line 71's daemon.json comment is stale too (`{ port, pid, startedAt }`), but it is out of this row's scope; leave it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/README.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/README.md"
+      ],
+      "startedAt": "2026-11-03T17:55:57.272Z",
+      "completedAt": "2026-11-03T17:56:10.274Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification (once, fresh, from the task worktree root). Run executionContract.checkRefs [0] and then [1], joined with ' && '. Submit that exact text, its exit code and the output tail as complete_task's verification.\n\n[0] is DoD 1 to DoD 3's mechanical check. It prints DOC_OK only when all of these hold:\n- `grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL|\\(required\\)'` finds nothing in the README;\n- the LOG_LEVEL line carries `Default: \\`info\\``;\n- the --project line names MOE_PROJECT_PATH and the current directory;\n- every `--flag` in the README is an `indexOf('--flag')` in packages/moe-daemon/src/index.ts;\n- every flag index.ts parses appears in the README.\n\n[1] is the scope check: only packages/moe-daemon/README.md may differ, plus .moe/.\n\nError handling for a red check:\n- [0] prints the offending README line, or the flag that is unparsed or missing. Fix the README text, never the check.\n- [1] names the stray path. Revert it.\n\nThe architect's dry run printed DOC_OK on the proposed text. The base README failed [0], and two mutants failed it too: an unparsed `--frobnicate` and a missing `--host`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs [0]+[1] printed DOC_OK, exit 0",
+      "startedAt": "2026-11-03T17:56:11.082Z",
+      "completedAt": "2026-11-03T17:56:21.166Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of the README diff. Load the adversarial-self-review skill first.\nChecklist:\n- Does every statement match the code it cites (index.ts parseArgs :58-72, the bindHost write at :876, util/logger.ts:7) and agree with docs/CONFIGURATION.md and the root CLAUDE.md \"Run\" section?\n- Is the precedence right: --host over MOE_BIND_HOST, and --project over MOE_PROJECT_PATH over the cwd?\n- Are the default port and the 50-port scan claims unchanged?\n- Is there no Markdown breakage (list items, backticks balanced)?\n- Does `git diff` touch only the README?\nIf you find something, fix it in the README and re-run step 2's command before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/README.md"
+      ],
+      "note": "Self-review: precedence matches parseArgs; diff touches README only.",
+      "startedAt": "2026-11-03T17:56:21.908Z",
+      "completedAt": "2026-11-03T17:56:29.896Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 394.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:33:52.760Z",
+  "updatedAt": "2026-11-04T19:20:44.408Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:52:15.117Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T18:08:59.429Z",
+    "wallClockMs": 1004312
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-af7be174"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:54:04.779Z",
+  "executionContract": {
+    "intendedBehavior": "packages/moe-daemon/README.md documents exactly the CLI flags parseArgs reads (--project with its MOE_PROJECT_PATH-then-cwd fallback, --port, --name, --host with MOE_BIND_HOST and wsl), drops the unparsed -p alias and the wrong '(required)', and names LOG_LEVEL (default info) instead of the unread MOE_LOG_LEVEL.",
+    "acceptanceCriteria": [
+      "No `-p`, no MOE_LOG_LEVEL and no '(required)' in the README.",
+      "The README's flags equal index.ts parseArgs' flags in both directions."
+    ],
+    "invariants": [
+      "Only packages/moe-daemon/README.md changes; no code, no env rename, no alias.",
+      "Every README flag is parsed by index.ts and every parsed flag is documented."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts:62-65 indexOf('--project'|'--port'|'--name'|'--host'); :67 projectPath = --project ?? MOE_PROJECT_PATH ?? cwd; :70 host = --host ?? MOE_BIND_HOST; :876 bindHost recorded when host !== 127.0.0.1.",
+      "packages/moe-daemon/src/util/logger.ts:7 `const level = process.env.LOG_LEVEL || 'info'`.",
+      "docs/CONFIGURATION.md:16 MOE_BIND_HOST (bind address or wsl), :19 LOG_LEVEL, :30 --host precedence."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && F=packages/moe-daemon/README.md && I=packages/moe-daemon/src/index.ts && ! grep -nE -- '(^|[^-])-p\\b|MOE_LOG_LEVEL|\\(required\\)' $F && grep -qE '`LOG_LEVEL`.*Default: `info`' $F && grep -qE '`--project`.*`MOE_PROJECT_PATH`.*current directory' $F && for f in $(grep -oE -- '--[a-z][a-z-]*' $F | sort -u); do grep -qF \"indexOf('$f')\" $I || { echo \"README flag not parsed: $f\"; exit 1; }; done && for f in $(grep -oE \"indexOf\\('--[a-z-]+'\\)\" $I | grep -oE -- '--[a-z-]+'); do grep -qE -- \"$f([^a-z-]|\\$)\" $F || { echo \"parsed flag missing from README: $f\"; exit 1; }; done && echo DOC_OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' ':(exclude)packages/moe-daemon/README.md'; git ls-files --others --exclude-standard -- . ':(exclude).moe') && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Implementing a real -p alias in parseArgs was rejected, as the row's own fix direction says: index.ts is held by task-88673297, and the docs-only fix removes the harm. Renaming LOG_LEVEL to MOE_LOG_LEVEL in code was rejected because it would break current users.",
+    "codebaseInsights": "Dry run in /mnt/d/moe-scratch/plan-52d7: README.proposed.md, checkref-doc.txt (626 chars), checkref-scope.txt and a dryrepo-* git sandbox. [0] fails on base and passes on the proposed text; both mutants fail it.",
+    "risks": [
+      "checkRef [1] is vacuous for QA in the control checkout (MOE_LAND_TARGET unset gives B=HEAD), so QA reviews `git diff <sha>^ <sha>`. [0] is meaningful anywhere the README is at the completion bytes.",
+      "If task-88673297 later adds a flag to parseArgs, checkRef [0] will then demand a README line for it. That is intended."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/README.md",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/util/logger.ts",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ce5ff130ae633ebbee3d6ca98e95c6b30be2b779",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:54:04.806Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:55:57.272Z",
+  "reviewStartedAt": "2026-11-03T17:56:31.855Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && checkRefs[0] (DOC_OK flag/grep check) && checkRefs[1] (scope check)",
+    "exitCode": 0,
+    "outputTail": "DOC_OK\nexit=0",
+    "reportedAt": "2026-11-03T17:56:31.855Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/README.md"
+  ],
+  "completionSummary": "README now documents exactly the parsed flags (--project with MOE_PROJECT_PATH then cwd fallback, --port, --host with MOE_BIND_HOST/wsl/bindHost, --name for init), drops -p and \"(required)\", and names LOG_LEVEL (default info) instead of MOE_LOG_LEVEL.",
+  "commits": [
+    {
+      "sha": "223488560880cf46d18538a5250d00fc6bbb737a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T17:54:35Z",
+      "paths": [
+        "packages/moe-daemon/README.md"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T18:07:36.395Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T18:07:52Z",
+    "at": "2026-11-03T18:09:23.601Z"
+  },
+  "completedAt": "2026-11-03T18:08:59.429Z",
+  "reviewCompletedAt": "2026-11-03T18:08:59.429Z",
+  "reviewSummary": "Reviewed completion 223488560880cf46d18538a5250d00fc6bbb737a (on moe/work-2026-10-24; the diff touches only packages/moe-daemon/README.md, +5/-2). I re-ran checkRefs[0] on a git-archive snapshot of that commit outside the repo and it printed DOC_OK with rc=0: no `-p`, MOE_LOG_LEVEL or \"(required)\"; the LOG_LEVEL line carries `Default: \\`info\\``; the --project line names MOE_PROJECT_PATH and the current directory; every README --flag is an indexOf('--flag') in src/index.ts; every parsed flag (--project, --port, --name, --host) appears in the README. checkRefs[1] scope check: `git diff --name-only <sha>^ <sha>` excluding .moe lists only packages/moe-daemon/README.md. Facts checked against code. parseArgs (index.ts:58-72) falls back from --project to MOE_PROJECT_PATH to cwd, and from --host to MOE_BIND_HOST. bindHost is recorded in daemon.json when host !== 127.0.0.1 (index.ts:871-875). util/logger.ts:7 reads LOG_LEVEL with default info. init calls superviseDaemon with the same port and host (index.ts:1304), so \"init takes the same options, plus --name\" holds. The --host text matches docs/CONFIGURATION.md:16 and :30. Docs-only, no tests required by the task. The stale daemon.json comment (README ~:71) was left out of scope, as the plan said. Diff is 7 changed LOC, far under the size cap.",
+  "requiredCheckAtDone": null
+}

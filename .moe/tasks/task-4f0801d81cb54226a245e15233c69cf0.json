@@ -1,0 +1,200 @@
+{
+  "id": "task-4f0801d81cb54226a245e15233c69cf0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: updateWorkerCursors, the cursor write behind every chat_read and chat_wait delivery, stamps a fresh lastActivityAt on a DEAD worker and re-publishes it as WORKER_UPDATED, unlike touchWorker and updateWorker, so a deregistered seat that still reads chat comes back onto the boards and its stale prune never comes due",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577.\n\nPROBLEM\npackages/moe-daemon/src/state/workerStore.ts:211-227 (updateWorkerCursors) merges the cursor, writes `lastActivityAt: new Date().toISOString()` and emits WORKER_UPDATED for any worker in the map, DEAD included. Its two siblings in the same file refuse exactly that:\n- touchWorker (:104-106) never refreshes a DEAD worker's heartbeat, \"so an in-flight tool call must not reset its prune clock and resurrect it in the UI\".\n- updateWorker (:176-202) keeps lastActivityAt on the DEAD transition and emits WORKER_DELETED, not WORKER_UPDATED.\nThe callers are chatRead.ts:174 (every cursor-mode chat_read) and util/chatBacklog.ts:343 (chat_wait's backlog delivery). The contract is packages/moe-daemon/CLAUDE.md, Dead-worker handling: DEAD workers are dropped from the UI, and their records are pruned once they own nothing.\n\nEFFECT\nTake a seat that is DEAD but whose CLI still reads chat, for example a chat_wait parked across a wrapper_restart or a governor deregister.\n- Every delivery resets its prune clock.\n- Every delivery re-publishes it with status DEAD. Both IDE clients upsert on WORKER_UPDATED, so the deregistered seat reappears on the board. JetBrains' 3 s full-state refresh masks this; VS Code's board does not.\n- While the reads continue, the Layer-3 prune (staleWorkerTimeoutMs) never removes the record.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_deadCursorWrite.test.ts, run at HEAD 942717bc in a snapshot outside the checkout; output in deadCursorWrite.vitest.txt in the same folder. deregister_worker marks the worker DEAD and keeps its 2-hour-old lastActivityAt. One chat_read from that worker then:\n- refreshes lastActivityAt;\n- emits WORKER_UPDATED with status DEAD;\n- leaves a record that checkBlockedTimeouts no longer prunes.\nThe code is unchanged at d5431577.\n\nFIX DIRECTION\nIn updateWorkerCursors, treat a DEAD record the way touchWorker does: keep its lastActivityAt and emit no WORKER_UPDATED. Persisting the merged cursor is fine and avoids re-delivery if the seat re-registers; say in the plan which you chose. Keep the mutex. Add a regression test (adapt the hunt repro), with error handling unchanged for a missing worker (still a silent skip).\n\nFILES AND PLACEMENT\npackages/moe-daemon/src/state/workerStore.ts plus one vitest file. Same defect family as task-fa70e835 (sweeps.ts) and task-a133bd6a (setTaskStatus.ts), but those are other files, so there is no dependsOn. Docs: sync your own docs/MCP_SERVER.md section (ruling msg-71db57ac); if no section states this behavior, the summary says none was owed. Gate: the daemon vitest file(s) you touch, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "A DEAD worker's cursor write leaves its lastActivityAt unchanged and emits no WORKER_UPDATED for it. A vitest case drives both callers (a cursor-mode chat_read, and a chat_wait backlog delivery) against a deregistered worker.",
+    "A live worker's cursor write behaves as before: cursor merged, lastActivityAt refreshed, WORKER_UPDATED emitted (a regression case).",
+    "After the DEAD worker reads chat, the Layer-3 prune past staleWorkerTimeoutMs still removes its record (the hunt repro's third assertion passes)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix updateWorkerCursors for a DEAD record, and add its regression test.\n(a) packages/moe-daemon/src/state/workerStore.ts, updateWorkerCursors (:211-227). Chosen behaviour, as the description allows: a DEAD record still gets its merged cursor PERSISTED (writeEntity + state.workers.set, inside the existing mutex). join_team later revives a DEAD record to IDLE with its chat cursors kept (MCP_SERVER.md `### moe.join_team`), so the revived seat is not re-delivered what its old session already read. But the record keeps its lastActivityAt and emits NO WORKER_UPDATED, exactly like touchWorker (:104-106) and updateWorker's DEAD arm (:176-202).\nImplementation:\n- `const dead = worker.status === 'DEAD';`\n- `lastActivityAt: dead ? worker.lastActivityAt : new Date().toISOString()`\n- `if (!dead) state.emit({ type: 'WORKER_UPDATED', payload: updated });`\nRewrite the doc comment to say this and cite the two siblings. The missing-worker silent skip and a live worker's path stay as they are: merge, fresh lastActivityAt, WORKER_UPDATED.\nError handling: unchanged. A writeEntity failure still rejects to the callers, which already handle it: chatRead propagates, and applyChatDelivery logs 'chat_wait failed to advance chat cursors' and still delivers.\n(b) New packages/moe-daemon/src/state/workerStore.cursors.test.ts, built from /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_deadCursorWrite.test.ts (ToolTestHarness; its '../tools/...' imports resolve from src/state/). Seed the worker with startedAt AND lastActivityAt 2 h ago, because chat_wait's backlog floor is startedAt (util/chatBacklog.ts:249). Record events with h.state.setEmitter. Mock postToRoleChannel, as the repro does. Cases:\n1. DEAD + cursor-mode chat_read (DoD 1 and 3).\n   - deregister_worker leaves the worker DEAD with the 2 h-old lastActivityAt.\n   - Post a human message in #workers; chat_read {channel:'#workers', workerId} returns it.\n   - Then lastActivityAt is exactly the 2 h-old value, and no WORKER_UPDATED event names the worker.\n   - chatCursors[<#workers channel id>] equals the read message id, both in memory and in .moe/workers/<id>.json (this pins the persisted-cursor choice).\n   - With h.state.staleWorkerTimeoutMs = 30 min, `await h.state.checkBlockedTimeouts()` removes the record (getWorker returns undefined).\n2. DEAD + chat_wait backlog delivery (DoD 1). Same seed, deregister and post. `chatWaitTool(h.state).handler({ workerId, channels: [<#workers id>], timeoutMs: 2000 }, h.state)` returns the message from its entry drain (applyChatDelivery, util/chatBacklog.ts:343). The same three assertions hold: lastActivityAt unchanged, no WORKER_UPDATED, cursor persisted.\n3. Live regression (DoD 2). An IDLE worker's chat_read merges the cursor (an earlier cursor on another channel survives), refreshes lastActivityAt to a value strictly later than the seeded 2 h-old one, and emits exactly one WORKER_UPDATED for it carrying the merged chatCursors.\n4. Missing worker: updateWorkerCursors on an unknown id resolves, writes no worker file and emits nothing.\nAssert exact values (toBe/toEqual), never truthiness. Edit with the seat's own editor (Serena or Edit on Claude, apply_patch on codex exec), never a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/workerStore.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/workerStore.cursors.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/state/workerStore.cursors.test.ts"
+      ],
+      "note": "DEAD record: cursor persisted, lastActivityAt kept, no WORKER_UPDATED. Live path unchanged. New 4-case test file.",
+      "startedAt": "2026-11-03T23:55:30.469Z",
+      "completedAt": "2026-11-03T23:56:01.336Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (text also at /mnt/d/moe-scratch/plan-4f0801d8/checkref-gate.txt, 721 chars).\n- What it does: it overlays workerStore.ts and the new test onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive). Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci && npx vitest run src/state/workerStore.cursors.test.ts src/state/StateManager.test.ts src/tools/{chatRead,chatWait,joinTeam}`. That is the new file plus every existing cursor, chat_read, chat_wait and join_team suite.\n- Expected: exit 0; 'Test Files 6 passed'; the last line is 'cursors ok (/tmp/m4f08.XXXX)'.\n- Architect dry run with this plan's prototype: exit 0, 6 files and 202 tests in about 14 s. The base workerStore.ts gives 1 failed and exit 1.\n- Then `rm -rf` the printed literal /tmp/m4f08.XXXX path.\n- Docs: none owed. No docs/MCP_SERVER.md section says a cursor write refreshes lastActivityAt or publishes the worker. `### moe.join_team` already says a revived DEAD record keeps its chat cursors, which this change honours. Say so in the completion summary.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed snapshot path and log tail first, then fix step 1's files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef exit 0: 6 files / 205 tests passed, 'cursors ok'. Docs: none owed.",
+      "startedAt": "2026-11-03T23:56:57.718Z",
+      "completedAt": "2026-11-03T23:56:59.881Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Concurrency: deregister_worker and the cursor write both run under the state mutex, and the DEAD check reads the record inside that critical section. A deregister landing between chat_read's message scan and its cursor write is therefore seen as DEAD.\n- A DEAD record must never re-enter the boards: no WORKER_UPDATED, and no repeated WORKER_DELETED either.\n- Its prune clock must not move: getSnapshot already excludes DEAD workers.\n- A revived seat (join_team, DEAD to IDLE) keeps the persisted cursor and is not re-delivered.\n- A live worker's path is unchanged: StateManager.test.ts 'updateWorkerCursors merges atomically' and the chat_wait cursor-bookkeeping rows still pass.\n- RED re-proof: in a scratch snapshot outside the repo, restore `git show $(git merge-base HEAD moe/work-2026-10-24):packages/moe-daemon/src/state/workerStore.ts` and run `npx vitest run src/state/workerStore.cursors.test.ts`. Cases 1 and 2 must fail; cases 3 and 4 pass. Paste the failing names into the completion summary, then rm -rf the literal scratch path.\n- Scope: only the two planned files changed.\nIf this review changes either file, re-run step 2's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in step 1's files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/state/workerStore.cursors.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/workerStore.ts",
+        "packages/moe-daemon/src/state/workerStore.cursors.test.ts"
+      ],
+      "note": "Self-review: DEAD check reads the record inside the mutex, so a concurrent deregister is seen; no WORKER_UPDATED/WORKER_DELETED for DEAD; lastActivityAt untouched; cursor persisted so revival keeps it; live path unchanged. RED re-proof on base file: cases 1 and 2 fail, 3 and 4 pass. Scope: two files only; no change after the gate run.",
+      "startedAt": "2026-11-03T23:57:00.877Z",
+      "completedAt": "2026-11-03T23:57:08.430Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 460.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:33:53.283Z",
+  "updatedAt": "2026-11-04T19:20:44.995Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:50:37.459Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T00:01:26.319Z",
+    "wallClockMs": 648860
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-ed0f6a9e",
+    "qa-93f9625e"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:54:24.607Z",
+  "executionContract": {
+    "intendedBehavior": "updateWorkerCursors (the cursor write behind every cursor-mode chat_read and chat_wait delivery) persists the merged cursor for any existing worker. For a DEAD record it keeps lastActivityAt unchanged and emits no WORKER_UPDATED, matching touchWorker and updateWorker's DEAD arm. A deregistered seat that still reads chat therefore stays off the boards, its Layer-3 prune still comes due, and a later join_team revival keeps the cursor. A live worker's cursor write is unchanged: merged cursor, fresh lastActivityAt, WORKER_UPDATED. A missing worker is still a silent skip.",
+    "acceptanceCriteria": [
+      "A DEAD worker's chat_read and chat_wait backlog delivery leave lastActivityAt unchanged, emit no WORKER_UPDATED for it, and persist the advanced cursor in memory and on disk.",
+      "After that read, checkBlockedTimeouts past staleWorkerTimeoutMs removes the DEAD record.",
+      "A live worker's cursor write merges the cursor, refreshes lastActivityAt and emits one WORKER_UPDATED.",
+      "The checkRef exits 0, ending with 'cursors ok'."
+    ],
+    "invariants": [
+      "A DEAD record is never re-published as WORKER_UPDATED, and its lastActivityAt never moves.",
+      "The cursor write stays inside state.mutex.runExclusive."
+    ],
+    "compatibility": [
+      "No MCP tool contract or reply change.",
+      "Existing worker records stay valid, with no new fields.",
+      "The live-worker cursor write is unchanged.",
+      "The silent skip for a missing worker is unchanged.",
+      "No docs section is owed: none states the old behaviour, and `### moe.join_team` already promises that cursors survive a DEAD revival."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/state/workerStore.ts: the updateWorkerCursors body and its doc comment only",
+      "packages/moe-daemon/src/state/workerStore.cursors.test.ts (new): cases 1-4"
+    ],
+    "reuse": [
+      "touchWorker's DEAD guard and updateWorker's DEAD arm are the behaviour to match.",
+      "The hunt repro /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_deadCursorWrite.test.ts is the test's base."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/workerStore.ts: :211-227 is updateWorkerCursors (merge, fresh lastActivityAt, WORKER_UPDATED for any worker); :104-106 touchWorker refuses DEAD; :176-202 updateWorker keeps lastActivityAt on the DEAD transition and emits WORKER_DELETED.",
+      "The callers: tools/chatRead.ts:174 (cursor-mode reads) and util/chatBacklog.ts:343 (applyChatDelivery, used by chat_wait's entry drain and its wake).",
+      "chat_wait does not refuse a DEAD worker (validateChatWaitParams, chatWait.ts:322-345). Its backlog floor is worker.startedAt (chatBacklog.ts:249)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/m4f08.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in state/workerStore{,.cursors.test}.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/state/workerStore.cursors.test.ts src/state/StateManager.test.ts src/tools/{chatRead,chatWait,joinTeam}' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -E '^ +(Test Files|Tests) ' ../v.log; grep -q '✓ src/state/workerStore.cursors.test.ts' ../v.log && echo \"cursors ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Skip the cursor write entirely for DEAD, like touchWorker: rejected. join_team revives a DEAD record with its cursors kept, so the revived seat would be re-delivered messages its old session already read. The description allows persisting. 2) Emitting WORKER_DELETED again for DEAD: rejected. It is noise, because the record is already off the boards and getSnapshot excludes it. 3) Light tier with implementation and tests in one step: the change is about 4 lines in one function, plus one test file.",
+    "codebaseInsights": "- Only two callers reach updateWorkerCursors: chatRead.ts:174 and applyChatDelivery (chatBacklog.ts:343).\n- The McpAdapter heartbeat (touchWorker) already refuses DEAD, so after this fix no tool path moves a DEAD record's prune clock.\n- Gate dry run: 6 files and 202 tests in about 14 s; the base file fails exactly 1 test.",
+    "risks": "- chat_wait's entry drain treats messages before worker.startedAt as history, so seed startedAt in the past, or the backlog case blocks until its timeout.\n- vitest emitter capture: setEmitter replaces the default emitter, so clearEmitter in afterEach.\n- The stale prune needs staleWorkerTimeoutMs set on the state instance before checkBlockedTimeouts.\n- Rails: no npm in the shared checkout, no pattern kills, and tracked files written only with the seat's own editor.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/util/chatBacklog.ts",
+      "packages/moe-daemon/src/tools/chatWait.test.ts",
+      "/mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_deadCursorWrite.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "563b95a72ab652164d72991b39bbbf92cbc9a070",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:54:24.640Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:55:30.469Z",
+  "reviewStartedAt": "2026-11-03T23:57:14.220Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/m4f08.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in state/workerStore{,.cursors.test}.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/state/workerStore.cursors.test.ts src/state/StateManager.test.ts src/tools/{chatRead,chatWait,joinTeam}' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -E '^ +(Test Files|Tests) ' ../v.log; grep -q '✓ src/state/workerStore.cursors.test.ts' ../v.log && echo \"cursors ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": "Test Files  6 passed (6)\n      Tests  205 passed (205)\ncursors ok (/tmp/m4f08.rFhA)",
+    "reportedAt": "2026-11-03T23:57:14.220Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/workerStore.ts",
+    "packages/moe-daemon/src/state/workerStore.cursors.test.ts"
+  ],
+  "completionSummary": "updateWorkerCursors now persists a DEAD record's merged cursor but keeps its lastActivityAt and emits no WORKER_UPDATED (matches touchWorker/updateWorker DEAD arm); live path unchanged; missing worker still silent skip. New workerStore.cursors.test.ts: 1) DEAD chat_read, 2) DEAD chat_wait backlog, both asserting lastActivityAt unchanged, no WORKER_UPDATED, cursor persisted in memory and on disk, Layer-3 prune removes the record; 3) live regression (one WORKER_UPDATED, merged cursor, fresh lastActivityAt); 4) missing worker. RED re-proof on base workerStore.ts: cases 1 and 2 fail ('1. a DEAD worker reading chat keeps its prune clock...', '2. a chat_wait backlog delivery to a DEAD worker...'), 3 and 4 pass. Docs: none owed (no MCP_SERVER.md section states the old behaviour; join_team already promises cursors survive a DEAD revival).",
+  "commits": [
+    {
+      "sha": "4fdfdd1562c152816352f56b1113bf218b10f80e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T23:54:25Z",
+      "paths": [
+        "packages/moe-daemon/src/state/workerStore.cursors.test.ts",
+        "packages/moe-daemon/src/state/workerStore.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T23:58:09.174Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-04T00:00:04Z",
+    "at": "2026-11-04T00:01:52.697Z"
+  },
+  "completedAt": "2026-11-04T00:01:26.319Z",
+  "reviewCompletedAt": "2026-11-04T00:01:26.319Z",
+  "reviewSummary": "Reviewed completion 4fdfdd15 (on moe/work-2026-10-24) via git show: 2 files, +123/-2 (net 121, under the 400 cap), matching approvedScope. workerStore.ts updateWorkerCursors: DEAD keeps lastActivityAt, emits no WORKER_UPDATED, still persists the merged cursor, all inside the existing mutex; missing-worker silent skip and live path unchanged.\n\nRe-ran task.verification (checkRef) in a /tmp git-archive snapshot, env -i, Node v24.21.0: exit 0, 6 files / 205 tests passed, 'cursors ok'. Both files were clean against HEAD.\n\nRED re-proof: pre-fix workerStore.ts (4fdfdd15^) in the snapshot fails case 1 (DEAD chat_read) and case 2 (DEAD chat_wait backlog); cases 3 (live) and 4 (missing worker) pass. Snapshot removed.\n\nDoD: (1) cases 1 and 2 drive both callers against a deregistered worker with exact asserts: lastActivityAt === 2 h-old seed, zero WORKER_UPDATED, cursor persisted in memory and on disk. (2) case 3: cursor merged, lastActivityAt strictly later, exactly one WORKER_UPDATED with merged cursors. (3) checkBlockedTimeouts past staleWorkerTimeoutMs removes the DEAD record. No tests deleted or weakened; cleanup hygiene fine.\n\nDocs: none owed. No MCP_SERVER.md section states the old behaviour; `### moe.join_team` already promises a revived DEAD record keeps its cursors, which this honours. No contract change. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

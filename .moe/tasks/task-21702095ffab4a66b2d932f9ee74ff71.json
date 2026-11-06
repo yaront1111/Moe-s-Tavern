@@ -1,0 +1,239 @@
+{
+  "id": "task-21702095ffab4a66b2d932f9ee74ff71",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the board's /ws UPDATE_TASK move from BLOCKED back to blockedFromStatus re-assigns the row to its recorded assignee with no owner check (WebSocketServer.ts:545), so a drag after the blocked-timeout idled a resource-parked seat strands the row on that corpse: the /ws twin of task-a133bd6a",
+  "description": "Filed by architect-74d9e1c7 on 2026-11-04 while planning task-a133bd6a. That row fixes the same defect in moe.set_task_status only; its description puts \"the /ws handlers\" out of scope. This row is the twin.\n\nPROBLEM (HEAD d5431577)\n- packages/moe-daemon/src/server/WebSocketServer.ts:507-547 is the /ws UPDATE_TASK exit from BLOCKED. Its comment says it \"Mirrors src/tools/setTaskStatus.ts\". On a return to blockedFromStatus it does `...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {})` (:545), with no owner check.\n- The two automatic restores keep a hold only for a worker that exists, is not DEAD and still points at the task:\n  - state/dependencyUnblock.ts:255-267 (runDependencyUnblock);\n  - state/resourceStore.ts:570-573 (resumeResourceHolder).\n  The contract is in packages/moe-daemon/CLAUDE.md:7.\n- task-a133bd6a (WORKING, planRevision 1) adds that predicate as one exported helper, `parkedHoldOwner(state, task): string | null` in state/dependencyUnblock.ts, and calls it from setTaskStatus.ts. Once it lands, the board drag (the most common human route) is the only manual path still stranding the row.\n- How the strand arises: the blocked-timeout sweep keeps a resource-waiting BLOCKED row assigned (sweeps.ts:456-460) and sets the timed-out seat IDLE with currentTaskId null (:485-489). A drag back to WORKING then restores the row onto that IDLE corpse. isTaskClaimable is false (the owner is neither missing nor DEAD), the Layer-3 prune keeps the corpse (it owns active work), and no sweep alerts. Only release_task recovers it.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-a133-ws/zzWsUnblockCorpse.test.ts. It is a real MoeWebSocketServer on an ephemeral port, the WebSocketServer.transitions.test.ts pattern, run from packages/moe-daemon/src/__hunt__/ of a whole-tree `git archive d5431577` snapshot after `npm ci`: `npx vitest run src/__hunt__/zzWsUnblockCorpse.test.ts` gives 1 failed. Output is in zzWsUnblockCorpse.vitest.txt:\n  HUNT /ws UNBLOCK: {\"task-ghost\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-gone\",\"claimable\":true},\"task-corpse\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-idle\",\"claimable\":false},\"task-dead\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-dead\",\"claimable\":true},\"task-held\":{\"reply\":\"TASK_UPDATED\",\"status\":\"WORKING\",\"assignedWorkerId\":\"worker-held\",\"claimable\":false}}\n- What it shows:\n  - task-corpse (IDLE record, currentTaskId null) is the strand: claimable false.\n  - The ghost and DEAD rows keep a stale assignee.\n  - task-held (a BLOCKED record pointing at the row) is the genuine hold and must stay kept.\n\nFIX DIRECTION\n- In the BLOCKED exit arm, replace `existing.assignedWorkerId` with `parkedHoldOwner(this.state, existing)`, imported from '../state/dependencyUnblock.js'. carriedBlockQuestion already comes from there. The explicit null then hands the seat back through updateTask, which also closes the task's running/reconciling attempt (MCP_SERVER.md, Close on hand-back).\n- Do not change the BLOCKED-entry arm (:559-566) or any other exit.\n- Docs: in docs/MCP_SERVER.md `### moe.set_task_status`, task-a133bd6a's Assignment sentence says the /ws handler \"still restores the recorded assignee without that owner check\". Replace that clause with \"enforces the same rules\". Edit only that section; it is free once task-a133bd6a is DONE, which dependsOn guarantees.\n\nFILES (planner to confirm)\n- packages/moe-daemon/src/server/WebSocketServer.ts\n- packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts (new; port the repro, asserting the correct behaviour)\n- docs/MCP_SERVER.md (### moe.set_task_status only)\n\nOUT OF SCOPE: setTaskStatus.ts and dependencyUnblock.ts (task-a133bd6a); resourceStore.ts; sweeps.ts (task-fa70e835); the IDE plugins (they send the same UPDATE_TASK frame, so no client change).\n\nVERIFICATION, in a whole-tree git-archive snapshot (never in the shared checkout): `cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.unblockOwner.test.ts src/server/WebSocketServer.transitions.test.ts src/tools/setTaskStatus`",
+  "definitionOfDone": [
+    "A new test, packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts, drives a real MoeWebSocketServer. It sends UPDATE_TASK {status: blockedFromStatus} for BLOCKED rows assigned to: a missing worker, an IDLE record whose currentTaskId is null, a DEAD record, and a BLOCKED record whose currentTaskId names the row. It asserts assignedWorkerId null and isTaskClaimable true for the first three, and that the last keeps its assignee.",
+    "WebSocketServer.ts's BLOCKED exit calls parkedHoldOwner from state/dependencyUnblock.ts and holds no inline owner check. The BLOCKED-entry arm is unchanged.",
+    "docs/MCP_SERVER.md's `### moe.set_task_status` says the /ws board-move handler enforces the same rules, and no other section changes. In a snapshot, `cd packages/moe-daemon && npx vitest run src/server/WebSocketServer.unblockOwner.test.ts src/server/WebSocketServer.transitions.test.ts src/tools/setTaskStatus` exits 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first. Create packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy. Start from the architect's prototype at /mnt/d/moe-scratch/plan-21702095/WebSocketServer.unblockOwner.test.ts (102 lines). It ports the filing repro /mnt/d/moe-scratch/hunt-a133-ws/zzWsUnblockCorpse.test.ts and adds one control.\n\nSetup: a real MoeWebSocketServer on an ephemeral 127.0.0.1 port, the WebSocketServer.transitions.test.ts pattern. Five BLOCKED rows (blockedFromStatus WORKING, blockedResourceId gpu-box) are assigned to:\n- worker-gone: no record;\n- worker-idle: IDLE with currentTaskId null, the blocked-timeout corpse shape;\n- worker-dead: DEAD, pointing at the row;\n- worker-held: BLOCKED, pointing at the row (the genuine hold);\n- worker-idle-held: IDLE but still pointing at the row. parkedHoldOwner keeps this one too (mem:gotcha-resource-parked-unblock-regression).\n\nEach row is moved with UPDATE_TASK {status: 'WORKING'}. The test asserts the exact table {reply, status, assignedWorkerId, claimable (state.isTaskClaimable), blockedFromStatus}:\n- the first three: assignedWorkerId null, claimable true;\n- the last two keep their assignee, claimable false;\n- all five: TASK_UPDATED, WORKING, blockedFromStatus null.\n\nArchitect RED proof at 0f56d3a7: 1 failed, with ghost/corpse/dead received as worker-gone/worker-idle/worker-dead and corpse claimable false.\n\nError handling in the test: the frame wait gives up after about 5 s with 'no frame' instead of hanging. afterEach closes the sockets, the server, the HTTP listener and the temp dir.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts"
+      ],
+      "note": "Created real ephemeral-port WebSocket regression with five owner shapes and bounded frame waits/socket error rejection. RED in whole-tree /tmp/m2170-red.bH7b snapshot after npm ci --prefer-offline: 1 test failed, exactly stale ghost/corpse/dead assignments; corpse claimable false. Genuine BLOCKED and IDLE-pointing controls unchanged. Work stays in assigned worktree; wrapper owns landing.",
+      "startedAt": "2026-11-04T00:16:18.184Z",
+      "completedAt": "2026-11-04T00:17:27.936Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, in packages/moe-daemon/src/server/WebSocketServer.ts, at 0f56d3a7's line numbers:\n- :5. Import parkedHoldOwner beside carriedBlockQuestion: `import { carriedBlockQuestion, parkedHoldOwner } from '../state/dependencyUnblock.js';`. 7638ad06 (task-a133bd6a) exported it there and setTaskStatus.ts already uses it.\n- :547. In the UPDATE_TASK BLOCKED exit arm, replace `{ assignedWorkerId: existing.assignedWorkerId }` with `{ assignedWorkerId: parkedHoldOwner(this.state, existing) }`. Keep the `newStatus === effectiveFrom ?` guard.\n- :510-512. Update the arm's comment: on a return to the blocked-from status, keep only a genuine hold (parkedHoldOwner, as set_task_status and both auto-unblocks do).\n\nLeave everything else alone:\n- the BLOCKED-entry arm (:560-567, `assignedWorkerId: existing.assignedWorkerId,`);\n- the needsHumanReview clear;\n- the reopen branch;\n- every other exit.\nNo inline owner check is added: the helper is the one predicate.\n\nError handling needs no new code. An explicit null assignment through state.updateTask is the existing hand-back, and it closes the task's running/reconciling attempts (MCP_SERVER.md, Close on hand-back). The handler's existing try/catch still turns a refused transition into an ERROR frame.\n\nReference: /mnt/d/moe-scratch/plan-21702095/prototype.diff (33 lines). Edit with your own editor (Edit on Claude, apply_patch on codex exec).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts"
+      ],
+      "note": "Reused parkedHoldOwner in the existing guard; updated import/comment only. Entry arm, reopen and other exits unchanged; no inline predicate. Existing helper is the minimal rung-2 reuse (ponytail loaded). Snapshot GREEN after overlay: new WebSocket regression 1/1 passed, following expected RED stale-owner diff.",
+      "startedAt": "2026-11-04T00:17:27.977Z",
+      "completedAt": "2026-11-04T00:17:39.110Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: sync your own section, `### moe.set_task_status` in docs/MCP_SERVER.md (:1632 at 0f56d3a7). Use your own editor: Edit on Claude, apply_patch on codex exec. Never Serena, which ignores docs/, and never a shell write.\n\nAt :1685-1687, replace 'The plugin `/ws` board-move handler enforces the same transition rules, but its return to `blockedFromStatus` still restores the recorded assignee without that owner check.' with 'The plugin `/ws` board-move handler enforces the same rules.'\n\nThe **Attempts:** paragraph above it (about :1672) already states the alive-and-pointing rule generally; leave it. No other section changes.\n\nError handling: re-grep the sentence first. If 7638ad06's wording has moved or been edited, replace only the /ws caveat clause.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Re-grepped caveat; replaced only the /ws sentence within ### moe.set_task_status with enforces the same rules. Attempts paragraph and all other sections untouched. git diff --check passes.",
+      "startedAt": "2026-11-04T00:17:42.425Z",
+      "completedAt": "2026-11-04T00:17:51.256Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (998 bytes) is at /mnt/d/moe-scratch/plan-21702095/checkref-gate.txt.\n- What it does:\n  - overlays the two owned code files onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive, mem:gotcha-daemon-linux-snapshot-gate);\n  - checks structurally that the exit arm calls `parkedHoldOwner(this.state, existing)`, that the old `assignedWorkerId: existing.assignedWorkerId }` restore is gone, and that the entry arm's `assignedWorkerId: existing.assignedWorkerId,` is still there;\n  - under env -i with nvm Node v24.21.0 and NO_COLOR=1, runs `npm ci` and vitest on the new file, WebSocketServer.transitions.test.ts and the setTaskStatus suites.\n- Expected: exit 0, 'Test Files  5 passed (5)', and a last line of 'unblockOwner ok (/tmp/m2170.XXXX)'.\n- Architect dry runs, from a --shared clone at 0f56d3a7 with this plan's prototype uncommitted:\n  - this command: exit 0, 5 files and 47 tests in about 5 s;\n  - the same command against the unfixed handler stops with 'exit arm (...)' and exit 1;\n  - the full daemon suite with the prototype: 279 files, 7428 passed, 24 skipped.\n- Then rm -rf the printed literal /tmp/m2170.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed path and the log tail first, then fix the earlier steps' files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran executionContract checkRef verbatim in whole-tree /tmp/m2170.F5fc snapshot: exit 0, Test Files 5 passed (5), Tests 47 passed (47), unblockOwner ok. Structural exit-predicate/entry-assignee anchors pass. Worktree qualityGate bash scripts/tests/parity-check.sh && npm run lint also exit 0 (parity + all three role-doc caps pass). No npm package tests/builds in live checkout.",
+      "startedAt": "2026-11-04T00:17:55.824Z",
+      "completedAt": "2026-11-04T00:18:24.300Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- One predicate: WebSocketServer.ts calls parkedHoldOwner and has no `currentTaskId ===` of its own. The architect counted 0 at 0f56d3a7.\n- Entry arm: the BLOCKED-entry arm still keeps the assignee.\n- Other exits: still clear the seat as before. A BLOCKED REVIEW row dragged to WORKING still takes the reopen path with no assignee; WebSocketServer.transitions.test.ts covers it.\n- Genuine holds survive, including an IDLE seat that still points at the row.\n- Concurrency: the /ws UPDATE_TASK body runs inside withMutex, so parkedHoldOwner reads the worker record and the write lands in one critical section.\n- The board's ERROR path for a refused transition is unchanged.\n- RED re-proof: in a scratch snapshot outside the repo, restore `git show $(git merge-base HEAD moe/work-2026-10-24):packages/moe-daemon/src/server/WebSocketServer.ts` and run only the new test file. It must fail with ghost/corpse/dead still assigned; the architect saw 1 failed. Paste that into the completion summary, then rm -rf the literal scratch path.\n- Scope: exactly the three planned files, and the docs change stays inside `### moe.set_task_status`.\nIf this review changes a file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the earlier steps' files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review complete; no files changed after step-4 gate (listed paths are cumulative delivered scope). One helper, no inline currentTaskId comparison. UPDATE_TASK read/helper/write remains inside withMutex; repeated moves cannot interleave owner lookup/write. Existing validation, ERROR handling, reopen route, needsHumanReview and BLOCKED entry unchanged. Null/missing/DEAD handled by shared helper; both genuine holds retained. Test sockets/server/listener/tempdir cleaned on assertion failure; bounded frame timeout and socket error rejection. RED re-proof restored merge-base handler only in scratch: 1 failed with ghost/corpse/dead stale assignees and corpse claimable false, controls unchanged. Approved GREEN gate 5 files/47 tests; added scratch test-file tsc passed. git diff --check passes, exactly three planned files, docs only set_task_status. Both literal snapshots removed via shutil after shell rm command was refused. No review edits requiring gate rerun.",
+      "startedAt": "2026-11-04T00:18:32.512Z",
+      "completedAt": "2026-11-04T00:19:09.307Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG by the governor. Its only prerequisite, task-a133bd6a, is DONE (completion 7638ad06), which is the trigger its filing architect named (msg-d7b4d7cb). This follows the human's standing \"move from backlog\" (2026-11-02 21:00Z). Planner: reuse the parkedHoldOwner helper that 7638ad06 exported from packages/moe-daemon/src/state/dependencyUnblock.ts and calls in setTaskStatus.ts. Apply the same owner check to /ws UPDATE_TASK's BLOCKED → blockedFromStatus restore (WebSocketServer.ts:545). Then drop the /ws caveat clause that a133bd6a added to `### moe.set_task_status`. Run `git show 7638ad06` first.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-a133bd6a56cc459aa2d4da94d0b80511"
+  ],
+  "priority": "MEDIUM",
+  "order": 464.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:50:08.712Z",
+  "updatedAt": "2026-11-04T19:20:45.041Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T00:08:34.448Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T00:10:17.634Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:22:37.972Z",
+    "wallClockMs": 740338
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-fdb2af60",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T00:15:02.901Z",
+  "executionContract": {
+    "intendedBehavior": "A board /ws UPDATE_TASK move of a BLOCKED row back to its blockedFromStatus keeps the recorded assignee only while that worker exists, is not DEAD and its currentTaskId still names the row. That is the rule set_task_status and both auto-unblocks apply through parkedHoldOwner. Otherwise the row returns unassigned and claimable, and the explicit-null hand-back closes the seat's running/reconciling attempt. A drag after the blocked-timeout idled a resource-parked seat therefore no longer strands the row on that corpse. Entering BLOCKED from the board still keeps the seat, and every other exit is unchanged.",
+    "acceptanceCriteria": [
+      "A drag back to blockedFromStatus returns the row with assignedWorkerId null and isTaskClaimable true for a missing assignee, an IDLE assignee whose currentTaskId is null, and a DEAD assignee.",
+      "A BLOCKED assignee pointing at the row, and an IDLE assignee still pointing at it, keep the row.",
+      "WebSocketServer.ts's BLOCKED exit calls parkedHoldOwner; the BLOCKED-entry arm is unchanged.",
+      "docs/MCP_SERVER.md's ### moe.set_task_status says the /ws board-move handler enforces the same rules.",
+      "The checkRef exits 0, ending with 'unblockOwner ok'."
+    ],
+    "invariants": [
+      "parkedHoldOwner in state/dependencyUnblock.ts stays the single owner predicate, with no inline copy in WebSocketServer.ts.",
+      "The UPDATE_TASK write still runs inside withMutex."
+    ],
+    "compatibility": [
+      "No /ws frame shape changes: UPDATE_TASK and TASK_UPDATED are unchanged, and no client change is needed (both IDE plugins send the same frame).",
+      "Existing task and worker records stay valid, with no new fields.",
+      "A genuine hold behaves exactly as before."
+    ],
+    "approvedScope": [
+      "server/WebSocketServer.ts: the dependencyUnblock import, the BLOCKED exit arm's assignment expression and its comment.",
+      "server/WebSocketServer.unblockOwner.test.ts (new).",
+      "docs/MCP_SERVER.md: the ### moe.set_task_status /ws sentence only."
+    ],
+    "reuse": [
+      "parkedHoldOwner(state, task), exported by 7638ad06 (task-a133bd6a) from state/dependencyUnblock.ts and used by setTaskStatus.ts and runDependencyUnblock.",
+      "The test ports /mnt/d/moe-scratch/hunt-a133-ws/zzWsUnblockCorpse.test.ts, using the prototype at /mnt/d/moe-scratch/plan-21702095/."
+    ],
+    "sourceAssumptions": [
+      "At 0f56d3a7, WebSocketServer.ts:5 imports carriedBlockQuestion from '../state/dependencyUnblock.js'.",
+      "WebSocketServer.ts:547 is `...(newStatus === effectiveFrom ? { assignedWorkerId: existing.assignedWorkerId } : {}),` in the BLOCKED exit arm.",
+      "WebSocketServer.ts:566 is the entry arm's `assignedWorkerId: existing.assignedWorkerId,`.",
+      "docs/MCP_SERVER.md:1685-1687 holds the /ws caveat that task-a133bd6a added."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src/server && L=$(mktemp -d /tmp/m2170.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src/server\" && for f in WebSocketServer{,.unblockOwner.test}.ts; do cp \"$R/$f\" $f || exit 1; done && { grep -q 'parkedHoldOwner(this.state, existing)' WebSocketServer.ts && ! grep -q 'assignedWorkerId: existing.assignedWorkerId }' WebSocketServer.ts && grep -q 'assignedWorkerId: existing.assignedWorkerId,' WebSocketServer.ts || { echo \"exit arm ($L)\"; exit 1; }; } && cd ../.. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/server/WebSocketServer.{unblockOwner,transitions}.test.ts src/tools/setTaskStatus' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/server/WebSocketServer.unblockOwner' ../v.log && echo \"unblockOwner ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Rejected: an inline copy of the owner check in WebSocketServer.ts. DoD 2 forbids it, and it is the drift that caused the bug.\n- Rejected: routing the /ws move through the setTaskStatus tool handler. It would also change the /ws reopen, column-limit and needsHumanReview semantics: too wide for a twin fix.",
+    "codebaseInsights": "- The /ws UPDATE_TASK BLOCKED arm mirrors setTaskStatus.ts.\n- parkedHoldOwner keeps any non-DEAD worker whose currentTaskId names the row, so an IDLE seat that still points at the row keeps it. It returns null otherwise.\n- updateTask's explicit null hand-back closes running/reconciling attempts, never a finalizing one.",
+    "risks": "- The checkRef must stay at or under 1000 chars, so keep it verbatim.\n- Do not touch the entry arm at :566. Its text is the gate's positive anchor.\n- Keep the docs edit inside ### moe.set_task_status.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.transitions.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0f56d3a7894ed95126b5787527015e1af8228a8a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T00:15:02.927Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:16:18.184Z",
+  "reviewStartedAt": "2026-11-04T00:19:34.425Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src/server && L=$(mktemp -d /tmp/m2170.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src/server\" && for f in WebSocketServer{,.unblockOwner.test}.ts; do cp \"$R/$f\" $f || exit 1; done && { grep -q 'parkedHoldOwner(this.state, existing)' WebSocketServer.ts && ! grep -q 'assignedWorkerId: existing.assignedWorkerId }' WebSocketServer.ts && grep -q 'assignedWorkerId: existing.assignedWorkerId,' WebSocketServer.ts || { echo \"exit arm ($L)\"; exit 1; }; } && cd ../.. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/server/WebSocketServer.{unblockOwner,transitions}.test.ts src/tools/setTaskStatus' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/server/WebSocketServer.unblockOwner' ../v.log && echo \"unblockOwner ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  5 passed (5)\n      Tests  47 passed (47)\nunblockOwner ok (/tmp/m2170.F5fc)",
+    "reportedAt": "2026-11-04T00:19:34.425Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts",
+    "packages/moe-daemon/src/server/WebSocketServer.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Board /ws BLOCKED return now reuses parkedHoldOwner under withMutex; stale missing/DEAD/IDLE-unpointed owners return unassigned and claimable. Genuine BLOCKED/IDLE-pointing holds survive. BLOCKED entry and all other exits unchanged. Added real WebSocket five-owner exact table regression; docs only ### moe.set_task_status caveat. Approved gate: 5 files / 47 tests passed, unblockOwner ok. Quality gate parity-check + lint passed; new test scratch typecheck passed. RED before fix and final merge-base-handler mutation each: 1 failed, ghost/corpse/dead stale assignments, corpse claimable false; genuine controls unchanged. No tracked changes after passing gate; adversarial review and diff check clean, exactly three planned paths. Scratch snapshots removed; Serena handoff recorded. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "f3ac15138d949f3a5aba22d3d2fef042cdb5199e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-04T00:15:08Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/server/WebSocketServer.ts",
+        "packages/moe-daemon/src/server/WebSocketServer.unblockOwner.test.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-04T00:20:28.762Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-04T00:21:08Z",
+    "at": "2026-11-04T00:23:03.399Z"
+  },
+  "completedAt": "2026-11-04T00:22:37.972Z",
+  "reviewCompletedAt": "2026-11-04T00:22:37.972Z",
+  "reviewSummary": "Reviewed completion f3ac15138 (kind=completion, pushed, on moe/work-2026-10-24, contained in control HEAD). 3 files, +117/-7 (net 110), exactly the planned paths, no .moe paths, git diff --check clean.\n\nRe-ran task.verification verbatim in a fresh whole-tree git-archive snapshot (removed afterwards): exit 0, Test Files 5 passed (5), Tests 47 passed (47), 'unblockOwner ok'. qualityGate re-run in place: parity-check.sh PASS, npm run lint OK. No npm in the shared checkout.\n\nMutation check: restored the pre-fix handler (f3ac15138^) in the snapshot and ran only the new test: 1 failed, ghost/corpse/dead kept worker-gone/worker-idle/worker-dead, corpse claimable false. The test fails without the fix.\n\nDoD: (1) The new test drives a real MoeWebSocketServer on an ephemeral port, sends UPDATE_TASK {status:'WORKING'} for five BLOCKED rows (missing worker, IDLE with null currentTaskId, DEAD, BLOCKED pointing at the row, plus an IDLE-pointing control) and asserts the exact table: first three assignedWorkerId null and claimable, last two keep their assignee. Bounded frame wait, and afterEach cleans up. (2) The BLOCKED exit calls parkedHoldOwner(this.state, existing) imported from state/dependencyUnblock.js, with no inline currentTaskId check in the file. The entry arm is untouched and the write stays inside the withMutex callback. (3) docs/MCP_SERVER.md: only the ### moe.set_task_status /ws sentence changed, to 'enforces the same rules.'\n\nNot verified: the full daemon suite (mid-epic slice; the plan's architect reported it green) and the IDE plugins (no client change by contract). The docs/MCP_SERVER.md collision alert with task-87cba58c is moot, since this landing already happened. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

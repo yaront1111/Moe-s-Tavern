@@ -1,0 +1,292 @@
+{
+  "id": "task-561d347c3e5b44129ecf9d6c91bbab9f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a worktree completion whose push origin applied but answered [remote rejected] still loses its receipt journal when the one re-check fetch also fails, so the retry records plain nothing-to-commit and QA's landed gate parks the row BLOCKED again (residual of task-bc6ba91b, both launchers)",
+  "description": "Residual of task-bc6ba91b (named in its plan's approachesConsidered #3; that DoD kept this path exactly as before). After task-bc6ba91b, a `![remote rejected]` push gets one re-check fetch (wt_remote_holds / Test-MoeRemoteHolds). When all 3 land_fetch tries of that re-check fail while origin really holds C, wt_publish still runs `rm -f` on the receipt journal (moe-agent.sh ~:7530; ps1 Publish-MoeWorktreeLanding ~:7144 Remove-Item) and routes MOE_PUSH_FAILED unlanded remote. The retry's L5 then finds the merged tree equal to origin's target, but with no journal the $jc recovery (sh ~:7600, LAND_WT_RECOVERED) cannot owe the completion row, so it records plain MOE_COMMIT_NOTHING_TO_COMMIT and qa_landed_gate blocks: the task-7cef0861 incident loop, only rarer.\nRepro: the postflight-worktree.cjs case wt-remote-rejected, arm fetch-fails (WT_GIT_PUSH_REMOTE_REJECTED + WT_GIT_FETCH_FAIL_AFTER_PUSH), followed by a LANDING-RETRY completion with fetch restored.\nDirection (the planner decides): when the re-check could not run (fetch failed), keep the journal (for example 'push remote-rejected-unverified: …'), so the retry's L5 or a pre-flight replay (reconcile_push) can still prove C and owe the row; a re-check that proves C absent still deletes it.",
+  "definitionOfDone": [
+    "In both launchers, a [remote rejected] push whose re-check fetch fails keeps a receipt journal naming C, while still routing MOE_PUSH_FAILED unlanded remote with the rescue ref as today.",
+    "The landing retry of such a task, once origin's target is fetchable and holds C, records the owed completion row (pushed:true) and a landed finalize instead of a plain MOE_COMMIT_NOTHING_TO_COMMIT; a re-check that proves C absent still removes the journal.",
+    "The worktree landing harness covers both launchers; parity-check.{sh,ps1} and worktree-landing.{sh,ps1} pass; scripts/CLAUDE.md and the design doc's L9 text describe the kept journal."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1-3), in scripts/tests/postflight-worktree.cjs. Read mem:gotcha-postflight-worktree-git-stub. The stub knobs WT_GIT_PUSH_REMOTE_REJECTED and WT_GIT_FETCH_FAIL_AFTER_PUSH (task-bc6ba91b, stub :125-216) already exist, so the stub itself does not change. Line numbers are at d1062cb0.\n\nShared strings. Steps 2 and 3 print them byte-identically in both wrappers, and this step's regexes match them:\n- journal pushResult prefix: `push remote-rejected-unverified: ` (a journal one wrapper writes, the other may replay);\n- push detail suffix: `; the re-check could not read origin's <T> (<detail>)`;\n- replay, origin holds C: `[receipt] origin's <T> holds <C>, the [remote rejected] push of task <id>; <file> kept until that task lands again, which records its row and finalizes landed.`;\n- replay, origin lacks C: `[receipt] origin's <T> does not hold <C>, the [remote rejected] push of task <id>; dropped <file>.`;\n- replay, re-check fetch failed again: `[WARN] receipt journal <file> kept: the [remote rejected] push of <C> is still unverified (<detail>).`\n\n(a) wtRemoteRejected (:1246), arm 'fetch-fails'. Keep its existing assertions, then add:\n- The journal is KEPT. Parse readOr(journal(p)), stripping a leading BOM as wtReplayRemote does. Its targetAfter is c, and its pushResult starts with the prefix and contains \"the re-check could not read origin's main\".\n- The retry: fs.rmSync(marker), then landRun(p,'wt-remote-rejected-fetch-fails-retry',{},{...REVIEW,MOE_LAND_NET_BACKOFF_SEC:'0'}). It sets no stub knob, so it runs real git.\n- Assert on the retry:\n  - exit 0, and the log has the holds-C line;\n  - finals(p) is [['landed',c]], and done(p) maps to [['committed',null,c,true]];\n  - the journal is gone, retryOf(p) is null, mainOf(p) is c, and origin's main is still c (the pushes log still has one line);\n  - no MOE_COMMIT_NOTHING_TO_COMMIT and no MOE_PUSH_FAILED in the log.\n\n(b) A new arm 'absent', after the loop, with its own repo, bare remote and marker. Write wtUnlanded's 'rejected' pre-receive hook (exit 1) into the bare remote and set both knobs, so the real push is refused, the stub still answers [remote rejected], and the re-check fetch fails.\n- Run 1 (REVIEW):\n  - origin's main is still main;\n  - the journal is kept with the unverified prefix; save C1 = its targetAfter;\n  - done(p) maps to [['failed','MOE_PUSH_FAILED',false]], and unlanded(p) is [['unlanded','remote',main,null]].\n- Remove the hook and the marker, then run the retry as in (a):\n  - the log has the does-not-hold line for C1, and the journal is gone;\n  - origin's main is a new C2, not C1, with parents [main] and src/a.txt 'done\\n';\n  - finals(p) is [['landed',C2]], done(p) maps to [['committed',null,C2,true]], and retryOf(p) is null.\n\n(c) wtUnlanded's 'rejected' arm (:1216): a pre-receive refusal with a working re-check fetch. After its landing run, add `if(n==='rejected')` assert that journal(p) is absent: a re-check that proves C absent still removes the journal.\n\nRED at HEAD: (a)'s journal assertion and (b)'s run-1 journal assertion fail, because wt_publish deletes the journal. (c) passes both before and after.\n\nError handling in the harness: each arm gets its own repo, bare remote, hook and marker, all removed before its retry, so no knob leaks into another arm or case. Edit with your TOOL-witnessed editor; never use a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Harness changes:\n- wtRemoteRejected 'fetch-fails' now asserts the journal is kept with the `push remote-rejected-unverified: ` prefix and the re-check detail. Its retry (fetch restored, no stub) asserts:\n  - the replay's holds-C keep line;\n  - finalize [['landed',C]] and the row ['committed',null,C,true];\n  - the journal is gone, landingRetry is null, the mirror and origin are at C, and there is still exactly one push;\n  - no NOTHING_TO_COMMIT and no PUSH_FAILED line.\n- New 'absent' arm: a pre-receive hook plus both stub knobs. The journal is kept unverified, with the failed row and an unlanded remote finalize. The retry logs the replay's does-not-hold drop line, and a fresh C2 lands with parent main, pushed:true and a landed finalize.\n- wtUnlanded 'rejected' now also asserts that the journal is absent.\n\nRED at HEAD (sh, MOE_WORKTREE_ONLY=wt-remote-rejected): \"fetch-fails: the receipt journal is gone, or not marked unverified: null\"; 0 ok, 1 failed.",
+      "startedAt": "2026-11-04T06:04:26.392Z",
+      "completedAt": "2026-11-04T06:06:44.769Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The sh wrapper, scripts/moe-agent.sh (line numbers at d1062cb0). Touch only these functions; the VM-route blocks belong to open rows cc4213c0 (sh), 62ec51f1 and d861f3de (ps1). Edit in place with a TOOL-witnessed editor, never temp+mv, then run `bash -n scripts/moe-agent.sh`.\n\n1. wt_remote_holds (:7487) becomes tri-state:\n   - 0: origin's TARGET holds C;\n   - 1: the fetch worked and origin lacks C (merge-base exit 1);\n   - 2: unverifiable.\n   For 2, set LAND_RECHECK_DETAIL: \"git fetch failed: $LAND_FETCH_ERR\" when land_fetch fails, or \"git merge-base --is-ancestor exited $rc\" for any other exit. It still never pushes.\n\n2. wt_push_target (:7500):\n   - Set LAND_PUSH_UNVERIFIED=\"\" on entry.\n   - In the rc-2 branch, a 0 keeps today's APPLIED line and rc=0.\n   - A 2 sets LAND_PUSH_UNVERIFIED=true and appends \"; the re-check could not read origin's $1 ($LAND_RECHECK_DETAIL)\" to LAND_PUSH_DETAIL.\n   - rc stays 2 for both 1 and 2, so run_migration_landing's `2)` arm is unchanged; it has no journal and only prints the richer detail.\n\n3. A new helper `wt_journal_unverified JOURNAL`: 0 when the journal's pushResult starts with the prefix (one python read; 1 on any failure).\n\n4. wt_publish (:7520), the rc-2 arm:\n   - When LAND_PUSH_UNVERIFIED=true, keep the journal and set its pushResult with `wt_journal_push_result \"$1\" \"push remote-rejected-unverified: $LAND_PUSH_DETAIL\"`;\n   - else `rm -f \"$1\"` as today.\n   - LAND_CODE=MOE_PUSH_FAILED and LAND_MESSAGE are unchanged, so the unlanded remote route, the rescue ref and the failed row are as today (DoD 1).\n\n5. wt_land_rounds' journal check (:7571-7581). For jw=remote with an unverified journal, run wt_remote_holds \"${jt#refs/heads/}\" \"$ja\":\n   - 0: jc=\"$ja\" plus wt_journal_push_result \"$journal\" \"pushed $ja to origin/${jt#refs/heads/}\". L5 then takes the existing $jc path: LAND_WT_RECOVERED, then wt_land_published sends the row (pushed:true, from the 'pushed ' prefix) and finalizes landed (DoD 2).\n   - 1: rm -f the journal, which the fresh round supersedes.\n   - 2: refuse with LAND_OUTCOME=refused, MOE_COMMIT_REFUSED_UNRECONCILED_INTENT and \"receipt journal $journal holds a [remote rejected] push of $ja that no re-check could verify ($LAND_RECHECK_DETAIL)\".\n   Every other journal takes the existing receipt_landed_as logic, unchanged; put it in an else.\n\n6. receipt_replay (:6550): add a block BEFORE the existing `[ \"$wt\" = remote ]` reconcile_push block, for wt=remote with an unverified journal. A [remote rejected] C is never re-pushed; a fetch decides.\n   - rc 2: the still-unverified WARN, then continue.\n   - Compute phase=moe_pinned_attempt_phase \"$aid\" \"$tid\" \"$gen\" \"$owner\".\n   - rc 0 with phase not finalizing: the holds-C line, then continue. The journal stays for step 5.\n   - Before any drop or overwrite, re-read and compare (`[ \"$(receipt_journal_fields \"$f\")\" != \"$fields\" ]`, then the existing 'rewritten or removed meanwhile' line), per mem:gotcha-worktree-receipt-replay-race: a worktree journal has no live marker.\n   - rc 1: with phase finalizing, first replay_unlanded ... remote MOE_PUSH_FAILED \"origin's <T> does not hold the [remote rejected] landing $after\"; if that fails, keep the journal. Then rm, print the does-not-hold line, and continue.\n   - rc 0 with phase finalizing: wt_journal_push_result \"$f\" \"pushed $after to origin/<T>\", then fall through. The existing block reconciles (its fetch finds C, so there is no push), records the row pushed:true, finalizes landed and drops the journal.\n\n7. Fix the header comments of wt_remote_holds, wt_push_target, wt_publish, wt_land_rounds and receipt_replay.\n\nError handling: only ENOENT-free proof moves anything. A failed fetch never drops, marks or settles a journal, and no path re-pushes after [remote rejected].",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh changes:\n- wt_remote_holds is tri-state (0 held, 1 absent, 2 unverifiable) and sets LAND_RECHECK_DETAIL.\n- wt_push_target sets LAND_PUSH_UNVERIFIED and appends the re-check detail suffix. It still returns rc 2, so migration is unchanged.\n- New wt_journal_unverified helper.\n- wt_publish rc 2 marks the journal `push remote-rejected-unverified: …`. Beyond the plan, it then runs `wt_journal_unverified || rm -f`: an unmarked journal (C absent, or a failed best-effort mark) is dropped as before rather than left as a plain journal that a replay's reconcile_push would re-push.\n- wt_land_rounds: an unverified remote journal is proven by fetch. Held: jc=C, marked 'pushed …', then the existing LAND_WT_RECOVERED path. Absent: rm. Unverifiable: refused UNRECONCILED_INTENT. Every other journal goes through the existing receipt_landed_as path.\n- receipt_replay gets a pre-block. Unverifiable keeps the journal with a WARN. Held and not finalizing keeps it, with the holds-C line. Held and finalizing marks it 'pushed' and falls through to reconcile_push, which does not push. Absent routes a finalizing attempt through replay_unlanded first, then drops the journal. Every drop or mark re-reads and compares first.\n- Header comments updated.\n\nbash -n is OK. GREEN, sh: MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded gives 2 ok, 0 failed.",
+      "startedAt": "2026-11-04T06:06:45.737Z",
+      "completedAt": "2026-11-04T06:15:24.677Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The ps1 twins in scripts/moe-agent.ps1 (line numbers at d1062cb0). The behavior and every shared string (step 1) are byte-identical to step 2. Keep the UTF-8 BOM. Edit in place with a TOOL-witnessed editor, then run the ParseFile check: powershell.exe -NoProfile with [System.Management.Automation.Language.Parser]::ParseFile on the wslpath -w path, exiting 1 on any error.\n\n1. Test-MoeRemoteHolds (:7099) returns [int] 0, 1 or 2, and sets $script:MoeRecheckDetail on 2: 'git fetch failed: ' + $script:MoeLandFetchErr, or \"git merge-base --is-ancestor exited <rc>\".\n2. Send-MoeLandPush (:7112): set $script:MoePushUnverified = $false on entry. On 0, the same APPLIED line and return 0. On 2, set $script:MoePushUnverified = $true and append the detail suffix to $script:MoePushDetail. Return 2 for both 1 and 2.\n3. Publish-MoeWorktreeLanding (:7138), the rc-2 arm: when $script:MoePushUnverified is set, Set-MoeJournalPushResult $Journal \"push remote-rejected-unverified: $($script:MoePushDetail)\"; otherwise Remove-Item as today.\n4. Invoke-MoeWorktreeRounds' journal check (:7214-7225). When Test-MoeWorktreeJournal holds, publicationMode is 'remote' and \"$($j.pushResult)\" -clike 'push remote-rejected-unverified: *', run Test-MoeRemoteHolds on the journal's target minus refs/heads/:\n   - 0: $jc = targetAfter, and mark 'pushed <C> to origin/<T>'. Complete-MoeWorktreeLanding (:7381) re-reads the journal from disk, so the mark reaches its row.\n   - 1: Remove-Item the journal and set $jc = ''.\n   - 2: the same refusal as sh.\n   Everything else stays on the existing Find-MoeJournaledLanding path.\n5. Invoke-MoeReceiptReplay (:2381): the same pre-block, before `if ($wt -and $j.publicationMode -ceq 'remote')`.\n   - Use Get-MoePinnedAttemptPhase $j.attemptId $j.taskId $j.generation $j.workerId.\n   - Before a drop or mark, compare the re-read journal's targetAfter and targetBefore, as the existing rc-1 path does.\n   - Use Invoke-MoeReplayUnlanded $git $j 'remote' 'MOE_PUSH_FAILED' ... for a finalizing absent attempt.\n   - PITFALL: Send-MoeOwedLedgerRow (:2329) reads pushResult from the IN-MEMORY $j. On the held-and-finalizing fall-through, set $j.pushResult = \"pushed $after to origin/$t\" as well as writing the file, or the replayed row omits pushed.\n6. Fix the matching header comments.\n\nError handling: as in sh. Proof alone moves anything, and nothing re-pushes after [remote rejected].",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twins:\n- Test-MoeRemoteHolds is tri-state, with $script:MoeRecheckDetail.\n- New Test-MoeJournalUnverified (the twin of wt_journal_unverified).\n- Send-MoeLandPush: $script:MoePushUnverified plus the detail suffix; it still returns 2.\n- Publish-MoeWorktreeLanding rc 2: marks the journal, then drops any journal that is not marked unverified (the same safety fallback as sh).\n- Invoke-MoeWorktreeRounds: the fetch proof (held: jc plus the 'pushed' mark; absent: Remove-Item; unverifiable: refused). Everything else stays on the Find-MoeJournaledLanding path.\n- Invoke-MoeReceiptReplay gets the pre-block. Every drop or mark re-reads the journal and compares targetAfter and targetBefore. On the held-and-finalizing fall-through, $j.pushResult is set in memory as well as in the file (the Send-MoeOwedLedgerRow pitfall).\n\nShared strings are byte-identical with sh. The BOM is kept (ef bb bf) and ParseFile is OK. GREEN, ps1 via Windows node: MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded gives 2 ok, 0 failed. The sh regression subset (wt-push, wt-completion, wt-replay, wt-replay-remote, codes) gives 5 ok.",
+      "startedAt": "2026-11-04T06:15:25.628Z",
+      "completedAt": "2026-11-04T06:20:49.856Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs (DoD 3). Use Edit, never Serena (which ignores docs/) and never a shell write (mem:gotcha-docs-edit-via-bash-python-no-tool-witness).\n\nscripts/CLAUDE.md, **Land on every exit, worktree mode**:\n- The L9-L10 bullet (:25). After the MOE_PUSH_REMOTE_REJECTED_APPLIED clause, replace \"otherwise, or when that fetch fails, it is `MOE_PUSH_FAILED`, unlanded `remote`.\" with:\n  \"otherwise it is `MOE_PUSH_FAILED`, unlanded `remote`. A re-check that shows origin lacking C drops the receipt journal. One whose fetch fails keeps it as `push remote-rejected-unverified: …`, which only a fetch settles, never a re-push. The task's next landing records C's owed row (`pushed: true`) and finalizes `landed` when origin holds C, and drops the journal when origin lacks it.\"\n- The **Replay.** bullet (:31). After \"In remote mode `reconcile_push` settles the journaled C against origin.\" add:\n  \"A `push remote-rejected-unverified` journal gets a fetch instead, never a re-push: origin lacking C drops it, and origin holding C keeps it for the task's next landing, or settles it at once while its attempt is still `finalizing`.\"\n\ndocs/plans/2026-10-30-per-task-worktrees.md:\n- The L9 row (:121). Replace \"otherwise, or when that fetch fails, `MOE_PUSH_FAILED`, unlanded `remote`, no more rounds.\" with:\n  \"otherwise `MOE_PUSH_FAILED`, unlanded `remote`, no more rounds. A re-check that shows C absent drops the journal; one whose fetch fails keeps it (`push remote-rejected-unverified: …`) for the task's next landing, whose L5 proves it by a fetch, never a re-push (2.9).\"\n- §2.9 (:146): add one sentence: \"A journal kept as `push remote-rejected-unverified` (L9) is proven by a fetch of origin instead of `receipt_landed_as`: origin holding C makes C this landing's (its row `pushed: true`, finalize `landed`), and origin lacking C drops the journal.\"\n- The L9 summary (:179): append \"(a failed re-check fetch keeps the journal for the next landing)\" after \"else unlanded `remote` at once\".\n\nTouch no other text. Re-grep each anchor first; if one moved, edit the same sentence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/plans/2026-10-30-per-task-worktrees.md"
+      ],
+      "note": "Docs edited with the Edit tool and the plan's exact text:\n- scripts/CLAUDE.md: the L9-L10 bullet (the kept unverified journal, settled only by a fetch, with the next landing recording pushed:true and finalizing landed, or dropping the journal) and the Replay bullet (the unverified journal gets a fetch instead of a re-push).\n- Design doc: the L9 row, a §2.9 sentence and the L9 summary parenthetical.\n\nAll anchors were still at their planned lines, and no other text was touched.",
+      "startedAt": "2026-11-04T06:20:50.814Z",
+      "completedAt": "2026-11-04T06:21:18.671Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify once, from the task worktree root, after the last edit. The run's fresh output is the complete_task evidence. Run the executionContract checkRef exactly as written; it is task-bc6ba91b's DONE gate with wt-replay added to MOE_WORKTREE_ONLY.\n\nWhat it runs:\n- bash -n;\n- parity-check.sh and parity-check.ps1;\n- postflight-worktree.cjs on sh and ps1, for wt-remote-rejected, wt-unlanded, wt-push, wt-completion, wt-replay, wt-replay-remote and codes;\n- postflight-migration.cjs (migration shares wt_push_target);\n- the held-out worktree-landing.sh and worktree-landing.ps1, which must pass unchanged. Never edit them.\n\nRun conditions:\n- The scratch dir sits on /mnt/d: a /tmp cwd breaks the Windows legs (mem:gotcha-qa-ps1-postflight-from-wsl).\n- bc6ba91b's run of this gate took about 17 min, which is past the 10-min Bash cap. Launch it detached into a log and poll for its end (mem:gotcha-qa-session-env-and-signals-leak-into-harness). Kill only PIDs your session recorded.\n- Never edit the wrappers mid-run (mem:gotcha-editing-wrapper-while-harness-runs).\n\nExpected: exit 0, and `[worktree] … 0 failed` for both engines.\n\nError handling for a red run:\n- If a Windows leg fails, re-run that leg on HEAD's scripts before blaming the change.\n- Fix the cause in step 1, 2 or 3's file, never by weakening an assertion.\n- Then re-run the whole command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "The executionContract checkRef ran verbatim from the worktree root, detached into /mnt/d/moe-scratch/561d-step5.log, from 06:22:59Z to about 06:43:40Z. EXIT=0.\n\nResults:\n- bash -n: OK.\n- parity-check.sh: PASS. parity-check.ps1: PASS.\n- postflight-worktree.cjs: sh \"7 ok, 0 failed\", ps1 \"7 ok, 0 failed\". The suites were wt-push, wt-completion, wt-replay, wt-replay-remote, wt-unlanded, wt-remote-rejected and codes.\n- postflight-migration.cjs: every case ok on both engines.\n- worktree-landing.sh: \"18 passed, 0 failed, 0 errors\". worktree-landing.ps1: \"18 passed, 0 failed, 0 errors\".\n\nNo file changed during the run. The held-out worktree-landing files are untouched.",
+      "startedAt": "2026-11-04T06:21:19.778Z",
+      "completedAt": "2026-11-04T06:43:53.346Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Last: an adversarial self-review of the 5-file diff. Check that:\n- A pre-receive refusal with a working re-check still makes ONE push, ends MOE_PUSH_FAILED and deletes the journal (worktree-landing remoteRejected, and wtUnlanded 'rejected' (c)).\n- No path re-pushes after [remote rejected]. The replay's unverified block never calls reconcile_push before proof. Its held-and-finalizing fall-through reaches reconcile_push only once origin holds C, which returns before any push.\n- A failed fetch never drops, marks or settles a journal.\n- Every replay drop and mark re-reads and compares the journal first.\n- A C held below a peer's later commit still counts: ancestry, not equality.\n- The shared strings and the pushResult prefix are byte-identical in sh and ps1.\n- The ps1 replay updates the in-memory $j.pushResult before Send-MoeOwedLedgerRow.\n- The 'push unknown' journals and the [rejected], applied and reconcile paths are byte-identical in behavior (wt-replay-remote green).\n- Migration still ends MOE_PUSH_FAILED with a journal-free run.\n- No VM-route block or other function was touched, and the ps1 BOM is intact.\n\nMutant check in a scratch clone, never the worktree: make wt_publish's rc-2 arm rm the journal unconditionally again. (a) and (b) must fail.\n\nIf the review changes any byte, re-run step 5 and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "I reviewed the 5-file diff adversarially and changed no byte, so step 5's gate output (EXIT=0, on these exact bytes, checkpoint aacb953a) stands.\n\nChecked:\n- A [remote rejected] answer is never followed by a re-push. In the replay, the unverified pre-block runs before reconcile_push. On the held-and-finalizing path it falls through only once a fetch has shown origin holds C, so reconcile_push's first fetch returns 0 with no push.\n- A failed fetch (rc 2) never drops, marks or settles a journal. The replay keeps it with a WARN, and L5 refuses MOE_COMMIT_REFUSED_UNRECONCILED_INTENT.\n- Every replay drop or mark re-reads the journal first. sh compares the receipt_journal_fields; ps1 compares targetAfter and targetBefore.\n- Proof is by ancestry (merge-base --is-ancestor). A C held below a peer's later commit still counts, and the L5 $jc path compares M with B's tree after the resume merge.\n- The shared strings and the `push remote-rejected-unverified: ` prefix are byte-identical in sh and ps1.\n- The ps1 replay sets $j.pushResult in memory before Send-MoeOwedLedgerRow.\n- wt_publish, wt_land_rounds and receipt_replay are all called in || contexts, so the script's set -e does not trip on the best-effort marks.\n- The 'push unknown', [rejected], applied and reconcile paths are untouched; wt-replay-remote, worktree-landing and migration stay green.\n- No VM-route block was touched, and the ps1 BOM is intact.\n\nTheoretical only: when L5 holds C but T adds new bytes beyond C, it refuses \"still owes the completion row\" with the journal now marked 'pushed'. The next replay then settles it through the existing reconcile_push path (row pushed:true), as for any pushed journal.\n\nMutant check, in a scratch archive outside the worktree: wt_publish's rc-2 arm made `rm -f \"$1\"` unconditional, sh leg with MOE_WORKTREE_ONLY=wt-remote-rejected.\n- (a) fails: \"fetch-fails: the receipt journal is gone, or not marked unverified: null\".\n- (b) fails when (a) is skipped in the scratch harness: \"absent: the receipt journal is gone, or not marked unverified: null\".\n- The scratch directory was removed.\n\nThe qualityGate (`bash scripts/tests/parity-check.sh && npm run lint`) re-ran in the worktree: exit 0.",
+      "startedAt": "2026-11-04T06:46:13.979Z",
+      "completedAt": "2026-11-04T06:51:33.109Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG under the human's standing \"move from backlog\" (2026-11-02 21:00Z): a fleet-filed row with its only dependency, task-bc6ba91b, DONE at 05:44Z 11-04, and no plan or reopen. Placement: build on bc6ba91b's landed re-check (wt_remote_holds / Test-MoeRemoteHolds, 1d830f75) and re-anchor the description's line numbers at the tip, since cc4213c0's 8ca6a40b also landed in moe-agent.sh. Open rows on the same launchers touch other functions (cc4213c0 in REVIEW: the sh VM-route launch outage; 62ec51f1 and d861f3de: the ps1 VM route), so no edge is needed. Edit both twins with a TOOL-witnessed editor, then run bash -n / ParseFile.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-bc6ba91b03b4435781ade6d4159e5ed7"
+  ],
+  "priority": "LOW",
+  "order": 463.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:38:02.611Z",
+  "updatedAt": "2026-11-04T19:20:45.030Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T05:44:41.089Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:45:19.172Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T07:15:39.492Z",
+    "wallClockMs": 5420320
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:00:21.505Z",
+  "executionContract": {
+    "intendedBehavior": "Both launchers. A worktree completion push answered `[remote rejected]` keeps its one re-check fetch. When that fetch fails, the receipt journal is now KEPT, its pushResult marked `push remote-rejected-unverified: <detail>`, while the landing still routes MOE_PUSH_FAILED, unlanded remote, with the rescue ref and the failed row as today. That journal is settled only by a fetch of origin, never a re-push. The task's next landing (L5) proves it: origin holding C makes C that landing's, recorded with the owed completion row (pushed:true) and a landed finalize instead of a plain MOE_COMMIT_NOTHING_TO_COMMIT; origin lacking C drops the journal and the fresh round lands; an unverifiable fetch refuses MOE_COMMIT_REFUSED_UNRECONCILED_INTENT. A pre-flight replay uses the same fetch-only proof: absent drops the journal (after routing a still-finalizing attempt unlanded); held keeps it for the task's next landing, or settles it at once (row, landed finalize, drop) while its attempt is still finalizing; an unverifiable fetch keeps it. A re-check that proves C absent at push time still deletes the journal.",
+    "acceptanceCriteria": [
+      "sh and ps1: the wt-remote-rejected fetch-fails arm keeps the journal, its pushResult starting `push remote-rejected-unverified: `, and still routes MOE_PUSH_FAILED, unlanded remote, with a rescue ref at T and landingRetry count 1.",
+      "Its retry, with fetch restored, logs the replay's holds-C keep line, then lands with finalize [['landed',C]], the row ['committed',C,pushed:true], the journal gone and landingRetry null. Its log has no MOE_COMMIT_NOTHING_TO_COMMIT and origin is pushed nothing new.",
+      "The new 'absent' arm (a pre-receive refusal and a failed re-check fetch): the journal is kept, then the retry's replay drops it and a fresh C2 lands, finalized landed and pushed:true.",
+      "wtUnlanded's 'rejected' arm (a working re-check proves C absent) leaves no journal.",
+      "parity-check.{sh,ps1}, postflight-migration.cjs and the held-out worktree-landing.{sh,ps1} pass unchanged.",
+      "scripts/CLAUDE.md (the L9-L10 and Replay bullets) and the design doc's L9 row, §2.9 and L9 summary describe the kept journal."
+    ],
+    "invariants": [
+      "After a [remote rejected] answer: never a re-push, a force flag or a new round, at push time, in the replay or at L5.",
+      "Only a successful fetch proving ancestry turns an unverified journal into a landing. Only a successful fetch proving absence drops it.",
+      "Every replay drop or overwrite of a journal re-reads and compares it first (worktree journals have no live marker).",
+      "'push unknown' journals, the [rejected], applied and reconcile_push paths, and migration's outcomes keep their behavior.",
+      "Shared strings and the pushResult prefix are byte-identical in both wrappers; the ps1 UTF-8 BOM is kept."
+    ],
+    "compatibility": [
+      "A journal written by either wrapper is replayed or landed correctly by the other (the same JSON keys and prefix).",
+      "Journals without the prefix (older wrappers, 'push unknown', 'pushed') take exactly today's paths.",
+      "No daemon, MCP tool or .moe/ schema change. pushResult is a local journal field."
+    ],
+    "approvedScope": [
+      "sh: wt_remote_holds (tri-state, LAND_RECHECK_DETAIL), wt_push_target (LAND_PUSH_UNVERIFIED, detail suffix), new wt_journal_unverified, wt_publish's rc-2 arm, wt_land_rounds' journal check, a pre-block in receipt_replay, and these functions' comments",
+      "ps1: the same in Test-MoeRemoteHolds, Send-MoeLandPush, Publish-MoeWorktreeLanding, Invoke-MoeWorktreeRounds and Invoke-MoeReceiptReplay",
+      "Harness: the wtRemoteRejected fetch-fails retry and the new 'absent' arm, plus one assertion in wtUnlanded's 'rejected' arm",
+      "Docs: the scripts/CLAUDE.md L9-L10 and Replay sentences; the design doc's L9 row, §2.9 sentence and L9 summary"
+    ],
+    "reuse": [
+      "wt_remote_holds / Test-MoeRemoteHolds (bc6ba91b) as the one proof, now tri-state.",
+      "wt_journal_push_result / Set-MoeJournalPushResult for the marker, and the existing 'pushed ' prefix that makes receipt_ledger_send / Send-MoeOwedLedgerRow send pushed:true.",
+      "The existing $jc recovery at L5 (LAND_WT_RECOVERED, wt_land_published / Complete-MoeWorktreeLanding).",
+      "replay_unlanded / Invoke-MoeReplayUnlanded, and the replay's re-read-and-compare guard.",
+      "The stub knobs WT_GIT_PUSH_REMOTE_REJECTED and WT_GIT_FETCH_FAIL_AFTER_PUSH, and wtUnlanded's pre-receive hook."
+    ],
+    "sourceAssumptions": [
+      "At d1062cb0, moe-agent.sh :7520 wt_publish's rc-2 arm runs `rm -f \"$1\"; LAND_CODE=MOE_PUSH_FAILED`; :7487 wt_remote_holds returns 1 for both an absent C and a failed fetch.",
+      "moe-agent.sh :7569 wt_land_rounds checks a journal with receipt_landed_as on the LOCAL target. A remote journal with no C there is refused MOE_COMMIT_REFUSED_UNRECONCILED_INTENT; a held one recovers via LAND_WT_RECOVERED when M equals B's tree.",
+      "moe-agent.sh :6550 receipt_replay calls reconcile_push for every remote worktree journal, which re-pushes C while origin's tip is still B, and drops a wt journal after recording its row.",
+      "receipt_ledger_send (:6514) and Send-MoeOwedLedgerRow (ps1 :2329) send pushed:true only for a pushResult starting 'pushed '. The ps1 one reads the in-memory object; Complete-MoeWorktreeLanding (ps1 :7381) re-reads the file.",
+      "moe_pinned_attempt_phase reads .moe/attempts/<id>.json, and the harness's launch() deletes .moe/attempts per run, so the old attempt reads 'mismatch' (not finalizing) on a retry.",
+      "ps1: :7099 Test-MoeRemoteHolds, :7112 Send-MoeLandPush, :7138 Publish-MoeWorktreeLanding, :7212 Invoke-MoeWorktreeRounds, :2381 Invoke-MoeReceiptReplay.",
+      "postflight-worktree.cjs: :1246 wtRemoteRejected, :1216 wtUnlanded's 'rejected' arm, :846 journal(p), and the stub at :125-216."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && export MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded,wt-push,wt-completion,wt-replay,wt-replay-remote,codes WSLENV=MOE_WORKTREE_ONLY && S=$(mktemp -d /mnt/d/moe-scratch/561d-v.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && x(){ env $E node $T/$1 sh \"$PWD/$A.sh\" $S/fp.js $S \"$BASH\" && env $E \"$N\" \"$(w $T/$1)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell; } && bash -n $A.sh && bash $T/parity-check.sh && $P \"$(w $T/parity-check.ps1)\" && x postflight-worktree.cjs && x postflight-migration.cjs && env $E bash $T/worktree-landing.sh && $P \"$(w $T/worktree-landing.ps1)\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Keep the journal and change nothing else: rejected. The unchanged replay would reconcile_push it, re-pushing a [remote rejected] C while origin is at B. When origin holds C, it records the row without pushed and drops the journal, so the retry ends in a plain MOE_COMMIT_NOTHING_TO_COMMIT, against DoD 2.\n2. Have the replay settle every unverified journal (row, then drop): rejected for the same reason. The retry's L5 then has no journal, so it cannot finalize landed. Worktree journals have no live marker, and every seat's poll replays them, so the replay would always win that race.\n3. Chosen: the fetch-only proof in three places. At push time a failed fetch keeps the journal. At L5 the next landing proves it and recovers C (row pushed:true, landed finalize) or drops it. The replay proves it too: absent drops it, held keeps it for the landing (or settles it at once while still finalizing), and unverifiable keeps it.\n4. A new wt_push_target return code for unverified: rejected. run_migration_landing's case would send it into the 'rebuilding' arm. A LAND_PUSH_UNVERIFIED flag keeps rc 2.\n5. Recording the owed row in the replay while keeping the journal: rejected. It re-sends on every poll of every seat, the spam that mem:decision-receipt-replay-owed-ledger-and-any-seat-finalize rejected.",
+    "codebaseInsights": "- The harness's landRun is a full wrapper iteration. The retry's order is: pre-flight claim, receipt_replay, worktree_resume (merging origin's C into W gives LANDING-RETRY: remote), the CLI, the completion, L2 (which commits the merge [T, C]), L5 (merge-tree(C, T') equals C's tree), then $jc recovery.\n- moe_pinned_attempt_phase is a disk read. The harness's launch() wipes .moe/attempts, so a retry reads the old attempt as 'mismatch' (not finalizing), as production's closed attempt does.\n- receipt_ledger_send re-reads the journal file. ps1's replay uses the parsed object, while Complete-MoeWorktreeLanding re-reads it.\n- worktree-landing remoteRejected uses a pre-receive refusal with a working fetch, so it stays on the absent path (one push, MOE_PUSH_FAILED).\n- postflight-migration's 'remote-rejected' asserts only MOE_PUSH_FAILED appears in the log.",
+    "risks": "- Open rows share the wrappers. cc4213c0 (REVIEW) holds the sh VM route; 62ec51f1 (WORKING) and d861f3de (BLOCKED) hold the ps1 VM route. Touch only the named functions, since adjacent-line edits conflict under merge-tree (mem:gotcha-adjacent-line-edits-conflict-in-worktree-landing).\n- Peer replays can race a live lander's journal. Guard every replay drop and mark, and accept that a peer may record the row first (the daemon merges a repeated sha).\n- A best-effort pushResult write that fails leaves a plain L8 journal, which takes today's unknown-outcome path. That is acceptable and needs no extra code.\n- The gate takes about 17-20 min and needs a detached run plus polling. The Windows legs need /mnt/d and the env -u prefix.\n- Held unverified journals print one replay line per poll until the task lands again, as the existing kept-journal lines do.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/worktree-landing.sh",
+      "scripts/tests/postflight-migration.cjs",
+      "scripts/CLAUDE.md",
+      "docs/plans/2026-10-30-per-task-worktrees.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3500ae19a150f8e2a968deb9e9b6dad44f8bf8fe",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:00:21.533Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:04:26.393Z",
+  "commits": [
+    {
+      "sha": "aacb953ad480eb042a58c770ffcb71d2adb66014",
+      "ref": "refs/heads/moe/task/task-561d347c3e5b44129ecf9d6c91bbab9f",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T06:00:39Z",
+      "paths": [
+        "docs/plans/2026-10-30-per-task-worktrees.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T06:44:38.227Z",
+      "treeId": "b8c464c12f2df57ad302c35b6f9c80a947125bdd",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "5eb4ae06fdfba4123ac770ffc55437f9ba470e6c",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T06:45:13Z",
+      "paths": [
+        "docs/plans/2026-10-30-per-task-worktrees.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T06:53:12.580Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/CLAUDE.md",
+    "docs/plans/2026-10-30-per-task-worktrees.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:53:30Z",
+    "at": "2026-11-04T07:16:14.003Z"
+  },
+  "reviewStartedAt": "2026-11-04T06:52:24.472Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && T=scripts/tests A=scripts/moe-agent N=\"/mnt/c/Program Files/nodejs/node.exe\" P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && export MOE_WORKTREE_ONLY=wt-remote-rejected,wt-unlanded,wt-push,wt-completion,wt-replay,wt-replay-remote,codes WSLENV=MOE_WORKTREE_ONLY && S=$(mktemp -d /mnt/d/moe-scratch/561d-v.XXXXXX) && cp $T/postflight-fake-proxy.js $S/fp.js && w(){ wslpath -w \"$1\"; } && x(){ env $E node $T/$1 sh \"$PWD/$A.sh\" $S/fp.js $S \"$BASH\" && env $E \"$N\" \"$(w $T/$1)\" ps1 \"$(w $A.ps1)\" \"$(w $S/fp.js)\" \"$(w $S)\" powershell; } && bash -n $A.sh && bash $T/parity-check.sh && $P \"$(w $T/parity-check.ps1)\" && x postflight-worktree.cjs && x postflight-migration.cjs && env $E bash $T/worktree-landing.sh && $P \"$(w $T/worktree-landing.ps1)\"",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nPASS parity-check.ps1\n[worktree] wt-push ok\n[worktree] wt-completion ok\n[worktree] wt-replay ok\n[worktree] wt-replay-remote ok\n[worktree] wt-unlanded ok\n[worktree] wt-remote-rejected ok\n[worktree] codes ok\n[worktree] 7 ok, 0 failed   (sh)\n[worktree] 7 ok, 0 failed   (ps1, same 7 cases)\n[migration] clean/local/no-gate/bad-args/conflict/gate-fail/signal/checked-out/contention/peer-once/remote-rejected/unknown ok\nPASS migration landing scenarios: 12   (sh)\nPASS migration landing scenarios: 11   (ps1)\nPASS local hunks-merge ... PASS remote push-remote-rejected, PASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors   (sh)\nworktree-landing: 18 passed, 0 failed, 0 errors   (ps1)\nEXIT=0",
+    "reportedAt": "2026-11-04T06:52:24.472Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Both launchers. A worktree completion push answered [remote rejected] still gets ONE re-check fetch. The re-check (wt_remote_holds / Test-MoeRemoteHolds) is now tri-state:\n- 0: origin holds C;\n- 1: the fetch worked and origin lacks C;\n- 2: unverifiable, with the reason in LAND_RECHECK_DETAIL / $script:MoeRecheckDetail.\n\nOn 2, wt_publish / Publish-MoeWorktreeLanding KEEPS the receipt journal as `push remote-rejected-unverified: <detail>`, and the push detail gains \"; the re-check could not read origin's <T> (...)\". The route is unchanged: MOE_PUSH_FAILED, unlanded remote, the rescue ref, the failed row and landingRetry. A re-check that proves C absent still drops the journal.\n\nA kept journal is settled only by a fetch, never a re-push.\n- The task's next landing (L5, wt_land_rounds / Invoke-MoeWorktreeRounds):\n  - held: C becomes this landing's (LAND_WT_RECOVERED), with the owed row pushed:true and a landed finalize instead of a plain MOE_COMMIT_NOTHING_TO_COMMIT;\n  - absent: the journal is dropped and a fresh C lands;\n  - unverifiable: refused MOE_COMMIT_REFUSED_UNRECONCILED_INTENT.\n- The pre-flight replay:\n  - absent: the journal is dropped, after routing a still-finalizing attempt unlanded;\n  - held: the journal is kept for the next landing, or settled at once while its attempt is finalizing (ps1 also updates the in-memory pushResult);\n  - unverifiable: the journal is kept.\n  - Every drop or mark re-reads and compares the journal first.\n\nShared strings are byte-identical in both wrappers. The ps1 BOM is kept, and migration is unchanged (rc 2 kept).\n\nHarness (postflight-worktree.cjs):\n- The fetch-fails arm now asserts the kept journal. Its retry lands with finalize [['landed',C]] and the row ['committed',C,pushed:true], with no NOTHING_TO_COMMIT and no new push.\n- A new 'absent' arm: the replay drops C1 and a fresh C2 lands.\n- wtUnlanded 'rejected' asserts the journal is gone.\n\nDocs: scripts/CLAUDE.md (the L9-L10 and Replay bullets) and the design doc's L9 row, §2.9",
+  "completedAt": "2026-11-04T07:15:39.492Z",
+  "reviewCompletedAt": "2026-11-04T07:15:39.492Z",
+  "reviewSummary": "Landed 5eb4ae06 is on moe/work-2026-10-24 and origin, and its blobs equal gated checkpoint aacb953a. Diff +201/-50, net 151, 5 declared files only. worktree-landing.* untouched; ps1 BOM kept.\n\nRe-ran task.verification verbatim in a fresh clone of 5eb4ae06 (06:56-07:14Z), EXIT=0:\n- bash -n OK; parity-check.sh and .ps1 PASS\n- postflight-worktree 7 ok, 0 failed on sh and ps1\n- migration: 12 cases sh, 11 ps1\n- worktree-landing 18/18 sh and ps1\nnpm run lint OK.\n\nsh mutants on wt-remote-rejected, control green, all 3 killed:\n- L5 held with jc=\"\"\n- replay pre-block disabled\n- wt_remote_holds failed fetch returning 1\n\nDoD:\n1. A failed re-check fetch keeps the journal as 'push remote-rejected-unverified: …' plus the re-check detail; it still routes MOE_PUSH_FAILED, unlanded remote, with rescue ref and landingRetry 1, on both engines.\n2. The retry finalizes landed C, records the row with pushed:true, removes the journal and clears landingRetry, with no NOTHING_TO_COMMIT and no re-push. 'absent' arm: the replay drops C1 and a fresh C2 lands. wtUnlanded 'rejected' asserts no journal.\n3. The harness covers both launchers; parity, landing and migration are green. scripts/CLAUDE.md L9-L10 and Replay, and the design doc's L9 row, §2.9 and L9 summary, are updated.\n\nReview:\n- Nothing re-pushes after [remote rejected]; a failed fetch never drops or marks a journal.\n- Replay re-reads and compares before every drop or mark.\n- Shared strings byte-identical; set -e safe (callers are `elif !` and `|| true`).\n- ps1 sets $j.pushResult in memory.\n\nUntested (worker-named, beyond the acceptance criteria, reviewed by reading): L5 absent, the L5 unverifiable refusal, the replay held+finalizing settle. Note: a held unverified journal makes every seat's replay fetch origin until the task re-lands, the same class as 'push unknown'.",
+  "requiredCheckAtDone": null
+}

@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=974cd9e9ac0e
+# moe-generated: sha=fb882949cdf7
 name: regression-check
 description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
@@ -14,11 +14,11 @@ Before `moe.complete_task` — **once, not after every step** — run the suite 
 
 The plan sizes this deliberately; don't silently upgrade it.
 
-- **Mid-epic task** (there are sibling tasks after this one in the epic): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
+- **Mid-epic task** (`moe.get_context` `task.isEpicFinal` is false): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
 - **Epic-final task, or a task with no epic siblings**: run the full thing. Every affected package, plus whatever integration/smoke the plan named.
 - **Any task that touched shared types, schema, wire protocol, or a migration**: full suite regardless of position. These break code outside your blast radius, and the epic's final task is too late to find out.
 
-Unsure of your position? `moe.list_tasks {epicId}` and compare `order`. No siblings after you → treat it as epic-final.
+Unsure of your position? Read `moe.get_context` → `task.isEpicFinal`: true means epic-final (the full run), false means mid-epic. A task with no epic reads true.
 
 ## What to run
 

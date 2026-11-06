@@ -1,0 +1,213 @@
+{
+  "id": "task-19869d862fe144948941d53687a3d9e2",
+  "epicId": "epic-be924fb8",
+  "title": "docs: scripts/doctor.sh:39-40 (\"Node.js ... (>= 18 required)\", passing major 18+), moe-vscode/README.md:24 (\"Node.js 18+\") and docs/MAC_INSTALL.md:11 (\"Node.js 18+\") still state an 18 floor, while packages/moe-daemon/package.json engines is >=22.22.0 and TROUBLESHOOTING.md and the installers already gate on 22.22",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #20's held-back item (task-9f3eac6d, architect-cd0ac706, #governors msg-3a9783bf). The governor re-verified each line at origin/moe/work-2026-10-24.\n\nPROBLEM\n- scripts/doctor.sh:39-40 checks `if [ \"$major\" -ge 18 ]` and prints \"[OK] Node.js version $version (>= 18 required)\". A Node 18 or 20 machine passes doctor.\n- moe-vscode/README.md:24 says \"Node.js 18+ on PATH\".\n- docs/MAC_INSTALL.md:11 says \"**Node.js 18+**: `brew install node`\".\n- The real floor is packages/moe-daemon/package.json:34-35 `\"engines\": { \"node\": \">=22.22.0\" }`, and docs/TROUBLESHOOTING.md:68 agrees. The installers already gate correctly (install-dependencies.sh:18, install-dependencies.ps1:130).\n- This is message drift: a user on Node 18 or 20 is told the setup is fine. The hunt saw the bundled daemon start on 18 and 20, but that is outside engines and unsupported.\n\nFIX\n- Raise doctor.sh's check to 22.22.0, comparing major.minor and not just the major, with the matching message.\n- Update the two docs lines to \"Node.js 22.22+\".\n- Check whether any other user-facing \"18\" floor remains (`git grep -n -E \"Node(\\.js)? *18\"`), and fix only those that state a requirement.\n\nSCOPE AND CHECKS\n- scripts/doctor.sh, moe-vscode/README.md and docs/MAC_INSTALL.md, plus any other floor statement the grep finds.\n- No open row holds them (checked against lanes.js at 09:40Z).\n- Verify with `bash -n scripts/doctor.sh`, then run doctor.sh's node check under a stub `node` that reports v20.11.0 and one that reports v22.22.0, in a snapshot.",
+  "definitionOfDone": [
+    "scripts/doctor.sh fails a Node below 22.22.0 and passes 22.22.0 or newer, comparing major.minor. The completion summary quotes both stub runs.",
+    "moe-vscode/README.md, docs/MAC_INSTALL.md and every other user-facing Node floor that `git grep` finds state 22.22+, matching packages/moe-daemon/package.json engines.",
+    "`bash -n scripts/doctor.sh` exits 0, and the diff touches only floor statements."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "doctor.sh floor and its regression test (DoD 1, DoD 3).\n\nCHANGE. In scripts/doctor.sh, rewrite check_node_version (:35-49) to compare major.minor against 22.22.0, matching packages/moe-daemon/package.json:34-35 engines `>=22.22.0`.\n- Parse strictly: `local version=$(node -v | sed 's/v//')`, then `[[ \"$version\" =~ ^([0-9]+)\\.([0-9]+) ]]`, taking major and minor from BASH_REMATCH. doctor.sh is #!/bin/bash, and BASH_REMATCH also works in macOS bash 3.2.\n- Pass when major > 22, or when major == 22 and minor >= 22.\n- Error handling: a version that does not parse (empty, `vX`, no minor) takes the same failing branch. It must never reach `[ -ge ]` on a non-number, because under `set -e` that prints `integer expression expected`.\n- Messages, the only text that changes:\n  - OK: `Node.js version $version (>= 22.22 required)`\n  - ERROR: `Node.js version $version is too old. Requires >= 22.22 (24 LTS recommended)`\n- Keep the colours, the `Update: brew upgrade node` hint and the return codes.\n- Like engines, 23, 25 and 27 pass. install-dependencies.sh moe_node_ready (:11-19) is stricter (22.22+, 24 or 26) and replaces odd lines with Node 24. DoD 1 asks for \"22.22.0 or newer\", so follow engines, and note the difference in the summary.\n\nTEST. The epic rail \"All fixes must include regression tests or test updates\" makes the regression test required. It is the one addition that is not a floor statement, and it tests nothing but this floor.\n- Add it to scripts/tests/dependencies.test.mjs, which CI's \"Test installers with isolated profiles\" step already runs on all three OS legs. No ci.yml edit is needed.\n- Run the REAL doctor.sh with bash, using the file's own `bash` and `shellPath` helpers so it works on Windows Git Bash.\n- PATH: a temp dir first, holding an executable stub `node` that prints the fixture version for any argument, then the system dirs. Use a temp HOME.\n- Strip ANSI colour codes from stdout before matching.\n- Assert on the Node.js line only. doctor's overall exit code also depends on npm, git, java and the rest, so do not assert on it.\n- Cases:\n  - v18.20.0, v20.11.0 and v22.21.1 print `[ERROR] Node.js version <v> is too old. Requires >= 22.22`;\n  - v22.22.0, v23.1.0, v24.0.0 and v26.0.0 print `[OK] Node.js version <v> (>= 22.22 required)`;\n  - `vX` prints the ERROR line, and stderr contains no `integer expression expected`.\n- Mirror the shape of the existing moe_node_ready cases at dependencies.test.mjs:138-152.\n- installers.test.mjs:30 replaces doctor.sh with an `exit 0` stub, so it is unaffected.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs"
+      ],
+      "note": "doctor.sh check_node_version now compares major.minor against 22.22 via BASH_REMATCH; unparseable versions take the ERROR branch. Added 8 doctor cases to dependencies.test.mjs (34/34 pass). Note: engines accepts any >=22.22 (23, 25, 27 pass); install-dependencies.sh moe_node_ready is stricter (22.22+, 24, 26).",
+      "startedAt": "2026-11-04T09:59:04.468Z",
+      "completedAt": "2026-11-04T09:59:34.620Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs floor statements (DoD 2, DoD 3). Each is a one-line edit that keeps the line's meaning and changes only the floor.\n- moe-vscode/README.md:24 becomes `- Node.js 22.22+ on PATH (24 LTS recommended; the extension bundles the Moe daemon and MCP proxy and starts them for you)`.\n- docs/MAC_INSTALL.md:11 becomes `- **Node.js 22.22+** (24 LTS recommended): \\`brew install node\\``. Keep the brew command.\n- CONTRIBUTING.md:17 becomes `| Node.js | 22.22+ (24 LTS recommended) | [nodejs.org](https://nodejs.org/) |`.\n\nLEAVE these, because they are already right or are not floor statements:\n- docs/GETTING_STARTED.md:29, \"Node 18 is upgraded because current build tools require newer Node.js\". It describes the installer upgrading an unsupported Node, which is true (install-dependencies.sh:18 upgrades anything outside 22.22+/24/26), and states no floor. The step 3 sweep matches it with `Node 18` but not with `18+`; name it in the summary as reviewed and left.\n- docs/TROUBLESHOOTING.md:68, installer/README.md:6 and docs/DEVELOPMENT.md:9 and :353: they already say 22.22+.\n- moe-vscode/README.md:68: vm-control.mjs needs Node 22's global WebSocket. That is a feature note.\n- The `Node 22+` libuv/WebSocket comments in scripts and ARCHITECTURE.md:476.\n- The code comments at build.gradle.kts:305 and workloadSnapshot.ts:120.\n- packages/moe-proxy/package.json engines `>=18.0.0`: that is the proxy package's own metadata, outside this row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "docs/MAC_INSTALL.md",
+        "CONTRIBUTING.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md",
+        "docs/MAC_INSTALL.md",
+        "CONTRIBUTING.md"
+      ],
+      "note": "Three floor lines now say 22.22+. Left docs/GETTING_STARTED.md:29 (installer upgrade note, no floor) and the already-correct lines per plan.",
+      "startedAt": "2026-11-04T09:59:38.668Z",
+      "completedAt": "2026-11-04T09:59:50.448Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run ONCE (DoD 1-3). Run it in a git-archive snapshot of the fix commit outside the shared checkout, or in this task's worktree, with every MOE_* var unset.\n1. The complete_task evidence is `bash -n scripts/doctor.sh && node --test scripts/tests/dependencies.test.mjs`. It must exit 0, and the new doctor cases must pass.\n2. Run the two stub cases DoD 1 asks to quote. In a temp dir, make an executable `node` that echoes v20.11.0, then one that echoes v22.22.0. For each, run `PATH=<stubdir>:/usr/bin:/bin bash scripts/doctor.sh | sed 's/\\x1b\\[[0-9;]*m//g' | grep 'Node.js version'`, and quote both output lines in the summary:\n   - `[ERROR] Node.js version 20.11.0 is too old. Requires >= 22.22 (24 LTS recommended)`\n   - `[OK] Node.js version 22.22.0 (>= 22.22 required)`\n3. Floor sweep: `git grep -nE 'Node(\\.js)? *18\\+|>= 18 required|Requires >= 18|\\| *18\\+ *\\|' -- ':!docs/plans'` prints nothing. A wider `git grep -nE 'Node(\\.js)? *18'` may print only the lines step 2 lists as left; say so in the summary.\n4. `git diff --stat HEAD~1` lists only the five plan files. In the summary, quote the one changed line of each, and add the engines-vs-installer note from step 1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs"
+      ],
+      "note": "bash -n + dependencies.test.mjs: 34/34 pass with MOE_* unset. Stub runs: v20.11.0 -> \"[ERROR] Node.js version 20.11.0 is too old. Requires >= 22.22 (24 LTS recommended)\"; v22.22.0 -> \"[OK] Node.js version 22.22.0 (>= 22.22 required)\". Floor sweep empty; wider grep shows only GETTING_STARTED:29, TROUBLESHOOTING:68, workloadSnapshot.ts:120 (left). git diff --stat: 5 plan files only.",
+      "startedAt": "2026-11-04T09:59:51.091Z",
+      "completedAt": "2026-11-04T10:00:15.548Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this row's diff, as the final step (load adversarial-self-review). Check:\n- Parse edge cases:\n  - `v22.22.0-nightly2026...` parses as 22.22 and passes;\n  - `v22` (no minor) and empty output fail;\n  - `v100.0.0` passes;\n  - no input reaches a non-numeric `[ -ge ]` under `set -e`.\n- The OK and ERROR wording matches the test's patterns, and only the version text changed. Colours, the hint and the return codes are unchanged.\n- The doctor test cannot pick up the machine's real node, because the stub dir is first on PATH. It also passes on Windows Git Bash through the file's shellPath and bash helpers.\n- Each docs line now says 22.22+, and none claims more than the installers do.\n- The diff touches only the five plan files: the floor statements plus the rail-required test. No .moe/ file is edited by hand.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs",
+        "moe-vscode/README.md",
+        "docs/MAC_INSTALL.md",
+        "CONTRIBUTING.md"
+      ],
+      "note": "Self-review: v22.22.0-nightly passes, v22/empty/vX fail, v100 passes, no 'integer expression' stderr. Wording, colours, Update hint and return codes unchanged. Stub node first on PATH. Diff = 5 plan files.",
+      "startedAt": "2026-11-04T10:00:16.204Z",
+      "completedAt": "2026-11-04T10:00:20.640Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 519.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:38:27.340Z",
+  "updatedAt": "2026-11-04T19:20:45.581Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:45:23.833Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T10:04:22.055Z",
+    "wallClockMs": 1138222
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a0305b0b",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:49:25.490Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/doctor.sh passes Node.js 22.22.0 or newer and fails anything older or unparseable, with messages naming 22.22. The user-facing Node floor statements in moe-vscode/README.md, docs/MAC_INSTALL.md and CONTRIBUTING.md say 22.22+, matching packages/moe-daemon/package.json engines.",
+    "invariants": [
+      "doctor.sh keeps its colours, its `Update:` hint, its return codes and its ERRORS accounting; only the floor and its message text change.",
+      "No non-numeric value ever reaches an arithmetic test under `set -e` (the error handling for unparseable versions).",
+      "install-dependencies.sh, install-dependencies.ps1, docs/GETTING_STARTED.md and the proxy's engines field stay unchanged."
+    ],
+    "compatibility": [
+      "installers.test.mjs swaps doctor.sh for an exit-0 stub, so the installer tests are unaffected.",
+      "macOS /bin/bash 3.2 supports `[[ =~ ]]` and BASH_REMATCH."
+    ],
+    "reuse": [
+      "The bash and shellPath helpers and the fixture style of scripts/tests/dependencies.test.mjs; the BASH_REMATCH parse mirrors moe_node_ready's major/minor split."
+    ],
+    "sourceAssumptions": [
+      "doctor.sh check_node_version at scripts/doctor.sh:35-49 passes `major -ge 18`, and its caller counts a failure into ERRORS.",
+      "install-dependencies.sh moe_node_ready (:11-19) accepts 22.22+, 24 and 26.",
+      "dependencies.test.mjs:138-152 already pins moe_node_ready's versions with a stub node."
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Source install-dependencies.sh's moe_node_ready from doctor.sh. Rejected: it is stricter (22.22+, 24 or 26 only) than the DoD's '22.22.0 or newer', and doctor.sh would then depend on that helper. (2) A new doctor test file. Rejected: it would also need a ci.yml listing to run in CI, while dependencies.test.mjs already runs in the installers step on all three OS legs. (3) Docs only, with no test. Rejected because of the epic rail 'All fixes must include regression tests or test updates'. (4) Editing GETTING_STARTED.md:29 too. Dropped: it states installer behaviour that is true and no floor, and a sixth file would floor the task at heavy.",
+    "codebaseInsights": "doctor.sh runs top to bottom (no main function), so the test runs the whole script and asserts on the Node.js line alone. installers.test.mjs stubs doctor.sh out, so the only real coverage is the new cases. The installers' own floor is already pinned by dependencies.test.mjs and install-dependencies-windows.test.mjs.",
+    "risks": "QA may read DoD 3 ('only floor statements') as excluding the test; the step says why the epic rail requires it and that it tests only the floor. Windows Git Bash path handling in the test: reuse shellPath. ANSI colour codes in doctor output need stripping before regex matches.",
+    "keyFiles": [
+      "scripts/doctor.sh",
+      "scripts/install-dependencies.sh",
+      "scripts/tests/dependencies.test.mjs",
+      "packages/moe-daemon/package.json",
+      "docs/TROUBLESHOOTING.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d6e34442856b5803b56319c80b047fbb65bdece5",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:49:25.523Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:59:04.468Z",
+  "reviewStartedAt": "2026-11-04T10:00:24.193Z",
+  "verification": {
+    "command": "bash -n scripts/doctor.sh && node --test scripts/tests/dependencies.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 34\nℹ suites 0\nℹ pass 34\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0",
+    "reportedAt": "2026-11-04T10:00:24.193Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/doctor.sh",
+    "scripts/tests/dependencies.test.mjs",
+    "moe-vscode/README.md",
+    "docs/MAC_INSTALL.md",
+    "CONTRIBUTING.md"
+  ],
+  "completionSummary": "doctor.sh check_node_version now compares major.minor against engines' 22.22.0 (BASH_REMATCH parse; unparseable/empty versions fail, no non-numeric reaches a numeric test). Stub runs: v20.11.0 -> \"[ERROR] Node.js version 20.11.0 is too old. Requires >= 22.22 (24 LTS recommended)\"; v22.22.0 -> \"[OK] Node.js version 22.22.0 (>= 22.22 required)\". Floors updated in moe-vscode/README.md:24, docs/MAC_INSTALL.md:11, CONTRIBUTING.md:17 (22.22+). Added 8 doctor cases to scripts/tests/dependencies.test.mjs (rail-required regression test). Left: GETTING_STARTED.md:29 (installer-upgrade note, no floor), TROUBLESHOOTING.md:68 (already right), workloadSnapshot.ts:120 (code comment). Note: engines accepts any >=22.22 (23/25 pass doctor); install-dependencies.sh moe_node_ready is stricter (22.22+, 24, 26).",
+  "commits": [
+    {
+      "sha": "fec9a8427036fef3b6a7f3545aac0a92200e73be",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T09:58:00Z",
+      "paths": [
+        "CONTRIBUTING.md",
+        "docs/MAC_INSTALL.md",
+        "moe-vscode/README.md",
+        "scripts/doctor.sh",
+        "scripts/tests/dependencies.test.mjs"
+      ],
+      "recordedBy": "architect-67c762f6",
+      "recordedAt": "2026-11-04T10:01:59.987Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T10:02:56Z",
+    "at": "2026-11-04T10:04:54.541Z"
+  },
+  "completedAt": "2026-11-04T10:04:22.055Z",
+  "reviewCompletedAt": "2026-11-04T10:04:22.055Z",
+  "reviewSummary": "Reviewed completion fec9a842 (on moe/work-2026-10-24; I verified it with `git show` and `git branch --contains`). The diff is +45/-7 across 5 files: doctor.sh, dependencies.test.mjs, moe-vscode/README.md, docs/MAC_INSTALL.md and CONTRIBUTING.md. Only floor lines and the rail-required test changed; `git diff --check` is clean.\n\nI re-ran everything in a `git archive` snapshot of the commit outside the shared tree, with `env -i` and Node 24:\n- `bash -n scripts/doctor.sh` and `node --test scripts/tests/dependencies.test.mjs`: syntax OK, 34/34 pass, 0 fail.\n- DoD1, real doctor.sh with a stub `node` first on PATH:\n  - v20.11.0 prints `[ERROR] Node.js version 20.11.0 is too old. Requires >= 22.22 (24 LTS recommended)`, followed by the `Update:` hint.\n  - v22.22.0 prints `[OK] Node.js version 22.22.0 (>= 22.22 required)`.\n  - Edge cases: v22.21.9, v22 (no minor), empty and vX all fail. v22.22.0-nightly and v100.0.0 pass. None of the eight runs wrote \"integer expression expected\" to stderr.\n- Mutant check: with the old doctor.sh restored, the 8 new doctor cases fail (pass 26, fail 8), so the tests do exercise the floor.\n- DoD2: the three floor lines now say 22.22+ and match engines `>=22.22.0`. The strict floor-statement grep at the commit finds nothing outside `.moe` task records and docs/plans. The wider `Node 18` grep shows only GETTING_STARTED.md:29, TROUBLESHOOTING.md:68 and workloadSnapshot.ts:120. None of them states a floor, and the worker left them on purpose.\n- Invariants hold. The colours, the `Update:` hint and the return codes are unchanged. The installers and the proxy's engines field are untouched. The test uses the file's own `bash` and `shellPath` helpers, so it works under Git Bash on Windows.\n\nI did not run the JetBrains or Windows legs.\n\nNote, no action needed: engines accepts 23/25/27, but the installer's `moe_node_ready` only accepts 22.22+, 24 and 26. The worker documented this.",
+  "requiredCheckAtDone": null
+}

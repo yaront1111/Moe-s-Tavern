@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=ad8f5eeab200
+# moe-generated: sha=22cebfcbaa64
 name: ponytail
 description: >
   Forces the laziest solution that actually works, simplest, shortest, most
@@ -135,9 +135,10 @@ rails are the "explicitly requested" tier — never YAGNI them away.
   here: search the project (Serena, or grep) for an existing helper before
   writing one.
 - **Architect, while sizing steps.** `moe.submit_plan` warns past 8 steps / 5
-  distinct `affectedFiles` and hard-rejects past 12 / 10. The ladder is the
-  cheapest way under the cap: a rung-3 step (stdlib does it) is one step, a
-  hand-rolled equivalent is four.
+  distinct files (the union of every step's `affectedFiles` and `newFiles`)
+  and hard-rejects past 12 / 10. The ladder is the cheapest way under the
+  cap: a rung-3 step (stdlib does it) is one step, a hand-rolled equivalent
+  is four.
 - **A step you believe is unnecessary is a conversation, not a silent skip.**
   The plan is what QA reviews and what the wrapper attributes. Say so in
   `moe.complete_step { note }`, or `moe.report_blocked` for the architect to

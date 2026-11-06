@@ -1,0 +1,255 @@
+{
+  "id": "task-ee10405f63834cd9a57118136ab3a4f5",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: neither wrapper sends protectedEntries with record_candidate, so every verified-local qa_approve is refused protected-checks-unmeasured",
+  "description": "Found by the CQ-M07 final row's composed acceptance test (task-1a8f1d0e, step 1).\nEvidence: record_candidate_rpc (scripts/moe-agent.sh:2724-2738) and Send-MoeCandidate (scripts/moe-agent.ps1:2168-2175) send {taskId, attemptId, generation, workerId, id, baseRevision, treeSha, deliveryTarget} and never protectedEntries; nothing else records it (grep -rn protectedEntries scripts/ outside tests: none). Under verified-local, check-dispatch.mjs owedChecks requires every owed check to carry dependencies, so a bare qualityGate stops with RUNNER_DEPENDENCIES_UNDECLARED and the task must declare executionContract.requiredChecks. Any declared requiredChecks makes policy.ts protectedCheckShortfall read the current candidate's protectedEntries; undefined gives protected-checks-unmeasured (policy.ts:400). So qa_approve on every verified-local task the real wrappers land is refused DELIVERY_EVIDENCE_MISSING [protected-checks-unmeasured], and a verified-local consumer is withheld the same way. The step-2 real-VM run (DoD 8) would fail at qa_approve.\nFix direction: in both wrappers' frozen-candidate record, send protectedEntries = the `git ls-tree -r -z --full-tree <M> -- <protected paths>` blob entries ({path, oid}, byte-sorted, at most 2000) for the paths under the task's approved requiredCheckSnapshot definitions (configs, scripts, assertionRoots; get_context task.executionContract.requiredChecks), only when requiredChecks is declared; omit it otherwise (legacy byte-identical). Keep sh/ps1 parity.",
+  "definitionOfDone": [
+    "Under a task whose executionContract declares requiredChecks, both moe-agent.sh and moe-agent.ps1 record the frozen candidate with protectedEntries equal to the merged tree's blob entries under the definitions' configs, scripts and assertionRoots (sorted by path bytes, exactly {path, oid}); a postflight-vm-route row per wrapper pins the payload against a fake daemon.",
+    "A task without requiredChecks (and every legacy/observe task) sends a record_candidate payload byte-identical to today's; a row pins it in both wrappers.",
+    "A protected path with no blob in the merged tree is omitted from protectedEntries (the daemon reports protected-check-changed for it), never invented; tested.",
+    "parity-check.sh, parity-check.ps1 and npm run lint pass; the gate stays within 20 minutes."
+  ],
+  "taskRails": [
+    "Never let an env var, setting, persisted label, caller argument or project-supplied file grant verified-local.",
+    "Legacy, the default, stays byte-for-byte unchanged in behavior.",
+    "No seat runs Multipass."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fake-daemon support in scripts/tests/postflight-fake-proxy.js. This is test infrastructure and stays inert unless used.\n(a) get_context: FAKE_CTX_CONTRACT=<JSON object> is served as task.executionContract on the task-scoped read. Put it in the switch's get_context case, beside FAKE_CTX_WORKSPACE and FAKE_CTX_COMMITS, mirroring tools/getContext.ts, which serves the field only when set. Parse it with jsonKnob; a non-object throws, as FAKE_CTX_LANDING does. Unset means no field, so today's payload is unchanged.\n(b) candidateReply: when args.protectedEntries is present, refuse it unless it obeys packages/moe-daemon/src/state/candidateStore.ts readProtectedEntries:\n- an array of at most 2000 entries;\n- each entry a plain object whose only keys are path and oid;\n- path equal to its own util/affectedFiles.ts normalization: trimmed, no backslash, no leading '/' or './', no empty, '.' or '..' segment, at most 500 chars, and no control character (0x00-0x1f, 0x7f);\n- oid matching /^[0-9a-f]{40}$/;\n- paths strictly ascending by Buffer.compare.\nAbsent stays absent, and the echoed candidate carries the list exactly as sent, so the wrapper's acknowledgement compares it. Document both knobs in the header notes.\nError handling: each violation throws a plain Error naming the rule inside evidenceRpc's try. The wrapper then sees the FIXTURE_REFUSED refusal it already handles, and the row fails on a refused record instead of a fixture crash. Nothing else changes, so suites that never send protectedEntries (the postflight.{sh,ps1} frozen modes, postflight-worktree.cjs, the other vm-route sections) see identical replies. The rows of steps 2-3 and the sort mutant of step 5 test this validator.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "FAKE_CTX_CONTRACT on the task-scoped get_context (jsonKnob; a non-object throws; unset serves no field). candidateReply runs protectedEntriesCheck (readProtectedEntries rules, plus normalizedPath mirroring normalizeAffectedFile, drive letter included) only when args.protectedEntries !== undefined; a violation throws inside evidenceRpc's try, so the wrapper gets FIXTURE_REFUSED. Smoke: absent, [] and a byte-sorted list are accepted; a mis-sorted list, an extra key, leading whitespace, a bad oid, null and 'a//b' are each refused; the contract is served only when set.",
+      "startedAt": "2026-11-05T10:29:21.214Z",
+      "completedAt": "2026-11-05T10:30:48.121Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.sh, plus its rows in scripts/tests/postflight-vm-route.sh. Read mem:gotcha-verified-local-protected-entries first. Edit only with the Edit tool.\n\nWRAPPER: add a new helper, protected_entries_json (Twin: Get-MoeProtectedEntries), called only from record_candidate_rpc after both attempt checks pass.\n1. Profile gate first: continue only when strong_landing_task \"$LAND_TASK_ID\" succeeds. Otherwise nothing new runs (no context parse, no git), and the same python builds args into today's JSON bytes in today's key order: taskId, attemptId, generation, workerId, id, baseRevision, treeSha, deliveryTarget.\n2. Contract: read PREFLIGHT_CONTEXT from python's stdin, never argv (FAKE_CTX_PAD_BYTES rows push it past 128 KiB). Use it only when it parses as an object whose task.id equals LAND_TASK_ID. requiredChecks count as declared only when task.executionContract.requiredChecks is a non-empty list. A missing, foreign or unparseable context, or no list, keeps today's payload and prints no warning; the daemon then judges.\n3. Paths: the de-duplicated union of every definition's configs, scripts and assertionRoots. If there are no paths, send protectedEntries [] and do NOT call git: ls-tree with no pathspec lists the whole tree.\n4. Measure the candidate's own tree with git -C \"$MOE_TOP\" --literal-pathspecs ls-tree -r -z --full-tree \"$FROZEN_TREE\" -- <paths>, run through subprocess with an argv list. Keep the records with mode 100644, 100755 or 120000 and type blob, as {\"path\": p, \"oid\": o} in that key order, sorted by path.encode('utf-8'). A protected path with no blob is simply absent (DoD 3); never fill it from the approved snapshot or the base.\n5. Unmeasurable: omit the field. Never invent an entry and never send a partial list. Check records in git order; the first offender names the reason:\n- 'requiredChecks unreadable': a definition is not an object with string-list paths;\n- 'git ls-tree failed': a non-zero exit, or python itself failing;\n- 'non-blob entry': for example a 160000 gitlink;\n- 'unsupported path': not strict UTF-8, or a path the daemon refuses (a control character, a backslash, leading or trailing whitespace, over 500 characters);\n- 'more than 2000 entries': checked after parsing.\nThen print exactly one line to stderr with printf (mem:gotcha-launcher-user-path-strings), byte-identical to the ps1 twin:\n[WARN] record_candidate: the protected check files of task <taskId> were not measured on tree <tree> (<reason>); the candidate is recorded without protectedEntries, so qa_approve will report protected-checks-unmeasured.\n6. args gains protectedEntries as its LAST key, and only when step 3 or 4 produced a list. moe_evidence_rpc's acknowledgement (a type-checked python ==) already refuses an echo that drops or changes it.\nError handling: no branch can grant anything; an omitted or wrong list only makes qa_approve refuse. The helper never fails the candidate record or the landing.\n\nROWS, in the [strong gate] block. They reuse sg_fixture and sg_check.\n- pe_fixture runs sg_fixture, then commits these files on moe/control: package-lock.json, scripts/lint.sh, scripts/other.sh, tests/B.txt, 'tests/a b.txt', tests/a.txt, tests/sub/c.txt, tests/<U+00E9>.txt (create the name from bytes, printf '\\303\\251') and unprotected.txt. With PE_GITLINK=1 it also adds a gitlink with git update-index --add --cacheinfo 160000,<seed commit>,tests/mod. Then it runs git branch -f main HEAD and rewrites sg-base.\n- PE='{\"requiredChecks\":[{\"id\":\"gate\",\"command\":\"npm test\",\"configs\":[\"package-lock.json\",\"vm-job.txt\"],\"assertionRoots\":[\"tests\"]},{\"id\":\"lint\",\"command\":\"npm run lint\",\"configs\":[\"package-lock.json\"],\"scripts\":[\"scripts/lint.sh\",\"scripts/gone.sh\"]}]}'. vm-job.txt exists only in M (the fake seat's job adds it), so its presence proves the entries come from M.\n- sg_check gains a payload expectation for every row; the default is 'today'.\n  - today: Object.keys(record_candidate args) deepEquals the 8 keys in order, and no 'record_candidate: the protected check files' line is printed.\n  - a path list: those 8 keys plus protectedEntries last. protectedEntries deepEquals [{path, oid: git rev-parse <treeSha>:<path>}] in the given order, and each entry's JSON text is exactly {\"path\":..,\"oid\":..}.\n  - empty: protectedEntries is exactly [].\n  - unmeasured: today's 8 keys, plus exactly one WARN line naming reason 'non-blob entry', task-postflight and the treeSha.\n- SG-legacy and SG-observe gain FAKE_CTX_CONTRACT=\"$PE\" and expect today (DoD 2). SG-pass and the refused SG rows keep no contract and expect today (DoD 2).\n- New PE-pass: pe_fixture, strong, $PE, kind pass. Expect package-lock.json, scripts/lint.sh, tests/B.txt, 'tests/a b.txt', tests/a.txt, tests/sub/c.txt, tests/<U+00E9>.txt, vm-job.txt (DoD 1, DoD 3).\n- New PE-empty: sg_fixture, strong, '{\"requiredChecks\":[{\"id\":\"gate\",\"command\":\"true\"}]}'. Expect [].\n- New PE-unmeasured: pe_fixture with PE_GITLINK=1, strong, $PE, kind pass. Expect unmeasured.\n- Restore VMR_SETUP=sg_fixture before [strong receipt].\nIterate on a [strong gate] slice (mem:pattern-vm-route-strong-receipt-slice). Then run bash -n scripts/moe-agent.sh and bash scripts/tests/postflight-vm-route.sh once in full, with MOE_*, CLAUDE* and FAKE_* unset.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "moe-agent.sh: new protected_entries_json, called from record_candidate_rpc after both attempt checks. It is gated first on strong_landing_task, so legacy/observe run nothing new and send today's bytes. The contract is read from PREFLIGHT_CONTEXT on stdin and used only when task.id matches and requiredChecks is a non-empty list; otherwise today's payload goes out with no WARN. The paths are the union of configs/scripts/assertionRoots: an empty list sends [] without calling git, and a non-string or empty path is 'requiredChecks unreadable'. git runs as --literal-pathspecs ls-tree -r -z --full-tree on FROZEN_TREE through an argv list. Only 100644/100755/120000 blob records are kept, sorted by UTF-8 bytes and emitted as exactly {path,oid}. A non-blob record, an unsupported path, git failure or more than 2000 entries falls back to today's payload plus one fixed WARN line. postflight-vm-route.sh: pe_fixture, an SG_PAYLOAD check in sg_check, FAKE_CTX_CONTRACT on SG-legacy/SG-observe (today's 8 keys pinned), plus PE-pass (8 entries incl. 'a b', B/a byte order, U+00E9; gone.sh omitted), PE-unmeasured (gitlink → the WARN) and PE-empty ([] and no git). Evidence: scratch snapshot, full `bash postflight-vm-route.sh` → PASS, EXIT=0. RED: with HEAD's moe-agent.sh, PE-pass fails on 'record_candidate keys'.",
+      "startedAt": "2026-11-05T10:30:48.905Z",
+      "completedAt": "2026-11-05T10:43:12.434Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/moe-agent.ps1 twin of step 2, plus its rows in scripts/tests/postflight-vm-route.ps1. Keep moe-agent.ps1 UTF-8 with BOM, and edit it only with the Edit tool.\n\nWRAPPER:\n- Add a new helper, Get-MoeProtectedEntries $Git $TaskId $Tree (Twin: protected_entries_json). It uses step 2's exact rules, reasons and [WARN] bytes, printed with Write-Host -ForegroundColor Yellow.\n- Profile gate first: Test-MoeStrongLandingTask $TaskId $Git.GitDir.\n- Context: $preflightContext, used only when its task.id -ceq $TaskId. Read the definitions with Get-MoeProp, and wrap each list in @(), because a one-item list unrolls.\n- git: Invoke-MoeGit -Top $Git.Top -GitArgs (@('--literal-pathspecs','ls-tree','-r','-z','--full-tree',$Tree,'--') + $paths). Split the output with ((Out -join \"`n\").Split([char]0)), as the wrapper does elsewhere. Match each record with '^(100644|100755|120000) blob ([0-9a-f]{40})\\t([\\s\\S]+)$'. A decoded path that holds U+FFFD is 'unsupported path', matching sh's strict decode.\n- Sort by UTF-8 bytes with a [Collections.Generic.List[...]] .Sort([Comparison[...]]{...}) that compares, with [string]::CompareOrdinal, the hex of each path's UTF-8 bytes. Probed: this works on 5.1 and 7 (mem:gotcha-ps1-byte-order-sort-and-array-ack). Never use Sort-Object: it is culture-aware and case-blind. Never use [Array]::Sort(keys, items, comparer): called from PowerShell it left the items unsorted.\n- Build entries as [ordered]@{ path = ...; oid = ... }. Return them inside a wrapper object (e.g. @{ Entries = ... }) or as $null, so a 0- or 1-entry list never unrolls through the return.\n- Send-MoeCandidate gains a $Git parameter. Its three callers pass their $Git: the shared-mode landing (~6201), the strong worktree L6 (~7451) and the legacy worktree L6 (~7459). Build the legacy hashtable exactly as today, and add protectedEntries = @(...) only when a list was measured.\n- Leave Send-MoeEvidence unchanged. Its per-key compare already acknowledges echoes of 0, 1 and 2 entries on both engines (probed).\nError handling: as in step 2, every failure omits the field and prints one WARN, and nothing here fails the record or the landing. A throw inside the helper is caught and counts as 'git ls-tree failed'.\n\nROWS, the twins of step 2's rows in Invoke-SgRows / Assert-SgRow:\n- The PE fixture, as a $script:VmrSetup variant: Initialize-SgFixture, then the same files and commit. Build the non-ASCII name from [char]0xE9, never a literal. Add the gitlink when PE_GITLINK is set. Then run branch -f main and update $script:VmjBase.\n- FAKE_CTX_CONTRACT on SG-legacy and SG-observe.\n- PE-pass, PE-empty and PE-unmeasured.\n- In Assert-SgRow's payload expectation, compare the record_candidate argument names as a sorted set: a ps1 @{} has no stable key order in pwsh 7, so 'today' means the same 8 names and values with no protectedEntries. Compare the protectedEntries entries in order, each as the exact JSON {\"path\":..,\"oid\":..}.\n- Restore $script:VmrSetup and $script:VmjBase before Invoke-SrRows.\nIterate with the ps1 slice from mem:pattern-vm-route-strong-receipt-slice, run from a /mnt/d cwd with the env scrubbed and WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC, on both engines:\n- pwsh.exe -nop -ep Bypass -f <file>\n- pwsh.exe -nop -c \"cmd /c powershell -nop -ep Bypass -f <file>\"\nSee mem:gotcha-qa-ps1-postflight-from-wsl. ParseFile must show no errors on 5.1 or 7.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "moe-agent.ps1 (BOM kept, ef bb bf): new Get-MoeProtectedEntries, the twin of protected_entries_json, with the same rules, reasons and WARN bytes. It is gated first on Test-MoeStrongLandingTask and reads $preflightContext only when task.id -ceq the TaskId. The definitions are read through a local raw-property scriptblock instead of Get-MoeProp, so that a one-item list stays a list and a bare string is refused. An empty-string path is 'requiredChecks unreadable', because 5.1 drops empty native args and ls-tree would then list the whole tree. git runs as Invoke-MoeGit --literal-pathspecs ls-tree -r -z --full-tree inside try/catch, and the trailing NUL is checked with the Ordinal EndsWith. Entries are sorted with a List.Sort Comparison by CompareOrdinal over the hex of the UTF-8 bytes, as [ordered]@{path;oid}, and returned in @{Entries=...}. Send-MoeCandidate gains $Git; all 3 callers pass it, and the legacy hashtable is unchanged. postflight-vm-route.ps1: Initialize-PeFixture ([char]0xE9, $script:PeGitlink), FAKE_CTX_CONTRACT on SG-legacy/SG-observe, and PE-pass/PE-unmeasured/PE-empty. Assert-SgRow gains Payload/Paths: the arg names are compared as an ordinal-sorted set, each entry as exact path,oid against `git rev-parse M:path`, and the WARN line exactly. Evidence: ParseFile shows 0 errors on 5.1 and 7 for both files. The slice (Invoke-SgRows only, scratch snapshot) gives SLICE-OK EXIT=0 on pwsh 7 and on 5.1. RED: with HEAD's moe-agent.ps1 the slice fails 'VM ROUTE FAILED (PE-pass): protectedEntries … expected 8 entries'.",
+      "startedAt": "2026-11-05T10:43:16.776Z",
+      "completedAt": "2026-11-05T10:47:02.404Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once. Run executionContract.checkRefs[0] verbatim from the task worktree; it changes into scripts/tests itself. Its legs run in parallel:\n- Each Windows engine runs ParseFile on moe-agent.ps1, then postflight-vm-route.ps1 (5.1 through the cmd hop), then postflight.ps1 limited to the frozen-candidate modes pass, record_candidate-refuse, record_candidate-malformed and intent-strong (Send-MoeCandidate's shared-mode caller, legacy and strong), then parity-check.ps1.\n- bash runs bash -n, postflight-vm-route.sh, the same 4 modes of postflight.sh, parity-check.sh and npm run lint.\nExit 0 needs three '@' markers plus three 'PASS frozen candidate scenarios: 4' lines. A dry run on 7a48aa92, before the new rows, took 514 s at load ~2; the new rows add about 1-3 min. The budget is 20 minutes (project rail).\nSubmit the run's command, exit code and output tail as the complete_task verification.\nError handling for a red run:\n- Read the leg logs it tails ($L/powershell, $L/pwsh, $L/sh), fix the cause, and re-run the whole command.\n- A leg that dies at once with a WSL interop error (UtilAcceptVsock) and no harness output is a launch failure. Re-run it; it is not the change (mem:gotcha-qa-ps1-postflight-from-wsl).\n- If the gate ever needs more than 20 minutes, report that instead of trimming coverage.\nKill only PIDs your session started. Never run npm build, ci, install or test here (project rails).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I ran checkRefs[0] verbatim from the task worktree (10:47:24Z-10:56:12Z, 8 min 48 s, within the 20 min budget). Exit 0. The tails: powershell and pwsh each end 'PASS frozen candidate scenarios: 4 / PASS parity-check.ps1 / @'; sh ends 'OK: docs/roles/qa.md has 36 lines (max 40) / @'. Step 5's review found two small byte changes: literal U+FEFF/U+FFFD in the sh python become \ufeff/� escapes, and the sh 'today' row pins the values as well as the key order. checkRefs[0] will be re-run on the final bytes before complete_task.",
+      "startedAt": "2026-11-05T10:47:18.028Z",
+      "completedAt": "2026-11-05T10:56:31.382Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review) of the whole diff, then prove the rows bite.\nRun each mutant in a scratch snapshot on /mnt/d (never in W, never with sed -i on tracked files), using the fast slices from mem:pattern-vm-route-strong-receipt-slice. Each mutant must turn its row red, in both wrappers:\n1. Drop the strong gate, so the field is sent for any task with requiredChecks. Red row: SG-legacy.\n2. Measure the base tree instead of FROZEN_TREE / $Frozen.Tree. Red row: PE-pass (vm-job.txt).\n3. Sort case-insensitively (sh key=str.lower; ps1 Sort-Object). Red row: PE-pass, and the fake refuses the unsorted list.\n4. Call ls-tree without a pathspec for an empty path list. Red row: PE-empty.\n5. Skip non-blob records instead of omitting the field. Red row: PE-unmeasured.\nAlso check:\n- legacy and observe add no git call, context parse or output line;\n- nothing reads an env var, setting or CLI-writable file to decide strong or the paths (task rails);\n- the [WARN] bytes match across the wrappers;\n- the ps1 BOM is intact;\n- the frozen-mode payloads are unchanged;\n- no existing test assertion was weakened.\nList the mutants and their red rows in the completion summary. If this review changes any byte, re-run checkRefs[0] and submit that fresh run.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial review fixes:\n(1) The sh python held literal U+FEFF/U+FFFD characters; they are now chr(0xfeff)/chr(0xfffd). python decodes -c argv by locale, so a non-UTF-8 locale would have silently disabled those checks. The added sh diff is now pure ASCII, and a unit check of unsupported() passes.\n(2) Payload pins strengthened. The sh rows pin the 8 today values as well as the key order; ps1 adds workerId, id, baseRevision and treeSha.\nMutants, run in scratch snapshots with the PE slices, each red in BOTH wrappers:\n1. No strong gate → SG-legacy.\n2. Base tree measured → PE-pass (no vm-job.txt).\n3. Case-insensitive sort (sh str.lower, ps1 Sort-Object) → PE-pass; the fake refuses record_candidate.\n4. ls-tree with no pathspec for an empty list → PE-empty (whole tree listed).\n5. Non-blob records skipped → PE-unmeasured.\nThe unmutated final-bytes controls: SLICE-OK on sh, pwsh 7 and PS 5.1.\nChecks:\n- Legacy and observe only add the read-only strong predicate, which the legacy landing already calls: no git, no context parse, no output.\n- PREFLIGHT_CONTEXT and $preflightContext are reset at the loop top and filled only from get_context, so no env var, setting or file decides strong or the paths.\n- The WARN text is equal across the wrappers (script check).\n- The BOM is ef bb bf.\n- The frozen modes pass in the gate.\n- No assertion was removed or weakened; the removed lines are only call sites that gained FAKE_CTX_CONTRACT or an extra argument.\nTheoretical, not fixed: on PS 5.1, a configured path containing a double quote is mangled by native arg passing. That entry would be omitted, and the daemon then fails closed with protected-check-changed.\nRe-ran checkRefs[0] on the final bytes: exit 0 in 8 min 35 s.",
+      "startedAt": "2026-11-05T10:56:32.228Z",
+      "completedAt": "2026-11-05T11:09:26.427Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 07:37Z. This is on the critical path of the final CQ-M07 row: task-1a8f1d0e is BLOCKED on it (blockedOnTaskIds) at step 2, because the real-VM run (DoD 8) would fail at qa_approve with protected-checks-unmeasured. The evidence is concrete, at record_candidate_rpc sh:2724 and Send-MoeCandidate ps1:2168, and acceptance row L3(e) pins it. HIGH. Plan it ahead of a251cd63.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 537.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T07:29:12.529Z",
+  "updatedAt": "2026-11-05T11:28:40.107Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-05T07:36:23.692Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-05T10:00:25.085Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-05T11:26:58.027Z",
+    "wallClockMs": 5192942
+  },
+  "contextFetchedBy": [
+    "architect-26393a1d",
+    "worker-57d48f38",
+    "qa-a22d53a1"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T10:27:47.043Z",
+  "executionContract": {
+    "intendedBehavior": "On a strong (verified-local) landing whose task's executionContract declares requiredChecks, moe-agent.sh and moe-agent.ps1 record the frozen candidate with protectedEntries: the candidate tree's blob entries under every definition's configs, scripts and assertionRoots, as exact {path, oid} objects in UTF-8 byte order ([] when the definitions name no path). qa_approve can then compare them with the approved requiredCheckSnapshot instead of refusing protected-checks-unmeasured. Every other landing (legacy, observe, or strong without requiredChecks) sends today's record_candidate payload unchanged. A tree whose protected entries cannot be measured faithfully (a non-blob entry, more than 2000 entries, a path the daemon would refuse, a git failure) is recorded without the field and with one [WARN] line, so the daemon fails closed; nothing is invented.",
+    "acceptanceCriteria": [
+      "PE-pass, in postflight-vm-route.sh and in postflight-vm-route.ps1 on 5.1 and 7: the record_candidate args end with protectedEntries for package-lock.json, scripts/lint.sh, tests/B.txt, 'tests/a b.txt', tests/a.txt, tests/sub/c.txt, tests/<U+00E9>.txt and vm-job.txt, in that order. Each oid equals git rev-parse <treeSha>:<path>, and each entry is exactly {path, oid}. scripts/gone.sh (no blob), scripts/other.sh, unprotected.txt and seed.txt are absent. main moves to C.",
+      "Strong without requiredChecks (SG-pass and every refused SG row) and legacy/observe with requiredChecks (SG-legacy, SG-observe): the record_candidate args are exactly today's 8 keys (sh in today's order), there is no protectedEntries, and no protected-entries [WARN] line is printed.",
+      "PE-empty: a strong task whose requiredChecks name no path records protectedEntries: [], and git never lists the whole tree.",
+      "PE-unmeasured: a gitlink under a protected root leaves the payload at today's 8 keys and prints exactly one '[WARN] record_candidate: the protected check files of task task-postflight were not measured on tree <treeSha> (non-blob entry); ...' line. The landing still lands.",
+      "The fake daemon refuses a protectedEntries list that breaks packages/moe-daemon/src/state/candidateStore.ts readProtectedEntries, so a mis-sorted or malformed list turns its row red."
+    ],
+    "invariants": [
+      "Only strong_landing_task / Test-MoeStrongLandingTask decide strong, from wrapper- or daemon-written records. No env var, setting, CLI-written file or caller argument decides strong or the protected paths.",
+      "protectedEntries are measured on exactly the candidate's own treeSha (FROZEN_TREE / $Frozen.Tree), never filled from the approved snapshot or the base. When in doubt the field is omitted, which can only make qa_approve refuse.",
+      "git ls-tree never runs without a pathspec. Pathspecs are literal (--literal-pathspecs) and passed after --, through an argv list, never a shell string.",
+      "The [WARN] line is byte-identical in both wrappers, and moe-agent.ps1 stays UTF-8 with BOM."
+    ],
+    "compatibility": [
+      "Legacy and observe landings, and strong landings without requiredChecks, send the same record_candidate payload as today: in sh the JSON is byte-identical in today's key order, and in ps1 the same 8 keys and values. Those paths add no RPC, git call or context parse.",
+      "The record_candidate wire contract is unchanged. protectedEntries is the optional field docs/MCP_SERVER.md already defines: omit it when not measured; [] means nothing exists under those paths. There is no daemon, check-dispatch, journal or landing-order change.",
+      "The fake daemon's new knob and validation are inert for every suite that sends no protectedEntries: the postflight.{sh,ps1} frozen modes, postflight-worktree.cjs and the other vm-route sections."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: record_candidate_rpc and a new helper (protected_entries_json). Reuses strong_landing_task, PREFLIGHT_CONTEXT, FROZEN_TREE, MOE_TOP and moe_evidence_rpc, all unchanged.",
+      "scripts/moe-agent.ps1: Send-MoeCandidate (a new $Git parameter) and its 3 callers, plus a new helper (Get-MoeProtectedEntries). Reuses Test-MoeStrongLandingTask, $preflightContext, Invoke-MoeGit and Get-MoeProp. Send-MoeEvidence is unchanged.",
+      "scripts/tests/postflight-fake-proxy.js: FAKE_CTX_CONTRACT on get_context, and protectedEntries validation in candidateReply.",
+      "scripts/tests/postflight-vm-route.{sh,ps1} [strong gate]: the PE fixture, the record_candidate payload expectation in sg_check / Assert-SgRow, a contract on SG-legacy/SG-observe, and the rows PE-pass, PE-empty and PE-unmeasured."
+    ],
+    "reuse": [
+      "strong_landing_task / Test-MoeStrongLandingTask (the strong L6 and CQ-V08b predicate), the pre-flight context the wrappers already hold, Invoke-MoeGit with the established -z split ((Out -join \"`n\").Split([char]0)), the moe_evidence_rpc / Send-MoeEvidence acknowledgement (unchanged), and the [strong gate] fixture, sg_check / Assert-SgRow and the fake check dispatch.",
+      "No new script file: a shared .mjs helper would need IDE bundle wiring and a sixth file. Python (sh) and Invoke-MoeGit (ps1) are the wrappers' established evidence patterns."
+    ],
+    "sourceAssumptions": [
+      "At 7a48aa92, scripts/moe-agent.sh record_candidate_rpc (~2724) and moe-agent.ps1 Send-MoeCandidate (~2168) send 8 keys and never protectedEntries. freeze_candidate (sh ~5710) / New-MoeFrozenCandidate (ps1) feed it in shared mode and in the worktree strong and legacy L6 (sh ~7822, ps1 ~6201/7451/7459).",
+      "packages/moe-daemon/src/delivery/policy.ts protectedCheckShortfall/protectedDrift: a current candidate without an array protectedEntries yields protected-checks-unmeasured. Entries are compared as a path->oid map with the readRequiredCheckSnapshot entries under protectedPaths roots.",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts measureRequiredCheckSnapshot runs git --literal-pathspecs ls-tree -r -z --full-tree <tree> -- <unique paths>. It keeps blob modes 100644/100755/120000 only, at most 2000 of them, sorted by Buffer.compare. With no paths it returns [] and never calls git.",
+      "packages/moe-daemon/src/state/candidateStore.ts readProtectedEntries refuses a list unless every entry is exactly {path, oid}, every path is normalized (util/affectedFiles.ts, at most 500 chars) and free of control characters, every oid is lowercase 40-hex, paths strictly ascend by UTF-8 bytes, and there are at most 2000 entries.",
+      "packages/moe-daemon/src/state/validators.ts drops an empty requiredChecks list, so a stored contract declares requiredChecks only as a non-empty list. get_context serves task.executionContract when it is set (tools/getContext.ts ~590).",
+      "Both wrappers keep the pre-flight get_context through the post-flight landing (sh PREFLIGHT_CONTEXT, ps1 $preflightContext). In worktree mode that read is guaranteed, because otherwise the seat stops with MOE_WORKTREE_CONTEXT_FAILED.",
+      "Probed 2026-11-05 on 5.1 and 7: git ls-tree -r already emits full paths in UTF-8 byte order. Invoke-MoeGit's UTF-8 capture decodes U+00E9 correctly. Send-MoeEvidence's per-key compare acknowledges echoes of 0, 1 and 2 entries. Sort-Object orders 'tests/a b.txt' before 'tests/B.txt' (wrong), and [Array]::Sort(keys, items, comparer) called from PowerShell left the items unsorted."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)/scripts/tests\"||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=pass,record_candidate-refuse,record_candidate-malformed,intent-strong;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B postflight.ps1&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash postflight.sh&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|rios: 4') = 6 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Keying protectedEntries on requiredChecks alone, under any profile: rejected. DoD 2 and the task rail keep every legacy/observe payload byte-identical. Note that policy.ts also judges requiredChecks under legacy, so a legacy task that declares requiredChecks is still refused protected-checks-unmeasured after this fix. That is unchanged behavior, and a separate human decision if it is ever wanted.\n- A fresh unserved get_context at landing: rejected in favour of the pre-flight read both wrappers already hold. That read adds no RPC (existing call-log rows stay unchanged) and is guaranteed in worktree mode.\n- Failing the landing when entries cannot be measured: rejected in favour of omitting the field and printing one WARN. The doc contract says 'omit when not measured'. The daemon then refuses approval, nothing is invented, and there is no new landing failure mode or unlanded route.\n- A shared node helper (.mjs) for both wrappers: rejected. It needs IDE bundle wiring and a sixth file.\n- Reading .moe/tasks/<id>.json directly: rejected, because get_context is the daemon-owned read.\n- Hardening Send-MoeEvidence for arrays: not needed. A probe showed today's per-key compare already handles 0, 1 and 2 entries on 5.1 and 7 (mem:gotcha-ps1-byte-order-sort-and-array-ack).",
+    "codebaseInsights": "- record_candidate_rpc / Send-MoeCandidate is the only place that records a candidate, for both shared-mode and worktree landings. Adding the field there covers both modes.\n- The worktree strong L6 (sh ~7822, ps1 ~7447) already evaluates strong_landing_task before freeze_candidate. The legacy L6 and the shared landing reach the same function with strong false.\n- FROZEN_TREE / $Frozen.Tree is the candidate's treeSha (M in worktree mode).\n- git ls-tree -r prints full paths in byte order, because git sorts tree entries with a '/' appended to directory names. The explicit sort is a safeguard, and the PE-pass row pins it: tests/B.txt < 'tests/a b.txt' < tests/a.txt.\n- Invoke-MoeGit sets the console output encoding to UTF-8. PowerShell splits native output on newlines, so the wrapper rejoins with a newline and splits on [char]0.\n- In pwsh 7, @{} key order varies per process, so ps1 payload rows compare key SETS.\n- The fake seat's VM job adds vm-job.txt to M, which lets the rows prove the entries come from M rather than B.\n- The daemon-side acceptance row L3(e) (task-1a8f1d0e) pins the daemon's fail-closed refusal of a candidate without protectedEntries. It stays valid after this wrapper fix.\n- Under verified-local, check-dispatch needs requiredChecks: a bare qualityGate gives RUNNER_DEPENDENCIES_UNDECLARED. That is why every real verified-local task hits this path.",
+    "risks": "- Do NOT declare executionContract.requiredChecks on this task. The repo runs legacy, which by DoD 2 still omits the field, so this task's own qa_approve would refuse protected-checks-unmeasured.\n- PowerShell unrolling: a function returning a 0- or 1-item array hands back $null or the bare item. Wrap collections in @() where they are used, and return the entries inside a wrapper object.\n- Never use Sort-Object or [Array]::Sort(keys, items) for byte order: a probe showed both get it wrong.\n- On Windows a very long pathspec list can pass the 32K command-line limit. That surfaces as 'git ls-tree failed' (field omitted, one WARN), never as a wrong list.\n- The gitlink fixture: tests/mod is an empty directory in W, which is normal. If provisioning or the fake seat trips on it, trigger the unmeasured path with more than 2000 blobs under tests/ instead, and say so in the summary.\n- Non-ASCII file name: in sh build it from bytes (printf '\\303\\251'); in ps1 from [char]0xE9. Never use a literal, which PS 5.1 can misread.\n- SG-legacy and SG-observe are host-gate controls. Adding FAKE_CTX_CONTRACT must not change their kind or their other assertions.\n- The new WARN must never appear on a legacy row; sg_check's default 'today' asserts this.\n- Gate time: the dry run took 514 s at load ~2. The new rows add about 1-3 min, well inside the 20-minute rail.\n- No other open task declares these five files (checked 2026-11-05: only a251cd63, which is JetBrains-only, and the BLOCKED final task).",
+    "keyFiles": [
+      "scripts/moe-agent.sh (record_candidate_rpc ~2724, moe_evidence_rpc ~2690, strong_landing_task ~4431, freeze_candidate ~5710, wt_land_rounds strong L6 ~7822)",
+      "scripts/moe-agent.ps1 (Send-MoeEvidence ~2139, Send-MoeCandidate ~2168, Invoke-MoeGit ~3120, Test-MoeStrongLandingTask ~4432, callers ~6201/7451/7459)",
+      "scripts/tests/postflight-fake-proxy.js (candidateReply ~102, get_context case ~577)",
+      "scripts/tests/postflight-vm-route.sh ([strong gate] ~777-1052: sg_fixture, sg_check, SG rows)",
+      "scripts/tests/postflight-vm-route.ps1 (Initialize-VmjFixture ~127, Initialize-SgFixture ~873, Assert-SgRow ~890, Invoke-SgRows ~949, Invoke-SgSections ~1284)",
+      "packages/moe-daemon/src/delivery/requiredChecks.ts (measureRequiredCheckSnapshot: the daemon's own measure to mirror)",
+      "packages/moe-daemon/src/state/candidateStore.ts (readProtectedEntries rules)",
+      "packages/moe-daemon/src/delivery/policy.ts (protectedCheckShortfall, protectedDrift)",
+      "docs/MCP_SERVER.md record_candidate (~881: omit when not measured; [] means nothing under those paths)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "7a48aa92c0a02dee1a22e6a81dd7f1ee332af3a2",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T10:27:47.082Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a22d53a1@2026-11-05T11:11:24Z",
+    "at": "2026-11-05T11:28:40.107Z"
+  },
+  "workStartedAt": "2026-11-05T10:29:21.214Z",
+  "reviewStartedAt": "2026-11-05T11:10:00.508Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)/scripts/tests\"||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_FROZEN_TEST_ONLY=pass,record_candidate-refuse,record_candidate-malformed,intent-strong;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B postflight.ps1&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash postflight.sh&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|rios: 4') = 6 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.XhszaTZk1Q/powershell <==\nPASS frozen candidate scenarios: 4\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.XhszaTZk1Q/pwsh <==\nPASS frozen candidate scenarios: 4\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.XhszaTZk1Q/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\n(final-bytes run 2026-11-05T11:00:27Z-11:09:02Z, 8 min 35 s; exit 0)",
+    "reportedAt": "2026-11-05T11:10:00.508Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "Both wrappers now send protectedEntries with record_candidate on a strong landing whose pre-flight context (task.id matched) declares a non-empty executionContract.requiredChecks.\n- What is sent: the candidate tree's blobs (100644/100755/120000) under the union of configs/scripts/assertionRoots, from `git --literal-pathspecs ls-tree -r -z --full-tree <FROZEN_TREE> -- <paths>`, sorted by UTF-8 bytes, each exactly {path,oid}. A path with no blob is omitted.\n- No paths: [] is sent and git is not called.\n- Fallbacks: a non-blob entry, an unsupported path, a git failure, unreadable requiredChecks or more than 2000 entries omit the field and print one fixed WARN (identical bytes in both wrappers).\n- Unchanged: legacy/observe, and strong tasks without requiredChecks, keep today's payload.\n- Helpers: sh protected_entries_json; ps1 Get-MoeProtectedEntries, with Send-MoeCandidate gaining $Git (3 callers).\n- Fake daemon: the FAKE_CTX_CONTRACT knob, and validation of protectedEntries as in candidateStore.readProtectedEntries.\n- Rows in both vm-route files:\n  - SG-legacy/SG-observe carry the contract and pin today's 8 keys and values.\n  - PE-pass: 8 entries incl. 'tests/a b.txt', B<a byte order, U+00E9, vm-job.txt from M; gone.sh omitted.\n  - PE-unmeasured: a gitlink gives the WARN.\n  - PE-empty: [].\n- RED: HEAD's wrappers fail PE-pass in sh and ps1.\n- Mutants, each red in both wrappers:\n  1. No strong gate → SG-legacy.\n  2. Base tree measured → PE-pass.\n  3. Case-insensitive sort → PE-pass (the fake refuses).\n  4. ls-tree with no pathspec → PE-empty.\n  5. Non-blob records skipped → PE-unmeasured.\n- Review fixes: ASCII chr() in place of literal U+FEFF/U+FFFD in the sh python (locale-safe), and stronger payload value pins.\n- Theoretical, not fixed: a PS 5.1 path containing a double quote would be omitted, and the daemon then fails closed.\n- Gate checkRefs[0] on the final bytes: exit 0 in 8 min 35 s.\n- Requires no rebuild.",
+  "commits": [
+    {
+      "sha": "b8e09f7e737a1c287d8a39d3a7fb6546dc1f144d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-57d48f38@2026-11-05T10:28:07Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-57d48f38",
+      "recordedAt": "2026-11-05T11:11:04.691Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-05T11:26:58.027Z",
+  "reviewCompletedAt": "2026-11-05T11:26:58.027Z",
+  "reviewSummary": "Reviewed completion b8e09f7e (on moe/work-2026-10-24 and origin). 5 files, +258/-14, 244 net, matching the approved scope.\nGate: re-ran checkRefs[0] verbatim (byte-equal to task.verification) in a --shared clone at b8e09f7e on /mnt/d. Exit 0 in 9m19s. Three '@' markers, 'PASS frozen candidate scenarios: 4' on 5.1 and 7, ParseFile clean, and every leg logs '[strong gate] ok ... PE-pass, PE-unmeasured, PE-empty'.\nDoD:\n1. PE-pass in both wrappers pins 8 exact {path,oid} entries in byte order (B < 'a b' < a, U+00E9), with vm-job.txt from M.\n2. Today's 8 keys and values, with no field, are pinned on SG-pass, the refused rows and SG-legacy/SG-observe (which carry the contract).\n3. gone.sh is omitted; PE-unmeasured (gitlink) prints the exact WARN and still lands.\n4. Gate green within budget.\nCode: both helpers gate on strong_landing_task first and read requiredChecks only from the daemon-served pre-flight context with a matching task.id. They run git --literal-pathspecs ls-tree on the frozen tree through an argv list, never with no pathspec, and any doubt omits the field (the daemon fails closed). The fake mirrors readProtectedEntries. The WARN is identical in both wrappers, the ps1 BOM is intact, and the added sh lines are ASCII.\nMutants (scratch snapshots; controls green on sh and pwsh 7):\n- no strong gate: SG-legacy red\n- base tree measured: PE-pass red\n- case-insensitive sort: PE-pass red, the fake refuses (sh, ps1)\n- no pathspec: PE-empty red\n- non-blob skipped: PE-unmeasured red\n- mine, {oid,path} key order: PE-pass red\n- mine, ps1 L6 caller without $Git: PE-pass red\nNotes: a legacy task that declares requiredChecks is still refused by policy.ts (pre-existing). A gitlink under a protected root never passes, matching the daemon's parseEntries.",
+  "requiredCheckAtDone": null
+}

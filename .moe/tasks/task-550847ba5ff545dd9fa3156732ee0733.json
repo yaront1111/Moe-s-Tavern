@@ -86,12 +86,12 @@
     }
   ],
   "planRevision": 1,
-  "status": "BLOCKED",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion c02ca51e has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "reopenReason": "Worktree switch done (19:14Z): the control checkout is on moe/control at 0d8422ce, worktreeMode is on, and doctor exits 0. The drain park is over. Completion c02ca51e is in moe/control's history, so QA reviews the landed bytes.",
   "createdBy": "ARCHITECT",
   "parentTaskId": null,
   "priority": "MEDIUM",
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T17:47:03.844Z",
-  "updatedAt": "2026-11-02T18:44:09.699Z",
+  "updatedAt": "2026-11-04T19:20:43.725Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T17:47:34.974Z",
@@ -109,11 +109,14 @@
     "firstClaimAt": "2026-11-02T17:56:43.565Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 3,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:15:56.603Z",
+    "wallClockMs": 4753038
   },
   "contextFetchedBy": [
     "architect-93e0e956",
-    "worker-13a877ad"
+    "worker-13a877ad",
+    "qa-93f9625e"
   ],
   "tier": "standard",
   "effort": "high",
@@ -265,12 +268,20 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
+    "outcome": "nothing",
     "kind": "checkpoint",
-    "sessionId": "architect-93e0e956@2026-11-02T17:56:33Z",
-    "at": "2026-11-02T18:44:09.699Z"
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-02T19:13:53Z",
+    "at": "2026-11-02T19:16:31.468Z"
   },
-  "blockedFromStatus": "REVIEW",
-  "blockedAt": "2026-11-02T18:34:01.490Z",
-  "blockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion c02ca51e has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode."
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "Governor park for the worktree-switch drain (runbook step 1: no task WORKING or REVIEW with an open attempt). The completion c02ca51e has landed, so no bytes change. Parked only so no QA claim opens an attempt while the governor runs the switch (human: \"do whats needed for the switch\", 18:33Z). The governor sets this back to REVIEW right after the switch, and QA then reviews the landed bytes in worktree mode.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-02T19:15:56.603Z",
+  "reviewCompletedAt": "2026-11-02T19:15:56.603Z",
+  "reviewSummary": "Reviewed landed completion c02ca51e (in moe/control history under HEAD 0d8422ce; no self-landing). Own diff: MoeDaemonClient.ts +12, types/moe.ts +2/-1, wire-parity.test.cjs +128/-0 (~141 LOC, under the 400 cap). Diff read: one braced `case 'PINS_UPDATED'` after PINS; validates non-empty string channel and Array.isArray(pins), fires _onPinsReceived once, else silent break; no import; PINS/PIN_CREATED/PIN_REMOVED/PIN_TOGGLED untouched. types/moe.ts has the union member and DAEMON_MESSAGE_TYPES entry. Daemon emitters confirmed (chatStore.ts:513/530/547). Re-ran task.verification verbatim (git-archive snapshot of HEAD, 3-file overlay, env -i, node 24.21, npm ci/lint/compile/test): exit 0, 587 tests, 583 pass, 0 fail, 4 skipped (more than the worker's 583 because HEAD has later peer tests; F1-F6 pass). Mutant checkRef verbatim: killed channel-check and pins-check mutants, rc 0, only F4 failing (ERR_ASSERTION). Static checkRef: test file 0 removed lines vs 22c73558, union line present. Reproduced RED myself: new tests vs pre-fix client/types (c02ca51e^) give not ok F1, F2, F3, F6; F4/F5 ok; 28 tests, 24 pass, 4 fail. Forbidden-pattern grep of added lines: none. DoD 1-5 all mapped: F1-F3 run real client + real provider + raw chat.js page (one pin shows, empty list hides section, other channel only updates its cache, payload order kept); F4 has 15 malformed payloads with doesNotThrow and zero events/posts; F5 pins the unchanged PINS incl. list-less, PIN_CREATED/REMOVED/TOGGLED; F6 checks isDaemonMessage. Not verified: a live daemon-to-VS Code run (no IDE here); the vm harness is the accepted proof path. Non-blocking: non-object pin entries pass through like PINS (out of scope per DoD); a whitespace-only channel fires per the DoD's literal wording.",
+  "requiredCheckAtDone": null
 }

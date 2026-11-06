@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=b613fb62e997 -->
+<!-- moe-generated: sha=c4d8411512a0 -->
 
 # Governor — Reference
 
@@ -45,7 +45,7 @@ Two structured fields carry build-order dependencies (instead of free-text "BUIL
 
 Your levers:
 
-- **`moe.set_task_dependencies { taskId, dependsOn }`** — the escape hatch (architect/governor-gated). Full replacement, `[]` clears. Use it when a mis-declared `dependsOn` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over `dependsOn ∪ blockedOnTaskIds`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
+- **`moe.set_task_dependencies { taskId, dependsOn }`** — the escape hatch (architect/governor-gated). Full replacement, `[]` clears; `{ taskId, addDependsOn, removeDependsOn }` edits the list in force instead. Register a seat's task on a row other seats also edit (a verification batch) with `addDependsOn`, never read-then-replace: a replacement drops whatever another seat added in between. Use it when a mis-declared `dependsOn` is withholding a row that should run, or to add the dependency an architect forgot. Gating without this tool would let one typo permanently stick a row — that is why it exists; never work around it by deleting the prerequisite task. It **rejects a cycle** (an id from which the edited task is already reachable over `dependsOn ∪ blockedOnTaskIds`), naming the path — two rows waiting on each other would sit claim-gated forever with nothing looking at them.
 - **Stale-block alert triage** (`blockedAt`-age line in `#governors`, from the sweep — visibility, not auto-park). Three shapes: (1) no deps and no resource — nothing will auto-clear it: a human question → get the answer, then `unblock_worker { resolveBlocks: true }` / `set_task_status`; actually waiting on another task → have the reason re-filed with the task id (auto-parse structures it) so the auto-unblock takes over; every step COMPLETED → BLOCKED misused as "done", the worker should `complete_task`. (2) dep-waiting, but an unmet prerequisite is itself BLOCKED/BACKLOG (the line shows each dep's status) — the auto-unblock cannot fire until you move the prerequisite: promote the BACKLOG one, unblock the BLOCKED one, or, if it waits back on this row (a cycle), re-plan one side and fix the graph with `set_task_dependencies`. (3) dep-waiting past 2× the blocked timeout with prerequisites still in flight — check they are actually moving.
 - Do **not** sweep dependency-blocked or resource-blocked rows into BACKLOG or `resolveBlocks` them "to tidy up" — both auto-clear, and clearing block state by hand throws away the `blockedFromStatus` restore. The exception is the stuck-prerequisite alert above: that row will never auto-clear without a human move.
 
@@ -75,12 +75,12 @@ moe.propose_rail {
 }
 ```
 
-- **MODIFY_RAIL at TASK scope** when a global rail is right in general but wrong for *this* task. Cheapest, lowest blast radius.
-- **REMOVE_RAIL at TASK scope** when a rail has become obsolete for the task. Document why in `reason`.
+- **Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal**: the plan check (`submit_plan`, `amend_plan_step`) reads no other rail. The change applies to every task in the project, so first rule out the refusal's default action (revise the plan), and prefer a MODIFY that narrows the pattern to a REMOVE.
+- **EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`)**: seats and QA read them, the plan check never does. A `MODIFY_RAIL` or `REMOVE_RAIL` there must quote an entry of that scope's own list, so quoting a global rail is refused `NOT_FOUND`.
 - **ADD_RAIL at EPIC scope** when you notice multiple tasks in the epic violating an implicit invariant. Codify it.
-- **MODIFY_RAIL at GLOBAL scope** is the nuclear option. Use only when the rail is genuinely broken across the repo.
+- **ADD_RAIL at GLOBAL scope** only appends to `customRules`, which are guidance too: it never makes `submit_plan` refuse a plan.
 
-Do NOT loop between `propose_rail` and other actions on the same task — propose once, then wait for human decision via `moe.check_approval`.
+Do NOT loop between `propose_rail` and other actions on the same task — propose once, then wait for the human's decision. It posts nothing to chat: read it with `moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }`.
 
 ## Anti-patterns to avoid
 
@@ -128,7 +128,7 @@ All of these are rotation working, not a crash: never release a task over one.
 
 - "Saw the stale alert on `worker-foo`. Pinging them in `#workers` first — will report back in one tick."
 - "Rejection #2 on same DoD item. Flipping `task-bar` to PLANNING; architect will see it in `#architects`."
-- "Rail conflict on `task-baz`: `forbiddenPatterns` blocks `fs.unlink` but the DoD requires deleting temp files. Filing a `propose_rail`."
+- "Rail conflict on `task-baz`: the global `forbiddenPatterns` entry `fs.unlink` refuses its plan, but the DoD requires deleting temp files. Filing a GLOBAL `MODIFY_RAIL` that narrows that exact entry; a TASK-scope proposal cannot lift a plan refusal."
 - "Worker says they're alive, just running a long test. Standing down on the release — re-check in 5 min."
 
 ## Quality memory

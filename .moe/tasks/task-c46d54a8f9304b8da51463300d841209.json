@@ -1,0 +1,202 @@
+{
+  "id": "task-c46d54a8f9304b8da51463300d841209",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_reject's failedDodItems entries have no type or length check (only the 20-item count is capped), so a numeric DoD index throws an uncoded \"s.trim is not a function\" and a 100k-char entry is stored, while qa_reject bounds reason and issues and submit_plan_critique bounds its concerns",
+  "description": "Held item (b) from hunt #10 (task-49a2c07f, architect-1dd28c7c, msg-e3e8725e), filed by the governor. Re-checked at tip 8ca8d389: qaReject.ts is unchanged since the hunt's repro HEAD 677d051a. No stored entry is affected yet (0 of 101 real failedDodItems entries are non-strings or oversized), hence LOW.\n\nPROBLEM. qa_reject validates the count of failedDodItems but not the entries. A non-string entry, such as a DoD index sent as a number, crashes the handler with an uncoded TypeError instead of a coded INVALID_INPUT. An entry of any length is stored in rejectionDetails and carried into the repeated-failure tracking. Its sibling fields are bounded: reason has MAX_REASON_LENGTH, and issues[].description is refused over 500 chars.\n\nEVIDENCE (at 8ca8d389):\n- qaReject.ts:87-88 caps the count (`> 20` → invalidInput). qaReject.ts:141 maps `(s) => s.trim()` over every entry with no typeof check and no length bound, and :150 stores the result in rejectionDetails.failedDodItems.\n- The siblings bound their text: qaReject.ts:82-83 (reason) and :103-104 (issues.description, 500). submitPlanCritique.ts:8-9 (MAX_CONCERNS 20, MAX_CONCERN_LEN 1000) with its array type check at :67-68.\n- Repro: /mnt/d/moe-scratch/hunt-49a2c07f/B/zzHuntB_failedDodItems.test.ts, output B/B_failedDodItems.out.txt at 677d051a: \"Tests 2 failed | 1 passed (3)\". A numeric entry gives \"TypeError: s.trim is not a function\", where `{ code: -32602 }` was expected. An over-long entry is stored: \"expected [ Array(3) ] to deeply equal []\".\n\nFIX DIRECTION. Before any write, refuse a non-string entry and an entry over a bound with a coded INVALID_INPUT. That matches qa_reject's own refusals for reason and issues. Use the DoD-item length (1000) or submit_plan_critique's MAX_CONCERN_LEN as the bound. Refusal (not truncation) keeps the repeated-failure matching exact.\n\nPLACEMENT. No open row edits qaReject.ts. No dependsOn.",
+  "definitionOfDone": [
+    "qa_reject refuses a failedDodItems entry that is not a string with a coded INVALID_INPUT (no uncoded TypeError), and writes nothing.",
+    "qa_reject refuses (coded INVALID_INPUT, nothing written) a failedDodItems entry longer than the chosen bound (at most 1000 chars), so no stored rejectionDetails entry exceeds it. Valid rejections, including the repeated-failure escalation, behave as before.",
+    "The hunt repro (zzHuntB_failedDodItems.test.ts) ported into the package's qa_reject tests passes 3 of 3, where it gave 2 failed | 1 passed at 677d051a, and the existing qa_reject test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first (load test-driven-development). Create packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts with the Write tool. It ports hunt #10's zzHuntB_failedDodItems.test.ts (DoD 3) and adds strict refusal cases. Never cp the scratch draft into the tree: a shell write leaves no TOOL witness. Read-only reference: /mnt/d/moe-scratch/plan-c46d54a8/qaReject.failedDodItems.test.ts. The architect dry-ran it red at base, green with the fix, and clean under the gate's tt.json typecheck.\n\nFixture (the hunt's):\n- ToolTestHarness with setupMoeFolder({ schemaVersion: 6 }) and createEpic.\n- Task task-r: REVIEW, assigned to qa-a, contextFetchedBy ['qa-a'], definitionOfDone ['Tests pass','Docs updated'].\n- Task task-p: AWAITING_APPROVAL.\n- Worker qa-a: CODING, currentTaskId task-r.\n- afterEach calls flushActivityLog(h.state), then h.cleanup().\n- reject(v) calls qa_reject {taskId:'task-r', workerId:'qa-a', reason:'DoD item 2 is not met', failedDodItems: v}.\n\nUse exactly these case-title prefixes, because the red checkRef greps them:\n- (c1) control, the hunt's: submit_plan_critique refuses concerns [2] with INVALID_INPUT, and stores a 5000-char concern as 1000 chars.\n- (r1) the hunt's: reject([2]) rejects with code MoeErrorCode.INVALID_INPUT (DoD 1).\n- (r2) the hunt's: after reject(['x'.repeat(100000)]).catch(() => undefined), no stored rejectionDetails.failedDodItems, rejectionHistory[0].failedDodItems or failedDodItems[].item entry is longer than 1000 (DoD 2).\n- (r3)-(r5) as one it.each over an `Array<[string, string, unknown]>` table:\n  - (r3) the bare string 'Tests pass';\n  - (r4) [null];\n  - (r5) ['y'.repeat(1001)].\n  Each must reject with a MoeError whose code is INVALID_INPUT. Afterwards .moe/tasks/task-r.json must be byte-identical to a read taken before the call, the status must still be REVIEW, and .moe/reviews/ must be empty or absent (DoD 1 and 2: nothing written).\n- (c2) control: reject(['z'.repeat(1000)]) succeeds. The task goes to WORKING and rejectionDetails.failedDodItems equals [that item].\n\nRun it once against the unfixed code. Expected: Tests 5 failed | 2 passed (7), with only (c1) and (c2) green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts"
+      ],
+      "note": "Test file written via Write; red-at-base is proven by checkRef[1] in step 3.",
+      "startedAt": "2026-11-03T21:15:29.556Z",
+      "completedAt": "2026-11-03T21:15:45.847Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Edit packages/moe-daemon/src/tools/qaReject.ts. This is the only runtime file; docs/MCP_SERVER.md is held by another row and is not edited here.\n\nChanges:\n- Add `const MAX_FAILED_DOD_ITEM_LENGTH = 1000;` above VALID_ISSUE_TYPES, with a one-line comment: an entry names a DoD item, which is stored at 1000 chars at most (taskStore's sanitizeStringArray(definitionOfDone, 50, 1000)).\n- Replace the count-only check at :86-89 with one validation block, still before the issues validation and before any lookup or write:\n  - when failedDodItems is not null or undefined, a non-array is refused with invalidInput('failedDodItems', 'must be an array of strings');\n  - the existing 'too many items (max 20)' refusal stays, with the same text;\n  - each entry that is not a string is refused with invalidInput(`failedDodItems[${i}]`, 'must be a string');\n  - each entry whose trimmed length exceeds the bound is refused with invalidInput(`failedDodItems[${i}]`, `too long (<n> chars). Maximum 1000 characters.`). Measure the trimmed length, because that is what gets stored.\n  - Block comment: refused, not truncated, so the repeated-failure match stays exact; a non-string used to crash the trim at :141 with an uncoded TypeError.\n- Everything after the block is unchanged: the dedupe and trim at :140-142, rejectionDetails, rejectionHistory, the 100-entry failedDodItems log and the same-item-twice flip.\n\nError handling: every refusal is a coded INVALID_INPUT (-32602) thrown before getTask, the ownership and context guards, assertReviewBinding and any write. A refused reject therefore changes nothing (no task write, no review record, no activity event) and the QA seat simply retries with DoD item text. null or undefined still means no failed items, and [] stays valid.\n\nReference diff (read-only): /mnt/d/moe-scratch/plan-c46d54a8/qaReject.fix.diff. With it the new file passes 7/7, and the 16 test files that call qa_reject or read failedDodItems pass (551 passed, 3 skipped). The architect's mutants were each killed:\n- dropping the type check kills (r1) and (r4);\n- an off-by-one bound kills (r5);\n- dropping the array check kills (r3).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "Added MAX_FAILED_DOD_ITEM_LENGTH and one validation block (array, count, string, trimmed length) before any lookup or write.",
+      "startedAt": "2026-11-03T21:15:46.909Z",
+      "completedAt": "2026-11-03T21:15:56.266Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE (DoD 1-3). From your task worktree, run both checkRefs as ONE command, each in its own subshell: `( <checkRefs[0]> ) && ( <checkRefs[1]> )`. Each leg cds into its own mktemp snapshot, so a bare && would break the second leg. That command and its output tail are the complete_task verification evidence.\n\n- [0] is the gate. It archives HEAD's packages/moe-daemon, overlays your two files, runs npm ci with nvm's Linux node 24 under env -i, then tsc --noEmit plus a tt.json typecheck of the new test. It runs vitest over:\n  - qaReject* (qaReject.test.ts and the new file: DoD 3);\n  - qaOwnership (the repeated-failure flip), qaApprove, reviewLoopActor, echoedReasonNotices, governanceFeatures, taskTimestamps, delivery/reviewBinding, util/qaCommitPolicy and state/attemptHandback.\n  The architect's dry-run printed `Test Files 11 passed (11)` and `Tests 284 passed | 3 skipped (287)`, and the gate exited 1 when qaReject.ts was unfixed.\n- [1] is the red-at-base leg. It runs the new file against qaReject.ts pinned at 6ded0c93, which is byte-identical to 677d051a, the hunt's repro HEAD. It requires exit 1, (c1) and (c2) green, and (r1)-(r5) red, then prints RED-AT-BASE. It was dry-run both uncommitted and after a simulated landing commit.\n\nError handling for a red run: fix the code, never the cases. If a listed suite other than the new file fails, compare it with a run on the unedited qaReject.ts first.\n\nNever run npm in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate leg: tsc + tt.json clean, Test Files 11 passed (11), Tests 284 passed | 3 skipped (287). Red leg: Tests 5 failed | 2 passed (7), RED-AT-BASE.",
+      "startedAt": "2026-11-03T21:15:57.223Z",
+      "completedAt": "2026-11-03T21:16:31.364Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new test.\n\nChecklist:\n(a) Every new refusal fires before getTask and before every write. Read the handler top to bottom to confirm no write precedes the block. (r3)-(r5) also pin the bytes on disk.\n(b) The trimmed-length rule matches what is stored. A 1000-char entry padded with spaces is accepted and stored trimmed; 1001 non-space chars are refused. Confirm (c2) and (r5) bracket the boundary.\n(c) Valid callers are unaffected:\n  - null, undefined and [] still mean no failed items;\n  - duplicate entries are still deduped within one reject;\n  - the same-DoD-item-twice flip and the 3-reopen flip in qaOwnership.test.ts and qaReject.test.ts are unchanged.\n(d) The error text names the field index (failedDodItems[i]), so a QA seat can fix its call without MoeError.context, which is not forwarded over MCP.\n(e) `git diff --name-only` lists only the two planned files.\n(f) No added line contains a project.json globalRails.forbiddenPatterns string.\n\nRecord the findings, with both legs' printed Tests lines, in the complete_task summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts"
+      ],
+      "note": "Self-review: (a) the validation block is synchronous and sits before getTask, assertWorkerOwns, assertReviewBinding and every write; (r3)-(r5) pin the bytes on disk. (b) The bound uses the trimmed length, which is what is stored; (c2) at 1000 and (r5) at 1001 bracket it. (c) null/undefined/[] skip the block, and dedupe and the repeat-failure flips are untouched (qaOwnership and qaReject suites green). (d) The error text names failedDodItems[i]. (e) git status lists only the two planned files. (f) No forbidden pattern in the diff. Theoretical: an array with holes (sparse) skips forEach holes, then the later .map(trim) would hit undefined, but JSON args cannot carry sparse arrays.",
+      "startedAt": "2026-11-03T21:16:32.429Z",
+      "completedAt": "2026-11-03T21:16:59.285Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 431.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:44:47.676Z",
+  "updatedAt": "2026-11-04T19:20:44.741Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:08:53.337Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:06:28.106Z",
+    "wallClockMs": 3454769
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:13:18.734Z",
+  "executionContract": {
+    "intendedBehavior": "moe.qa_reject validates failedDodItems as an array of at most 20 strings, each at most 1000 chars after trimming (the stored DoD-item bound), before any lookup or write. A non-array value, a non-string entry, or an over-long entry is refused with a coded INVALID_INPUT naming the field index, and nothing is written. Valid rejections behave exactly as before.",
+    "invariants": [
+      "A refused qa_reject writes nothing: no task write, no review record, no activity event, no chat line.",
+      "The 'too many items (max 20)' refusal keeps its text. Entries are refused, never truncated, so repeated-failure matching stays exact.",
+      "null, undefined and [] still mean no failed items, and duplicates are still deduped within one reject."
+    ],
+    "compatibility": [
+      "qaReject.test.ts, qaOwnership.test.ts, qaApprove.test.ts and the other listed suites pass unchanged.",
+      "The qa_reject inputSchema and response shapes are unchanged. docs/MCP_SERVER.md is not edited (held by another row); its `failedDodItems?: string[], // max 20` line stays true."
+    ],
+    "reuse": [
+      "invalidInput from util/errors.js, the code every other qa_reject refusal uses.",
+      "The hunt repro's fixture and three cases, ported verbatim as (c1), (r1) and (r2)."
+    ],
+    "sourceAssumptions": [
+      "tools/qaReject.ts:86-89 checks only `params.failedDodItems.length > 20`. :140-142 dedupes with `.map((s) => s.trim())`, which throws a TypeError on a non-string or null entry. :150 stores the result. The file is byte-identical at 677d051a and 6ded0c93.",
+      "tools/qaReject.ts:81-84 caps reason at 2000 and :103-104 caps issues[].description at 500. submitPlanCritique.ts bounds its concerns at MAX_CONCERN_LEN 1000.",
+      "state/taskStore.ts stores definitionOfDone through sanitizeStringArray(..., 50, 1000), so a DoD item is at most 1000 chars."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/qaReject{.ts,.failedDodItems.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/qaReject.failedDodItems.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{qaReject,qaOwnership,qaApprove,reviewLoopActor,echoedReasonNotices,governanceFeatures,taskTimestamps} src/delivery/reviewBinding src/util/qaCommitPolicy src/state/attemptHandback > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp $P/qaReject.failedDodItems.test.ts \"$S/$P/\" && git show 6ded0c935e82f850493411b41e1b61e6bfc9ca1a:$P/qaReject.ts > \"$S/$P/qaReject.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/tools/qaReject.failedDodItems.test.ts > ../l 2>&1; r=$?; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] || exit 1; for k in c1 c2; do ! grep -aqF \"> ($k) \" ../l || exit 1; done; for k in r1 r2 r3 r4 r5; do grep -aqF \"> ($k) \" ../l || exit 1; done; echo RED-AT-BASE'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Truncating long entries to 1000, as submit_plan_critique does for concerns, was rejected: the DoD says refuse, and truncation would make two different over-long items compare equal in the repeated-failure log.",
+      "Measuring the raw length instead of the trimmed length was rejected, because the trimmed text is what gets stored and matched."
+    ],
+    "codebaseInsights": "qa_reject's text fields: reason is capped at 2000 and issues[].description at 500 with a non-empty check, but failedDodItems had only the count cap. Its entries feed rejectionDetails, rejectionHistory (20 entries), the 100-entry failedDodItems log and the same-item-twice PLANNING flip. None of the 101 real entries on this board is a non-string or over 536 chars.",
+    "risks": [
+      "A QA seat that names DoD items by index now gets INVALID_INPUT and must resend the item text. Today the call crashes uncoded and records nothing, so this only improves that path."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/submitPlanCritique.ts",
+      "packages/moe-daemon/src/tools/qaReject.test.ts",
+      "packages/moe-daemon/src/tools/qaOwnership.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "67d7a0c09bc0b96b983e214a334c5373806761c3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:13:18.769Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:15:29.556Z",
+  "reviewStartedAt": "2026-11-03T21:17:05.701Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/qaReject{.ts,.failedDodItems.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/{qaReject,qaOwnership,qaApprove,reviewLoopActor,echoedReasonNotices,governanceFeatures,taskTimestamps} src/delivery/reviewBinding src/util/qaCommitPolicy src/state/attemptHandback ) && ( red-at-base leg: qaReject.ts pinned at 6ded0c93, new test file only ); both legs are checkRefs[0] and checkRefs[1] of the task, run as one command in snapshots outside the repo",
+    "exitCode": 0,
+    "outputTail": " Test Files  11 passed (11)\n      Tests  284 passed | 3 skipped (287)\n FAIL  src/tools/qaReject.failedDodItems.test.ts > ... (r1)(r2)(r3)(r4)(r5) [at base]\n      Tests  5 failed | 2 passed (7)\nRED-AT-BASE\nEXIT=0",
+    "reportedAt": "2026-11-03T21:17:05.701Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts"
+  ],
+  "completionSummary": "qa_reject now validates failedDodItems before any lookup or write: a non-array, a non-string entry, or an entry over 1000 trimmed chars is refused with a coded INVALID_INPUT naming failedDodItems[i]. Entries are refused, not truncated. The 'too many items (max 20)' text is unchanged, and null/undefined/[] still mean no failed items. Added qaReject.failedDodItems.test.ts (hunt repro ported as c1/r1/r2 plus r3-r5 and c2). Gate leg: tsc and the tt.json typecheck are clean; Test Files 11 passed (11), Tests 284 passed | 3 skipped (287). Red-at-base leg (qaReject.ts pinned at 6ded0c93): Tests 5 failed | 2 passed (7), with only c1 and c2 green, printed RED-AT-BASE. Self-review found no real risks; only the two planned files changed.",
+  "commits": [
+    {
+      "sha": "ff36725bdcc8974f783bf37c26c29a278bd22a72",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T21:13:24Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/qaReject.failedDodItems.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T21:28:37.382Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:04:49Z",
+    "at": "2026-11-03T22:06:57.731Z"
+  },
+  "completedAt": "2026-11-03T22:06:28.106Z",
+  "reviewCompletedAt": "2026-11-03T22:06:28.106Z",
+  "reviewSummary": "Reviewed completion ff36725b (on moe/work-2026-10-24, contained in control HEAD; +107/-3 net 104, only qaReject.ts and the new qaReject.failedDodItems.test.ts, working tree clean for both paths). Re-ran both checkRefs myself in /tmp snapshots (nvm node 24, env -i, nothing run in the shared checkout). Gate leg: npm ci, tsc --noEmit OK, tt.json typecheck of the new test OK, vitest over qaReject/qaOwnership/qaApprove/reviewLoopActor/echoedReasonNotices/governanceFeatures/taskTimestamps + delivery/reviewBinding + util/qaCommitPolicy + state/attemptHandback = Test Files 11 passed (11), Tests 284 passed | 3 skipped (287), exit 0. Red-at-base leg (qaReject.ts pinned at 6ded0c93): Tests 5 failed | 2 passed (7), only c1/c2 green, r1-r5 red, printed RED-AT-BASE. Matches the worker's evidence exactly. DoD 1: a non-string entry ([2], [null]) and a non-array (bare string) are refused with coded INVALID_INPUT naming failedDodItems[i]; the new block sits before state.getTask, assertWorkerOwns, assertContextFetched, assertReviewBinding and every write (read the handler top to bottom), and r3-r5 pin task-r.json byte-identical, status REVIEW, no reviews/ file. DoD 2: trimmed length over 1000 refused (r5 at 1001, r2 with 100k), 1000 accepted and stored as given (c2); refuse-not-truncate keeps the repeat-failure match exact; the 'too many items (max 20)' text is unchanged; null/undefined/[] skip the block; dedupe/trim and the flips untouched (qaOwnership and qaReject suites green). DoD 3: hunt repro ported as c1/r1/r2 and all pass in the gate run. Tests are mutation-resistant (exact code, byte equality, boundary pair 1000/1001). No forbidden pattern in added lines; docs/MCP_SERVER.md untouched as the contract required; inputSchema/response shapes unchanged. Size is well under 400, no rail waiver needed. Complexity pass: nothing to cut (one forEach block, one constant). Minor non-blocking note: sparse arrays would skip forEach holes, but JSON args cannot carry them.",
+  "requiredCheckAtDone": null
+}

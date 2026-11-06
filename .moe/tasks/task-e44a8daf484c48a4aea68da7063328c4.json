@@ -1,0 +1,188 @@
+{
+  "id": "task-e44a8daf484c48a4aea68da7063328c4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains board's previous-arrow on a WORKING card, and Previous in its detail dialog, ask the daemon for WORKING to AWAITING_APPROVAL, which /ws always refuses, so the card never moves and the typed reason is lost",
+  "description": "Filed by the 11-03 #2 defect hunt (task-2597ac6f). This is a client-wire mismatch: the plugin sends a status move that the daemon's transition table has never allowed.\n\nPROBLEM\nIn moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt at HEAD 946358a8:\n- :532 sets workflowOrder = listOf(\"BACKLOG\", \"PLANNING\", \"AWAITING_APPROVAL\", \"WORKING\", \"REVIEW\", \"DONE\").\n- getPreviousStatus at :537-540 therefore returns \"AWAITING_APPROVAL\" for \"WORKING\".\n- handlePrevious at :564-577 first prompts for a reason. For any status except DONE or REVIEW it then calls service.updateTaskStatus(task.id, \"AWAITING_APPROVAL\", order), and nothing sends the reason.\n- That callback is wired to every card outside Backlog (:675) and to TaskDetailDialog's Previous button (:635-637). Every WORKING card shows the arrow, and it fails every time.\n\nOn the daemon side, the /ws UPDATE_TASK guard at packages/moe-daemon/src/server/WebSocketServer.ts:498-513 rejects the move. Its VALID_TRANSITIONS entry is WORKING: ['REVIEW', 'PLANNING', 'BACKLOG', 'BLOCKED'], and the guard throws \"Cannot move task from WORKING to AWAITING_APPROVAL. Allowed: REVIEW, PLANNING, BACKLOG, BLOCKED\". The plugin surfaces that only as a generic error notification (MoeMessageDispatcher.kt:198-206), so the card stays put.\n\nAWAITING_APPROVAL is display-mapped into the Planning column, so \"one column left\" from Working means PLANNING. The daemon allows WORKING to PLANNING.\n\nEVIDENCE\n(a) Daemon-side repro on HEAD 946358a8, run in a git-archive snapshot under /tmp, never in the shared checkout:\n`cd packages/moe-daemon && npx vitest run src/server/zzHunt2597B.prevArrow.test.ts` sends the exact UPDATE_TASK frame the plugin's MoeCommandSender builds for a WORKING task. The reply is:\n  [PREV] reply = {\"type\":\"ERROR\",\"message\":\"Cannot move task from WORKING to AWAITING_APPROVAL. Allowed: REVIEW, PLANNING, BACKLOG, BLOCKED\",\"operation\":\"UPDATE_TASK\",\"context\":{\"taskId\":\"task-1\"}}\nand the task stays WORKING. Test and key lines: /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.prevArrow.test.ts and /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.prevArrow.key-lines.txt.\n(b) The client lines cited above, at 946358a8.\n\nFIX DIRECTION\nJetBrains only; leave the daemon unchanged.\n- Move the previous-target rule into a small pure helper, e.g. toolwindow/BoardMoves.kt (the name is free), that returns only daemon-legal back-moves:\n  - WORKING goes to PLANNING.\n  - AWAITING_APPROVAL goes to PLANNING.\n  - PLANNING goes to BACKLOG.\n  - REVIEW and DONE keep using REOPEN_TASK, as today.\n  - BLOCKED, BACKLOG and unknown statuses return null: no arrow and no reason prompt.\n- Use the helper for both the card arrow and the detail dialog's Previous button.\n- The reason prompt for WORKING to PLANNING must either reach the daemon or be dropped:\n  - Reaching the daemon means, for example, sending reopenReason in the UPDATE_TASK updates. First check it is not on WebSocketServer.ts UPDATE_TASK_DENYLIST (:61 onwards).\n  - Otherwise, do not prompt for that move.\n- VS Code may have its own twin of this bug. It is out of scope here.\n\nFILES\n- moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt\n- a new moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt\n- test: moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt\nThese files are disjoint from the other rows filed by this hunt. Run Gradle only under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease, mem:gotcha-gradle-jetbrains-shared-box).\n\nVERIFICATION\n`cd moe-jetbrains && ./gradlew test` (gradlew.bat on Windows), under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "The helper's previous target for WORKING is PLANNING. For every status it returns only a move that the daemon's /ws VALID_TRANSITIONS allows at 946358a8, or reopen for REVIEW/DONE, or null for BLOCKED/BACKLOG/unknown. A JUnit test asserts each status.",
+    "MoeToolWindowPanel's card arrow and TaskDetailDialog's Previous button both get their target from the helper. A status with no legal previous move shows no arrow and no reason prompt. A typed reason is either sent to the daemon or never asked for.",
+    "`cd moe-jetbrains && ./gradlew test` exits 0 under the jetbrains-gradle lease, and the new test fails on HEAD 946358a8, where WORKING maps to AWAITING_APPROVAL."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1. A pure helper plus its JUnit test, red first. Model it on toolwindow/DoneColumnClear.kt and DoneColumnClearTest.kt: a pure `object` in com.moe.toolwindow whose KDoc cites the daemon line it mirrors, tested headlessly.\n\n(a) Create moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt with:\n- `internal sealed interface PreviousMove`, with two cases:\n  - `object Reopen`: REOPEN_TASK with the typed reason, which the daemon routes to BACKLOG.\n  - `data class Status(val target: String)`: a plain UPDATE_TASK status move.\n- `internal object BoardMoves`, with:\n  - `fun previous(status: String): PreviousMove?`\n  - `fun hasPrevious(status: String): Boolean = previous(status) != null`.\n\nFor the RED run, give previous() TODAY's rule, copied from MoeToolWindowPanel.kt:532-540: the workflowOrder neighbour, so WORKING returns Status(\"AWAITING_APPROVAL\"), with REVIEW and DONE as Reopen.\n\n(b) Create moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt with exact assertions for each status:\n- BACKLOG gives null.\n- PLANNING gives Status(\"BACKLOG\").\n- AWAITING_APPROVAL gives Status(\"PLANNING\").\n- WORKING gives Status(\"PLANNING\").\n- REVIEW and DONE give Reopen.\n- BLOCKED, ARCHIVED, \"\" and \"NOT_A_STATUS\" give null.\n\nAdd one legality test. Copy the daemon's /ws VALID_TRANSITIONS map at 946358a8 verbatim (packages/moe-daemon/src/server/WebSocketServer.ts:498-507; cite it in a comment). Then assert that, for every status in that map, previous() returns either null, Reopen (REVIEW/DONE only), or a Status whose target the map allows from that status. A future edit to an illegal move then fails.\n\nRun red, holding the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease):\n`gradlew.bat -p moe-jetbrains test --tests com.moe.toolwindow.BoardMovesTest --rerun`\nExpect the WORKING assertion (expected PLANNING, was AWAITING_APPROVAL) and the legality test to fail. Keep that tail: it is DoD 3's evidence that the test fails on HEAD 946358a8.\n\n(c) GREEN: change previous() to an explicit `when`. The `else` branch returns null: BACKLOG, BLOCKED, ARCHIVED and unknown statuses have no previous move. Re-run the same command; it must be green.\n\nError handling: previous() never throws. An unknown or empty status is simply null, meaning no arrow and no prompt.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt"
+      ],
+      "note": "BoardMoves + BoardMovesTest. Red: 2 of 7 failed (workingGoesToPlanning, legality) on the old workflowOrder rule; green after the explicit when. Note gradlew.bat lives in moe-jetbrains/, not the repo root.",
+      "startedAt": "2026-11-03T15:56:27.348Z",
+      "completedAt": "2026-11-03T15:57:31.206Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2. Route the card arrow and the detail dialog's Previous button through the helper.\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt\n- Delete getPreviousStatus (:537-540) and keep getNextStatus and workflowOrder for Next. Next is correct and out of scope.\n- handlePrevious (:564-577) becomes:\n  1. `val move = BoardMoves.previous(task.status) ?: return`.\n  2. Prompt for the reason exactly as today (moe.message.previousReason / previousReasonTitle). The prompt also confirms the click.\n  3. If the reason is null or blank, return.\n  4. Then `when (move)`:\n     - PreviousMove.Reopen: service.reopenTask(task.id, reason). This is unchanged and carries the reason.\n     - PreviousMove.Status: first service.addTaskComment(task.id, reason), so the reason reaches the daemon as a task comment the next claimer sees. Then service.updateTaskStatus(task.id, move.target, task.order).\n  Both service methods already exist (MoeProjectService.kt:523 and :561), so no new wire command is needed. reopenReason was considered and rejected: it needs a new MoeCommandSender/MoeProjectService parameter, which takes this row past 4 files.\n- The TaskDetailDialog Previous callback (prevCb, :636) becomes `if (BoardMoves.hasPrevious(task.status)) { t: Task -> handlePrevious(t) } else null`. TaskDetailDialog.kt itself is NOT edited; task-37e03b91 and task-ac587df5 own hunks there.\n\n(b) moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt:174\n- Pass `onPrevious = onPrevious?.takeIf { BoardMoves.hasPrevious(task.status) }` per card. A card whose status has no legal back-move, e.g. a BLOCKED card in the Working column, then shows no arrow. TaskCard.kt:252 draws the arrow only when the callback is non-null, so TaskCard needs no change.\n- Keep the column-level `if (!isBacklog)` at MoeToolWindowPanel.kt:675 as it is.\n\nError handling:\n- A daemon refusal, e.g. a PLANNING WIP limit, still surfaces through the existing ERROR notification path (MoeMessageDispatcher.kt:198-206).\n- TaskCard keeps its safeCallback wrapper.\n- If the move is refused after the comment lands, the comment stays. That is acceptable: it records what the human asked for.\n\nDo not touch VS Code, the daemon, TaskDetailDialog.kt, BoardStyles or TaskCard.kt.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ],
+      "note": "getPreviousStatus deleted; handlePrevious, detail-dialog prevCb and per-card arrow all use BoardMoves. Status moves send the reason as a task comment first. Compile is covered by the step-3 gradle run.",
+      "startedAt": "2026-11-03T15:57:31.962Z",
+      "completedAt": "2026-11-03T15:57:50.811Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 3: verification. Run this ONCE, fresh, from the task worktree root, after every edit is in. Its output is the evidence you give complete_task, and QA re-runs the same command.\n\n1. Take the lease: moe.acquire_resource { resourceId: \"jetbrains-gradle\" } (mem:convention-jetbrains-gradle-lease).\n2. Run exactly `gradlew.bat -p moe-jetbrains test --rerun`. From WSL that is `cmd.exe /d /c \"cd /d <wslpath -w of the worktree root> && gradlew.bat -p moe-jetbrains test --rerun\"`.\n3. Release the lease immediately afterwards.\n\nUse --rerun because an UP-TO-DATE :test task executes zero tests (mem:gotcha-gradle-jetbrains-shared-box).\n\nConfirm the tests really ran by reading moe-jetbrains/build/test-results/test/*.xml:\n- total tests > 0, with 0 failures and 0 errors;\n- TEST-com.moe.toolwindow.BoardMovesTest.xml lists the new cases.\nQuote those totals in the evidence. The unit tests need no daemon or proxy dist.\n\nIf a red run shows a socket MessageIOException in the Gradle daemon log, it is the known IPC flake: re-run once.\n\nNever `--stop` the Gradle daemon, and never clean shared build output. Nothing in TypeScript changes, so no npm or daemon gate applies.\n\nStep 1's red run covers DoD 3's fails-on-946358a8 clause.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt"
+      ],
+      "note": "gradlew.bat test --rerun in moe-jetbrains: BUILD SUCCESSFUL; XML totals 632 tests, 0 failures, 0 errors; BoardMovesTest lists 7 cases. Lease released.",
+      "startedAt": "2026-11-03T15:57:51.928Z",
+      "completedAt": "2026-11-03T15:58:33.583Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once. Load the adversarial-self-review skill, then read this task's diff as an attacker. Check each item:\n(1) `grep -n 'getPreviousStatus' -r moe-jetbrains/src` finds nothing. Every Previous path (card arrow, detail-dialog button, handlePrevious) goes through BoardMoves.\n(2) Each target previous() returns is legal under the daemon's /ws VALID_TRANSITIONS, re-read at the current target tip in packages/moe-daemon/src/server/WebSocketServer.ts. If the daemon table has changed since 946358a8, say so in a comment rather than silently diverging.\n(3) A typed reason is never dropped. Reopen sends it with REOPEN_TASK, and Status sends it as a task comment before the move. A blank or cancelled prompt sends nothing.\n(4) A BLOCKED card shows no arrow, and nothing that has no legal move prompts for a reason.\n(5) The Next arrow and the AWAITING_APPROVAL Next path (BoardApproval.approveRendered) behave as before.\n(6) The test asserts exact values and the legality table, so a no-op or reverted mapping fails it.\n(7) The diff touches only this plan's 4 files and stays clear of TaskDetailDialog.kt, Models.kt and MoeJson.kt, which task-37e03b91, task-40813cc1 and task-ac587df5 own.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+      ],
+      "note": "Self-review: no getPreviousStatus left; daemon VALID_TRANSITIONS at current tip identical to the test's copy; Reopen carries the reason, Status sends a comment first, blank/cancel sends nothing; BLOCKED/BACKLOG/unknown get no arrow and no prompt; Next path untouched; diff is the 4 planned files only.",
+      "startedAt": "2026-11-03T15:58:34.491Z",
+      "completedAt": "2026-11-03T15:58:45.647Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 368.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:43:28.073Z",
+  "updatedAt": "2026-11-04T19:20:44.166Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:51:53.789Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:03:00.613Z",
+    "wallClockMs": 666824
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-8cf0816c",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T15:55:26.255Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected options:\n(1) Send the typed reason as reopenReason in the UPDATE_TASK updates. /ws accepts it, since reopenReason is not on UPDATE_TASK_DENYLIST and the BLOCKED-exit path reads safeUpdates.reopenReason. But it needs a new optional parameter on MoeCommandSender.updateTaskStatus and MoeProjectService.updateTaskStatus, plus a payload test, which takes the row to 6-7 files.\n(2) Drop the reason prompt for status moves. That makes WORKING to PLANNING a one-click unassignment of a live worker, with no confirmation.\n(3) Route AWAITING_APPROVAL to REJECT_TASK. That changes the event semantics (PLAN_REJECTED), and the bug does not need it.\nChosen: keep the prompt (it doubles as a confirmation), send the reason as a task comment through the existing addTaskComment, then the legal status move.",
+    "codebaseInsights": "- The /ws VALID_TRANSITIONS map is at packages/moe-daemon/src/server/WebSocketServer.ts:498-507. WORKING allows REVIEW, PLANNING, BACKLOG and BLOCKED; AWAITING_APPROVAL allows WORKING and PLANNING; PLANNING allows AWAITING_APPROVAL, BACKLOG, BLOCKED and ARCHIVED.\n- TaskCard.kt:252 draws the arrow only when the callback is non-null.\n- TaskColumn.kt:174 passes one column-level callback to every card, so per-card visibility is decided there.\n- TaskDetailDialog's Previous button is the prevCb that MoeToolWindowPanel.kt:636 builds.\n- The board drag (MoeToolWindowPanel.kt:606/:625) already sends plain status moves with no prompt.\n- toolwindow/DoneColumnClear.kt is the precedent for a pure, headlessly tested board rule.",
+    "risks": "- The comment and the move are two /ws messages. If the move is refused, for example by a WIP limit, the comment stays. That is acceptable and informative.\n- The test's copy of VALID_TRANSITIONS can drift from the daemon. The self-review re-reads the daemon table at the current tip.\n- Gradle traps on this shared Windows box: use --rerun, re-run once on the IPC MessageIOException flake, and hold the jetbrains-gradle lease only around a run.\n- The VS Code twin is out of scope.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskCard.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "dc37ea2b1ba7668843668d2a5bb7070a05b777db",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T15:55:26.289Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T15:56:27.348Z",
+  "reviewStartedAt": "2026-11-03T15:58:49.644Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"cd /d D:\\projexts\\moes\\.worktrees\\task-e44a8daf484c48a4aea68da7063328c4\\moe-jetbrains && gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "> Task :test\n\nBUILD SUCCESSFUL in 32s\n11 actionable tasks: 7 executed, 4 up-to-date\ntest-results XML totals: 632 tests, 0 failures, 0 errors; TEST-com.moe.toolwindow.BoardMovesTest.xml lists 7 cases",
+    "reportedAt": "2026-11-03T15:58:49.644Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt"
+  ],
+  "completionSummary": "Added pure BoardMoves.previous() (WORKING/AWAITING_APPROVAL→PLANNING, PLANNING→BACKLOG, REVIEW/DONE→Reopen, else null) mirroring /ws VALID_TRANSITIONS. MoeToolWindowPanel's handlePrevious, the detail dialog's Previous callback and TaskColumn's per-card arrow now use it; getPreviousStatus is gone. Status moves send the typed reason as a task comment before the move; Reopen still carries it. BoardMovesTest (7 cases incl. a legality check against a copy of the daemon table) failed 2/7 on the old rule and passes now. Full suite: 632 tests, 0 failures, 0 errors. Note: gradlew.bat lives in moe-jetbrains/, so the plan's root-level command was run from there.",
+  "commits": [
+    {
+      "sha": "8be134034262da4f8222d7d3bbdaf0838bba5dac",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T15:55:27Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/BoardMoves.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/MoeToolWindowPanel.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/board/TaskColumn.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/BoardMovesTest.kt"
+      ],
+      "recordedBy": "qa-7328a40d",
+      "recordedAt": "2026-11-03T15:59:57.320Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:00:40Z",
+    "at": "2026-11-03T16:03:25.144Z"
+  },
+  "completedAt": "2026-11-03T16:03:00.613Z",
+  "reviewCompletedAt": "2026-11-03T16:03:00.613Z",
+  "reviewSummary": "APPROVED. Reviewed completion 8be13403 (git show; recorded in task.commits, on moe/work-2026-10-24). 4 files, +98/-11 (net ~87 LOC), only the plan's files; TaskDetailDialog/daemon/VS Code untouched.\nDoD1: BoardMoves.previous() is an explicit when: WORKING/AWAITING_APPROVAL->PLANNING, PLANNING->BACKLOG, REVIEW/DONE->Reopen, else null. Re-read WebSocketServer.ts:498-507 at HEAD: VALID_TRANSITIONS is identical to the test's copy and every returned target is allowed. BoardMovesTest: 7 cases, exact assertEquals/assertNull plus a legality test over the full daemon table; reverting to the workflowOrder rule fails it.\nDoD2: getPreviousStatus is gone (git grep). handlePrevious (MoeToolWindowPanel.kt:561), the detail-dialog prevCb (:635) and TaskColumn's per-card arrow (:175, takeIf hasPrevious) all use BoardMoves, so BLOCKED/BACKLOG/unknown get no arrow and no prompt. The reason is never dropped: Reopen sends it with REOPEN_TASK; Status moves send ADD_TASK_COMMENT (daemon case WebSocketServer.ts:928) then UPDATE_TASK; blank/cancel sends nothing. Next path unchanged.\nDoD3: under the jetbrains-gradle lease (released) I re-ran `cmd.exe /d /c \"cd /d D:\\projexts\\moes\\moe-jetbrains && gradlew.bat test --rerun\"` in the control checkout (moe-jetbrains/src identical to 8be13403): BUILD SUCCESSFUL, exit 0, :test executed. XML totals tests=632 skipped=6 failures=0 errors=0; fresh TEST-com.moe.toolwindow.BoardMovesTest.xml lists all 7 cases. The fails-on-946358a8 clause rests on the worker's recorded red run (2/7 failed on the old rule); by inspection the old WORKING->AWAITING_APPROVAL mapping contradicts workingGoesToPlanning and the legality test.\nComplexity pass: no findings. Non-blocking: a refused Status move (e.g. PLANNING WIP limit) leaves its comment, which the plan accepted. VS Code twin out of scope.",
+  "requiredCheckAtDone": null
+}

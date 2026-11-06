@@ -1,0 +1,281 @@
+{
+  "id": "task-c199e17764364e59a980ecc9eebccb85",
+  "epicId": "epic-be924fb8",
+  "title": "bug: gemini mode runs the Gemini CLI with Antigravity's flags when agy is missing, treats agentCommand 'agy' as claude, and under MOE_RUNTIME_PROTECTED=1 resolves the Gemini CLI: both launchers run only Antigravity (agy), from MOE_AGY_COMMAND else PATH, with one fixed not-found message (PR #208 port, launcher slice)",
+  "description": "Split out of task-cb378fd8 by architect-cd0ac706 on 2026-11-04. That row ports PR #208 (`gh.exe pr diff 208`) and needs about 13 files, over the 10-file plan cap. This row is the launcher slice. task-cb378fd8 keeps the docs (README, CONFIGURATION, GETTING_STARTED, SCHEMA), the JetBrains and VS Code labels and the PR hunk map. It depends on this row, because its docs name MOE_AGY_COMMAND and quote the message this row adds.\n\nPROBLEM, at da80b2d8:\n- CLI-type detection (moe-agent.sh :639, moe-agent.ps1 :1227) maps only `gemini` to gemini mode. `--command agy` runs claude mode: MOE_WORKER_TYPE=CLAUDE, claude's argv, no .gemini/GEMINI.md.\n- The gemini launch block (sh :11611-11618, ps1 :10993-11003) switches to agy only when agy is on PATH. Otherwise it runs the Gemini CLI with agy's flags. MOE_AGY_COMMAND is not read. The message \"Antigravity command not found: <cmd>\" can name gemini.\n- Protected runtime (MOE_RUNTIME_PROTECTED=1; sh :956 `protected_resolve_cli \"$COMMAND\"`, ps1 :649 `Resolve-MoeProtectedCli $Command`): `gemini` resolves the Gemini CLI's absolute path, and refuses when only agy is installed. The block above never remaps an absolute path, so a protected gemini seat always runs the Gemini CLI.\n- ps1 calls Write-Error before `exit 1`. Under the script's `$ErrorActionPreference = 'Stop'` (:125, see the comment at :128) that throws instead.\n- Reproduced by architect prototype rows (scratch clone, 2026-11-04): with only a fake gemini on PATH both launchers ran it; `agy` ran in claude mode; MOE_AGY_COMMAND was ignored; the protected INFO line named gemini.\n\nDELIVERABLE:\n1. Detection, both launchers: a command whose base name without extension is `gemini` or `agy` is gemini mode (MOE_WORKER_TYPE=GEMINI).\n2. Gemini launch block, both launchers, without the protected marker:\n   - a non-blank MOE_AGY_COMMAND is the binary (an empty or whitespace-only value counts as unset);\n   - else a `gemini` command (base name without extension) becomes `agy`;\n   - any other command (agy, a path to agy, a custom one) runs as given, with its arguments;\n   - never the Gemini CLI.\n3. Not found: exit 1, nothing runs, and one line in both launchers, #208's exact text: `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` sh keeps its `${RED}[ERROR]${NC} ` echo on stdout. ps1 writes `[ERROR] ` plus the text with [Console]::Error.WriteLine, not Write-Error.\n4. Under MOE_RUNTIME_PROTECTED=1:\n   - the agent-command allowlist stays claude, codex, gemini, grok, so `agy` stays refused with the unchanged MOE_PROTECTED_AGENT_COMMAND_REFUSED line (JetBrains PROTECTED_AGENT_COMMANDS holds the same four names, task-aa85ff13);\n   - for `gemini` the trusted lookup resolves `agy`, never the Gemini CLI (`[INFO] MOE_PROTECTED_AGENT_CLI: agy -> <file>`);\n   - MOE_AGY_COMMAND is not read;\n   - with no trusted agy, the existing MOE_PROTECTED_AGENT_CLI_NOT_FOUND line names agy.\n5. parity-check.sh and parity-check.ps1 require MOE_AGY_COMMAND, 'Antigravity CLI (agy) not found:' and the message's second sentence in both wrappers.\n6. Tests with fake binaries only (no real agy or gemini): whole-launcher rows named \"gemini mode\" in scripts/tests/protected-agent-command.test.mjs (bash, PowerShell 7, PowerShell 5.1), plus `agy` and `C:/tools/agy.exe` typeCases in scripts/tests/prompt-cache-launcher.test.mjs, which CI runs on all three OSes.\n\nNOT IN SCOPE:\n- docs and the IDE labels (task-cb378fd8);\n- the ps1 BOM and the heartbeatStop.test.ts flake, already on the branch;\n- the protected allowlist;\n- the gemini block's banners and comments, and the .gemini/ config writers;\n- wiring protected-agent-command.test.mjs into CI (7 scripts/tests files are not CI-wired today);\n- closing PR #208, which the governor does after task-cb378fd8.\n\nORDER: dependsOn CQ-M07t (task-527735ea), the governor's ordering for launcher edits. It also serializes this row after CQ-M07s, which edits parity-check. task-e444f6ae edits moe-agent.ps1's check-dispatch stop area, more than 1,500 lines from these hunks. In worktree mode non-overlapping hunks merge, so it gets no edge.\n\nVERIFICATION: the exact command in this row's plan. It runs the gemini mode rows on WSL node with Linux pwsh 7 and on Windows node.exe, the typeCases, parity-check on bash, pwsh 7 and PowerShell 5.1, and npm run lint.",
+  "definitionOfDone": [
+    "Without MOE_RUNTIME_PROTECTED, both launchers run agy in gemini mode (MOE_WORKER_TYPE=GEMINI) for agentCommand `gemini` or `agy`: MOE_AGY_COMMAND when non-blank, else `agy` on PATH, never a `gemini` binary. With no agy both exit 1, run nothing and print `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` Pinned by the 'gemini mode' rows of scripts/tests/protected-agent-command.test.mjs, passing on bash, PowerShell 7 and PowerShell 5.1.",
+    "Under MOE_RUNTIME_PROTECTED=1, `gemini` resolves and runs the trusted `agy` (`[INFO] MOE_PROTECTED_AGENT_CLI: agy -> <file>`), never the Gemini CLI or MOE_AGY_COMMAND. With no trusted agy it refuses with `MOE_PROTECTED_AGENT_CLI_NOT_FOUND: agy ...`, and agentCommand `agy` is refused with the unchanged MOE_PROTECTED_AGENT_COMMAND_REFUSED line. Pinned by the same rows.",
+    "scripts/tests/prompt-cache-launcher.test.mjs typeCases include `agy` and `C:/tools/agy.exe`, both exporting MOE_WORKER_TYPE=GEMINI, and pass.",
+    "parity-check.sh and parity-check.ps1 (pwsh 7 and PowerShell 5.1) require MOE_AGY_COMMAND and both not-found literals in both wrappers, and pass. npm run lint passes, and the plan's verification command passes fresh."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "scripts/moe-agent.sh: three hunks, anchored by text. Each old block occurs once at edc3e937. Edit in place with the Edit tool and run `bash -n` afterwards. A task worktree needs no atomic-save dance (scripts/CLAUDE.md, worktree Launch bullet).\n(a) CLI-type detection (~:639): 'elif [ \"$CMD_BASE\" = \"gemini\" ]; then' -> 'elif [ \"$CMD_BASE\" = \"gemini\" ] || [ \"$CMD_BASE\" = \"agy\" ]; then'. MOE_WORKER_TYPE then follows CLI_TYPE (GEMINI) with no further edit.\n(b) The protected gate (~:955), inside `if [ \"$RUNTIME_PROTECTED\" = 1 ]; then`. Replace the line '    protected_resolve_cli \"$COMMAND\"' with two lines:\n    # Gemini mode runs Antigravity only: the trusted lookup takes agy, never the Gemini CLI.\n    if [ \"$CLI_TYPE\" = \"gemini\" ]; then protected_resolve_cli agy; else protected_resolve_cli \"$COMMAND\"; fi\nCLI_TYPE is set at ~:634-644, earlier. The allowlist above (`case \"$COMMAND\" in claude|codex|gemini|grok`) is unchanged, so `agy` stays refused there.\n(c) The gemini launch block (~:11612). Replace from '        if [ \"$COMMAND_BIN\" = \"gemini\" ] && command -v agy &> /dev/null; then' through the not-found check's `exit 1` / `fi` with:\n        # Gemini mode runs Antigravity (agy) only, never the Gemini CLI, which rejects agy's flags.\n        # MOE_AGY_COMMAND names agy when the IDE's PATH lacks it; a blank value counts as unset.\n        # Under the protected marker COMMAND_BIN is already the trusted agy (protected_resolve_cli).\n        if [ \"$RUNTIME_PROTECTED\" != 1 ]; then\n            GEMINI_BIN_BASE=$(basename \"$COMMAND_BIN\")\n            case \"${MOE_AGY_COMMAND:-}\" in\n                *[![:space:]]*) COMMAND_BIN=\"$MOE_AGY_COMMAND\" ;;\n                *) if [ \"${GEMINI_BIN_BASE%.*}\" = \"gemini\" ]; then COMMAND_BIN=\"agy\"; fi ;;\n            esac\n        fi\n        if ! command -v \"$COMMAND_BIN\" &> /dev/null; then\n            echo -e \"${RED}[ERROR]${NC} Antigravity CLI (agy) not found: $COMMAND_BIN. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).\"\n            exit 1\n        fi\nWhy `case` and not `-n`: the architect's dry run showed `-n \"${MOE_AGY_COMMAND:-}\"` runs a whitespace-only value as the command ('not found:  .'), while ps1's IsNullOrWhiteSpace treats it as unset. Row AG2 pins the shared behaviour. `${MOE_AGY_COMMAND:-}` keeps `set -u` safe. The pattern parses on macOS /bin/bash 3.2. COMMAND_ARGV, the command's own arguments, is kept. Error handling: a missing agy exits 1 before GEMINI.md is written and before any CLI or heartbeat starts, as today.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "sh: detection accepts agy (:639); the protected gate resolves agy for gemini mode (:957); the gemini block remaps (MOE_AGY_COMMAND non-blank via case, else gemini->agy) only without the marker, and prints #208's not-found line. bash -n clean. COMMAND_ARGV kept; later banner/launch lines read the new COMMAND_BIN.",
+      "startedAt": "2026-11-04T19:44:13.871Z",
+      "completedAt": "2026-11-04T19:44:54.085Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "scripts/moe-agent.ps1: three hunks, anchored by text. Each occurs once at edc3e937. Keep the UTF-8 BOM and LF endings; the Edit tool keeps both. Check afterwards with ParseFile on pwsh.exe and powershell.exe (step 5).\n(a) The protected resolution (~:649), inside `if ($script:MoeRuntimeProtected) {`. Replace '    $Command = Resolve-MoeProtectedCli $Command' with:\n    # Gemini mode runs Antigravity only: the trusted lookup takes agy, never the Gemini CLI.\n    $Command = Resolve-MoeProtectedCli $(if ($Command -ceq 'gemini') { 'agy' } else { $Command })\nThis runs before CLI-type detection, so it tests $Command. The allowlist check above it (-cnotin the four names) guarantees an exact name here, and the INFO line becomes 'MOE_PROTECTED_AGENT_CLI: agy -> <file>'.\n(b) CLI-type detection (~:1227): 'elseif ($cmdBase -eq \"gemini\") { $cliType = \"gemini\" }' -> 'elseif ($cmdBase -eq \"gemini\" -or $cmdBase -eq \"agy\") { $cliType = \"gemini\" }'. A protected seat's resolved agy path then detects as gemini mode too.\n(c) The gemini launch block (~:11136). Replace from '        if ($Command -eq \"gemini\") {' through the not-found check's `exit 1` / `}`; $geminiCheck is used nowhere else. The new text:\n        # Gemini mode runs Antigravity (agy) only, never the Gemini CLI, which rejects agy's flags.\n        # MOE_AGY_COMMAND names agy when the IDE's PATH lacks it; a blank value counts as unset.\n        # Under the protected marker $Command is already the trusted agy (Resolve-MoeProtectedCli).\n        if (-not $script:MoeRuntimeProtected) {\n            if (-not [string]::IsNullOrWhiteSpace($env:MOE_AGY_COMMAND)) {\n                $Command = $env:MOE_AGY_COMMAND\n            } elseif ([System.IO.Path]::GetFileNameWithoutExtension($Command) -eq \"gemini\") {\n                $Command = \"agy\"\n            }\n        }\n        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {\n            # Not Write-Error: under $ErrorActionPreference='Stop' it throws before exit 1.\n            [Console]::Error.WriteLine(\"[ERROR] Antigravity CLI (agy) not found: $Command. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).\")\n            $script:MoeExitStatus = 1\n            exit 1\n        }\nWhy Console: :125 sets EAP 'Stop', and the comment at :128 documents that Write-Error then terminates instead of exiting 1. Console output is one unwrapped stderr line, the same text as sh's. $CommandArgs is kept. Error handling: on a missing agy the seat exits 1 before Start-HeartbeatSidecar and before any CLI, so nothing runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1: protected resolution takes agy for an exact 'gemini' (:650); detection accepts agy (:1228); the gemini block remaps only without the marker (IsNullOrWhiteSpace MOE_AGY_COMMAND, else GetFileNameWithoutExtension gemini -> agy) and the not-found line goes through [Console]::Error.WriteLine, then exit 1. BOM kept, no CR, ParseFile ok on pwsh.exe and powershell.exe.",
+      "startedAt": "2026-11-04T19:44:57.327Z",
+      "completedAt": "2026-11-04T19:45:50.090Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Parity needles, placed after CQ-M07s's landed lines (governor comment-8c983720). s added the families at ~:41-46 and the 'check dispatch' loop at ~:163-167 in the sh, and the dynamicPatterns at ~:41-45 and the 'check dispatch' group at ~:118-120 in the ps1. Neither new block is adjacent to them.\n- scripts/tests/parity-check.sh: directly after the grok banner loop ('  require_both \"grok banner\" \"$banner\"' / 'done'), add:\n# Gemini mode runs Antigravity (agy) only: both wrappers read MOE_AGY_COMMAND and\n# stop with the same not-found message, never a fallback to the Gemini CLI.\nfor agy_lit in MOE_AGY_COMMAND 'Antigravity CLI (agy) not found:' \\\n  'Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).'; do\n  require_both \"gemini mode (Antigravity)\" \"$agy_lit\"\ndone\n- scripts/tests/parity-check.ps1: as the LAST entry of the `$required = [ordered]@{` table, after the 'Serena TOOL-tier tools' group and before its closing '}', add:\n    # Gemini mode runs Antigravity (agy) only: both wrappers read MOE_AGY_COMMAND\n    # and stop with the same not-found message, never a fallback to the Gemini CLI.\n    'gemini mode (Antigravity)' = @('MOE_AGY_COMMAND', 'Antigravity CLI (agy) not found:', 'Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).')\nparity-check.ps1 has no BOM, so the added text must stay ASCII (no em-dash). Dry run: with the needles and the old wrappers, parity-check.sh reported 3 'gemini mode (Antigravity) ... missing from: moe-agent.sh moe-agent.ps1' failures; with steps 1-2 both scripts PASS, the ps1 on pwsh 7 and on 5.1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "parity-check.sh: a require_both loop 'gemini mode (Antigravity)' after the grok banner loop. parity-check.ps1: the last $required group, ASCII only. GREEN on the new wrappers (sh, pwsh.exe, powershell.exe). RED in a scratch archive of HEAD's wrappers: 3 failures from each script.",
+      "startedAt": "2026-11-04T19:45:51.038Z",
+      "completedAt": "2026-11-04T19:47:33.310Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Tests: fake binaries only, no real agy or gemini.\n(1) scripts/tests/protected-agent-command.test.mjs: append this block at the end of the file. It reuses the file's fixture/run/assertRefused/assertResolved/refusedLine/notFoundLine/show/TAIL/GIT_DIR/nodeBin helpers. A governor seat reaches the CLI with the inert runtime, as rows C1/C2 do. Every row name contains 'gemini mode', which the gate's --test-name-pattern selects. The block:\n// Gemini mode runs Antigravity (agy) only, never the Gemini CLI (PR #208's port).\n// Without the marker: a non-blank MOE_AGY_COMMAND, else agy on PATH; no agy stops\n// with one fixed line. Under the marker: the trusted lookup takes agy and\n// MOE_AGY_COMMAND is not read. Each stub logs '<where> <name> <MOE_WORKER_TYPE>'.\nfunction typedStub(fx, dir, name, where) {\n  const file = path.join(dir, windows ? `${name}.cmd` : name);\n  writeFileSync(file, windows ? `@echo ${where} ${name} %MOE_WORKER_TYPE%>>\"${fx.ran}\"\\r\\n` : `#!/bin/sh\\necho \"${where} ${name} $MOE_WORKER_TYPE\" >> '${fx.ran}'\\n`);\n  if (!windows) chmodSync(file, 0o755);\n  return file;\n}\nconst ranText = (fx) => (existsSync(fx.ran) ? readFileSync(fx.ran, 'utf8') : '').replaceAll('\\r', '');\n// pwsh 7 colours and wraps rendered error records at the console width; match on flattened text.\nconst flat = (r) => `${r.stdout}\\n${r.stderr}`.replace(/\\x1B\\[[0-9;?]*[A-Za-z]/g, '').replace(/\\r?\\n[ \\t]*\\|?[ \\t]*/g, ' ').replace(/\\s+/g, ' ');\nconst agyMissing = (cmd) => `Antigravity CLI (agy) not found: ${cmd}. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).`;\nfor (const engine of ENGINES) {\n  const opts = { skip: engine.skip };\n  const name = (row) => `${engine.name}: ${row}`;\n  const legacy = (fx, command, env = {}) => run(engine, fx, { command, marker: null, role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined, ...env } });\n  for (const command of ['gemini', 'agy']) {\n    test(name(`AG1 gemini mode: ${command} runs agy, never the Gemini CLI`), opts, async (t) => {\n      const fx = fixture(t);\n      typedStub(fx, fx.trusted, 'gemini', 'path'); typedStub(fx, fx.trusted, 'agy', 'path');\n      const r = await legacy(fx, command);\n      assert.equal(r.code, 0, show(r));\n      assert.equal(ranText(fx), 'path agy GEMINI\\n', show(r));\n      assert.ok(existsSync(path.join(fx.project, '.gemini', 'GEMINI.md')), `no gemini-mode instructions\\n${show(r)}`);\n    });\n  }\n  test(name('AG2 gemini mode: a non-blank MOE_AGY_COMMAND names the agy that runs; a blank one counts as unset'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'gemini', 'path'); typedStub(fx, fx.trusted, 'agy', 'path');\n    for (const [value, want] of [[typedStub(fx, fx.custom, 'agy', 'custom'), 'custom agy GEMINI\\n'], [' ', 'path agy GEMINI\\n']]) {\n      rmSync(fx.ran, { force: true });\n      const r = await legacy(fx, 'gemini', { MOE_AGY_COMMAND: value });\n      assert.equal(r.code, 0, show(r));\n      assert.equal(ranText(fx), want, show(r));\n    }\n  });\n  test(name('AG3 gemini mode: with no agy the launcher stops with the fixed line and runs nothing'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'gemini', 'path');\n    for (const [env, shown] of [[{}, 'agy'], [{ MOE_AGY_COMMAND: path.join(fx.custom, 'agy') }, path.join(fx.custom, 'agy')]]) {\n      const r = await legacy(fx, 'gemini', env);\n      assert.equal(r.code, 1, show(r));\n      assert.equal(flat(r).split(agyMissing(shown)).length - 1, 1, show(r));\n      assert.equal(existsSync(fx.ran), false, `a CLI ran\\n${show(r)}`);\n    }\n  });\n  test(name('AG4 gemini mode: under the marker gemini resolves the trusted agy, never the Gemini CLI or MOE_AGY_COMMAND'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'gemini', 'trusted'); const file = typedStub(fx, fx.trusted, 'agy', 'trusted');\n    const r = await run(engine, fx, { command: 'gemini', pathEntries: [fx.empty, fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:', env: { MOE_AGY_COMMAND: typedStub(fx, fx.custom, 'agy', 'custom') } });\n    assertResolved(fx, r, 'agy', file);\n  });\n  test(name('AG5 gemini mode: under the marker a governor seat runs the trusted agy'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'gemini', 'trusted'); typedStub(fx, fx.trusted, 'agy', 'trusted');\n    const r = await run(engine, fx, { command: 'gemini', role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined, MOE_AGY_COMMAND: typedStub(fx, fx.custom, 'agy', 'custom') } });\n    assert.equal(r.code, 0, show(r));\n    assert.equal(ranText(fx), 'trusted agy GEMINI\\n', show(r));\n  });\n  test(name('AG6 gemini mode: under the marker with no trusted agy the launcher refuses'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'gemini', 'trusted');\n    assertRefused(engine, fx, await run(engine, fx, { command: 'gemini', pathEntries: [fx.trusted, ...TAIL] }), notFoundLine('agy'));\n  });\n  test(name('AG7 gemini mode: under the marker agy itself is refused'), opts, async (t) => {\n    const fx = fixture(t);\n    typedStub(fx, fx.trusted, 'agy', 'trusted');\n    assertRefused(engine, fx, await run(engine, fx, { command: 'agy', pathEntries: [fx.trusted, ...TAIL] }), refusedLine('agy'));\n  });\n}\nThat is 8 rows per engine: bash (Linux, macOS, WSL), PowerShell 7, and PowerShell 5.1 (Windows).\n(2) scripts/tests/prompt-cache-launcher.test.mjs, which CI runs on all three OSes: in `const typeCases = [...]`, add ['agy', 'GEMINI'] and ['C:/tools/agy.exe', 'GEMINI'] after ['C:/tools/gemini.cmd', 'GEMINI']. These cut the real detection blocks.\nArchitect dry run (scratch clone at edc3e937 plus steps 1-3): all 8 rows green on bash, PowerShell 5.1 and pwsh.exe 7; against the edc3e937 launchers AG1(agy) and AG2-AG6 are red on every engine (AG1(gemini) and AG7 pin behaviour that is already right). The typeCases are 2 green rows on WSL and 6 on Windows (5.1, pwsh 7, Git Bash), and red before step 1(a)/2(b).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs"
+      ],
+      "note": "Appended the planned 'gemini mode' block (typedStub, ranText, flat, agyMissing, AG1 x2, AG2-AG7) to protected-agent-command.test.mjs, plus two typeCases ['agy','GEMINI'], ['C:/tools/agy.exe','GEMINI'] in prompt-cache-launcher.test.mjs. GREEN: gemini mode 8/8 bash (WSL node), 8/8 PowerShell 5.1 and 8/8 pwsh 7 (node.exe); typeCases agy rows 2 on linux, 6 on windows (5.1, pwsh 7, Git Bash). RED is proven per piece by the step-6 mutants.",
+      "startedAt": "2026-11-04T19:47:34.210Z",
+      "completedAt": "2026-11-04T19:50:45.142Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run ONCE after steps 1-4, from this task's worktree root. The command is the 3 executionContract.checkRefs joined with ' && ', in order:\n- the 'gemini mode' rows on WSL node (bash) and on Windows node.exe (PowerShell 5.1 and pwsh 7), in parallel;\n- the agy typeCases on both nodes, in parallel;\n- bash -n, parity-check.sh and npm run lint, then ParseFile of moe-agent.ps1 and parity-check.ps1 on pwsh.exe and on powershell.exe.\nIts fresh output is the complete_task evidence. Expect:\n- 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each);\n- 'agy type rows: rc=0 linux=2 windows=6' (or more);\n- PASS parity-check.sh, the lint OK lines, and 'ParseFile ok' plus PASS parity-check.ps1 twice.\nThe architect's dry run took about 50 s for the rows plus 6 s for the rest. That fits the human's 20-minute gate rail; per that rail and comment-1a9850e2, do not run postflight.sh or postflight.ps1, and no JetBrains test (no Kotlin changes here). Linux pwsh is optional: on WSL its rows skip, and the gate counts bash there.\nError handling for a red run:\n- A red row prints its log path: read the TAP 'not ok' block, which carries the wrapper's stdout and stderr.\n- 'a CLI ran' or a wrong ran.log line means the remap or protected resolution is off.\n- A count below 8 with rc=0 means a row skipped: the engine is missing, so check pwsh.exe and powershell.exe on the WSL PATH (mem:gotcha-pwsh7-reachable-from-wsl).\n- Never weaken a row or the count.\n- WSL leaks MOE_* into Windows processes: the pieces unset every MOE_*/CLAUDE* variable (mem:gotcha-launcher-ps1-rows-from-wsl).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran ( ref0 ) && ( ref1 ) && ( ref2 ) per amend-1, GATE_RC=0 in 50 s: 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8'; 'agy type rows: rc=0 linux=2 windows=6'; PASS parity-check.sh; lint OK x3; ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe. No postflight, no JetBrains (per the 20-min rail).",
+      "startedAt": "2026-11-04T19:51:02.238Z",
+      "completedAt": "2026-11-04T19:52:30.435Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run ONCE after steps 1-4, from this task's worktree root. The command is the 3 executionContract.checkRefs, each wrapped VERBATIM in its own subshell and chained in order: `( <checkRefs[0]> ) && ( <checkRefs[1]> ) && ( <checkRefs[2]> )`. Never join the bare refs with ' && '. Each ref is a `;`-sequence, so a bare join links only the boundary commands, and a red check inside a ref would not fail the gate (comment-0a43e151 on task-cb378fd8). Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so the subshells need nothing else. The chain stops at the first red ref and returns its code. Submit that exact command and its output tail as moe.complete_task verification. The refs cover:\n- the 'gemini mode' rows on WSL node (bash) and on Windows node.exe (PowerShell 5.1 and pwsh 7), in parallel;\n- the agy typeCases on both nodes, in parallel;\n- bash -n, parity-check.sh and npm run lint, then ParseFile of moe-agent.ps1 and parity-check.ps1 on pwsh.exe and on powershell.exe.\nIts fresh output is the complete_task evidence. Expect:\n- 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each);\n- 'agy type rows: rc=0 linux=2 windows=6' (or more);\n- PASS parity-check.sh, the lint OK lines, and 'ParseFile ok' plus PASS parity-check.ps1 twice.\nThe architect's dry run took about 50 s for the rows plus 6 s for the rest. That fits the human's 20-minute gate rail; per that rail and comment-1a9850e2, do not run postflight.sh or postflight.ps1, and no JetBrains test (no Kotlin changes here). Linux pwsh is optional: on WSL its rows skip, and the gate counts bash there.\nError handling for a red run:\n- A red row prints its log path: read the TAP 'not ok' block, which carries the wrapper's stdout and stderr.\n- 'a CLI ran' or a wrong ran.log line means the remap or protected resolution is off.\n- A count below 8 with rc=0 means a row skipped: the engine is missing, so check pwsh.exe and powershell.exe on the WSL PATH (mem:gotcha-pwsh7-reachable-from-wsl).\n- Never weaken a row or the count.\n- WSL leaks MOE_* into Windows processes: the pieces unset every MOE_*/CLAUDE* variable (mem:gotcha-launcher-ps1-rows-from-wsl).",
+          "reason": "Verification trap found by architect-2a219562 (comment-0a43e151 on cb378fd8). Each checkRef is a `;`-sequence (refs 0/1/2 have 13/12/4 top-level `;`). Joined with bare ' && ', the && links only the boundary commands, so a red check inside a ref can't fail the gate. Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so subshells change nothing else. No ref byte changes, only how they're chained.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T19:36:52.296Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this row's diff (load adversarial-self-review). Run mutants in a scratch clone outside the checkout (`git clone -q --shared --no-checkout` of the control checkout into /mnt/d/moe-scratch/<dir>, detach at your worktree's HEAD, then copy your working files in). Never mutate W. Each mutant must turn the named piece red:\n- M1 revert sh 1(a) -> AG1(agy) on bash and the linux typeCases;\n- M2 sh `case` back to `if [ -n \"${MOE_AGY_COMMAND:-}\" ]` -> AG2 on bash;\n- M3 revert sh 1(b) -> AG4-AG6 on bash;\n- M4 revert ps1 2(a) -> AG4-AG6 on both PowerShells;\n- M5 revert ps1 2(b) -> AG1(agy) and AG5 on both PowerShells, and the windows typeCases;\n- M6 drop the ps1 `-not $script:MoeRuntimeProtected` guard -> AG5 (custom agy runs);\n- M7 change one word of either wrapper's message -> parity-check.sh and .ps1.\nAlso check:\n- the whole diff is 6 files, with no postflight-vm-route.* or .moe/ path;\n- the gemini block's later uses of $COMMAND_BIN / $Command (the 'Command:' banner and the launch lines) see the new value;\n- a hot reload or a second loop iteration keeps working (ps1 $Command is already agy; sh COMMAND_BIN parses once at ~:765);\n- no added line holds a project.json globalRails.forbiddenPatterns string.\nIn the complete_task summary, name the mutants and their results. Then add one line for the docs row task-cb378fd8: the exact message text and MOE_AGY_COMMAND semantics as landed.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Self-review found 2 real defects and fixed both inside the approved hunks.\n(1) The sh not-found line used `echo -e` on a user path (MOE_AGY_COMMAND): `\\c` cut the line and `\\t` became a tab. It now uses printf '%b[ERROR]%b %s\\n' \"$RED\" \"$NC\" \"<msg>\", the refuse_unprotected_runtime pattern, with the same bytes on stdout.\n(2) A quoted ps1 -Command ('\"gemini\"') keeps its quotes through Resolve-CommandParts, and [IO.Path]::GetFileNameWithoutExtension throws 'Illegal characters in path' on PS 5.1 under EAP Stop (probed). Both twins now test the detection base name ($cmdBase / CMD_BASE, computed once from the quote-trimmed token), which also drops sh's GEMINI_BIN_BASE.\nTests: AG1 gains '\"gemini\"' and AG3 gains a 'custom/agy\\c' case, so there are 9 rows per engine.\nMutants were run in a scratch clone (/mnt/d/moe-scratch/c199-mut, now removed), and each turned its named rows red:\n- M1: AG1(agy) on bash, plus the linux and Git Bash typeCases.\n- M2: AG2 on bash.\n- M3: AG4-AG6 on bash.\n- M4: AG4-AG6 on 5.1 and 7.\n- M5: AG1(agy) and AG5 on 5.1 and 7, plus the PS typeCases.\n- M6: AG5 on 5.1 and 7.\n- M7a/M7b: parity-check.sh and .ps1 (pwsh and 5.1).\n- M8 (back to echo -e): AG3 on bash.\n- M9 (back to GetFileNameWithoutExtension($Command)): AG1('\"gemini\"') on 5.1 and 7.\nOther checks: 6 files changed, none under postflight-vm-route.* or .moe/. The banner and launch lines read the new COMMAND_BIN/$Command, and a second loop pass is idempotent. The added lines contain no forbidden patterns. The gate was re-run fresh after these edits: GATE_RC=0.",
+      "startedAt": "2026-11-04T19:52:31.513Z",
+      "completedAt": "2026-11-04T20:05:45.424Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23"
+  ],
+  "priority": "MEDIUM",
+  "order": 537.2,
+  "comments": [
+    {
+      "id": "comment-b2fad41493c6499b9eed658f47ccff2f",
+      "author": "architect-2a219562",
+      "content": "Verification trap, found by architect-2a219562 while planning task-ff0df867 (proof run in bash). The verify step joins the 3 checkRefs with ' && ', but each ref is a `;`-sequence. `&&` links only one ref's last command to the next ref's `cd`, so the rest of the next ref runs anyway and the exit code is the LAST ref's alone. A red \"gemini mode rows\" ref followed by green parity/lint therefore returns 0. Proof: `bash -c 'echo \"ref0 says FAIL\"; false && cd /; echo \"ref1 body ran\"; true'` returns 0.\nFix, with no ref byte changed: wrap each ref in a subshell, `( <ref0> ) && ( <ref1> ) && ( <ref2> )`. The chain then stops at the first red ref and returns its code.",
+      "timestamp": "2026-11-04T19:27:10.207Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T18:14:14.056Z",
+  "updatedAt": "2026-11-04T20:15:04.808Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T18:28:59.222Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T20:14:18.667Z",
+    "wallClockMs": 6319445
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-593560ee",
+    "qa-1cd86a39"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T18:32:11.964Z",
+  "executionContract": {
+    "intendedBehavior": "Gemini mode always runs Antigravity (agy) and never the Gemini CLI, in both launchers. agentCommand `gemini` or `agy` (base name without extension, any path) selects gemini mode (MOE_WORKER_TYPE=GEMINI). Without MOE_RUNTIME_PROTECTED=1 the binary is a non-blank MOE_AGY_COMMAND, else `agy` in place of a `gemini` command, else the given command, with its arguments kept. When it is not found, both launchers exit 1 before any CLI starts and print `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` Under MOE_RUNTIME_PROTECTED=1 the four-name allowlist is unchanged, so `agy` is refused. For `gemini` the trusted lookup resolves `agy` (INFO `MOE_PROTECTED_AGENT_CLI: agy -> <file>`), MOE_AGY_COMMAND is not read, and a missing trusted agy refuses with MOE_PROTECTED_AGENT_CLI_NOT_FOUND naming agy. parity-check.sh and parity-check.ps1 require the shared literals.",
+    "acceptanceCriteria": [
+      "The 8 'gemini mode' rows of protected-agent-command.test.mjs pass on bash, PowerShell 5.1 and PowerShell 7 (AG1 x2, AG2-AG7).",
+      "prompt-cache-launcher typeCases ['agy','GEMINI'] and ['C:/tools/agy.exe','GEMINI'] pass on WSL bash and on Windows (5.1, pwsh 7, Git Bash).",
+      "parity-check.sh and parity-check.ps1 (pwsh.exe and powershell.exe) PASS, and fail when either wrapper drops MOE_AGY_COMMAND or a not-found literal.",
+      "bash -n and ParseFile (both engines) are clean, and npm run lint passes."
+    ],
+    "invariants": [
+      "Gemini mode never execs a binary whose base name is gemini.",
+      "Under MOE_RUNTIME_PROTECTED=1 the CLI that runs is the one the trusted lookup resolved (an absolute PATH entry outside the project), never an env-provided path.",
+      "postflight-vm-route.{sh,ps1} and .moe/ are untouched. CQ-M07s's parity lines stay as landed, and the new blocks are not adjacent to them."
+    ],
+    "compatibility": [
+      "agentCommand `gemini` keeps working: it now always runs agy. A seat that ran the Gemini CLI by fallback now stops with the fixed message instead of failing on agy's flags. This is the intended #208 change.",
+      "The protected allowlist and its refusal line are unchanged (byte-identical in both wrappers), and JetBrains PROTECTED_AGENT_COMMANDS needs no change.",
+      "Other CLIs (claude, codex, grok, custom) and their branches are unchanged. The gemini block's argv (--print / --prompt-interactive), the GEMINI.md and settings.json writers, and the banners are unchanged."
+    ],
+    "approvedScope": [
+      "moe-agent.sh: CLI-type detection (CMD_BASE), the protected gate's protected_resolve_cli call, and the gemini launch block's binary choice and not-found line",
+      "moe-agent.ps1: the protected Resolve-MoeProtectedCli call, CLI-type detection ($cmdBase), and the gemini launch block's binary choice and not-found line",
+      "parity-check.sh: one require_both loop after the grok banner loop. parity-check.ps1: one $required group, the last one",
+      "protected-agent-command.test.mjs: the appended 'gemini mode' block (typedStub, ranText, flat, agyMissing, AG1-AG7). prompt-cache-launcher.test.mjs: two typeCases"
+    ],
+    "reuse": [
+      "The test harness is the existing protected-agent-command.test.mjs (real launchers, inert runtime stub, CLI stubs). No new file and no new CI wiring.",
+      "The not-found message and MOE_AGY_COMMAND come from PR #208 verbatim. The protected resolution reuses protected_resolve_cli and Resolve-MoeProtectedCli.",
+      "The flattening normalizer follows subagent-mirror.test.mjs's fix for wrapped pwsh error text (task-02af8654)."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh at edc3e937: detection `elif [ \"$CMD_BASE\" = \"gemini\" ]` ~:639; the protected gate calls `protected_resolve_cli \"$COMMAND\"` ~:955; the gemini block starts `if [ \"$COMMAND_BIN\" = \"gemini\" ] && command -v agy` ~:11612; COMMAND_BIN is parsed once (~:765).",
+      "moe-agent.ps1 at edc3e937: `$ErrorActionPreference = 'Stop'` at :125; `$Command = Resolve-MoeProtectedCli $Command` ~:649 runs before detection `elseif ($cmdBase -eq \"gemini\")` ~:1227; the gemini block starts `if ($Command -eq \"gemini\") {` ~:11136; Invoke-MoeGuardedCommand runs `& $Command @args`.",
+      "protected-agent-command.test.mjs: fixture/run/launch/assertRefused/assertResolved/refusedLine/notFoundLine/GIT_DIR/TAIL/nodeBin exist, and governor rows (C1, C2, G1) reach the CLI with the inert runtime. run() sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1, so it runs from a task worktree.",
+      "CQ-M07s landed as edc3e937 with parity lines at sh ~:41-46/~:163-167 and ps1 ~:41-45/~:118-120. PR #208 = a73af400."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/protected-agent-command.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E \"^ok [0-9]+ - $2: [^#]*gemini mode\" | grep -vc '# SKIP'; }; s=\"bash=$(k $L bash) ps51=$(k $N 'PowerShell 5.1') ps7=$(k $N 'PowerShell 7')\"; echo \"gemini mode rows: rc=$r $s (logs $L $N)\"; [ $r = 0 ] && echo \"$s\" | grep -qE '^bash=([89]|[1-9][0-9]) ps51=([89]|[1-9][0-9]) ps7=([89]|[1-9][0-9])$'",
+      "cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/prompt-cache-launcher.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E '^ok [0-9]+ - [^#]*: (C:/tools/)?agy(\\.exe)? exports MOE_WORKER_TYPE=GEMINI' | grep -vc '# SKIP'; }; echo \"agy type rows: rc=$r linux=$(k $L) windows=$(k $N) (logs $L $N)\"; [ $r = 0 ] && [ \"$(k $L)\" -ge 2 ] && [ \"$(k $N)\" -ge 6 ]",
+      "cd \"$(git rev-parse --show-toplevel)\"; P=$(wslpath -w \"$PWD\"); bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && npm run lint --silent && for e in pwsh.exe powershell.exe; do $e -NoProfile -Command \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$P\\scripts\\moe-agent.ps1',[ref]\\$null,[ref]\\$x);if(\\$x.Count){\\$x;exit 1};'ParseFile ok'\" && $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" || exit 1; done"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A literal #208 port (remap only in the gemini block) was rejected for the protected runtime. protected_resolve_cli and Resolve-MoeProtectedCli resolve the command NAME first, so a protected gemini seat would still require the Gemini CLI to be installed, refuse when only agy exists, and then run a bare `agy` or an env-provided MOE_AGY_COMMAND that the trusted lookup never vetted. Instead, the trusted lookup takes agy for gemini and the block skips the remap under the marker.\n- Adding `agy` to the protected allowlist was rejected. The refusal line is byte-identical across the wrappers, the tests pin it, and JetBrains PROTECTED_AGENT_COMMANDS has the same four names (task-aa85ff13). Under protection gemini reaches agy anyway.\n- ps1 Write-Error (as in #208) was replaced by [Console]::Error.WriteLine, because EAP 'Stop' turns Write-Error into a throw (:128's comment documents the same pattern).\n- Whitespace-only MOE_AGY_COMMAND is blank in both launchers. The dry run caught a `-n` sh sketch diverging from ps1's IsNullOrWhiteSpace.\n- A new test file plus ci.yml wiring was rejected for the file count. protected-agent-command.test.mjs already is the whole-launcher harness for agentCommand. CI coverage of the detection comes through prompt-cache-launcher's typeCases (all three OSes).",
+    "codebaseInsights": "- A governor seat with the inert runtime stub reaches the gemini launch block in about 0.6 s on bash and about 2 s on pwsh. That made whole-launcher rows cheap (32-36 s for 8 rows x 2 engines per node).\n- Under the marker the sh PATH is scrubbed and COMMAND_BIN is the absolute trusted path; command -v on it succeeds.\n- The ps1 resolves the protected CLI BEFORE type detection (:649 vs :1227), so 2(a) tests $Command and 2(b) must accept agy, or a protected seat would detect claude.\n- CQ-M07s landed after the original claim (edc3e937). The ps1 gemini block moved from ~:10993 to ~:11136; all anchors still occur once.\n- Stub .cmd files on Windows echo %MOE_WORKER_TYPE%, which proves detection without logging argv (prompt quotes would break cmd echo).",
+    "risks": "- Ordering: dependsOn CQ-M07s (task-74fe4c99; landed edc3e937, BLOCKED at 18:12Z on stray-edit triage). This row runs in parallel with CQ-M07t (task-527735ea, re-planning; receipt/journal code, far from these hunks) and task-e444f6ae (ps1 check-dispatch stop area ~:9575-9640, about 1500 lines away). merge-tree lands disjoint hunks; a true conflict takes the LANDING-CONFLICT resume.\n- This row's description still says 'dependsOn CQ-M07t' and 'Linux pwsh 7' in VERIFICATION. Both are superseded: the governor moved it to M07s (comment-8c983720 on task-cb378fd8), and the gate counts bash, pwsh.exe and powershell.exe.\n- task-cb378fd8's docs quote this row's message. Rewording it on a QA fix is fine, because cb378fd8's check derives the text from scripts/moe-agent.sh.\n- The macOS /bin/bash 3.2 parse (CI) cannot be run here; `case` with `*[![:space:]]*` is POSIX.\n- Kill only PIDs your own session started: the test harness kills its own launcher trees. Never pattern-kill.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "scripts/tests/prompt-cache-launcher.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "da80b2d853f249f455955c374ff765e0ef028523",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T18:32:11.994Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T19:44:13.871Z",
+  "reviewStartedAt": "2026-11-04T20:06:44.460Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/protected-agent-command.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E \"^ok [0-9]+ - $2: [^#]*gemini mode\" | grep -vc '# SKIP'; }; s=\"bash=$(k $L bash) ps51=$(k $N 'PowerShell 5.1') ps7=$(k $N 'PowerShell 7')\"; echo \"gemini mode rows: rc=$r $s (logs $L $N)\"; [ $r = 0 ] && echo \"$s\" | grep -qE '^bash=([89]|[1-9][0-9]) ps51=([89]|[1-9][0-9]) ps7=([89]|[1-9][0-9])$' ) && ( cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/prompt-cache-launcher.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern MOE_WORKER_TYPE $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E '^ok [0-9]+ - [^#]*: (C:/tools/)?agy(\\.exe)? exports MOE_WORKER_TYPE=GEMINI' | grep -vc '# SKIP'; }; echo \"agy type rows: rc=$r linux=$(k $L) windows=$(k $N) (logs $L $N)\"; [ $r = 0 ] && [ \"$(k $L)\" -ge 2 ] && [ \"$(k $N)\" -ge 6 ] ) && ( cd \"$(git rev-parse --show-toplevel)\"; P=$(wslpath -w \"$PWD\"); bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && npm run lint --silent && for e in pwsh.exe powershell.exe; do $e -NoProfile -Command \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$P\\scripts\\moe-agent.ps1',[ref]\\$null,[ref]\\$x);if(\\$x.Count){\\$x;exit 1};'ParseFile ok'\" && $e -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" || exit 1; done )",
+    "exitCode": 0,
+    "outputTail": "gemini mode rows: rc=0 bash=9 ps51=9 ps7=9 (logs /tmp/tmp.vjjKO06iEE /tmp/tmp.Uv7VpQtuwc)\nagy type rows: rc=0 linux=2 windows=6 (logs /tmp/tmp.Jj2W8ISSvC /tmp/tmp.L6FN3SsHOU)\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nParseFile ok\nPASS parity-check.ps1\nParseFile ok\nPASS parity-check.ps1\nGATE_RC=0 elapsed=53s",
+    "reportedAt": "2026-11-04T20:06:44.460Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs"
+  ],
+  "completionSummary": "PR #208 launcher slice, both twins. agentCommand gemini or agy (base name) is gemini mode, MOE_WORKER_TYPE=GEMINI. Without MOE_RUNTIME_PROTECTED the binary is a non-blank MOE_AGY_COMMAND, else agy for a gemini command, else the command as given, never the Gemini CLI. If not found: exit 1, nothing runs, one fixed line. Under the marker the allowlist is unchanged (agy refused), gemini's trusted lookup takes agy, and MOE_AGY_COMMAND is not read. The parity scripts require 3 literals.\n\nPlan deviations (self-review, inside the approved hunks):\n1. sh prints not-found via printf '%b[ERROR]%b %s\\n', not echo -e, so a backslash in MOE_AGY_COMMAND (agy\\c) cannot cut the line.\n2. The gemini->agy test uses detection's $cmdBase/CMD_BASE in both twins: GetFileNameWithoutExtension($Command) throws 'Illegal characters in path' on PS 5.1 for a quoted -Command.\nNew test cases: AG1 '\"gemini\"' and AG3 agy\\c, now 9 rows per engine.\n\nVerification, fresh after all edits: GATE_RC=0 in 53 s.\n- gemini mode rows bash=9 ps51=9 ps7=9; agy type rows linux=2 windows=6.\n- PASS parity-check.sh; lint OK; ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nMutants (scratch clone), each red on its rows:\n- M1: AG1(agy) bash + linux/Git Bash typeCases. M2: AG2 bash. M3: AG4-6 bash.\n- M4: AG4-6 on 5.1+7. M5: AG1(agy)+AG5 on 5.1+7 + PS typeCases. M6: AG5 on 5.1+7.\n- M7: a one-word change in either wrapper fails both parity scripts (bash, pwsh, 5.1).\n- M8 (echo -e): AG3 bash. M9 (GetFileNameWithoutExtension): AG1 '\"gemini\"' on 5.1+7.\n\nFor task-cb378fd8: the message is `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` sh prints it on stdout after [ERROR]; ps1 writes `[ERROR] ` plus the text to stderr. MOE_AGY_COMMAND = the agy binary path, read only without MOE_RUNTIME_PROTECTED=1; blank or whitespace = unset; it replaces the binary and keeps the command's args.",
+  "commits": [
+    {
+      "sha": "a1e93d27f0a8383163efd04d2ac736f12c951538",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T19:42:25Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T20:07:58.941Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T20:08:31Z",
+    "at": "2026-11-04T20:15:04.808Z"
+  },
+  "completedAt": "2026-11-04T20:14:18.667Z",
+  "reviewCompletedAt": "2026-11-04T20:14:18.667Z",
+  "reviewSummary": "Reviewed completion a1e93d27: pushed, and it is the remote tip of moe/work-2026-10-24. 6 files, +113/-14, net 99 LOC, exactly the approvedScope; no .moe/ or postflight-vm-route path.\n\nGate: re-ran task.verification verbatim, (ref0) && (ref1) && (ref2), in a fresh clone snapshot at a1e93d27. The control checkout's moe-agent.sh holds another session's uncommitted edits. GATE_RC=0 in 63 s:\n- gemini mode rows: bash=9 ps51=9 ps7=9, TAP fail 0;\n- agy type rows: linux=2 windows=6;\n- PASS parity-check.sh, lint OK, and ParseFile ok + PASS parity-check.ps1 on pwsh.exe and powershell.exe.\n\nRED check: the new tests against the base c0bab562 launchers.\n- AG1(agy) and AG2-AG6 fail on every engine, and AG1('\"gemini\"') on 5.1/7.\n- AG1(gemini) and AG7 pass there: they pin behaviour that was already right.\n- parity-check.sh fails with 3 asymmetries.\n\nDoD:\n1. Legacy: MOE_AGY_COMMAND when non-blank, else gemini becomes agy (by the detection base name), then the fixed not-found line and exit 1 before any CLI. sh prints with printf; ps1 uses [Console]::Error.WriteLine.\n2. Protected: gemini resolves the trusted agy; the allowlist is unchanged, so agy is refused; MOE_AGY_COMMAND is not read (AG4-AG7).\n3. Both typeCases pass.\n4. Both parity scripts and lint pass.\n\nAlso checked:\n- The ps1 hot reload passes @PSBoundParameters, so the reassigned $Command does not leak into a reload, and the remap repeats safely in every loop pass.\n- No stale old message or $geminiCheck reference remains.\n- The ps1 BOM is kept with no CR; no forbidden patterns.\n\nBoth plan deviations (printf, detection base name) fix real defects and are pinned by new cases.\n\nComplexity pass: nothing to cut.\n\nNot verified: macOS bash 3.2. protected-agent-command.test.mjs is not CI-wired, which is out of scope.",
+  "requiredCheckAtDone": null
+}

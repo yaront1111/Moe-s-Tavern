@@ -1,0 +1,190 @@
+{
+  "id": "task-6b3ab9d82a494d7c8704a50c5fe5b29e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: CI's \"Test launcher literal project paths\" (literal-project-path.test.mjs G2) is red on all 3 legs since 2e96f697 (CQ-M07n3, task-23c803d2), because the seat-runner Start-Process it added at moe-agent.ps1:9408 has no escaped -WorkingDirectory, so PS 5.1 resolves the inherited location as a wildcard for a project path containing [ or ]",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 from hunt #20's held-back item (task-9f3eac6d, architect-cd0ac706, #governors msg-3a9783bf). The governor re-verified it at origin/moe/work-2026-10-24.\n\nPROBLEM\n- scripts/tests/literal-project-path.test.mjs:63-67 enforces G2: every Start-Process in the launcher passes its own escaped -WorkingDirectory, because PS 5.1 resolves an inherited current location as a wildcard.\n- moe-agent.ps1:9408 is `return (Start-Process -FilePath ... -ArgumentList (ConvertTo-MoeArgumentLine (@($script:AgentSeatCli) + $SeatArgs)) -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop)`. It has no -WorkingDirectory at all.\n- The line came in with 2e96f697 ([CQ-M07n3] seat VM and per-task seat job, task-23c803d2). The hunt's dry run shows the step passes at 2e96f697^ and fails on all 3 OS legs since. ci.yml:269-270 runs `node --test scripts/tests/literal-project-path.test.mjs`.\n- CQ-M07n's WIP (80879746) still carries the same line at about :9363, and its gate does not run this test.\n\nFIX\n- Use the launcher's own pattern from :1026-1029: `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`.\n- Apply it to every Start-Process that CQ-M07n leaves without one; re-scan after it lands.\n\nPLACEMENT\n- moe-agent.ps1 is held by task-62ec51f1 (CQ-M07n, step 7 of 7), so this row depends on it and plans against its landed bytes.\n- task-bbd7ad2d, task-1dfec7a4 and task-cd3887fe also edit moe-agent.ps1 after 62ec51f1. Keep this a one-hunk change near the seat-runner call, not a reflow.\n\nVERIFY\n- `node --test scripts/tests/literal-project-path.test.mjs` in a snapshot outside the shared checkout.\n- `bash scripts/tests/parity-check.sh`, plus the ParseFile check of moe-agent.ps1.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/literal-project-path.test.mjs` passes at the row's tip, with G1 and G2 reporting no violations, run in a snapshot outside the shared checkout.",
+    "Every Start-Process in scripts/moe-agent.ps1 passes the escaped -WorkingDirectory form from :1029, and the diff is limited to those call sites.",
+    "`bash scripts/tests/parity-check.sh` exits 0 and moe-agent.ps1 parses cleanly with [System.Management.Automation.Language.Parser]::ParseFile."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Work on task-62ec51f1's LANDED bytes. The claim is withheld until that row is DONE, so this task's HEAD already carries them. Anchor on content, not line numbers: line numbers move when 62ec51f1 lands (:9408 at acea850b, :9363 on its WIP 80879746).\n(1) List the violations first. In a scratch copy (`git archive HEAD scripts` into a mkdtemp dir), run `node --test scripts/tests/literal-project-path.test.mjs`. The G2 failure lists every Start-Process without an escaped -WorkingDirectory. Expected: exactly one, Invoke-MoeSeatCli's background seat-runner call.\n(2) Edit scripts/moe-agent.ps1 with the Edit tool (TOOL witness). In Invoke-MoeSeatCli's `if ($BackgroundOut) {` branch, the line `return (Start-Process -FilePath ... -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop)` becomes:\n`... -NoNewWindow -PassThru -ErrorAction Stop -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath)))`\nThat is :1029's exact form (the daemon-start Start-Process). The test's escapedDirectory regex (:29) needs `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(` at the call's top level. Fix any other site the scan names with the same form, one line each.\nRules for the edit:\n- No comment, no reflow. bbd7ad2d, 1dfec7a4 and cd3887fe edit this file next, so keep it a one-line hunk.\n- Keep the file's UTF-8 BOM; parity-check enforces it.\n- Behavior: the escaped current FileSystem location is the directory the child inherited before. PS 5.1 simply stops resolving it as a wildcard, so a project path containing [ or ] no longer breaks the seat-stop call.\n- The existing G2 static test is the regression test: it is RED at HEAD on exactly this line and GREEN after (the architect checked both). No new test is needed.\n- Editing moe-agent.ps1 inside the task worktree is safe. Seats run only the control checkout's committed wrapper, and a copy under .worktrees refuses to start. Run ParseFile (step 2) after the edit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Added escaped -WorkingDirectory to Invoke-MoeSeatCli's background Start-Process (the only call without it).",
+      "startedAt": "2026-11-04T11:43:54.823Z",
+      "completedAt": "2026-11-04T11:44:07.708Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Run the one gate verbatim from the ROOT of your task worktree. It exports HEAD's scripts/ to /mnt/d/moe-scratch, overlays your edited moe-agent.ps1 (at QA time this is a no-op), and runs four checks:\n- the test under WSL node (static G1/G2; the 5 Windows runtime cases skip);\n- the test under Windows node.exe (all 8, including the 5 literal-project launch-and-completion cases under powershell.exe and pwsh.exe with the project `control é [x] $;'`);\n- parity-check.sh in place;\n- PS 5.1 ParseFile of the edited file.\ncd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && S=$(mktemp -d /mnt/d/moe-scratch/6b3a-v.XXXXXX) && echo \"snapshot=$S\" && git archive HEAD scripts | tar -x -C \"$S\" && cp scripts/moe-agent.ps1 \"$S/scripts/moe-agent.ps1\" && (cd \"$S\" && env $E node --test scripts/tests/literal-project-path.test.mjs && WSLENV= \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/literal-project-path.test.mjs) && env $E bash scripts/tests/parity-check.sh && WSLENV= /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$S/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); \\$e | ForEach-Object { \\$_.ToString() }; exit \\$e.Count\"\nExpected from the architect's dry run of this exact command from a clone at acea850b plus this edit (33 s):\n- WSL: tests 8, pass 3, skipped 5.\n- Windows: tests 8, pass 8.\n- `PASS parity-check.sh`.\n- ParseFile exit 0.\nAt HEAD, without the edit, both node runs fail only the moe-agent.ps1 G1/G2 case.\nError handling: the gate fails closed on any failing test, a parity failure or a parse error, and ParseFile prints each error before exiting with the count.\nPut the command verbatim, its exit code and the output tail in complete_task's verification. Then delete the snapshot by the literal path it printed as snapshot=.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate passed: WSL node 3 pass/5 skip, Windows node 8/8, parity PASS, ParseFile 0 errors.",
+      "startedAt": "2026-11-04T11:44:08.552Z",
+      "completedAt": "2026-11-04T11:45:02.539Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, then complete_task with step 2's evidence.\n1. `git diff --stat` and `git diff -U0 -- scripts/moe-agent.ps1` show only the Start-Process line(s) the scan named (DoD 2). Nothing else changes: moe-agent.sh, moe-team.ps1 and the test file are untouched. `head -c3 scripts/moe-agent.ps1 | od -An -c` still shows the BOM (357 273 277).\n2. Mutant: in a scratch copy, put back the old line (no -WorkingDirectory) and run the WSL node command from step 2. G2 must fail and name that line.\n3. Think it through:\n   - The child's cwd stays the wrapper's current FileSystem location.\n   - `Get-Location -PSProvider FileSystem` answers even when the current provider is not FileSystem.\n   - -RedirectStandardOutput receives Stop-MoeSeatVm's `[IO.Path]::GetTempFileName()` path, which never contains [ or ], so it stays out of scope.\n   - Only the verified-local seat path (Stop-MoeSeatVm) reaches this call, and legacy launches never do.\n4. If anything changed, re-run step 2's command and use the fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Self-review: 1-line diff, BOM intact, mutant (old line) fails G2, fix passes.",
+      "startedAt": "2026-11-04T11:45:03.055Z",
+      "completedAt": "2026-11-04T11:45:05.445Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "MEDIUM",
+  "order": 243.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:38:17.145Z",
+  "updatedAt": "2026-11-04T19:20:41.602Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:42:51.205Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T11:48:04.344Z",
+    "wallClockMs": 7513139
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "worker-a408f113",
+    "qa-1cd86a39"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:48:20.992Z",
+  "executionContract": {
+    "intendedBehavior": "Every Start-Process in scripts/moe-agent.ps1 passes its own escaped -WorkingDirectory, so Windows PowerShell 5.1 never resolves the inherited current location as a wildcard. The only exception today is Invoke-MoeSeatCli's background seat-runner call, which 2e96f697 (task-23c803d2) added and literal-project-path.test.mjs G2 flags on every CI leg. It gains :1029's escaped form, as does any other call the scan names once task-62ec51f1 lands. The child's working directory does not change.",
+    "acceptanceCriteria": [
+      "`node --test scripts/tests/literal-project-path.test.mjs` passes in a snapshot outside the shared checkout, with G1 and G2 reporting no violations: under WSL node 3 pass and 5 Windows-only skips; under Windows node.exe 8 of 8.",
+      "Every Start-Process in scripts/moe-agent.ps1 carries `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`. The diff is limited to those call lines.",
+      "`bash scripts/tests/parity-check.sh` exits 0, and PS 5.1 ParseFile of moe-agent.ps1 reports 0 errors."
+    ],
+    "invariants": [
+      "No other line of scripts/moe-agent.ps1 changes. moe-agent.sh, moe-team.ps1 and literal-project-path.test.mjs are unchanged.",
+      "moe-agent.ps1 keeps its UTF-8 BOM.",
+      "The child process's working directory stays the wrapper's current FileSystem location."
+    ],
+    "compatibility": [
+      "PS 5.1 and pwsh 7 both accept -WorkingDirectory with an escaped path; the launcher already uses this form at :1029. Legacy (non-verified-local) launches never reach Invoke-MoeSeatCli."
+    ],
+    "approvedScope": [
+      "the Start-Process line in Invoke-MoeSeatCli's `if ($BackgroundOut)` branch",
+      "any other Start-Process call the G2 scan lists at the landed base, one line each"
+    ],
+    "reuse": [
+      "The launcher's own escaped -WorkingDirectory form at :1029. No new helper."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:1029 (acea850b), the daemon-start Start-Process, carries `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath))`.",
+      "scripts/moe-agent.ps1:9408 (acea850b), Invoke-MoeSeatCli's `return (Start-Process ... -RedirectStandardOutput $BackgroundOut -NoNewWindow -PassThru -ErrorAction Stop)`, has no -WorkingDirectory. On 62ec51f1's WIP 80879746 the same line is at :9363, and that WIP adds no other Start-Process.",
+      "literal-project-path.test.mjs:29 escapedDirectory regex; :54 the G2 rule for Start-Process; :63-67 the static test over moe-agent.ps1 and moe-team.ps1. Five Windows runtime cases skip off Windows.",
+      "Stop-MoeSeatVm (~:9449-9462) is the only -BackgroundOut caller. Its $out is [IO.Path]::GetTempFileName().",
+      "At acea850b the scan's only violation is moe-agent.ps1:9408. Windows node.exe passes the 5 runtime cases in 5-7 s each."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && S=$(mktemp -d /mnt/d/moe-scratch/6b3a-v.XXXXXX) && echo \"snapshot=$S\" && git archive HEAD scripts | tar -x -C \"$S\" && cp scripts/moe-agent.ps1 \"$S/scripts/moe-agent.ps1\" && (cd \"$S\" && env $E node --test scripts/tests/literal-project-path.test.mjs && WSLENV= \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/literal-project-path.test.mjs) && env $E bash scripts/tests/parity-check.sh && WSLENV= /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$S/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); \\$e | ForEach-Object { \\$_.ToString() }; exit \\$e.Count\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: add :1029's escaped -WorkingDirectory to the one call, which is the governor's FIX. Rejected: (1) a helper that wraps Start-Process: a reflow that collides with the three sibling rows editing this file. (2) Changing the test: the G2 rule is right, and this call is the defect.",
+    "codebaseInsights": "The architect ran literal-project-path.test.mjs at acea850b. WSL node gave 1 fail (moe-agent.ps1:9408 only), 2 pass and 5 skipped. Windows node.exe gave 7 pass and 1 fail, with the 5 runtime launch cases under powershell.exe and pwsh.exe green in about 5-7 s each. Applying this exact one-line edit made the static scan pass on both nodes (Windows 8 of 8). parity-check.sh passed, and PS 5.1 ParseFile reported 0 errors. The step-2 gate ran end to end from a clone in 33 s.",
+    "risks": "dependsOn task-62ec51f1 (WORKING) holds moe-agent.ps1, so plan and edit against its landed bytes and re-scan first. task-bbd7ad2d, task-1dfec7a4 and task-cd3887fe edit moe-agent.ps1 afterwards, so keep the change to one line. -RedirectStandardOutput is left alone, because its only value is a GetTempFileName path. Run the Windows node and PowerShell steps with an empty WSLENV, so no seat MOE_* var crosses into Windows.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/literal-project-path.test.mjs",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d6e34442856b5803b56319c80b047fbb65bdece5",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:48:21.025Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T11:43:54.823Z",
+  "reviewStartedAt": "2026-11-04T11:45:10.591Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') && S=$(mktemp -d /mnt/d/moe-scratch/6b3a-v.XXXXXX) && echo \"snapshot=$S\" && git archive HEAD scripts | tar -x -C \"$S\" && cp scripts/moe-agent.ps1 \"$S/scripts/moe-agent.ps1\" && (cd \"$S\" && env $E node --test scripts/tests/literal-project-path.test.mjs && WSLENV= \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/literal-project-path.test.mjs) && env $E bash scripts/tests/parity-check.sh && WSLENV= /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$S/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); \\$e | ForEach-Object { \\$_.ToString() }; exit \\$e.Count\"",
+    "exitCode": 0,
+    "outputTail": "WSL node: tests 8, pass 3, fail 0, skipped 5. Windows node.exe: tests 8, pass 8, fail 0, skipped 0 (G1/G2 ok for moe-agent.ps1 and moe-team.ps1; 5 launch-and-completion cases ok). PASS parity-check.sh. ParseFile: 0 errors, EXIT=0.",
+    "reportedAt": "2026-11-04T11:45:10.591Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Added the launcher's escaped -WorkingDirectory form (from :1029) to Invoke-MoeSeatCli's background Start-Process in scripts/moe-agent.ps1, the only Start-Process G2 flagged. One-line diff, BOM intact, nothing else touched. Mutant (old line) fails G2; fix passes G1/G2 under WSL node (3 pass/5 skip) and Windows node.exe (8/8); parity-check PASS; PS 5.1 ParseFile 0 errors.",
+  "commits": [
+    {
+      "sha": "2037e856921123c6ccd86ee64b04fb256c7d48c7",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T11:42:41Z",
+      "paths": [
+        "scripts/moe-agent.ps1"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T11:46:08.652Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T11:46:30Z",
+    "at": "2026-11-04T11:48:44.903Z"
+  },
+  "completedAt": "2026-11-04T11:48:04.344Z",
+  "reviewCompletedAt": "2026-11-04T11:48:04.344Z",
+  "reviewSummary": "Reviewed completion 2037e856 (on moe/work-2026-10-24, contained in control HEAD). Diff is 1 line (+1/-1) in scripts/moe-agent.ps1 only: Invoke-MoeSeatCli's `if ($BackgroundOut)` Start-Process gains the escaped -WorkingDirectory form from :1029. git diff --check clean; BOM ef bb bf kept; no other file touched. Grep shows only 2 real Start-Process calls (:1029, :9420), both escaped (DoD 2). Re-ran task.verification verbatim from a fresh snapshot: WSL node 8 tests, 3 pass, 0 fail, 5 skip (G1/G2 ok for moe-agent.ps1 and moe-team.ps1); Windows node.exe 8/8 pass incl. 5 launch-and-completion cases (powershell.exe x4, pwsh.exe x1); parity-check.sh PASS; PS 5.1 ParseFile 0 errors, exit 0 (DoD 1, 3). Mutant: pre-fix moe-agent.ps1 from 2037e856^ in the snapshot fails G2 naming moe-agent.ps1:9420, so the static test discriminates. Size well under 400. Scratch snapshot deleted.",
+  "requiredCheckAtDone": null
+}

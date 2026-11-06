@@ -1,0 +1,274 @@
+{
+  "id": "task-e44fbbf336754fdf9e852f80c93a9ee8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a REVIEW row the qa_reject hard cap parked for a human (needsHumanReview) is fenced only at claim time, so any worker, QA or governor seat can qa_approve it to DONE with no claim and no get_context, qa_reject it again, or release_task it back into the QA queue, and get_context's nextAction points a QA seat at qa_approve",
+  "description": "Filed by defect hunt #15 (task-928a468d), lane 1 (the QA review-loop escalation). Verified at HEAD d5431577 in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\n- Past the cap, qa_reject parks the row. Status stays REVIEW, the assignee is cleared and needsHumanReview is set true (packages/moe-daemon/src/tools/qaReject.ts:295-298).\n- Only claim_next_task (claimNextTask.ts:574, plus its ranked-pool exclusion) and wait_for_task (waitForTask.ts:146, :180) honour the flag.\n- qa_approve and qa_reject never read needsHumanReview. Their guards no-op on an unassigned row: assertWorkerOwns returns at util/enforcement.ts:44 and assertContextFetched at :240. So a seat that never claimed or read the row passes both guards.\n  - qa_approve then writes DONE and clears the flag (qaApprove.ts:231-236).\n  - qa_reject re-rejects it (reopenCount 4 → 5).\n- release_task's already-unassigned branch clears needsHumanReview for any caller (releaseTask.ts:250-264). assertReleaseCaller no-ops on an unassigned row (util/claimGuards.ts:293). So a worker seat puts the row back in the QA queue.\n- get_context's nextAction for every REVIEW row is moe.qa_approve (util/contextNextAction.ts:57-59), parked or not.\n\nCONTRACT\n- qaReject.ts:412 (the park message): \"A human must reopen or approve it; it is excluded from the QA queue until then.\" claimNextTask.ts:577 says the same.\n- types/schema.ts:1131-1136: the row is excluded from the QA claim pool \"until a human clears it (qa_approve / set_task_status reopen / release_task / board move)\".\n- docs/roles/governor.md:33 (the ❌ row): the daemon \"parks it in REVIEW for a human past that\".\n- docs/MCP_SERVER.md:2106 (### moe.release_task): release_task is \"one of the documented human unpark paths\".\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-928a468d/A/parkedReviewAgentBypass.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a d5431577 snapshot and run `npx vitest run src/__hunt__/parkedReviewAgentBypass.test.ts`.\n- The test parks a row with four real qa_reject calls, then calls each tool from a seat that never claimed the row. Result: 4 failed, 1 passed. The passing case is the workerId-less human control.\n  - qa_approve by qa-b: expected refused true, \"status\": \"REVIEW\", \"needsHumanReview\": true. Received refused false, \"status\": \"DONE\", \"needsHumanReview\": undefined.\n  - get_context by qa-b gives nextAction moe.qa_approve, and following it lands the same DONE.\n  - qa_reject by qa-b: received \"reopenCount\": 5. Expected 4 and a refusal.\n  - release_task by worker-x: received \"needsHumanReview\": false.\n- Output: /mnt/d/moe-scratch/hunt-928a468d/A/parkedReviewAgentBypass.vitest.txt\n- Exposure: no live row has needsHumanReview today, and the highest QA-driven reopenCount is 3. This is a guard gap, not a live incident, but the park is the only terminating tier of the reject loop.\n\nFIX DIRECTION\n- Keep the deliberate unassigned no-op of assertWorkerOwns and assertContextFetched; util/enforcement.ts:62-68 lists the tools that rely on it.\n- Add one park-specific refusal that mirrors claimNextTask.ts:574. On a REVIEW row with needsHumanReview true, refuse with NOT_ALLOWED any call that supplies a workerId, before any write. Apply it in qa_approve, in qa_reject, and in release_task's unpark branch. The workerId-less human/IDE path keeps working.\n- get_context returns no moe.qa_approve nextAction for a parked row: either no hint, or one saying a human owns it.\n- Before tightening, grep the existing callers. Checked at hunt time: no current test clears a park with a workerId. qaReject.test.ts:177-187 re-rejects an ASSIGNED row with no flag. releaseTask.test.ts:272 unparks with no workerId.\n\nFILES (6, at the warn line; the get_context hint is the same contract)\n- packages/moe-daemon/src/tools/qaApprove.ts\n- packages/moe-daemon/src/tools/qaReject.ts\n- packages/moe-daemon/src/tools/releaseTask.ts\n- packages/moe-daemon/src/util/contextNextAction.ts\n- packages/moe-daemon/src/tools/parkedReview.guard.test.ts (new; one vitest file for all four)\n- docs/MCP_SERVER.md: sync your own sections, `### moe.qa_approve`, `### moe.qa_reject` and `### moe.release_task`. The qa_reject Returns block (:2353) should also list status \"REVIEW\" and the parkedForHuman and needsHumanReview keys that the park already returns (qaReject.ts:419-424).\n\nPlacement: no open row holds these files at filing time. A held-back lead also edits qaReject.ts: the cap counts reopens from any path, so a human reopen onto the cap skips the architect re-plan. That lead waits for this row.",
+  "definitionOfDone": [
+    "On a parked row (REVIEW, unassigned, needsHumanReview true), qa_approve and qa_reject called with a workerId are refused NOT_ALLOWED and leave the task's status, reopenCount, needsHumanReview and rejectionHistory unchanged, while the same qa_approve with no workerId still lands DONE (new test file packages/moe-daemon/src/tools/parkedReview.guard.test.ts)",
+    "release_task with a workerId on a parked row leaves needsHumanReview true, and releaseTask.test.ts's existing human-path case 'clears needsHumanReview on a parked REVIEW task' still passes unchanged",
+    "get_context on a parked row returns no moe.qa_approve nextAction (new test), and docs/MCP_SERVER.md's ### moe.qa_approve, ### moe.qa_reject and ### moe.release_task sections name the refusal, the qa_reject Returns block listing status REVIEW, parkedForHuman and needsHumanReview",
+    "`cd packages/moe-daemon && npx vitest run src/tools/parkedReview.guard.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/releaseTask.test.ts` passes, run in a snapshot outside the shared checkout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the regression test first: create packages/moe-daemon/src/tools/parkedReview.guard.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy, because the TOOL witness matters at landing. Start from the architect's prototype at /mnt/d/moe-scratch/plan-e44fbbf3/parkedReview.guard.test.ts (151 lines). Against the unfixed sources at f76c55f3 it gives 4 failed / 2 passed; with the fix all 6 pass.\n\nThe test parks task-1 through the real hard-cap path: a 4th qa_reject by qa-a at reopenCount 3. qa-b is a QA seat busy on its own task-2. It then pins:\n(a) it.each over qa-b and a governor-x seat:\n  - qa_approve and qa_reject called with that workerId reject with code NOT_ALLOWED (-32003), codeName 'NOT_ALLOWED', and a message containing 'parked for human review';\n  - the task file is byte-identical;\n  - status is REVIEW, assignedWorkerId null, reopenCount 4, needsHumanReview true, rejectionHistory length 1;\n  - qa-b stays CODING on task-2, so no touchWorker runs on a refused caller.\n(b) release_task with workerId worker-x and a valid handoffNote is refused NOT_ALLOWED; the row stays parked and the file stays byte-identical (no handoff persisted).\n(c) get_context by qa-b returns no moe.qa_approve nextAction.\n(d) Controls:\n  - a workerId-less release_task unparks (needsHumanReview false);\n  - a workerId-less qa_approve lands DONE and clears the flag;\n  - an UNPARKED unassigned REVIEW row keeps the legacy seat path (the get_context hint is qa_approve, and qa_approve by qa-b lands DONE).\n\nAssert exact codes and field values, never truthiness, so the test is mutation-resistant. Error handling in the test: afterEach removes its temp dir, and the claim-fence contrast uses its own idle seat qa-c. qa-b holds task-2, so a claim by qa-b answers alreadyAssigned first.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
+      ],
+      "note": "New test written with Write from the architect prototype; the qa_reject and release_task refusals also assert the 'parked for human review' message. RED in a git-archive HEAD (0f56d3a7) snapshot /tmp/e44red.wyqM: 4 failed / 2 passed — qa_approve+qa_reject from qa-b and governor-x resolve instead of rejecting, release_task by worker-x resolves, get_context hint is moe.qa_approve; the two human/unparked controls pass.",
+      "startedAt": "2026-11-04T00:11:10.380Z",
+      "completedAt": "2026-11-04T00:12:14.503Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Refuse agent verdicts on a parked row, in packages/moe-daemon/src/tools/qaApprove.ts and packages/moe-daemon/src/tools/qaReject.ts.\n\nPlacement: in each handler, right after `if (task.status !== 'REVIEW') throw invalidState('Task', task.status, 'REVIEW');`. That is before qa_approve's finalizing-attempt check and before assertWorkerOwns / assertContextFetched in both tools, so the refusal fires before any write, touchWorker, recordReview or chat post.\n\nThe guard: `if (task.needsHumanReview === true && params.workerId) throw notAllowed('qa_approve', \\`Task ${task.id} is parked for human review: its reopen budget and the architect re-plan are exhausted. A human must reopen or approve it; an agent seat cannot.\\`)`. Pass 'qa_reject' as the operation in qaReject.ts. Add notAllowed to each file's ../util/errors.js import.\n\nAdd a 3-5 line comment explaining why: the unassigned park passes the ownership and context no-ops, and the guard mirrors claimNextTask.ts:574.\n\nLeave assertWorkerOwns and assertContextFetched unchanged. util/enforcement.ts:62-68 documents that other tools rely on their unassigned no-op.\n\nThe human path is an absent workerId: both tools already attribute `params.workerId || 'human'` (qaApprove.ts:207/:218, qaReject.ts:314). So a falsy workerId passes, exactly as today.\n\nqa_reject's own hard-cap park still works. The 4th reject lands on a row whose flag is not yet set, and the guard reads the flag BEFORE this reject's write.\n\nAppend one clause to each tool's description string saying that a row parked for human review (needsHumanReview) refuses any supplied workerId NOT_ALLOWED: qaApprove.ts:31, and qaReject.ts:22 after 'flagged for a human'. No test pins those strings.\n\nReference: these files' hunks in /mnt/d/moe-scratch/plan-e44fbbf3/prototype.diff. Edit with your own editor (Edit on Claude, apply_patch on codex exec).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "Inline guard `task.needsHumanReview === true && params.workerId` → notAllowed('qa_approve'|'qa_reject', '... parked for human review ...') right after the REVIEW status check in both handlers (before the finalizing check, assertWorkerOwns, assertContextFetched and every write); notAllowed added to both errors imports; one description clause each. Only qaReject.ts:298 sets the flag, so the message wording is accurate. Snapshot check: the two it.each verdict cases now pass; qaApprove.test.ts + qaReject.test.ts all green (169 passed incl. 4 of 6 new); release/get_context cases stay red until step 3.",
+      "startedAt": "2026-11-04T00:12:15.898Z",
+      "completedAt": "2026-11-04T00:13:35.411Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make the release unpark human-only, and drop the verdict hint on a parked row.\n\n(1) packages/moe-daemon/src/tools/releaseTask.ts. Inside the runExclusive body's already-unassigned branch (`if (!previousWorkerId)`), right after `const unparking = task.needsHumanReview === true;` (:251), add: `if (unparking && params.workerId) throw notAllowed('release_task', \\`Task ${task.id} is parked for human review; only a human (no workerId) can release it back into the QA queue.\\`)`. notAllowed is already imported.\n  - Position: after the DONE/ARCHIVED strict no-op and before repairUpdates and the handoffNote write, so a refused call writes nothing.\n  - Unaffected callers: the /ws RELEASE_TASK path (WebSocketServer.ts:743) calls the handler with no workerId, so the board's human unpark keeps working. releaseTask.test.ts:272 ('clears needsHumanReview on a parked REVIEW task') passes no workerId and must pass unchanged.\n  - In the tool's description (releaseTask.ts:93), after the RELEASE_NOT_ASSIGNEE ownership clause, add: a row parked for human review (needsHumanReview) refuses any supplied workerId NOT_ALLOWED.\n\n(2) packages/moe-daemon/src/util/contextNextAction.ts. Just before the `if (task.status === 'REVIEW')` → moe.qa_approve branch (:57), add `if (task.status === 'REVIEW' && task.needsHumanReview === true) return undefined;` with a one-line comment: no seat may give a verdict on it. The governor branch above it is unchanged. Other statuses already return undefined, so get_context handles an absent hint.\n\nReference hunks: /mnt/d/moe-scratch/plan-e44fbbf3/prototype.diff. Edit with your own editor.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts"
+      ],
+      "note": "releaseTask.ts: `if (unparking && params.workerId) throw notAllowed('release_task', ...)` right after `const unparking` in the already-unassigned branch (inside runExclusive, after the DONE/ARCHIVED no-op, before repairUpdates/handoff write); description gains a separate sentence after the INVALID_INPUT clause. contextNextAction.ts: early `return undefined` for REVIEW + needsHumanReview before the qa_approve branch. Snapshot: parkedReview.guard (6/6), releaseTask.test.ts, getContextGovernance.test.ts → 3 files, 80 passed; tsc --noEmit clean.",
+      "startedAt": "2026-11-04T00:13:36.759Z",
+      "completedAt": "2026-11-04T00:14:33.419Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Sync your own three sections of docs/MCP_SERVER.md. Use your own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) and never a shell write. Line numbers are from f76c55f3, so re-grep the headings first. Edit only these three sections; 29342b49 (REVIEW) last touched the chat_join/chat_who sections.\n- `### moe.qa_approve` (:2258): add an Errors bullet to the list at :2316: a task parked by the qa_reject hard cap (`needsHumanReview`) with a supplied `workerId` → `-32003` / `NOT_ALLOWED`, before any write. Only the workerId-less human path approves it.\n- `### moe.qa_reject` (:2331):\n  - The Returns block (:2353) becomes `status: \"WORKING\" | \"PLANNING\" | \"REVIEW\"` plus `parkedForHuman: boolean, needsHumanReview: boolean`, which qaReject.ts:419-424 already returns.\n  - Add one Notes bullet for the hard-cap park: past the cap the row stays REVIEW, unassigned and `needsHumanReview: true`, out of the QA claim pool until a human clears it.\n  - Add the same Errors bullet as qa_approve, to the list at :2378.\n- `### moe.release_task` (:2067):\n  - The :2069 Ownership sentence ('an unassigned row has no holder, so its repair below is open to any well-formed caller') gains the exception for a parked row.\n  - The :2106 Side-effects bullet says the unpark is the workerId-less human/board path, and a supplied workerId is refused `NOT_ALLOWED`.\nError handling: if a heading moved, re-grep rather than guess. Do not touch the other tools' sections.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md edited with Edit, only in 3 sections (headings re-grepped: release_task :2068, qa_approve :2259, qa_reject :2332). release_task: Ownership sentence gains the parked-row exception; the needsHumanReview Side-effects bullet says the unpark is the workerId-less human/board path and a supplied workerId is refused -32003 NOT_ALLOWED before any write (no handoffNote recorded). qa_approve: new Errors bullet. qa_reject: Returns status \"WORKING\" | \"PLANNING\" | \"REVIEW\" + parkedForHuman/needsHumanReview; new Hard-cap park Notes bullet (≥ maxReopens+1, per qaReject.ts:212-213); new Errors bullet. 7 diff hunks, all inside those sections; npm run lint OK.",
+      "startedAt": "2026-11-04T00:14:34.764Z",
+      "completedAt": "2026-11-04T00:16:07.139Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text, 948 chars, is at /mnt/d/moe-scratch/plan-e44fbbf3/checkref-gate.txt.\n- What it does: it overlays the 5 owned code and test files onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive, mem:gotcha-daemon-linux-snapshot-gate). Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci` and vitest on the new file plus the qaApprove, qaReject, qaReject.failedDodItems, releaseTask, getContextGovernance and waitForTask suites.\n- Expected: exit 0, 'Test Files  7 passed (7)', and a last line of 'parked ok (/tmp/me44f.XXXX)'.\n- Architect dry runs, from a --shared clone at f76c55f3 with this plan's prototype edits uncommitted:\n  - this command: exit 0, 7 files and 262 tests in about 9 s;\n  - the full daemon suite with the prototype: 277 files, 7419 passed, 24 skipped.\n- Then rm -rf the printed literal /tmp/me44f.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed snapshot path and the log tail first, then fix the earlier steps' files. Docs carry no test here; check step 4's three sections by grep in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef run verbatim from the worktree root: exit 0, 'Test Files  7 passed (7)', 'Tests  262 passed (262)', 'parked ok (/tmp/me44f.hfp4)'; snapshot removed. Extra regression check (snapshot /tmp/e44red.wyqM, git archive HEAD + the 5 files + docs/MCP_SERVER.md overlaid): full daemon vitest 279 files passed, 7433 passed / 24 skipped, exit 0.",
+      "startedAt": "2026-11-04T00:16:08.438Z",
+      "completedAt": "2026-11-04T00:18:35.813Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Caller identity: the guard keys on a supplied workerId. The proxy injects MOE_WORKER_ID only into an absent key. release_task already refuses a blank or non-string workerId with INVALID_INPUT. For qa_approve and qa_reject an empty string is falsy and takes the human path, exactly like their existing `params.workerId || 'human'` attribution. Confirm that is consistent, and invent no new rule.\n- Order: in all three tools the refusal comes before every write, touchWorker, recordReview and chat post; the byte-identical task-file assertions prove it. qa_approve's finalizing refusal and both tools' candidate gates come after it.\n- qa_reject's own park still parks. qaReject.test.ts 'parks in REVIEW for a human past the hard cap' still passes, and so does 'does not re-flip on repeated rejects past the hard cap', which uses an assigned, unflagged row.\n- Concurrency: qa_approve and qa_reject run under the dispatch-level state mutex (they are not blocking). release_task reads the task inside its own runExclusive. So the flag check and the write see one snapshot.\n- Human paths: /ws RELEASE_TASK (no workerId), set_task_status and board moves (untouched), and a workerId-less qa_approve all still work.\n- RED re-proof: in a scratch snapshot outside the repo, restore the 4 sources with `git show $(git merge-base HEAD moe/work-2026-10-24):<path>` and run only the new test file. The 4 parked cases must fail and the 2 controls pass; the architect's proof was 4 failed / 2 passed. Paste the failing test names into the completion summary, then rm -rf the literal scratch path.\n- Scope: only the six planned files changed, and the docs edits stay inside the three sections.\nIf this review changes any file, re-run step 5's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the earlier steps' files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review, no file changed (so step 5's gate output stands). Identity: a falsy workerId takes the human path in qa_approve and qa_reject, matching their `params.workerId || 'human'`; any truthy value (including a whitespace or non-string id) is refused, the safe direction; release_task already refuses blank or non-string ids with INVALID_INPUT earlier. scripts/moe-call.sh injects no workerId. Order: in both qa tools the guard comes right after the REVIEW check, with only param validation before it; the release guard sits inside runExclusive before repairUpdates/handoff. Concurrency: the qa tools are non-blocking (dispatch mutex). /ws RELEASE_TASK (WebSocketServer.ts:743) sends no workerId, so it is unaffected. The governor get_context branch is unchanged. Theoretical, not fixed: an ASSIGNED row with needsHumanReview true cannot arise (the park nulls the assignee and claims refuse flagged rows), and no test pins a workerId-less qa_reject on a parked row. RED re-proof at merge-base 0f56d3a7 (the 4 sources restored with git show, identical test): 4 failed / 2 passed, the failures being \"qa_approve and qa_reject from qa-b…\", \"…from governor-x…\", \"release_task from a seat is refused…\" and \"get_context gives a QA seat no qa_approve hint…\". Scratch dirs removed. Scope: the 6 planned files only, and the docs hunks stay in the 3 sections.",
+      "startedAt": "2026-11-04T00:18:37.086Z",
+      "completedAt": "2026-11-04T00:19:39.594Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 466.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:59:17.189Z",
+  "updatedAt": "2026-11-04T19:20:45.072Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T00:01:43.742Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T00:27:29.072Z",
+    "wallClockMs": 1545330
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-af7be174"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T00:09:59.358Z",
+  "executionContract": {
+    "intendedBehavior": "A REVIEW row that the qa_reject hard cap parked for a human (needsHumanReview true, unassigned) can no longer be decided or unparked by an agent seat. qa_approve and qa_reject called with any supplied workerId are refused NOT_ALLOWED (-32003) before any write, touchWorker, review record or chat post. release_task's already-unassigned unpark is refused the same way for a supplied workerId. get_context offers no moe.qa_approve nextAction for the parked row. The workerId-less human paths (an MCP call with no workerId, the /ws RELEASE_TASK board action, set_task_status) keep working. An unparked unassigned REVIEW row keeps today's seat path.",
+    "acceptanceCriteria": [
+      "On a parked row, qa_approve and qa_reject with a workerId (a QA seat, or a governor seat) throw NOT_ALLOWED with a message containing 'parked for human review'. The task file stays byte-identical, and the refused caller's worker record is untouched.",
+      "release_task with a workerId on a parked row throws NOT_ALLOWED, and needsHumanReview stays true. The workerId-less release still unparks it.",
+      "get_context on a parked row returns no moe.qa_approve nextAction, while an unparked unassigned REVIEW row still gets the qa_approve hint.",
+      "A workerId-less qa_approve on a parked row lands DONE and clears needsHumanReview.",
+      "The checkRef exits 0, ending with 'parked ok'."
+    ],
+    "invariants": [
+      "The refusal precedes every state write in all three tools.",
+      "assertWorkerOwns and assertContextFetched keep their unassigned no-op (util/enforcement.ts:62-68).",
+      "qa_reject's own hard-cap park of an unflagged row is unchanged."
+    ],
+    "compatibility": [
+      "No reply-shape change for any accepted call. The only new behaviour is a NOT_ALLOWED refusal on a parked row for a supplied workerId, which the docs already describe as a human-only state.",
+      "Existing .moe task records are unchanged, and no field is added.",
+      "The /ws RELEASE_TASK handler (no workerId) and the releaseTask.test.ts human unpark case are unchanged.",
+      "docs/MCP_SERVER.md's qa_approve, qa_reject and release_task sections are synced; the qa_reject Returns block finally lists the park's existing keys."
+    ],
+    "approvedScope": [
+      "tools/qaApprove.ts and tools/qaReject.ts: one guard after the REVIEW status check, the notAllowed import, and one description clause each.",
+      "tools/releaseTask.ts: one guard in the already-unassigned branch, and one description clause.",
+      "util/contextNextAction.ts: one early return for a parked REVIEW row.",
+      "tools/parkedReview.guard.test.ts (new).",
+      "docs/MCP_SERVER.md: the qa_approve, qa_reject and release_task sections only."
+    ],
+    "reuse": [
+      "The fence matches claimNextTask.ts:574's refusal for the same row.",
+      "notAllowed from util/errors.ts.",
+      "The test's base is the architect prototype at /mnt/d/moe-scratch/plan-e44fbbf3/parkedReview.guard.test.ts, derived from the hunt repro /mnt/d/moe-scratch/hunt-928a468d/A/parkedReviewAgentBypass.test.ts."
+    ],
+    "sourceAssumptions": [
+      "qaReject.ts:295-298 parks: assignedWorkerId null and needsHumanReview true. Its reply returns status, parkedForHuman and needsHumanReview (:419-424).",
+      "qaApprove.ts:70-72 and qaReject.ts:133-135 are the REVIEW status checks. qaApprove.ts:231-236 writes DONE and clears needsHumanReview. qaApprove.ts:251 and qaReject.ts:384 touchWorker the caller.",
+      "util/enforcement.ts:44 (assertWorkerOwns) and :240 (assertContextFetched) return early on an unassigned row.",
+      "releaseTask.ts:250-264 is the already-unassigned branch's unpark. WebSocketServer.ts:743 calls releaseTaskTool with no workerId.",
+      "util/contextNextAction.ts:57-59 returns moe.qa_approve for every REVIEW row."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/me44f.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/qaApprove.ts tools/qaReject.ts tools/releaseTask.ts util/contextNextAction.ts tools/parkedReview.guard.test.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npx vitest run src/tools/parkedReview.guard.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/qaReject.failedDodItems.test.ts src/tools/releaseTask.test.ts src/tools/getContextGovernance.test.ts src/tools/waitForTask.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/tools/parkedReview.guard.test.ts' ../v.log && echo \"parked ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three alternatives were rejected:\n(1) Make assertWorkerOwns/assertContextFetched refuse unassigned rows. util/enforcement.ts:62-68 says report_blocked, submit_plan, qa_approve/qa_reject, request_replan and acquire_resource rely on their unassigned no-op (legacy --no-auto-claim and /ws flows), so the blast radius is too wide.\n(2) A shared helper in util/enforcement.ts. That would be a 7th file. claimNextTask.ts:574 and waitForTask.ts already inline the same flag check, so inline is the local convention.\n(3) Have release_task skip only the unpark and still persist a handoffNote. A refusal is simpler and keeps the task file byte-identical.",
+    "codebaseInsights": "- The human path is an absent workerId: the qa tools attribute `params.workerId || 'human'`, the /ws RELEASE_TASK handler calls releaseTaskTool without one, and the IDE approves through /ws status moves rather than qa_approve.\n- needsHumanReview is set only by the qa_reject hard cap (qaReject.ts:298) and the critique-block cap. It is cleared by qa_approve (:236), set_task_status (setTaskStatus.ts:243-245) and release_task's unpark.\n- release_task is `blocking: true` since 5158e85b and takes runExclusive itself, so its guard sits inside that block.",
+    "risks": "- qa_reject's guard must read the flag before its own write, so the 4th reject still parks.\n- Do not widen into the touchWorker-on-an-unflagged-unassigned-row side effect. It is held back as a separate lead in hunt #15's handoff.\n- The test's claim-fence contrast must use an idle seat: a seat that holds a task gets alreadyAssigned before the park refusal.\n- Keep the docs edits inside the three sections.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/util/contextNextAction.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0f56d3a7894ed95126b5787527015e1af8228a8a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T00:09:59.387Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:11:10.380Z",
+  "reviewStartedAt": "2026-11-04T00:20:22.981Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/me44f.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/qaApprove.ts tools/qaReject.ts tools/releaseTask.ts util/contextNextAction.ts tools/parkedReview.guard.test.ts; do cp \"$R/$f\" $f || exit 1; done && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npx vitest run src/tools/parkedReview.guard.test.ts src/tools/qaApprove.test.ts src/tools/qaReject.test.ts src/tools/qaReject.failedDodItems.test.ts src/tools/releaseTask.test.ts src/tools/getContextGovernance.test.ts src/tools/waitForTask.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aq '✓ src/tools/parkedReview.guard.test.ts' ../v.log && echo \"parked ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  7 passed (7)\n      Tests  262 passed (262)\nparked ok (/tmp/me44f.btIr)",
+    "reportedAt": "2026-11-04T00:20:22.981Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/util/contextNextAction.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "A REVIEW row the qa_reject hard cap parked for a human (needsHumanReview, unassigned) now refuses agent seats.\n- qa_approve and qa_reject: refuse any supplied workerId with NOT_ALLOWED ('… parked for human review …') right after the REVIEW status check, before finalizing, ownership, context, recordReview, touchWorker, chat and every write.\n- release_task: the already-unassigned unpark refuses a supplied workerId with NOT_ALLOWED inside runExclusive, before any write, so no handoff is persisted.\n- get_context: contextNextAction returns no hint for a parked REVIEW row; the governor branch is unchanged.\n- Human paths unchanged: a workerId-less qa_approve still lands DONE; /ws RELEASE_TASK and a workerId-less release still unpark; set_task_status and board moves are untouched. An unparked, unassigned REVIEW row keeps the seat path, and qa_reject's own first park still parks.\n- Tool descriptions gain one clause each. docs/MCP_SERVER.md is synced in three sections:\n  - release_task: the Ownership exception and the Side-effects bullet;\n  - qa_approve: an Errors bullet;\n  - qa_reject: Returns gains status \"REVIEW\", parkedForHuman and needsHumanReview; a Hard-cap park note; an Errors bullet.\n\nTests: the new tools/parkedReview.guard.test.ts (6 tests).\n- RED at merge-base 0f56d3a7 (sources restored, same test): 4 failed / 2 passed. The failures were \"qa_approve and qa_reject from qa-b…\", \"…from governor-x…\", \"release_task from a seat is refused NOT_ALLOWED…\" and \"get_context gives a QA seat no qa_approve hint…\".\n- GREEN: 6/6. The checkRef ran fresh: 7 files, 262 tests passed, \"parked ok\".\n- Full daemon suite in a git-archive snapshot: 279 files, 7433 passed, 24 skipped.\n- releaseTask.test.ts's human unpark case passes unchanged.\n- npm run lint is OK.",
+  "commits": [
+    {
+      "sha": "a51570599717c0e0f3449e823fd4295720b7b3ed",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-04T00:10:02Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/util/contextNextAction.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-04T00:21:19.455Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-04T00:23:59Z",
+    "at": "2026-11-04T00:28:08.361Z"
+  },
+  "completedAt": "2026-11-04T00:27:29.072Z",
+  "reviewCompletedAt": "2026-11-04T00:27:29.072Z",
+  "reviewSummary": "Reviewed landed completion a5157059 (pushed, on moe/work-2026-10-24 + origin; owned files unchanged since). Diff: 6 files +191/-8 (net 183), exactly the approvedScope.\n\nRe-ran:\n- checkRef verbatim: exit 0, 7 files, 262 tests passed, 'parked ok'.\n- Same snapshot: tsc --noEmit clean; full daemon vitest 280 files, 7434 passed / 24 skipped.\n- RED: with the 4 sources restored from a5157059^, the new test gives 4 failed / 2 passed (the 2 human/unparked controls pass).\n- qualityGate: parity-check PASS, lint OK.\n\nDoD:\n1. qa_approve/qa_reject refuse a supplied workerId NOT_ALLOWED right after the REVIEW check, before the finalizing/ownership/context/candidate gates and every write. The test pins the byte-identical file, the fields and an untouched caller. A workerId-less approve lands DONE.\n2. The release_task guard is inside runExclusive, before repairUpdates and the handoff write; the file stays byte-identical. releaseTask.test.ts is unmodified and passes; /ws RELEASE_TASK sends no workerId.\n3. get_context gives no hint on a parked row; an unparked unassigned REVIEW row still gets qa_approve. Docs: release_task Ownership + Side-effects; a qa_approve Errors bullet; qa_reject Returns (REVIEW, parkedForHuman, needsHumanReview) + a Hard-cap note + Errors. All hunks stay inside the 3 sections.\n4. The checkRef suite passes in a snapshot.\n\nInvariants: the enforcement no-ops are unchanged; the first park still parks.\n\nTaste (non-blocking): the get_context test could use toBeUndefined(); the park message is duplicated across the two qa tools.",
+  "requiredCheckAtDone": null
+}

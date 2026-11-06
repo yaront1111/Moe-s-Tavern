@@ -1,0 +1,229 @@
+{
+  "id": "task-1528e8996b0c49d89dd72d41ca12ac54",
+  "epicId": "epic-be924fb8",
+  "title": "docs: architect.md tells seats to read error.data.nextAction on a MoeError although error.data is exactly { tool, codeName }, and the QA landing-gap reject (qa.reference.md, moe-qa-loop) puts the held-path remedy into one issue description, which qa_reject refuses past 500 characters",
+  "description": "Defect hunt #8 (task-21d671c1), lane 3: role docs and skills checked against the runtime. HEAD b5f40fee.\n\nPROBLEM\n1. architect.md, the MoeError rule.\n   - docs/roles/architect.md:30 says \"On `MoeError`, read `error.data.nextAction` and do what it says.\" The line arrived in b4d3b91a (2026-05-08), and its vendored copy is packages/moe-daemon/src/generated/initFiles.ts:55.\n   - McpAdapter sends a MoeError as `errorResponse(id, code, message, { tool: params.name, codeName: toolError.codeName })` (packages/moe-daemon/src/server/McpAdapter.ts:316-323).\n   - docs/MCP_SERVER.md:91 agrees with the code: \"`error.data` is exactly `{ tool, codeName }` … `MoeError.context` is logged in the daemon and never sent, so clients key on `data.codeName` and read details from the message\". For that reason, util/enforcement.ts:71-72 puts the claim call in the message text.\n   - So every architect seat looks for a recovery field that never arrives, while the real next call sits in `error.message`. A retryable refusal such as TASK_NOT_CLAIMED or ATTEMPT_FINALIZING then reads as a dead end.\n   - worker.md, qa.md and governor.md have no such line.\n2. The QA landing-gap reject.\n   - docs/roles/qa.reference.md:46-50 tells QA to call moe.qa_reject with ONE issue of type `other`. Its description starts `Landing gap:` and cites lastCommitOutcome, landingRetry, each rescue ref, and \"the row's paths that are still dirty, with any held-path remedy its landing printed (`MOE_CONTESTED_HELD`)\".\n   - docs/skills/moe-qa-loop/SKILL.md:61 says the same: \"the row's still-dirty paths with their remedy (`MOE_CONTESTED_HELD`)\".\n   - qaReject.ts:103-104 refuses any issue description over 500 characters. Neither doc mentions that cap, and MCP_SERVER.md's qa_reject section lists only reason ≤2000 and issues ≤20.\n   - The remedy alone is longer than the cap: HELD_REMEDY_UNTOUCHED + HELD_REMEDY_WITNESS + HELD_REMEDY_NEVER in packages/moe-daemon/src/tools/recordCommit.ts:24-30 run to about 700 characters.\n   - So for a held-path landing gap, the reject the docs prescribe is refused with INVALID_INPUT, and QA truncates the evidence or stalls.\n\nEVIDENCE\nVitest repros, run in a git-archive snapshot of HEAD (/tmp/hunt-21d6-B). Files and outputs are in /mnt/d/moe-scratch/hunt-21d671c1/B/.\n- errorDataNextAction.test.ts drives the real assertWorkerHoldsTask refusal through McpAdapter.handle. repro-error-data-nextAction.out shows no nextAction in data:\n  `WIRE ERROR: {\"code\":-32002,\"message\":\"[TASK_NOT_CLAIMED] Task task-x is not claimed by any worker, … Claim it first with moe.claim_next_task {…}\",\"data\":{\"tool\":\"moe.start_step\",\"codeName\":\"TASK_NOT_CLAIMED\"}}`\n- qaRejectLandingGap.test.ts builds the `Landing gap:` description exactly as the docs prescribe, with the verbatim held remedy. repro-qa-reject-landing-gap.out:\n  `DESCRIPTION LENGTH: 1155` / `REFUSAL: [INVALID_INPUT] Invalid issues.description: too long (1155 chars). Maximum 500 characters.`\n\nFIX DIRECTION\n- architect.md:30: reword in place. The file is at 39 lines and `npm run lint` caps it at 40, so add no line. The new rule: on a MoeError, key on `error.data.codeName` and follow the call that `error.message` names.\n- qa.reference.md (exempt from the cap) and moe-qa-loop SKILL.md:61:\n  - state the 500-character cap on each issue description;\n  - keep the issue to the codes, refs and paths;\n  - put the printed remedy text in `reason` (max 2000) or quote it in a task comment.\n  qa.md:16 lists no remedy, so it needs no change.\n- Regenerate both vendored copies; see mem:gotcha-moe-doc-generated-artifacts:\n  - packages/moe-daemon/src/generated/initFiles.ts (generate-init-files);\n  - packages/moe-daemon/src/generated/skillFiles.ts (generate-skill-files).\n  Run the generators in a clone that has history, never as npm build/clean in the shared checkout (global rail). Apply their few-line diff hunks with the session's Edit tool, not cp: global rail on TOOL witnesses.\n- qaCommitPolicy.test.ts guards the 'Landing gap:' sentinel (util/qaCommitPolicy.test.ts:31). Keep it green.\n\nFILES: docs/roles/architect.md, docs/roles/qa.reference.md, docs/skills/moe-qa-loop/SKILL.md, packages/moe-daemon/src/generated/initFiles.ts, packages/moe-daemon/src/generated/skillFiles.ts. The last two are regenerated output.\nOUT OF SCOPE:\n- docs/MCP_SERVER.md, held by task-66108835 and task-3e1d0c2e.\n- docs/roles/qa.md.\n- The using-git-worktrees skill's shared-mode-only landing text, which is held back for a later hunt.",
+  "definitionOfDone": [
+    "`grep -rn 'error\\.data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated` prints nothing. architect.md's MoeError rule names `error.data.codeName` and says to follow the call that `error.message` names. `npm run lint` at the repo root passes, so architect.md stays at or under 40 lines.",
+    "`grep -n '500' docs/roles/qa.reference.md docs/skills/moe-qa-loop/SKILL.md` shows the issue-description cap in two places: qa.reference.md's landing-gap reject paragraph and SKILL.md's landing-gap bullet. Both route the held-path remedy text to `reason` (max 2000) or a task comment, not to the issue description.",
+    "Both vendored copies match the edited docs. In a clone of the fix commit that has history (mem:gotcha-moe-doc-generated-artifacts), `npm run generate-init-files && npm run generate-skill-files` leaves `git status --short src/generated` empty, and `npx vitest run src/util/initFiles.test.ts src/util/skillFiles.test.ts src/util/qaCommitPolicy.test.ts` passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "architect.md:30, the MoeError rule.\n\nIn the single long line 30, replace only the sentence \"On `MoeError`, read `error.data.nextAction` and do what it says.\" Leave the rest of the line as it is. Do not add a line: architect.md is at 39 lines, and the lint caps it at 40.\n\nThe new sentence must name `error.data.codeName` and say to follow the call that `error.message` names. Suggested: \"On `MoeError`, key on `error.data.codeName` and follow the call `error.message` names (`error.data` is exactly `{ tool, codeName }`).\"\n\nWhy: McpAdapter.ts:316-323 sends exactly { tool, codeName }, and docs/MCP_SERVER.md:91 documents it.\n\nEdit with the session's own editor: Edit on Claude, apply_patch on codex exec. Never use Serena (its project config ignores docs/) or a shell write; that is the global rail on TOOL witnesses.\n\nError handling: if your editor's match fails, re-read the line and retry the exact sentence. Never rewrite the whole file. The tests for this step are in the step 4 gate (the grep for data.nextAction, plus the lint).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/architect.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.md"
+      ],
+      "startedAt": "2026-11-03T19:25:32.389Z",
+      "completedAt": "2026-11-03T19:25:47.267Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the QA landing-gap cap to qa.reference.md and moe-qa-loop SKILL.md, editing both with the same tool rule as step 1.\n\n(a) qa.reference.md, the 'The reject.' paragraph (:46-50).\n- Keep the opening sentence and the four bullets.\n- Change the last bullet so it names the dirty paths and any held-path code (`MOE_CONTESTED_HELD`) without the full remedy text.\n- Add one sentence after the bullets: `moe.qa_reject` refuses an issue description longer than 500 characters (qaReject.ts:103-104). So keep that issue to the codes, refs and paths, and put the held-path remedy text the landing printed in `reason` (max 2000 characters) or quote it in a task comment.\n\n(b) docs/skills/moe-qa-loop/SKILL.md:61, the landing-gap bullet.\n- Make the same change in place: \"…still-dirty paths with their held-path code (`MOE_CONTESTED_HELD`)\".\n- Add the 500-character cap, with the remedy routed to `reason` or a comment.\n\nDo not touch qa.md (out of scope).\n\nKeep every phrase util/qaCommitPolicy.test.ts pins, in both files:\n- 'Landing gap:'\n- 'lastCommitOutcome'\n- 'in either mode'\n- 'counts toward the reopen cap'\n- 'bounded wait, not a blocker'\n- 'up to ~2 minutes'\n- 'record_commit'\n- '#governors'\n- 'MOE_AGENT_GIT_REFUSED'\nAnd add none of its RETIRED phrases: 'land it yourself', 'shared mode only', and the rest.\n\nError handling: '500' appears nowhere in either file today, so the DoD 2 grep proves exactly this addition. The tests for this step are the qaCommitPolicy run in the step 4 gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md"
+      ],
+      "startedAt": "2026-11-03T19:25:47.991Z",
+      "completedAt": "2026-11-03T19:25:55.880Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regenerate the vendored copies and apply their hunks (see mem:gotcha-moe-doc-generated-artifacts).\n\nWhat changes:\n- packages/moe-daemon/src/generated/initFiles.ts vendors both edited role docs: architect.md and qa.reference.md. Each entry's body changes, and so does its sha-stamped marker. Each doc's shipped-body sha list gains one sha, kept sorted.\n- packages/moe-daemon/src/generated/skillFiles.ts vendors moe-qa-loop/SKILL.md: its embedded body changes and so does its frontmatter marker sha.\n\nGenerate them outside the shared checkout, in a clone that has history. A git-archive snapshot writes truncated sha lists. Run from your worktree:\n`S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md $S/r`\nThen, in `$S/r/packages/moe-daemon`, under the step 4 env -i PATH, run:\n`npm ci --no-audit && npm run -s generate-init-files && npm run -s generate-skill-files`\nBoth must print a `Generated …` line. A 'skipping' line means the docs were missing: stop and fix the clone.\n\nThen `diff -u` each regenerated file against your worktree's copy, and apply every hunk with your editor (Edit or apply_patch). Do not cp it over: the global rail requires a TOOL witness. Expect a few small hunks per entry; recent rows show about 6 changed lines per role doc.\n\nNever run npm build, ci or clean in the shared checkout (global rail).\n\nError handling: if a hunk will not match, re-run the diff against your current file and apply that hunk again. The step 4 gate proves the result byte for byte with its regenerate-and-checksum compare.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "startedAt": "2026-11-03T19:25:56.766Z",
+      "completedAt": "2026-11-03T19:26:59.469Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts $S/r && cd $S/r && ! grep -rq 'data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated && grep -q 500 docs/roles/qa.reference.md && grep -q 500 docs/skills/moe-qa-loop/SKILL.md && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci --no-audit >/dev/null 2>&1 && sha1sum src/generated/*.ts > ../g.sha && npm run -s generate-init-files | grep Generated && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/{initFiles,skillFiles,qaCommitPolicy}.test.ts | grep -aE \"Test Files|Tests |FAIL\"'`\n\nWhat it checks, in order:\n- DoD 1 and DoD 2: the content greps, then the role-doc lint (40-line cap).\n- DoD 3: regenerating from the edited docs must leave both vendored files byte-identical to yours.\n- Then the three guard test files.\n\nExpected: OK lint lines, two Generated lines, `Test Files  3 passed (3)`, exit 0.\n\nMeasured while planning:\n- On HEAD f8b8d60c it exits 1 at the data.nextAction grep (architect.md:30 and initFiles.ts:55).\n- With the content greps removed, the rest passed on HEAD: 3 files, 44 tests, about 42 s.\n\nError handling for a red run:\n- A sha1sum 'FAILED' line means your hand-applied hunks differ from the generator's output. Redo step 3's diff.\n- A qaCommitPolicy failure names the sentinel phrase you dropped.\n- Re-run the whole command; never submit a subset as evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate command exit 0: lint OK (architect 39 lines), both Generated, checksum compare clean, 3 files/44 tests passed.",
+      "startedAt": "2026-11-03T19:27:00.209Z",
+      "completedAt": "2026-11-03T19:27:49.432Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's own diff. Load adversarial-self-review, then check:\n1. architect.md is still at or under 40 lines (lint OK), and its rule no longer promises any error field the daemon never sends.\n2. The new QA text does not contradict qa.md:16 or the 'A second landing gap is not rejected again' rule in SKILL.md:61, which stays as it is.\n3. Every qaCommitPolicy sentinel is still present in both the docs and their vendored copies.\n4. The vendored copies were not hand-written: the gate's checksum compare is the proof.\n5. `git status --short` in the worktree lists only the 5 files.\n6. No added line contains any string from the project.json globalRails.forbiddenPatterns list.\nFix anything this finds, then re-run the step 4 command before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/roles/architect.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Self-review: git status lists only the 5 files; no forbidden patterns in added lines; sentinels guarded by qaCommitPolicy test (passed); second-landing-gap rule untouched.",
+      "startedAt": "2026-11-03T19:27:50.175Z",
+      "completedAt": "2026-11-03T19:27:59.229Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 409.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:11:45.670Z",
+  "updatedAt": "2026-11-04T19:20:44.536Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:20:21.764Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T19:32:02.867Z",
+    "wallClockMs": 701103
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-c9368191",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T19:24:13.821Z",
+  "executionContract": {
+    "intendedBehavior": "architect.md's MoeError rule tells seats to key on error.data.codeName (error.data is exactly { tool, codeName }) and to follow the call error.message names. It no longer points at error.data.nextAction, which the daemon never sends. The QA landing-gap reject docs state qa_reject's 500-character cap on an issue description and route the held-path remedy text to reason (max 2000) or a task comment. The vendored initFiles.ts and skillFiles.ts match the edited docs byte for byte.",
+    "invariants": [
+      "architect.md stays at or under 40 lines; npm run lint passes.",
+      "Every qaCommitPolicy.test.ts sentinel phrase stays in qa.reference.md, SKILL.md and their vendored copies, and no RETIRED phrase returns.",
+      "The generated files are the generators' exact output; the regenerate-and-checksum compare in checkRefs[0] proves it."
+    ],
+    "compatibility": [
+      "No daemon runtime code changes, only vendored doc strings.",
+      "The daemon's marker-sha upgrade rewrites stale .moe/roles and .moe/skills copies at its next start; that is the normal path."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts $S/r && cd $S/r && ! grep -rq 'data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated && grep -q 500 docs/roles/qa.reference.md && grep -q 500 docs/skills/moe-qa-loop/SKILL.md && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci --no-audit >/dev/null 2>&1 && sha1sum src/generated/*.ts > ../g.sha && npm run -s generate-init-files | grep Generated && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/{initFiles,skillFiles,qaCommitPolicy}.test.ts | grep -aE \"Test Files|Tests |FAIL\"'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Changing McpAdapter to send nextAction in error.data: rejected. It changes the documented wire contract (MCP_SERVER.md:91), and the epic rail forbids MCP contract breaks.",
+      "Raising qa_reject's 500-char cap: rejected. The cap bounds stored issue data, and reason already allows 2000 characters.",
+      "Editing docs/MCP_SERVER.md's qa_reject section: out of scope, because rows 66108835 and 3e1d0c2e hold that file."
+    ],
+    "codebaseInsights": [
+      "docs/roles/*.md, including the .reference.md files, are vendored into src/generated/initFiles.ts with a sha marker and a shipped-body sha list built from git history plus the working copy. docs/skills/** are vendored into src/generated/skillFiles.ts.",
+      "Both generators exit 0 with a 'skipping' line when the docs are absent. The gate therefore greps for 'Generated'.",
+      "A git-archive snapshot lacks history and writes truncated shipped-body lists, so the gate uses a --shared clone checked out at the worktree's HEAD, with the 5 edited files overlaid."
+    ],
+    "risks": [
+      "Hand-applied generated hunks that drift by one byte; the gate's checksum compare catches this.",
+      "Dropping a qaCommitPolicy sentinel while rewording.",
+      "Adding a line to architect.md (lint cap).",
+      "The gate needs network or an npm cache for npm ci in the clone."
+    ],
+    "keyFiles": [
+      "docs/roles/architect.md",
+      "docs/roles/qa.reference.md",
+      "docs/skills/moe-qa-loop/SKILL.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/src/generated/skillFiles.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "packages/moe-daemon/src/util/qaCommitPolicy.test.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "32929cf205da7c9bb6414edccba72f8e7f85d19e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T19:24:13.856Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:25:32.389Z",
+  "reviewStartedAt": "2026-11-03T19:28:04.155Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git clone -q --shared \"$(git rev-parse --git-common-dir)\" $S/r && git -C $S/r checkout -q $(git rev-parse HEAD) && cp --parents docs/roles/{architect.md,qa.reference.md} docs/skills/moe-qa-loop/SKILL.md packages/moe-daemon/src/generated/{initFiles,skillFiles}.ts $S/r && cd $S/r && ! grep -rq 'data\\.nextAction' docs/roles docs/skills packages/moe-daemon/src/generated && grep -q 500 docs/roles/qa.reference.md && grep -q 500 docs/skills/moe-qa-loop/SKILL.md && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci --no-audit >/dev/null 2>&1 && sha1sum src/generated/*.ts > ../g.sha && npm run -s generate-init-files | grep Generated && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/{initFiles,skillFiles,qaCommitPolicy}.test.ts | grep -aE \"Test Files|Tests |FAIL\"'",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nGenerated .../initFiles.ts (8 role docs + 3 subagents, sha-stamped)\nGenerated .../skillFiles.ts (65 skill files across 17 skills)\n Test Files  3 passed (3)\n      Tests  44 passed (44)",
+    "reportedAt": "2026-11-03T19:28:04.155Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/architect.md",
+    "docs/roles/qa.reference.md",
+    "docs/skills/moe-qa-loop/SKILL.md",
+    "packages/moe-daemon/src/generated/initFiles.ts",
+    "packages/moe-daemon/src/generated/skillFiles.ts"
+  ],
+  "completionSummary": "architect.md MoeError rule now says to key on error.data.codeName and follow the call error.message names (error.data is exactly { tool, codeName }). qa.reference.md and moe-qa-loop SKILL.md state qa_reject's 500-char issue-description cap and route held-path remedy text to reason (max 2000) or a task comment. initFiles.ts and skillFiles.ts updated from the generators' output (hunks applied with Edit); gate regenerate-and-checksum compare is byte-identical.",
+  "commits": [
+    {
+      "sha": "3463c53813e3ea424689458c9f8e605a0ea46917",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T19:24:34Z",
+      "paths": [
+        "docs/roles/architect.md",
+        "docs/roles/qa.reference.md",
+        "docs/skills/moe-qa-loop/SKILL.md",
+        "packages/moe-daemon/src/generated/initFiles.ts",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T19:29:24.122Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:30:11Z",
+    "at": "2026-11-03T19:32:23.850Z"
+  },
+  "completedAt": "2026-11-03T19:32:02.867Z",
+  "reviewCompletedAt": "2026-11-03T19:32:02.867Z",
+  "reviewSummary": "Reviewed completion 3463c538 (contained in HEAD and moe/work-2026-10-24; +15/-11, net +4, 5 files, no size issue). Diff read directly: architect.md:30 now says \"key on `error.data.codeName` and follow the call `error.message` names (`error.data` is exactly `{ tool, codeName }`)\" (matches McpAdapter.ts:316-323, which sends exactly { tool, codeName }). qa.reference.md landing-gap reject and moe-qa-loop SKILL.md landing-gap bullet now state the 500-char issue-description cap (matches qaReject.ts:103-104; reason cap 2000 matches qaReject.ts:81) and route the held-path remedy text to `reason` or a task comment; the issue keeps only codes/refs/paths (`MOE_CONTESTED_HELD`). 'A second landing gap is not rejected again' rule and qa.md untouched. Re-ran task.verification (checkRefs[0]) myself in a fresh --shared clone of HEAD outside the shared checkout: exit 0 — `grep data.nextAction` over docs/roles, docs/skills and src/generated prints nothing; 500 present in both qa.reference.md and SKILL.md; lint OK (architect.md 39 lines, max 40); npm ci + generate-init-files + generate-skill-files both print Generated and `sha1sum -c` against the committed generated files is clean (vendored copies byte-identical to generator output); vitest initFiles/skillFiles/qaCommitPolicy: 3 files, 44 tests passed. Working tree for the 5 owned files matches HEAD. No forbidden patterns (eval(/innerHTML/dangerouslySetInnerHTML/__proto__) in added lines; no daemon runtime code changed, doc strings only). DoD 1-3 all met. Not run: the full daemon suite and JetBrains/launcher gates, not required by this docs-only row. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

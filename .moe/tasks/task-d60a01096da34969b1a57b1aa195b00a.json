@@ -1,0 +1,212 @@
+{
+  "id": "task-d60a01096da34969b1a57b1aa195b00a",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the moe-planning and ponytail skills say submit_plan's distinct-file limit counts step affectedFiles, but the size gate also counts newFiles (submitPlan.ts:427-432), so an architect sizing a plan by either skill undercounts (skills twin of task-ed84e283)",
+  "description": "Filed by architect-2a219562 while planning task-ed84e283 (2026-11-04). That row fixes the same wording in docs/CONFIGURATION.md, docs/roles/governor.md, docs/MCP_SERVER.md and packages/moe-daemon/CLAUDE.md. The two skills below were split out to keep each row at 5 files or fewer and to keep the 1.4 MB skillFiles.ts out of the role-doc row. Verified at d1062cb0.\n\nPROBLEM\npackages/moe-daemon/src/tools/submitPlan.ts:427-432 builds the size-gate input as `affectedFiles: [...step.affectedFiles, ...step.newFiles]`, and util/planSize.ts:88-95 (countDistinctAffectedFiles) takes the union. The same count sets the plan-size tier floor (submitPlan.ts:499, plannedDistinctFileCount; `heavy` past the warn thresholds). Two skills still say only affectedFiles count:\n- docs/skills/moe-planning/SKILL.md:14 (\"Count before you draft\"): \"more than 8 steps or more than 5 distinct `affectedFiles`\".\n- docs/skills/ponytail/SKILL.md:136-137, the `## Moe integration` footer: \"`moe.submit_plan` warns past 8 steps / 5 distinct `affectedFiles` and hard-rejects past 12 / 10.\"\nEvery architect loads moe-planning before submit_plan. A plan sized by it undercounts newFiles: 5 affectedFiles plus 1 newFile draws the size warning and the heavy tier floor, and 8 plus 3 is refused CONSTRAINT_VIOLATION.\n\nFIX DIRECTION (docs only)\n- Say the distinct-file count is the union of each step's affectedFiles and newFiles. Reuse task-ed84e283's wording: \"distinct files (the union of every step's `affectedFiles` and `newFiles`)\". Its byte-exact doc diff is in /mnt/d/moe-scratch/ed84e283-plan/proto-doc.diff.\n- In ponytail, edit only the `## Moe integration` footer, which is a Moe local modification listed in docs/skills/ponytail/SOURCE.md. Keep the footer's 2-space-indented wrapping.\n- Regenerate packages/moe-daemon/src/generated/skillFiles.ts with `npm run generate-skill-files` in a snapshot outside the shared checkout. This generator needs no git history. Apply its hunks to the tracked file with the seat's own Edit tool: the file is about 1.4 MB, too big for Write, and cp is a shell write with no TOOL witness. See mem:gotcha-moe-doc-generated-artifacts and mem:convention-docs-vendored-regen-gate. Never run npm run build in the shared checkout.\n\nNOT IN SCOPE\n- docs/roles/*, docs/CONFIGURATION.md, docs/MCP_SERVER.md, packages/moe-daemon/CLAUDE.md and initFiles.ts (task-ed84e283 owns them).\n- docs/skills/moe-epic-breakdown's \">5 distinct files warns\" row (generic, already correct).\n- The .moe/skills copies, which the daemon rewrites from skillFiles.ts at start.\n- Any code change.\n\nFILES: docs/skills/moe-planning/SKILL.md, docs/skills/ponytail/SKILL.md, packages/moe-daemon/src/generated/skillFiles.ts\n\nGATE\n- `npm run lint` at the repo root.\n- In a git clone or archive snapshot outside the repo: overlay the two skills and the candidate skillFiles.ts, run `npm run generate-skill-files`, and sha1sum-compare skillFiles.ts before and after (byte-identical). Then run `npx vitest run src/util/skillFiles.test.ts`.",
+  "definitionOfDone": [
+    "docs/skills/moe-planning/SKILL.md and docs/skills/ponytail/SKILL.md say submit_plan's distinct-file count is the union of each step's affectedFiles and newFiles, and `grep -rniE 'distinct\\*? `?affected ?files' docs/skills` prints nothing.",
+    "packages/moe-daemon/src/generated/skillFiles.ts is regenerated from the edited skills and committed with them: in a snapshot outside the shared checkout, `npm run generate-skill-files` over the candidate files leaves skillFiles.ts byte-identical, and src/util/skillFiles.test.ts passes there.",
+    "npm run lint passes at the repo root, and the diff touches only those three files."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fix the two skill lines with your own editor (Edit on Claude, apply_patch on codex exec), never Serena for docs/ (it ignores the folder) and never a shell write: the TOOL witness matters at landing (global rail). This is docs only, so no code, test or error handling changes. The byte-exact prototype is /mnt/d/moe-scratch/plan-d60a0109/docs.diff (2 files, +5/-4), and its wording reuses task-ed84e283's (landed bf35a0a7): \"distinct files (the union of every step's `affectedFiles` and `newFiles`)\". The apostrophe and the backticks are plain ASCII.\n(1) docs/skills/moe-planning/SKILL.md:14 ('Count before you draft'). Replace `**more than 8 steps or more than 5 distinct `affectedFiles`**,` with `**more than 8 steps or more than 5 distinct files** (the union of every step's `affectedFiles` and `newFiles`),`. Leave the rest of the line unchanged; its later '5 distinct files' wording is already right.\n(2) docs/skills/ponytail/SKILL.md:136-139, the '## Moe integration' footer bullet '**Architect, while sizing steps.**', which SOURCE.md lists as a Moe local modification. Its four lines become five, keeping the 2-space continuation indent and wrapping under 80 columns:\n  - **Architect, while sizing steps.** `moe.submit_plan` warns past 8 steps / 5\n    distinct files (the union of every step's `affectedFiles` and `newFiles`)\n    and hard-rejects past 12 / 10. The ladder is the cheapest way under the\n    cap: a rung-3 step (stdlib does it) is one step, a hand-rolled equivalent\n    is four.\nThe upstream body of ponytail stays untouched. Afterwards `grep -rniE 'distinct\\*? `?affected ?files' docs/skills` must print nothing (DoD 1).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/skills/ponytail/SKILL.md"
+      ],
+      "modifiedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/skills/ponytail/SKILL.md"
+      ],
+      "note": "Edited both skills; diff content matches architect prototype byte for byte; grep clean.",
+      "startedAt": "2026-11-04T05:54:51.216Z",
+      "completedAt": "2026-11-04T05:55:06.226Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Regenerate the vendored copy and apply its hunks with Edit (mem:gotcha-moe-doc-generated-artifacts, mem:convention-docs-vendored-regen-gate).\n\nRegenerate in a snapshot outside the shared checkout, never in place. Never run npm run build or prebuild anywhere in the shared tree (global rail). Example: `S=$(mktemp -d); git archive HEAD | tar -x -C $S; cp --parents docs/skills/{moe-planning,ponytail}/SKILL.md $S`. Then in $S/packages/moe-daemon, under env -i with the nvm Node v24.21.0 bin on PATH, run `npm ci && npm run -s generate-skill-files`. It must print 'Generated ... (65 skill files across 17 skills)'. A 'skipping' line means docs/ was missing, not success. This generator hashes content only and needs no git history, so an archive is enough.\n\nDiff the regenerated skillFiles.ts against the tracked packages/moe-daemon/src/generated/skillFiles.ts. Expect exactly 4 hunks, the same as the architect's /mnt/d/moe-scratch/plan-d60a0109/skillFiles.regen.diff:\n- the moe-planning/SKILL.md entry's '# moe-generated: sha=' marker (a2881f92c874 -> 247fee8eaf61 for the prototype's bytes);\n- its Size-triage line;\n- the ponytail/SKILL.md entry's marker (ad8f5eeab200 -> 22cebfcbaa64);\n- its footer lines.\nIf your step-1 bytes differ from the prototype at all, the shas differ: always take them from your own regeneration, never compute or copy them by hand.\n\nApply each hunk to the tracked file with the Edit tool. The file is about 1.36 MB (30,910 lines), too big for Write, and cp is a shell write with no TOOL witness. Read only the lines around each hunk (offset/limit, near 1269-1290 and 1490-1635), then Edit with an old_string unique in the file. The template literal escapes backticks as \\`, exactly as the generator wrote them.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Regenerated in a git-archive snapshot (65 files/17 skills, 4 hunks); applied via Edit; cmp shows byte-identical to generator output.",
+      "startedAt": "2026-11-04T05:55:06.859Z",
+      "completedAt": "2026-11-04T05:55:31.599Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (918 chars) is at /mnt/d/moe-scratch/plan-d60a0109/checkref-gate.txt.\n\nWhat it does:\n- the DoD-1 grep (no 'distinct affectedFiles' left under docs/skills);\n- two positive greps for the new wording;\n- a whole-tree `git archive HEAD` snapshot outside the repo, with the three owned files overlaid.\n\nThen, under env -i with nvm Node v24.21.0, in that snapshot:\n- `npm run -s lint` at the snapshot root (DoD 3);\n- `npm ci`, then sha1sum skillFiles.ts, `npm run -s generate-skill-files | grep Generated`, and `sha1sum -c` (DoD 2: the hand-applied hunks are byte-identical to the generator's output);\n- `npx vitest run src/util/skillFiles.test.ts`.\n\nThe architect's dry run at 9224de15:\n- with the prototype and its regenerated skillFiles.ts: lint OK (architect.md 39, worker.md 30, qa.md 36 lines), 'Generated ...', 'Test Files 1 passed (1)', 'Tests 11 passed (11)', exit 0;\n- negative control, the stale tracked skillFiles.ts: 'src/generated/skillFiles.ts: FAILED', exit 1.\n\nAlso confirm `git diff --stat` lists only the three owned files (DoD 3).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef gate exit 0: lint OK, Generated (65/17), sha1sum -c byte-identical, skillFiles.test.ts 11 passed.",
+      "startedAt": "2026-11-04T05:55:32.339Z",
+      "completedAt": "2026-11-04T05:55:47.481Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, the final step. Load the adversarial-self-review skill and read your diff as an attacker.\n- Exactly three files changed. ponytail's upstream body is untouched; only the '## Moe integration' footer bullet moved.\n- The wording matches task-ed84e283's byte for byte (\"the union of every step's `affectedFiles` and `newFiles`\"), with an ASCII apostrophe and backticks. Neither skill still implies that newFiles are free.\n- The moe-planning line still reads as one sentence, and its later '5 distinct files' clause is consistent.\n- In ponytail, the footer wrapping keeps the 2-space indent and stays under 80 columns.\n- The skillFiles.ts diff has exactly the generator's 4 hunks: no CRLF churn, no other skill entry touched, and the sha markers come from your own regeneration.\n- The .moe/skills copies are not edited: the daemon rewrites them from skillFiles.ts at start, and .moe/** never lands from a worktree.\n\nIf anything changes, re-run the step-3 checkRef and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/skills/ponytail/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "modifiedFiles": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/skills/ponytail/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "note": "Doc-only review: 3 files, no CR, ASCII apostrophe, footer lines ≤75 cols, upstream ponytail body untouched, skillFiles.ts 4 hunks only (generator-identical), .moe/skills untouched.",
+      "startedAt": "2026-11-04T05:55:48.189Z",
+      "completedAt": "2026-11-04T05:56:03.750Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 477.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:36:55.588Z",
+  "updatedAt": "2026-11-04T19:20:45.178Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:50:57.209Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T06:12:20.183Z",
+    "wallClockMs": 1282974
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "worker-a408f113",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T05:53:45.870Z",
+  "executionContract": {
+    "intendedBehavior": "The moe-planning skill (Size triage) and the ponytail skill's Moe integration footer say that submit_plan's distinct-file count is the union of every step's affectedFiles and newFiles, as submitPlan.ts:427-432 and util/planSize.ts countDistinctAffectedFiles compute it. That is the same wording task-ed84e283 put in CONFIGURATION.md, MCP_SERVER.md, governor.md and the daemon CLAUDE.md. The vendored packages/moe-daemon/src/generated/skillFiles.ts carries the same bytes, so IDE users and the daemon's .moe/skills rewrite get the corrected text. No code changes.",
+    "acceptanceCriteria": [
+      "`grep -rniE 'distinct\\*? `?affected ?files' docs/skills` prints nothing. moe-planning/SKILL.md contains \"distinct files** (the union of every step's `affectedFiles` and `newFiles`)\", and ponytail/SKILL.md contains \"distinct files (the union of every step's `affectedFiles` and `newFiles`)\".",
+      "In a snapshot outside the shared checkout, `npm run generate-skill-files` over the candidate files leaves skillFiles.ts byte-identical (sha1sum -c). src/util/skillFiles.test.ts passes there.",
+      "npm run lint passes, and the diff touches only docs/skills/moe-planning/SKILL.md, docs/skills/ponytail/SKILL.md and packages/moe-daemon/src/generated/skillFiles.ts."
+    ],
+    "invariants": [
+      "ponytail's upstream body is unchanged. Only its Moe integration footer, a local modification listed in docs/skills/ponytail/SOURCE.md, is edited.",
+      "skillFiles.ts changes only by the generator's 4 hunks: two sha markers and two content changes."
+    ],
+    "compatibility": [
+      "Every skill keeps its frontmatter keys and marker convention, so the daemon's stale-marker upgrade of .moe/skills behaves as before."
+    ],
+    "approvedScope": [
+      "docs/skills/moe-planning/SKILL.md:14 and docs/skills/ponytail/SKILL.md:136-139 (footer), plus the matching regenerated entries in packages/moe-daemon/src/generated/skillFiles.ts. Out of scope: docs/roles, CONFIGURATION.md, MCP_SERVER.md, the daemon CLAUDE.md, initFiles.ts (task-ed84e283), moe-epic-breakdown's generic '>5 distinct files' row, and .moe/skills."
+    ],
+    "reuse": [
+      "task-ed84e283's exact phrase \"the union of every step's `affectedFiles` and `newFiles`\" (landed bf35a0a7).",
+      "The repo's generate-skill-files script is the only source of skillFiles.ts bytes."
+    ],
+    "sourceAssumptions": [
+      "submitPlan.ts:427-432 feeds the size gate `[...step.affectedFiles, ...step.newFiles]`, and util/planSize.ts:88-95 counts the union.",
+      "scripts/generate-skill-files.ts hashes content (sha12) and never reads git, so a git-archive snapshot regenerates it byte-identically.",
+      "At 9224de15 skillFiles.ts is LF and about 1.36 MB; its moe-planning and ponytail entries carry the markers a2881f92c874 and ad8f5eeab200."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && ! grep -rniE 'distinct\\*? `?affected ?files' docs/skills && grep -qE 'distinct files\\*\\* \\(the union of every step.s .affectedFiles. and .newFiles.\\)' docs/skills/moe-planning/SKILL.md && grep -qE 'distinct files \\(the union of every step.s .affectedFiles. and .newFiles.\\)' docs/skills/ponytail/SKILL.md && S=$(mktemp -d) && git archive HEAD | tar -x -C $S && cp --parents docs/skills/{moe-planning,ponytail}/SKILL.md packages/moe-daemon/src/generated/skillFiles.ts $S && cd $S && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci >/dev/null 2>&1 && sha1sum src/generated/skillFiles.ts > ../g.sha && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/skillFiles.test.ts | grep -aE \"Test Files|Tests |FAIL\"'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Copy the regenerated skillFiles.ts over the tracked one. Rejected: a shell write leaves no TOOL witness, and the file is too big for Write. The worker applies the generator's 4 hunks with Edit, and the gate proves byte-identity. (2) A phrase-guard vitest like qaCommitPolicy.test.ts. Rejected: DoD 3 limits the diff to the three files; the regen compare plus the greps are the guard. (3) A clone with history, as the role-doc gate uses. Not needed: the skill generator never reads git.",
+    "codebaseInsights": "Only initFiles.ts (role docs) needs git history; the skill generator only hashes content. The regenerated diff is exactly 4 hunks (two '# moe-generated: sha=' marker lines and two content changes), with no CRLF churn on /mnt/d. Dry run at 9224de15: the candidate passes (lint OK, Generated, sha match, skillFiles.test.ts 11 passed, exit 0); the stale skillFiles.ts fails the sha compare (exit 1). Artifacts are in /mnt/d/moe-scratch/plan-d60a0109/ (docs.diff, skillFiles.regen.diff, checkref-gate.txt).",
+    "risks": "A hand-computed or copied sha marker breaks the byte-identity check, so take the markers from your own regeneration. A typographic apostrophe in the new phrase silently breaks the gate's greps. The Edit old_string must be unique in a 30,910-line file: include the entry key line or a neighbouring unique line. isEpicFinal reads true only through the epic's max-order fallback (epic-be924fb8 has no finalTaskId), so this docs row needs no full-system regression; the landing's qualityGate (parity-check + lint) still runs.",
+    "keyFiles": [
+      "docs/skills/moe-planning/SKILL.md",
+      "docs/skills/ponytail/SKILL.md",
+      "docs/skills/ponytail/SOURCE.md",
+      "packages/moe-daemon/src/generated/skillFiles.ts",
+      "packages/moe-daemon/scripts/generate-skill-files.ts",
+      "packages/moe-daemon/src/util/skillFiles.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4469377b1e31acfa383d80aa58fe08ae0728bb6b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T05:53:45.900Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:54:51.216Z",
+  "reviewStartedAt": "2026-11-04T05:56:16.477Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && ! grep -rniE 'distinct\\*? `?affected ?files' docs/skills && grep -qE 'distinct files\\*\\* \\(the union of every step.s .affectedFiles. and .newFiles.\\)' docs/skills/moe-planning/SKILL.md && grep -qE 'distinct files \\(the union of every step.s .affectedFiles. and .newFiles.\\)' docs/skills/ponytail/SKILL.md && S=$(mktemp -d) && git archive HEAD | tar -x -C $S && cp --parents docs/skills/{moe-planning,ponytail}/SKILL.md packages/moe-daemon/src/generated/skillFiles.ts $S && cd $S && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 bash -c 'set -o pipefail; npm run -s lint && cd packages/moe-daemon && npm ci >/dev/null 2>&1 && sha1sum src/generated/skillFiles.ts > ../g.sha && npm run -s generate-skill-files | grep Generated && sha1sum -c --quiet ../g.sha && npx vitest run src/util/skillFiles.test.ts | grep -aE \"Test Files|Tests |FAIL\"'",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nGenerated .../skillFiles.ts (65 skill files across 17 skills)\n Test Files  1 passed (1)\n      Tests  11 passed (11)\nexit=0",
+    "reportedAt": "2026-11-04T05:56:16.477Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/skills/moe-planning/SKILL.md",
+    "docs/skills/ponytail/SKILL.md",
+    "packages/moe-daemon/src/generated/skillFiles.ts"
+  ],
+  "completionSummary": "moe-planning (Size triage) and ponytail (Moe integration footer) now say submit_plan's distinct-file count is the union of every step's affectedFiles and newFiles, matching task-ed84e283's wording. Regenerated skillFiles.ts in a git-archive snapshot and applied the generator's 4 hunks with Edit; byte-identical to generator output (sha1sum -c). skillFiles.test.ts 11 passed; lint and parity-check pass; the diff touches only the 3 owned files.",
+  "commits": [
+    {
+      "sha": "05f4240fbee9ee3636ef131ca88ec1a5427c5b3b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T05:53:58Z",
+      "paths": [
+        "docs/skills/moe-planning/SKILL.md",
+        "docs/skills/ponytail/SKILL.md",
+        "packages/moe-daemon/src/generated/skillFiles.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T05:57:11.660Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:11:13Z",
+    "at": "2026-11-04T06:12:42.165Z"
+  },
+  "completedAt": "2026-11-04T06:12:20.183Z",
+  "reviewCompletedAt": "2026-11-04T06:12:20.183Z",
+  "reviewSummary": "Reviewed completion 05f4240f (on moe/work-2026-10-24, contained in moe/control HEAD 2a1c5a36; owned paths clean and unchanged since). Diff is 12+/10-, 3 files only (moe-planning SKILL.md 1/1, ponytail SKILL.md 4/3 footer only, skillFiles.ts 7/6), well under 400 LOC. Re-ran task.verification myself in a git-archive snapshot outside the repo (/tmp, removed after): DoD-1 negative grep `distinct\\*? `?affected ?files` over docs/skills prints nothing; both positive greps pass (also checked ASCII apostrophe/backticks, 1 hit per skill, no CR bytes in the diff); npm run lint OK (architect 39, worker 30, qa 36 lines); npm ci + generate-skill-files printed 'Generated ... (65 skill files across 17 skills)' and sha1sum -c shows the worker's hand-applied skillFiles.ts is byte-identical to generator output (DoD-2); vitest src/util/skillFiles.test.ts 1 file / 11 tests passed; exit 0. skillFiles.ts diff is exactly the 4 generator hunks (two sha markers a2881f92c874->247fee8eaf61 and ad8f5eeab200->22cebfcbaa64, plus the two content hunks); ponytail upstream body untouched (only the Moe integration footer bullet, 2-space indent kept, lines <80 cols); wording matches task-ed84e283's phrase; no other docs/skills line still implies newFiles are free; .moe/skills and code untouched. DoD 1-3 all met. Complexity pass: nothing to cut (docs-only wording change).",
+  "requiredCheckAtDone": null
+}

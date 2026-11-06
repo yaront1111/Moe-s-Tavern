@@ -1,0 +1,48 @@
+{
+  "id": "task-9ca914008d6d4ca8a9cf34c5764d46c2",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #25): file 2-4 evidence-backed rows from a re-run of hunt #20's Linux CI dry run at moe/work-2026-10-24's tip (80078651 or later), 22 commits and 60 changed files after hunt #20's bc4793cf baseline",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04.\n\nWHY\n- Hunt #20 (task-9f3eac6d) ran every Linux ci.yml step at bc4793cf between 08:55 and 09:35Z.\n  - 4 steps were red, and the rows filed for them are now DONE: 7e862808, 649f34dd, 6b3ab9d8, e45da220, plus the flake 20f59bc9 and d27edf88's register.test.js.\n  - Row gates never run the whole of CI, and main moves only by PR, so CI-red builds up silently.\n- Since then 22 commits have landed: CQ-M07n/u/w, many launcher-test fixes, JetBrains and daemon fixes, and the release-version guard. 60 files changed, 2171 lines were added and 1375 removed.\n- ci.yml itself is unchanged: `git diff --stat bc4793cf origin/moe/work-2026-10-24 -- .github/` is empty. Hunt #20's scripts therefore apply as they are, with only the revision changed.\n- 3 workers are idle and nothing is claimable. The CQ-M07 chain is serial.\n\nLANE\n1. Copy /mnt/d/moe-scratch/hunt-9f3eac6d/mine/{ci-lib.sh,job-j0.sh,job-j2.sh,job-j4.sh,job-j4b.sh} to /mnt/d/moe-scratch/hunt-<this id>/mine/.\n   - Change bc4793cf to the tip you fetch, which must be 80078651 or later.\n   - Change the hunt-9f3eac6d log paths and the /tmp/hunt-9f3e work dirs to your own.\n   - Keep the env: env -i, a fresh HOME, every MOE_* var cleared, CI=true, and each job in its own `git clone --shared` clone, detached at the tip.\n   - j0 runs fresh-linux-install in docker ubuntu:24.04 from a git-archive tree.\n2. Run j2, j4, j4b and j0, at most two at a time. The CQ-M07r worker runs launcher postflights on this box, and hunt #20 saw the bridge test flake under load.\n3. Write /mnt/d/moe-scratch/hunt-<id>/ci/SUMMARY.txt in hunt #20's format: one line per step with its exit code. Compare it line by line with /mnt/d/moe-scratch/hunt-9f3eac6d/ci/SUMMARY.txt.\n4. Classify every red step:\n   - (a) A regression: green at bc4793cf, red at the tip. Name the commit with `git log bc4793cf..<tip> -- <file>` or a bisect.\n   - (b) Still red although its hunt #20 fix row is DONE. Cite that row.\n   - (c) A flake. Re-run it alone 3 times. File it only with load evidence, as with hunt #20's bridge-load logs.\n   - \"All green\" is a valid outcome. Post the step table.\n\nNOT RUN, same as hunt #20\n- build-plugin and every Gradle step. There is no JDK in WSL, and a hunt cannot hold the jetbrains-gradle lease.\n- The Windows and PowerShell-5.1 legs, which hunt #22 (7a3640da) ran at about 12:40Z.\n- The macOS bash 3.2 parse step.\n- docker.yml and release.yml, which hunt #23 covered.\n\nSKIP\n- A red in a file an open row holds goes to the holder as a task comment, not into a new row. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start.\n  - CQ-M07r/s/t hold scripts/moe-agent.sh, scripts/tests/postflight-vm-route.{sh,ps1} and scripts/tests/postflight-fake-*.js.\n- Hunt #24 (task-53801f5d) owns MCP_SERVER.md and SCHEMA.md parity.\n- Before filing, grep the descriptions of open and unplanned rows for the failing file too, not only lanes.js.\n- Never work in, build in or test in the shared checkout: its packages/moe-daemon/dist is the live runtime. Never push, publish or tag.\n\nEVIDENCE BAR. Each row cites the step's name and exit code at the tip sha, its failing lines (the log path under /mnt/d/moe-scratch/hunt-<id>/ci/), the hunt #20 result for the same step, and the file:line the failure points at.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task, status PLANNING, in the epic that owns the failing surface, as hunt #20 did: epic-be924fb8, or epic-b8c6bbda for the verified-local launcher and runner surfaces. Give each row a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n   - epic-be924fb8 has no finalTaskId, so its newest row reads isEpicFinal:true. Tell the planner to keep the gate narrow.\n2. Post the ids, or \"all green\" with the step table, in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "Every Linux ci.yml step that hunt #20 ran was re-run at a tip at or after 80078651, with hunt #20's clean-env scripts. /mnt/d/moe-scratch/hunt-<id>/ci/SUMMARY.txt lists each step's exit code next to hunt #20's.",
+    "Each red step is either filed as a PLANNING row, with its exit code, failing log lines, the hunt #20 comparison and a file:line, or handed to the open row holding its file as a task comment. A flake is filed only with load evidence, and \"all green\" is posted with the table.",
+    "The outcome is posted in #governors with a mention of governor-e6142a94. No row duplicates an open or 11-04 row, and the holder archives this row."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 530.7,
+  "comments": [
+    {
+      "id": "comment-f95ba6c80f0e4c63acc7eca02a4470bf",
+      "author": "governor-e6142a94",
+      "content": "@architect-67c762f6 Lane change for hunt #25, from real CI. Please re-scope.\n\nReal CI on PR #230 (moe/work-2026-10-24 into main) runs ci.yml at every landing. Read it first:\n- `gh.exe run list --workflow CI --branch moe/work-2026-10-24` (gh exists only as gh.exe in WSL)\n- `gh.exe run view <id> --json jobs` and `--log-failed`\n\nWhat it shows:\n- At 80078651 (run 41834653023), macOS, JetBrains (buildPlugin, gradle test, packaged onboarding), fresh Linux install, Build TS and Test TS are all green.\n- At 060d7b8c, ubuntu-latest was green. At 80078651 it is still running.\n- The ONLY red is windows-latest step 13, \"Test launcher daemon.json cap and seat re-registration\": subagent-mirror.test.mjs, PowerShell 7 case B, a pwsh 7 ConciseView wrap. I filed it as task-02af8654 (HIGH). Don't refile it.\n\nNew lane:\n1. Skip every Linux step that real CI shows green at a tip at or after 060d7b8c. Your Linux dry run would only re-confirm green.\n2. Spend the time on Windows steps 14-23 of build-all-platforms instead. GitHub stops the job at step 13, so CI has not run these in any completed run since 2037e856:\n   - the .moe-agent.json read and daemon autostart args;\n   - the Bash, WinPS and PS7 landing guards;\n   - the Bash, WinPS and PS7 wrapper postflights and parity;\n   - VS Code daemon startup, and the VS Code package and bundle smoke test.\n   Re-run them on the Windows host at the tip with your hunt #22 scripts (/mnt/d/moe-scratch/hunt-7a3640da/mine/). Since your 10:05Z run at fec9a842, CQ-M07n, bbd7ad2d, 1dfec7a4, cd3887fe and 6b3ab9d8 have all changed moe-agent.ps1.\n3. The symlink-privilege host artifact (postflight.ps1 scenario AE) still applies. Note what you could not reach, as before.\n\nSame evidence bar and finish rule. This comment replaces DoD 1's \"every Linux step\" scope.",
+      "timestamp": "2026-11-04T13:53:39.392Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T13:06:26.016Z",
+  "updatedAt": "2026-11-04T16:29:55.173Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T13:06:49.258Z"
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-67c762f6@2026-11-04T13:06:47Z",
+    "at": "2026-11-04T16:29:55.173Z"
+  }
+}

@@ -1,0 +1,269 @@
+{
+  "id": "task-e3d41183255f42719395914edd161e1d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: complete_step stores modifiedFiles unchecked and the plan sanitizer keeps only the first 50 on the next write, so paths 51+ silently leave the ASSERTED tier, while its siblings (submit_plan, the note cap) refuse past the same bound",
+  "description": "Found by hunt task-859eff80 (architect-74d9e1c7). It was held back only by the hunt's 4-row cap. The governor filed it at 16:30Z on 2026-11-03, after re-checking the citations at d5f36e82.\n\nPROBLEM. complete_step accepts any number of modifiedFiles and stores them as given. The plan sanitizer then keeps only the first 50 on the next task write (state/validators.ts:790, `.slice(0, 50)`). The call succeeds, and no warning says paths were lost. Paths 51+ drop out of the ASSERTED attribution tier: the wrapper commits a task from its completed steps' modifiedFiles, and get_commit_scope's `asserted` no longer lists them. In shared mode those bytes stay unstaged. In every mode task.filesModified under-reports.\n\nThe sibling guards refuse instead:\n- complete_step's own note cap, completeStep.ts:83-88, \"refuse it up front instead, like every other capped text field\";\n- submit_plan, submitPlan.ts:395-402: \"Step N has too many affected files (max 50)\" and the same for newFiles.\n\nEVIDENCE (HEAD ef5c7101, re-checked at d5f36e82). /mnt/d/moe-scratch/hunt-859e/A/zzHuntAModifiedFiles.test.ts, output in zzHuntAModifiedFiles.output.txt:\n- complete_step with 60 modifiedFiles returns success with no warning;\n- the stored list has 50 entries;\n- get_commit_scope's asserted is missing src/gen/file51.ts through file60.ts;\n- the sibling control, submit_plan with 51 affectedFiles, is refused \"too many affected files (max 50)\".\n\nFIX DIRECTION. Never lose a reported path silently. Two acceptable shapes; the planner picks one and says why:\n(a) Refuse more than 50 modifiedFiles with INVALID_INPUT before any write, consistent with the siblings. The step stays IN_PROGRESS and no evidence is recorded. The message names the cap and the escape: report the first 50, then moe.declare_files the rest.\n(b) Keep every reported path, with a bound of its own large enough for a regenerate step, e.g. record_commit's 500.\nEither way, document it in docs/MCP_SERVER.md's complete_step section (around :475-490).\n\nPLACEMENT (no dependsOn edge). task-314405bb edits MCP_SERVER.md's chat_decision section, and the docs-drift row filed alongside this one edits its set_task_status, archive_task and chat_send sections. Touch only the complete_step section.\n\nVERIFICATION. vitest in the task worktree, never in the shared checkout: the new and changed completeStep test files, plus the existing completeStep and getCommitScope tests.",
+  "definitionOfDone": [
+    "No reported path is lost silently. complete_step with more than 50 modifiedFiles is either refused with INVALID_INPUT before any write (the step stays IN_PROGRESS and the message names the cap and moe.declare_files), or stores every reported path so all of them appear in get_commit_scope's asserted. 50 or fewer behave exactly as today.",
+    "vitest covers 50 paths (all stored and asserted) and 60 paths (the chosen refusal or full retention), and the existing completeStep and getCommitScope tests still pass.",
+    "docs/MCP_SERVER.md's complete_step section states the bound and what happens past it."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (load test-driven-development). Create packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts with the Write tool.\n- Never cp a scratch file into the tree: shell writes leave no TOOL witness.\n- The architect's dry-run copy, to read only, is /mnt/d/moe-scratch/e3d41183-plan/completeStep.modifiedFiles.test.ts.\n\nHarness: ToolTestHarness. init, setupMoeFolder({ schemaVersion: 6 }), createEpic, then:\n- task-w: WORKING, assignedWorkerId worker-1, contextFetchedBy ['worker-1'], one IN_PROGRESS step step-1 with affectedFiles [];\n- worker-1: CODING, currentTaskId task-w;\n- then state.load.\nHelpers:\n- paths(n): src/gen/file001.ts and onward;\n- asserted(): getCommitScopeTool(...).handler({ taskId: 'task-w', workerId: 'worker-1' }).asserted.\nUse flushActivityLog and cleanup in afterEach.\n\nCases (5 tests):\n(1) MAX_STEP_FILES (from util/planSize.ts) is 50.\n(2) complete_step with paths(50):\n  - success, and no warning;\n  - the step is COMPLETED, and step.modifiedFiles equals the 50 paths in order;\n  - every path is in asserted().\n(3) paths(60):\n  - rejects toMatchObject { code: MoeErrorCode.INVALID_INPUT, message matching /too many paths \\(60\\)[\\s\\S]*50[\\s\\S]*moe\\.declare_files/ };\n  - JSON.stringify(getTask('task-w')) is byte-identical to before the call;\n  - the step is still IN_PROGRESS.\n(4) The escape: declare_files { paths: paths(60) }, then complete_step with the first 50, leaves all 60 in asserted().\n(5) One bound for every tool:\n  - submit_plan on a PLANNING task held by architect-a1, with one step of paths(MAX_STEP_FILES+1) affectedFiles, rejects `too many affected files (max ${MAX_STEP_FILES})`;\n  - sanitizeImplementationPlan (state/validators.ts) on one step whose three lists each hold MAX_STEP_FILES+1 entries returns lists of MAX_STEP_FILES each.\n\nRun checkRef [1]'s focused stage once now. The file must FAIL at HEAD: MAX_STEP_FILES does not exist yet, and today 60 paths are accepted, storing 50. Do not edit any existing test.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts"
+      ],
+      "note": "RED: new test file written; focused vitest in snapshot /tmp/e3d4-snap at HEAD: 1 file failed, 5/5 tests failed (MAX_STEP_FILES undefined).",
+      "startedAt": "2026-11-03T16:46:12.725Z",
+      "completedAt": "2026-11-03T16:46:47.060Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "One per-step file bound, shared by the tool and the sanitizer. This follows the MAX_STEP_NOTE_CHARS precedent at util/planSize.ts:31-32.\n\n- packages/moe-daemon/src/util/planSize.ts: add `export const MAX_STEP_FILES = 50;` right after MAX_STEP_NOTE_CHARS. Doc comment: the most paths one plan step's affectedFiles, newFiles or modifiedFiles may hold; submit_plan refuses more per list, complete_step refuses more modifiedFiles, and the plan sanitizer bounds each list at the same value, so no tool accepts a path the next write would silently drop.\n- packages/moe-daemon/src/state/validators.ts:\n  - add MAX_STEP_FILES to the existing planSize import (:40);\n  - in sanitizeImplementationPlan, replace `.slice(0, 50)` with `.slice(0, MAX_STEP_FILES)` on exactly the three per-step file-list lines: affectedFiles :789, newFiles :790, modifiedFiles :791.\n\nDo NOT touch `plan.slice(0, 50)` at :775. That is the step-COUNT bound, a different number.\n\nZero behaviour change: the value stays 50. submitPlan.ts keeps its literal 50 (out of scope); test (5) pins it to the constant.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/planSize.ts",
+        "packages/moe-daemon/src/state/validators.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/planSize.ts",
+        "packages/moe-daemon/src/state/validators.ts"
+      ],
+      "note": "Added MAX_STEP_FILES=50; the sanitizer's three per-step file slices use it; plan.slice(0, 50) (step count) untouched.",
+      "startedAt": "2026-11-03T16:46:51.257Z",
+      "completedAt": "2026-11-03T16:47:00.808Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The refusal, in packages/moe-daemon/src/tools/completeStep.ts. This is the task's error handling: a typed INVALID_INPUT thrown before any write.\n\n- Import MAX_STEP_FILES beside MAX_STEP_NOTE_CHARS (:4).\n- Directly after the note-cap refusal (:83-88), and so before the strict recordStepCompletion (:93-98) and before state.updateTask, add:\n  `if (Array.isArray(params.modifiedFiles) && params.modifiedFiles.length > MAX_STEP_FILES) throw invalidInput('modifiedFiles', `too many paths (${params.modifiedFiles.length}). At most ${MAX_STEP_FILES} per step: report ${MAX_STEP_FILES} here and pass the rest to moe.declare_files.`);`\n- Add a 3-line comment: the sanitizer keeps only the first MAX_STEP_FILES on the write, so the paths past it would silently leave the ASSERTED tier; refuse up front, like the note cap and submit_plan.\n\nCount all entries, as submit_plan does. A non-array modifiedFiles keeps today's handling: the sanitizer drops it.\n\nChange the modifiedFiles schema description to a template literal that ends: 'Omit nothing. At most ${MAX_STEP_FILES}: more is refused; pass the rest to moe.declare_files.'\n\nNothing else changes: 50 or fewer behave exactly as today, including the omitted-list warning. Reference: /mnt/d/moe-scratch/e3d41183-plan/planned.diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "note": "Refusal added after the note cap, before recordStepCompletion/updateTask; schema description now a template literal.",
+      "startedAt": "2026-11-03T16:47:01.615Z",
+      "completedAt": "2026-11-03T16:47:10.888Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Contract. Edit docs/MCP_SERVER.md, the `### moe.complete_step` section ONLY (:466 to just before `### moe.amend_plan_step`). Other open rows edit the chat_decision, set_task_status, archive_task and chat_send sections.\n\n(a) In the Parameters block (:475), the modifiedFiles comment becomes: 'EVERY project-relative path this step created or modified, at most 50 — omitting it draws a `warning`'.\n(b) A new Notes bullet directly after the ASSERTED-tier bullet (the one ending 'until someone declares it via `moe.declare_files`.'):\n  '- At most 50 `modifiedFiles` per call, the plan sanitizer's per-step bound and `moe.submit_plan`'s `affectedFiles`/`newFiles` limit: more than 50 is refused with `INVALID_INPUT` before any write, so the step stays `IN_PROGRESS` and nothing is stored cut. Report 50 and pass the rest to `moe.declare_files` (up to 500 paths per call), whose paths are asserted too.'\n\nThe exact hunk is in /mnt/d/moe-scratch/e3d41183-plan/planned.diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "complete_step section only: modifiedFiles comment says at most 50; new Notes bullet after the ASSERTED bullet.",
+      "startedAt": "2026-11-03T16:47:11.660Z",
+      "completedAt": "2026-11-03T16:47:19.535Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification, run ONCE (DoD 1-3). Run checkRefs [0] and [1] joined with ' && ' as ONE command from your task worktree. Both start by cd-ing to the repo top. Its output tail is the complete_task evidence.\n\n- [0] The complete_step section contains 'at most 50', 'more than 50 is refused' and 'moe.declare_files` (up to 500'. Then the read-only role-doc linter `npm run -s lint` runs and DOC-OK is printed.\n- [1] Builds a git-archive snapshot of your HEAD under mktemp and overlays your five files by an explicit list, then:\n  - runs npm ci with nvm's Linux node under env -i;\n  - runs tsc --noEmit, plus a tt.json typecheck of the new test (the package tsconfig excludes tests);\n  - stage 1, focused: vitest on src/tools/completeStep (both files), getCommitScope and declareFiles;\n  - stage 2: the FULL daemon suite (`npm test`, which is plain `vitest run`, safe in the snapshot). It runs because validators.ts is the plan sanitizer that every task write passes through.\n\nnpm never runs in the shared checkout (global rail). Put any TMPDIR prefix on the outer command only (mem:convention-daemon-full-suite-gate-checkref, TMPDIR TRAP).\n\nThe architect's dry run at ef5c7101, from a clone with these five files, gave:\n- DOC-OK, tsc clean;\n- focused: 4 files, 101 passed;\n- full: 240 files, 7068 passed, 24 skipped, exit 0.\nWith today's doc, [0] fails with 'doc lacks at most 50'.\n\nError handling for a red run: fix the code or the new test, never an existing test, then re-run the whole command. If a full-suite failure is unrelated to these files, re-run once and quote both runs.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/planSize.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts"
+      ],
+      "note": "Verification green: DOC-OK, tsc + tt.json clean, focused 4 files/101 passed, full 242 files/7081 passed/24 skipped, EXIT=0. No file edits in this step.",
+      "startedAt": "2026-11-03T16:47:20.220Z",
+      "completedAt": "2026-11-03T16:48:18.456Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new file.\n\n(a) Mutation check, in a scratch copy of the step-5 snapshot. Use cp -al for node_modules after `rm -rf node_modules/.vite`. Run only the new file per mutant; each mutant must fail at least one case. Then restore and confirm 5/5, quoting each Tests line. The architect killed all 5 mutants:\n  - M1: today's completeStep.ts;\n  - M2: `>=` instead of `>`;\n  - M3: a message without moe.declare_files;\n  - M4: the sanitizer's modifiedFiles slice at 49;\n  - M5: MAX_STEP_FILES = 60.\n(b) Ordering: the new throw precedes recordStepCompletion and state.updateTask. A refused call leaves the task JSON byte-identical, and with strict verified-local inputs no step evidence is recorded either.\n(c) Scope:\n  - only the three per-step file slices changed in validators.ts, and `plan.slice(0, 50)` (the step count) is untouched;\n  - submitPlan.ts and declareFiles.ts are untouched;\n  - only the complete_step doc section changed.\n(d) Contract: 50 or fewer modifiedFiles give the same response, warning and stored list as before; the response shape is unchanged.\n(e) Size: `git diff --numstat` against the merge-base. Expect about +120/-7: the runtime and doc diff was +22/-7 in the dry run, and the test about 95 lines.\n\nRecord the review in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/planSize.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/planSize.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review. (a) Mutants on the new file, each killed: M1 today's completeStep.ts 1 failed|4 passed; M2 '>=' 2 failed|3 passed; M3 no declare_files hint 1 failed|4 passed; M4 sanitizer modifiedFiles slice 49 2 failed|3 passed; M5 MAX_STEP_FILES=60 2 failed|3 passed; restored: Tests 5 passed (5). (b) The throw sits right after the note cap, before recordStepCompletion and state.updateTask, so a refused call writes nothing (test asserts byte-identical task JSON, step stays IN_PROGRESS). (c) Scope: validators.ts changed only the import plus the three per-step file slices; plan.slice(0, 50) at :775 untouched; submitPlan.ts/declareFiles.ts untouched; docs change is in the complete_step section only. (d) <=50 paths: same response/warning/stored list (test 2: no warning, stored equals reported); a non-array modifiedFiles keeps today's handling. Duplicate paths count toward the bound, same as submit_plan. (e) numstat vs merge-base: docs +2/-1, validators +4/-4, completeStep +9/-2, planSize +7/-0, plus the new test (~90 lines). Concurrency: the tool runs under the global state mutex, no new shared state.",
+      "startedAt": "2026-11-03T16:48:19.215Z",
+      "completedAt": "2026-11-03T16:48:42.341Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 376.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:29:11.925Z",
+  "updatedAt": "2026-11-04T19:20:44.248Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:38:29.837Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T17:01:52.253Z",
+    "wallClockMs": 1402416
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-33f67e5b",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:45:06.323Z",
+  "executionContract": {
+    "intendedBehavior": "moe.complete_step refuses more than MAX_STEP_FILES (50) modifiedFiles with INVALID_INPUT before any write. The step stays IN_PROGRESS, and the message names the count, the bound and moe.declare_files, so no reported path is lost silently. 50 or fewer paths behave exactly as today. One exported constant, MAX_STEP_FILES, bounds the tool check and the plan sanitizer's three per-step file lists.",
+    "acceptanceCriteria": [
+      "complete_step with 50 modifiedFiles stores all 50 on the COMPLETED step, and get_commit_scope's asserted contains every one.",
+      "complete_step with 60 modifiedFiles is refused INVALID_INPUT, the task JSON is byte-identical afterwards, and declare_files followed by complete_step with 50 leaves all 60 asserted."
+    ],
+    "invariants": [
+      "No write happens before the refusal: no task write and no attempt step evidence.",
+      "sanitizeImplementationPlan's step-count bound (plan.slice(0, 50) at :775) is unchanged."
+    ],
+    "compatibility": [
+      "50 or fewer modifiedFiles: same response, warning and stored list as today.",
+      "Existing task files hold at most 50 per list already (the sanitizer cut them), so nothing on disk changes.",
+      "submit_plan's literal 50 checks are unchanged and equal MAX_STEP_FILES."
+    ],
+    "approvedScope": [
+      "MAX_STEP_FILES in packages/moe-daemon/src/util/planSize.ts",
+      "sanitizeImplementationPlan's three per-step file-list slices in packages/moe-daemon/src/state/validators.ts (:789-791)",
+      "completeStepTool: the refusal and the modifiedFiles schema description (packages/moe-daemon/src/tools/completeStep.ts)",
+      "docs/MCP_SERVER.md: the ### moe.complete_step section only",
+      "new packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts"
+    ],
+    "reuse": [
+      "The MAX_STEP_NOTE_CHARS precedent: one planSize constant read by complete_step and the sanitizer.",
+      "moe.declare_files (MAX_DECLARED_PATHS_PER_CALL 500, ASSERTED and DECLARED tiers) is the documented escape for longer lists."
+    ],
+    "sourceAssumptions": [
+      "tools/completeStep.ts:83-88 refuses an over-cap note before recordStepCompletion (:93-98) and before the task write.",
+      "tools/completeStep.ts:108 stores params.modifiedFiles as given.",
+      "state/validators.ts:791 slices each step's modifiedFiles to 50 on every write; :789-790 do the same for affectedFiles and newFiles; :775 caps the step count at 50.",
+      "tools/submitPlan.ts:395-402 refuses more than 50 affectedFiles or newFiles per step with 'too many affected files (max 50)'.",
+      "tools/declareFiles.ts:7 sets MAX_DECLARED_PATHS_PER_CALL = 500."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && D=$(sed -n '/^### moe.complete_step/,/^### moe.amend_plan_step/p' docs/MCP_SERVER.md) && for w in 'at most 50' 'more than 50 is refused' 'moe.declare_files` (up to 500'; do printf '%s' \"$D\" | grep -qF -- \"$w\" || { echo \"doc lacks $w\"; exit 1; }; done && npm run -s lint && echo DOC-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/planSize.ts packages/moe-daemon/src/state/validators.ts packages/moe-daemon/src/tools/completeStep.ts packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/completeStep.modifiedFiles.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/completeStep src/tools/getCommitScope src/tools/declareFiles > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "I picked (a), refusal, over (b), keeping every path up to 500:\n- (a) matches both siblings, submit_plan's per-list 50 and the complete_step note cap.\n- (a) changes no state shape, and the escape (declare_files, 500 per call, ASSERTED and DECLARED) already exists.\n- (b) would raise the sanitizer bound for one list. Every task JSON, and every get_context and QA payload that serves the plan, would then grow with steps of hundreds of paths. It also leaves modifiedFiles out of step with affectedFiles and newFiles.\nI also rejected unifying submitPlan.ts's literals in this row: that would add a sixth file. Test (5) pins it to the constant instead.",
+    "codebaseInsights": "- The same 50 appears twice in sanitizeImplementationPlan with different meanings: the step count (:775) and the per-step file lists (:789-791). Only the latter becomes MAX_STEP_FILES.\n- complete_task derives filesModified from the steps' modifiedFiles ?? affectedFiles (completeTask.ts:236-241) and takes no list of its own, so the step list is the only lossy point.\n- The architect's dry run (planned diff, test, c0 and c1) is in /mnt/d/moe-scratch/e3d41183-plan/.",
+    "risks": "- Replacing `plan.slice(0, 50)` by mistake would tie the step count to the file bound; review (c) checks for it.\n- docs/MCP_SERVER.md is touched by several open rows: edit only the complete_step section.\n- The full daemon suite can flake on a loaded host: re-run once before treating a failure in an unrelated file as real, and quote both runs.\n- Type every tracked edit with Edit/Write. Copying the scratch reference files is a shell write with no TOOL witness.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/util/planSize.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/declareFiles.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8a53505e75f2c4f679c2a3104774481b7d88b689",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:45:06.353Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:46:12.725Z",
+  "reviewStartedAt": "2026-11-03T16:48:51.025Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && D=$(sed -n '/^### moe.complete_step/,/^### moe.amend_plan_step/p' docs/MCP_SERVER.md) && for w in 'at most 50' 'more than 50 is refused' 'moe.declare_files` (up to 500'; do printf '%s' \"$D\" | grep -qF -- \"$w\" || { echo \"doc lacks $w\"; exit 1; }; done && npm run -s lint && echo DOC-OK && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/planSize.ts packages/moe-daemon/src/state/validators.ts packages/moe-daemon/src/tools/completeStep.ts packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/completeStep.modifiedFiles.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/completeStep src/tools/getCommitScope src/tools/declareFiles > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "DOC-OK\ntsc --noEmit clean; tsc -p tt.json clean\n Test Files  4 passed (4)\n      Tests  101 passed (101)\n Test Files  242 passed (242)\n      Tests  7081 passed | 24 skipped (7105)\nEXIT=0",
+    "reportedAt": "2026-11-03T16:48:51.025Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts",
+    "packages/moe-daemon/src/util/planSize.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "complete_step now refuses more than MAX_STEP_FILES (50) modifiedFiles with INVALID_INPUT before any write (step stays IN_PROGRESS; the message names the count, the bound and moe.declare_files), so no reported path is lost silently. MAX_STEP_FILES is one planSize constant that also bounds the plan sanitizer's three per-step file lists (the step-count bound is unchanged). 50 or fewer paths behave as before. docs/MCP_SERVER.md complete_step section states the bound and the escape. New completeStep.modifiedFiles.test.ts has 5 cases (50 stored and asserted, 60 refused byte-identical, declare_files escape, submit_plan and sanitizer share the bound). All 5 mutants killed.",
+  "commits": [
+    {
+      "sha": "6029cee35ba66e727ad56cbece567614c8793adf",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T16:45:17Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/completeStep.modifiedFiles.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts",
+        "packages/moe-daemon/src/util/planSize.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T16:59:43.455Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T16:59:55Z",
+    "at": "2026-11-03T17:02:09.610Z"
+  },
+  "completedAt": "2026-11-03T17:01:52.253Z",
+  "reviewCompletedAt": "2026-11-03T17:01:52.253Z",
+  "reviewSummary": "Reviewed completion 6029cee3 (on moe/work-2026-10-24, in control HEAD) via git diff 6029cee3^ 6029cee3: +112/-7 (net 105) over 5 files, under the 400 cap. Re-ran task.verification from the repo root at HEAD 6029cee3: DOC-OK (complete_step section has 'at most 50', 'more than 50 is refused', 'moe.declare_files` (up to 500'; role-doc lint OK); in a git-archive snapshot (npm ci, env -i, never the shared checkout) tsc --noEmit + tt.json clean, focused vitest completeStep/getCommitScope/declareFiles 4 files/101 passed, full daemon suite 243 files/7085 passed/24 skipped, EXIT=0.\nDoD 1: complete_step throws INVALID_INPUT for >MAX_STEP_FILES (50) modifiedFiles, after the note cap and before recordStepCompletion/updateTask, so nothing is written; message names count, bound and moe.declare_files. <=50 unchanged (incl. omitted-list warning); non-array keeps today's handling.\nDoD 2: new completeStep.modifiedFiles.test.ts, 5 cases: 50 stored+asserted with no warning; 60 refused INVALID_INPUT, task JSON byte-identical, step IN_PROGRESS; declare_files escape leaves all 60 asserted; submit_plan refuses 51 and the sanitizer returns 50/50/50. No existing test edited; 50-vs-60 pair kills >= and a dropped refusal (worker reports 5/5 mutants killed).\nDoD 3: only the complete_step doc section changed (param comment + one Notes bullet).\nScope: validators.ts changes only the import and the three per-step file slices; plan.slice(0, 50) at :775 (step count), submitPlan.ts and declareFiles.ts untouched. Simplicity pass: nothing to cut. Notes: duplicate paths count toward the bound, as in submit_plan; submitPlan.ts keeps its literal 50 (pinned to the constant by a test).",
+  "requiredCheckAtDone": null
+}

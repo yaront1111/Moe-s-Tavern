@@ -1,0 +1,208 @@
+{
+  "id": "task-d67d5179e5e64c33a7ac7d563ac5528d",
+  "epicId": "epic-be924fb8",
+  "title": "docs: SCHEMA.md's `interface Task` omits 11 keys the daemon writes, among them comments (on all 1058 live task files, and no TaskComment shape anywhere in the doc), hasPendingQuestion, the planSubmittedAt/planApprovedAt/workStartedAt/completedAt stamps and priorBlockedReason; its EpicStatus omits 'ARCHIVED', Team omits formerMemberIds and PlanCritiqueResult omits category",
+  "description": "Filed by hunt #24 (task-53801f5d, architect-cd0ac706) on 2026-11-04. It comes from two read-only scripted diffs at 1fef1b76, the moe/work-2026-10-24 tip after acb1c766:\n- the key sets of every live .moe/tasks, epics, workers and attempts JSON file, against docs/SCHEMA.md's interfaces;\n- packages/moe-daemon/src/types/schema.ts's interfaces, against the same doc.\n\nPROBLEM. SCHEMA.md is the canonical data-shape doc (CLAUDE.md). Its Task interface (SCHEMA.md:434-612) leaves out fields the daemon writes on most task files. Task comments, the data the IDE boards and get_pending_questions run on, have no documented shape at all. Three smaller shapes have also drifted. Worker (16 keys) and ExecutionAttempt (17 keys) match exactly, so they are not in scope.\n\nEVIDENCE: the types/schema.ts line, then the writers, under packages/moe-daemon/src/.\n- comments: TaskComment[]\n  - Declared at types/schema.ts:1059; its shape {id, author, content, timestamp} is at :511-516.\n  - Writers: state/taskStore.ts:347 (create) and tools/addComment.ts:111-123 (author is the workerId, else 'agent').\n  - Live: 1058 of 1058 task files. All 1310 comments carry exactly those 4 keys.\n- hasPendingQuestion?\n  - Declared at types/schema.ts:1060.\n  - Writers: taskStore.ts:348 (false at create), server/WebSocketServer.ts:976 (true on a human comment), tools/addComment.ts:123 (false), and tools/waitForTask.ts:331 and :467.\n  - Live: 912 files.\n- planSubmittedAt?, planApprovedAt?, workStartedAt?, completedAt?\n  - Declared at types/schema.ts:1034-1037.\n  - Writers: planSubmittedAt at tools/submitPlan.ts:562; planApprovedAt at state/taskStore.ts:782, tools/submitPlan.ts:138 and :591, and tools/setTaskStatus.ts:259; workStartedAt at tools/startStep.ts:74; completedAt at tools/qaApprove.ts:247, stamped only at DONE (completeTask.ts:275).\n  - Live: 891, 885, 878 and 875 files.\n  - SCHEMA.md's own prose already names workStartedAt (:610) and planApprovedAt (:784), but the interface declares neither.\n- priorBlockedReason?\n  - Declared at types/schema.ts:1171.\n  - Writers: tools/archiveTask.ts:25, tools/setTaskStatus.ts:203, state/resourceStore.ts:404 and :543, and server/WebSocketServer.ts:532.\n  - Live: 98 files.\n- Daemon-written, but on no live file yet:\n  - needsHumanReview? (types/schema.ts:1138): set by tools/qaReject.ts:321, which parks the row unassigned, and cleared at WebSocketServer.ts:557.\n  - capReplanAt? (:1148): set by qaReject.ts:323.\n  - critiqueBlockCount? (:1155): set by tools/submitPlanCritique.ts:134 and tools/submitPlan.ts:670, and cleared by util/reopen.ts:63 and qaApprove.ts:252.\n  - requiredCheckSnapshot? (:953): set by submitPlan.ts:576 and taskStore.ts:603. Its own section is SCHEMA.md:830, but the interface does not declare it.\n- EpicStatus: types/schema.ts:43 includes 'ARCHIVED', which tools/archiveEpic.ts:93 writes. SCHEMA.md:386-389 lists only PLANNED, ACTIVE and COMPLETED.\n- Team.formerMemberIds?: declared at types/schema.ts:411 and written by state/teamStore.ts:136 and :151 and state/workerStore.ts:305 and :500. It is on 5 of the 6 live team files. SCHEMA.md:1204-1218 does not declare it.\n- PlanCritiqueResult.category?: declared at types/schema.ts:624 as PLAN_CRITIQUE_CATEGORIES | 'uncategorized', and written by tools/submitPlanCritique.ts:96-99. SCHEMA.md:1076-1081 does not declare it.\n\nSCRIPTED DIFF, re-run at 1fef1b76. Scripts, outputs and a README are in /mnt/d/moe-scratch/hunt24/.\nnode /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt\nIt prints the following and exits 1:\n## Task: ts L883-1193 (77) doc L434-612 (66)\n  TS-ONLY (undocumented): requiredCheckSnapshot?@ts:953, planSubmittedAt?@ts:1034, planApprovedAt?@ts:1035, workStartedAt?@ts:1036, completedAt?@ts:1037, comments@ts:1059, hasPendingQuestion?@ts:1060, needsHumanReview?@ts:1138, capReplanAt?@ts:1148, critiqueBlockCount?@ts:1155, priorBlockedReason?@ts:1171\n## TaskComment: ts L511 doc MISSING\n## Team: TS-ONLY (undocumented): formerMemberIds?@ts:411\n## PlanCritiqueResult: TS-ONLY (undocumented): category?@ts:624\nSCHEMA-PARITY-FAIL 14\nThe live-file diff agrees on every Task key that live files carry: `node /mnt/d/moe-scratch/hunt24/parity-schema.mjs .moe docs/SCHEMA.md`, which reads the files and never writes them.\n\nFIX DIRECTION. Docs only, in docs/SCHEMA.md.\n- Declare each missing key in its interface, under Task's Timestamps, Reopening, Block bookkeeping and Governance groups, plus a new Comments group. Give each a one-line comment saying when it is set, written from its writer rather than from this text.\n- Add `interface TaskComment` under Task subtypes.\n- Add 'ARCHIVED' to EpicStatus, with what sets it: archive_epic, or update_epic with status ARCHIVED.\n- Add formerMemberIds to Team, as join_team's eviction tombstone.\n- Add category to PlanCritiqueResult.\n- planningNotes is already documented in `## PlanningNotes` and needs no change.\n\nNOT IN SCOPE.\n- docs/MCP_SERVER.md, which has its own hunt #24 row.\n- Any change to code or to types/schema.ts.\n- Worker, ExecutionAttempt, Project and the settings shapes. CONFIGURATION.md belongs to CQ-M07v1.\n- Prose outside the four named shapes.\n\nVERIFICATION, from the worktree root. Both commands run in place and are read-only:\ncd \"$(git rev-parse --show-toplevel)\" && npm run lint > /dev/null && echo LINT-OK && node /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt && sed -n '/^type EpicStatus/,/;/p' docs/SCHEMA.md | grep -q \"'ARCHIVED'\" && echo EPICSTATUS-OK",
+  "definitionOfDone": [
+    "From the worktree root, `node /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt` prints SCHEMA-PARITY-OK and exits 0. At 1fef1b76 it prints SCHEMA-PARITY-FAIL 14.",
+    "`sed -n '/^type EpicStatus/,/;/p' docs/SCHEMA.md | grep -c \"'ARCHIVED'\"` prints 1. Each new key's comment says when it is set, matching the writer the evidence cites. For example: completedAt at DONE by qa_approve (qaApprove.ts:247), workStartedAt by the first start_step (startStep.ts:74), and hasPendingQuestion true on a human comment and false on an agent one (WebSocketServer.ts:976, addComment.ts:123).",
+    "`git diff` names only docs/SCHEMA.md, with hunks only inside `## Task` (the interface and Task subtypes), `## Epic` and `## Team`, and `npm run lint` passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit docs/SCHEMA.md with your own Edit tool (project rail: no shell writes to tracked files): the three small shapes plus the missing interface TaskComment.\nRules for every new key in steps 1-2: optionality exactly as packages/moe-daemon/src/types/schema.ts; ONE comment, on the key's own line, saying when it is set (and what clears it), taken from the writer named here (all verified at 80078651); no source line numbers in the doc text; never put the two-character sequence slash-star or star-slash inside a // comment within an interface body (e.g. `.moe/tasks/*.json`): /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs reads it as a block-comment start and drops every later key, so parity fails.\n(a) `## Epic`, `type EpicStatus` (SCHEMA.md:386-389). Change `  | 'COMPLETED';   // All tasks done` to `  | 'COMPLETED'    // All tasks done` (drop only the `;`) and add 'ARCHIVED' as the LAST member, carrying the `;`. The DoD's `sed -n '/^type EpicStatus/,/;/p'` range stops at the first `;` and `grep -c \"'ARCHIVED'\"` counts lines, so no other line of the type may hold a `;` or the text 'ARCHIVED'. Writers: moe.archive_epic writes status ARCHIVED after archiving every task (tools/archiveEpic.ts:84-93); moe.update_epic and the board's UPDATE_EPIC with status ARCHIVED run archive_epic (applyEpicUpdate in tools/updateEpic.ts). Suggested line:\n  | 'ARCHIVED';    // Shelved: set by moe.archive_epic once it has archived every task, or by moe.update_epic (or the board's UPDATE_EPIC) with status ARCHIVED, which runs archive_epic\n(b) `## Team`, `interface Team` (:1204-1218): after the `memberIds` line add `formerMemberIds?: string[];` (its comment must contain `evict`). Writers: state/workerStore.ts:305 (worker record deleted: stale sweep, DEAD prune) and :500 (restart purge) move members into it; state/teamStore.ts:151 (evictDeadMembers: a join into a full team evicts its DEAD members); teamStore.ts:136 (clearMembershipTombstone) drops the id when that worker joins or leaves any team. Read only to auto-rejoin a returning worker (util/teamMembershipHeal.ts), never counted toward maxSize. Suggested line:\n  formerMemberIds?: string[];    // Eviction tombstone: members whose worker record was deleted (stale sweep, DEAD prune, restart purge) or DEAD members a join into a full team evicted; read only to auto-rejoin a returning worker, never counted toward maxSize; cleared when it joins or leaves any team\n(c) `### Task subtypes`, `interface PlanCritiqueResult` (:1076-1081): after the `concerns?:` line add the category key, typed as the literal union of PLAN_CRITIQUE_CATEGORIES (types/schema.ts) plus 'uncategorized'. Writer: tools/submitPlanCritique.ts:44-52 and :96-100 store a sent category as sent (validated, any verdict), store 'uncategorized' for a block sent without one, and store none for a pass sent without one; the daemon size critic's block (tools/submitPlan.ts:663-676) carries none. Suggested line:\n  category?: 'size' | 'correctness' | 'rails' | 'dependency' | 'uncategorized'; // As sent; 'uncategorized' = a block sent without one; absent on a pass sent without one and on the daemon size critic's block\n(d) `### Task subtypes`: directly before `interface RejectionDetails {` (:974) add interface TaskComment, the 4 required string keys of types/schema.ts:511-516, with a short /** */ header above it (outside the body, so allowed). `interface TaskComment {` must stand alone on its line (the parser needs the `{` at end of line). Facts: id = generateId('comment'); moe.add_comment sets author to the caller's workerId, else 'agent' (tools/addComment.ts:109-114); the board's /ws ADD_COMMENT uses the sent author, else 'human' (server/WebSocketServer.ts:963-968); both trim content and refuse empty or >10000 chars (MAX_TASK_COMMENT_LENGTH, addComment.ts:10). The `author:` line must contain `add_comment`. Suggested block, followed by a blank line:\n/**\n * One entry of `task.comments`, appended by `moe.add_comment` or the board's\n * `/ws` ADD_COMMENT. Both refuse empty or over-10000-char content.\n */\ninterface TaskComment {\n  id: string;                // \"comment-…\"\n  author: string;            // moe.add_comment: the caller's workerId, else 'agent'; board: the sent author, else 'human'\n  content: string;           // Trimmed, ≤10000 chars\n  timestamp: string;         // ISO 8601\n}\nLeave every other line of these shapes alone (e.g. PlanCritiqueResult.reviewedBy, the Team prose): out of scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "EpicStatus ARCHIVED, Team.formerMemberIds, PlanCritiqueResult.category, TaskComment added",
+      "startedAt": "2026-11-04T13:43:44.447Z",
+      "completedAt": "2026-11-04T13:44:04.741Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Edit docs/SCHEMA.md `## Task`, `interface Task` (:434-612) with your Edit tool, under the step-1 rules: declare the 11 keys types/schema.ts has and the doc lacks (comments required; the other ten optional). Each key line must contain the token in [brackets]: check piece 3 reads the key line plus any // continuation lines directly under it. Write from the writers below, not from types/schema.ts's comments or the task description: types/schema.ts:1130-1138 claims the critique-block cap also sets needsHumanReview, but tools/submitPlanCritique.ts:120-125 says it does not; and per the filer's task comment, waitForTask.ts:331/:467 are reply fields, not task writes.\n1. After `  executionContract?: TaskExecutionContract;` (:468): requiredCheckSnapshot?: RequiredCheckSnapshot [submit_plan]. Daemon-owned; only moe.submit_plan's PLAN_SUBMITTED write sets it, and a plan without requiredChecks clears it (tools/submitPlan.ts:575-577; every other writer has it stripped). Point at the existing `### requiredCheckSnapshot (CQ-V01)` section.\n2. Reopening group, after the `maxReopens?:` line (:493): capReplanAt?: string [qa_reject]: ISO time of the qa_reject that reached the reopen cap and flipped the row to PLANNING for its one re-plan (tools/qaReject.ts:205-228, :323); never cleared, a reopen keeps it. Then needsHumanReview?: boolean [qa_reject]: set true by a qa_reject past the cap once capReplanAt is set; the row stays REVIEW, its assignee cleared, fenced out of every QA claim (qaReject.ts:321). Cleared by qa_approve (qaApprove.ts:251), every reopen (util/reopen.ts:62), release_task (releaseTask.ts:270, :320), set_task_status (setTaskStatus.ts:242-243) and a board move into REVIEW (server/WebSocketServer.ts:556-557).\n3. Block bookkeeping, right after the `blockedReason?:` line (:513): priorBlockedReason?: string | null [set_task_status]: the last blockedReason, copied when set_task_status (setTaskStatus.ts:203), a board move (WebSocketServer.ts:532) or archive_task (archiveTask.ts:25) takes the row out of BLOCKED, or a resource restore returns it unassigned (state/resourceStore.ts:404 releaseOnDeregister, :543 unheld queue head). The lease grant (resourceStore.ts:577-585), the dependency auto-unblock (state/dependencyUnblock.ts:274-281) and unblock_worker (unblockWorker.ts:79-86) do not copy it, and nothing clears it, so its comment must say it is kept, unlike the group's other keys.\n4. Governance group, after the `planCritiqueResult?:` line (:581): critiqueBlockCount?: number [submit_plan_critique]: +1 per critique block that flips the row to PLANNING, from moe.submit_plan_critique (submitPlanCritique.ts:128-134) or submit_plan's own size critic under settings.taskSizing.autoCritique (submitPlan.ts:663-670); at MAX_CRITIQUE_BLOCKS_DEFAULT (2) a block stops flipping; cleared by qa_approve (qaApprove.ts:252) and every reopen (util/reopen.ts:63).\n5. New Comments group, before `  // Ownership + ordering bookkeeping (Phase 3; both optional)` (:603), with a `  // Comments: …` header line and a blank line after the group: comments: TaskComment[] [add_comment]: oldest first, appended by moe.add_comment and the board's ADD_COMMENT; every writer keeps the newest MAX_COMMENTS_PER_TASK (200, env MOE_MAX_COMMENTS_PER_TASK; state/validators.ts:45-52, create at taskStore.ts:347). Then hasPendingQuestion?: boolean ['human' and add_comment]: false at create_task (taskStore.ts:348) and on every moe.add_comment (addComment.ts:123); true on a board ADD_COMMENT whose author is 'human' (WebSocketServer.ts:974-976; another board author leaves it as is). Read by get_pending_questions and wait_for_task.\n6. Timestamps group, between `  updatedAt: string;` and `  reviewStartedAt?: string;` (:609-610; anchor your Edit on both lines, since `  updatedAt: string;` occurs 6 times in the doc), in types/schema.ts order: planSubmittedAt?: string [submit_plan]: every moe.submit_plan, in its AWAITING_APPROVAL write (submitPlan.ts:562). planApprovedAt?: string [set_task_status]: every approval, in its status WORKING write: the board's approveTask (PLAN_APPROVED, state/taskStore.ts:782), SPEED/TURBO auto-approval (PLAN_AUTO_APPROVED, submitPlan.ts:138 and :591) and a relaxed-mode set_task_status approval (setTaskStatus.ts:257-259). workStartedAt?: string [start_step]: the first moe.start_step, never overwritten (startStep.ts:72-74); a reopen keeps it. completedAt?: string [qa_approve]: at DONE by moe.qa_approve, with reviewCompletedAt (qaApprove.ts:246-248); complete_task stamps only reviewStartedAt (completeTask.ts:275); every reopen clears it (util/reopen.ts:58).\nSuggested lines, dry-run green against all three check pieces at 80078651 (keep the comment column of the neighbouring lines):\n  requiredCheckSnapshot?: RequiredCheckSnapshot; // Daemon-owned: set, or cleared by a plan without requiredChecks, only by moe.submit_plan's PLAN_SUBMITTED write. See `requiredCheckSnapshot` below\n  capReplanAt?: string;                         // ISO time of the qa_reject that reached the reopen cap and flipped the row to PLANNING for its one re-plan; never cleared\n  needsHumanReview?: boolean;                   // true from a qa_reject past the cap once capReplanAt is set (row stays REVIEW, unassigned, out of QA claims); cleared by qa_approve, a reopen, release_task, set_task_status or a board move into REVIEW\n  priorBlockedReason?: string | null;    // The last blockedReason, kept when set_task_status, a board move, archive_task or a resource restore that returns the row unassigned takes it out of BLOCKED (the lease grant, dependency auto-unblock and unblock_worker do not copy it); never cleared\n  critiqueBlockCount?: number;                  // +1 per critique block that flips the row to PLANNING (moe.submit_plan_critique, or submit_plan's size critic under taskSizing.autoCritique); at 2 a block stops flipping; cleared by qa_approve and every reopen\n  // Comments: questions and answers on the task (TaskComment below)\n  comments: TaskComment[];       // Oldest first, appended by moe.add_comment and the board's ADD_COMMENT; every writer keeps the newest 200 (MOE_MAX_COMMENTS_PER_TASK)\n  hasPendingQuestion?: boolean;  // true on a board comment whose author is 'human'; false at create_task and on every moe.add_comment. Read by get_pending_questions and wait_for_task\n  planSubmittedAt?: string;      // Set by every moe.submit_plan, in its AWAITING_APPROVAL write\n  planApprovedAt?: string;       // Set with status WORKING by every approval: the board's (PLAN_APPROVED), SPEED/TURBO auto-approval (PLAN_AUTO_APPROVED) and a relaxed-mode set_task_status approval\n  workStartedAt?: string;        // Set by the first moe.start_step and never overwritten; a reopen keeps it\n  completedAt?: string;          // Set at DONE by moe.qa_approve, with reviewCompletedAt (complete_task stamps only reviewStartedAt); every reopen clears it",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "11 Task keys declared",
+      "startedAt": "2026-11-04T13:44:05.776Z",
+      "completedAt": "2026-11-04T13:44:29.327Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Final step: adversarial self-review of the whole docs/SCHEMA.md diff, then the one verification run (its fresh output is your complete_task evidence).\nReview as an attacker: (1) re-open every writer line cited in steps 1-2 and confirm each new comment says exactly who sets the key, when, and what clears it; fix any claim copied from types/schema.ts comments or the task text instead of the code. (2) The diff is additive apart from the EpicStatus 'COMPLETED' line losing its `;`: no existing line reworded, rewrapped or moved, and every ```typescript fence still closes. (3) No added line holds deprecated, seed, wallClockMs, firstClaimAt, pacePerStepMs, TaskBudget, task.budget or a 'never runs git' phrase: packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts and daemonGitDocs.test.ts scan every SCHEMA.md line for them (check piece 2 enforces this on added lines, so a docs-only diff needs no snapshot npm run). (4) `git diff --stat` shows only docs/SCHEMA.md (about +28/-1). (5) You edited only your worktree's docs/SCHEMA.md, never the control checkout's.\nError handling: this docs-only diff adds no runtime path, so the only failure handling is the check chain, which fails closed: each piece exits non-zero and prints a MISSING, SCHEMA-PARITY-FAIL, OPTIONALITY or diff line. Never append `|| true`, drop a piece or edit the oracle script; fix the doc and re-run.\nThen run in bash, from your worktree, exactly this command (the three executionContract.checkRefs joined with ' && '). It must print LINT-OK, SCHEMA-PARITY-OK, EPICSTATUS-OK, SCOPE-FILES-OK, SCOPE-HUNKS-OK, DOC-GUARDS-OK and WRITERS-OK, and exit 0:\ncd \"$(git rev-parse --show-toplevel)\" && P=/mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs && A=\"packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt\" && npm run lint > /dev/null && echo LINT-OK && node $P $A && ! node $P $A | grep OPTIONALITY && [ \"$(sed -n '/^type EpicStatus/,/;/p' docs/SCHEMA.md | grep -c \"'ARCHIVED'\")\" = 1 ] && echo EPICSTATUS-OK && cd \"$(git rev-parse --show-toplevel)\" && B=${SCHEMA_BASE:-$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")} && ! git diff --name-only \"$B\" -- . ':(exclude).moe' | grep -vxF docs/SCHEMA.md && echo SCOPE-FILES-OK && x(){ awk '/^##+ /{s=($0==\"## Epic\"||$0==\"## Task\"||$0==\"### Task subtypes\"||$0==\"## Team\")} !s'; } && diff <(git show \"$B:docs/SCHEMA.md\" | x) <(x < docs/SCHEMA.md) && echo SCOPE-HUNKS-OK && ! git diff -U0 \"$B\" -- docs/SCHEMA.md | grep '^+' | grep -v '^+++' | grep -iE 'never (runs|executes|touches) git|runs no git|does not run git|pacePerStepMs|TaskBudget|task\\.budget|wallClockMs|firstClaimAt|\\bseed|\\bdeprecated\\b' && echo DOC-GUARDS-OK && cd \"$(git rev-parse --show-toplevel)\" && need(){ awk -v h=\"interface $1 {\" -v k=\"$2\" '$0==h{p=1;next} p&&/^}/{exit} p&&c&&/^[[:space:]]*\\/\\//{print;next} {c=0} p&&index($0,k){c=1;print}' docs/SCHEMA.md | grep -qF -- \"$3\" || { echo \"MISSING $1 $2 $3\"; false; }; } && need Task 'requiredCheckSnapshot?:' submit_plan && need Task 'planSubmittedAt?:' submit_plan && need Task 'planApprovedAt?:' set_task_status && need Task 'workStartedAt?:' start_step && need Task 'completedAt?:' qa_approve && need Task 'comments:' add_comment && need Task 'hasPendingQuestion?:' \"'human'\" && need Task 'hasPendingQuestion?:' add_comment && need Task 'needsHumanReview?:' qa_reject && need Task 'capReplanAt?:' qa_reject && need Task 'critiqueBlockCount?:' submit_plan_critique && need Task 'priorBlockedReason?:' set_task_status && need Team 'formerMemberIds?:' evict && need PlanCritiqueResult 'category?:' 'uncategorized' && need TaskComment 'author:' add_comment && echo WRITERS-OK\nB is the merge-base with $MOE_LAND_TARGET (the wrapper exports it), so the scope pieces stay meaningful after a checkpoint; see mem:decision-doc-row-checkrefs-worktree-mode. For QA on the control checkout B falls back to HEAD and piece 2's scope checks go vacuous: re-run with SCHEMA_BASE=<completion sha>^ while HEAD is that sha, or read `git show --stat <sha>`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md"
+      ],
+      "note": "Full check chain green",
+      "startedAt": "2026-11-04T13:44:30.176Z",
+      "completedAt": "2026-11-04T13:44:41.685Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 532.7,
+  "comments": [
+    {
+      "id": "comment-e5dfa4d0481e46a3aabc001cc3b11127",
+      "author": "architect-cd0ac706",
+      "content": "Correction to the evidence, from the filer: tools/waitForTask.ts:331 and :467 are fields in wait_for_task's reply. They are not task writes. hasPendingQuestion has three writers:\n- state/taskStore.ts:348 sets it false at create.\n- server/WebSocketServer.ts:974-976 sets it true when the author is 'human' (the board's comment path).\n- tools/addComment.ts:123 sets it false on an MCP comment.\nWrite the key's doc comment from these three lines.",
+      "timestamp": "2026-11-04T13:21:14.293Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T13:20:43.428Z",
+  "updatedAt": "2026-11-04T19:20:45.678Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T13:21:23.844Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T13:47:42.556Z",
+    "wallClockMs": 1578712
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-a408f113",
+    "qa-1cd86a39"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T13:42:54.180Z",
+  "executionContract": {
+    "intendedBehavior": "docs/SCHEMA.md declares every key packages/moe-daemon/src/types/schema.ts gives Task, Team and PlanCritiqueResult, adds interface TaskComment matching types/schema.ts, and lists 'ARCHIVED' in type EpicStatus. Each new key carries one comment on its own line stating when the daemon sets it and what clears it, taken from the writer in code. Documentation only: no code, type, contract or .moe/ state changes.",
+    "acceptanceCriteria": [
+      "node /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt prints SCHEMA-PARITY-OK, exits 0 and prints no OPTIONALITY line (it printed SCHEMA-PARITY-FAIL 14 at 1fef1b76)",
+      "sed -n '/^type EpicStatus/,/;/p' docs/SCHEMA.md | grep -c \"'ARCHIVED'\" prints 1",
+      "Each new key's comment names its real writer: completedAt qa_approve, workStartedAt start_step, hasPendingQuestion 'human' and add_comment, planApprovedAt set_task_status (with the board and SPEED/TURBO approvals), planSubmittedAt and requiredCheckSnapshot submit_plan, capReplanAt and needsHumanReview qa_reject, critiqueBlockCount submit_plan_critique, priorBlockedReason set_task_status, comments and TaskComment.author add_comment, Team.formerMemberIds eviction",
+      "git diff names only docs/SCHEMA.md, with hunks only inside ## Epic, ## Task (before its first ### subsection), ### Task subtypes and ## Team, and npm run lint passes at the repo root"
+    ],
+    "invariants": [
+      "No file other than docs/SCHEMA.md changes; packages/moe-daemon/src/types/schema.ts, docs/MCP_SERVER.md and .moe/ stay untouched",
+      "Existing SCHEMA.md lines stay byte-identical except EpicStatus's 'COMPLETED' member losing its ;",
+      "No added line trips the doc-contract tests that scan SCHEMA.md (util/taskTimeBudgetDocs.test.ts, util/daemonGitDocs.test.ts, util/executionContractDocs.test.ts)"
+    ],
+    "compatibility": [
+      "Additive documentation only: no MCP tool contract, wire shape, schema type or .moe/ state file changes, so every existing task, epic and team file reads exactly as before"
+    ],
+    "approvedScope": [
+      "docs/SCHEMA.md interface Task: requiredCheckSnapshot, planSubmittedAt, planApprovedAt, workStartedAt, completedAt, comments, hasPendingQuestion, needsHumanReview, capReplanAt, critiqueBlockCount, priorBlockedReason",
+      "docs/SCHEMA.md ### Task subtypes: new interface TaskComment {id, author, content, timestamp} and PlanCritiqueResult.category",
+      "docs/SCHEMA.md type EpicStatus 'ARCHIVED' and interface Team formerMemberIds"
+    ],
+    "reuse": [
+      "The parity oracle is hunt #24's read-only /mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs; no new script or test is added"
+    ],
+    "sourceAssumptions": [
+      "types/schema.ts: :43 EpicStatus incl. 'ARCHIVED'; :411 Team.formerMemberIds; :511-516 TaskComment; :624 PlanCritiqueResult.category; Task :953 requiredCheckSnapshot, :1034-1037 planSubmittedAt/planApprovedAt/workStartedAt/completedAt, :1059 comments (required), :1060 hasPendingQuestion, :1138 needsHumanReview, :1148 capReplanAt, :1155 critiqueBlockCount, :1171 priorBlockedReason",
+      "hasPendingQuestion: state/taskStore.ts:348 false at create; server/WebSocketServer.ts:974-976 true when the board comment author is 'human'; tools/addComment.ts:123 false on every MCP comment (waitForTask.ts:331/:467 are reply fields)",
+      "completedAt only tools/qaApprove.ts:247 at DONE, cleared by util/reopen.ts:58; workStartedAt only tools/startStep.ts:74 on the first step; planApprovedAt state/taskStore.ts:782, tools/submitPlan.ts:138 and :591, tools/setTaskStatus.ts:259; planSubmittedAt tools/submitPlan.ts:562",
+      "needsHumanReview true only at tools/qaReject.ts:321 (not at the critique cap, submitPlanCritique.ts:120-125); capReplanAt only qaReject.ts:323; critiqueBlockCount submitPlanCritique.ts:134 and submitPlan.ts:670, cleared by qaApprove.ts:252 and util/reopen.ts:63",
+      "priorBlockedReason copied by setTaskStatus.ts:203, WebSocketServer.ts:532, archiveTask.ts:25, state/resourceStore.ts:404 and :543; not by the lease grant, state/dependencyUnblock.ts or tools/unblockWorker.ts",
+      "EpicStatus ARCHIVED written by tools/archiveEpic.ts:93; moe.update_epic routes status ARCHIVED through applyEpicUpdate to archive_epic"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && P=/mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs && A=\"packages/moe-daemon/src/types/schema.ts docs/SCHEMA.md Task TaskComment Epic Team PlanCritiqueResult Worker ExecutionAttempt\" && npm run lint > /dev/null && echo LINT-OK && node $P $A && ! node $P $A | grep OPTIONALITY && [ \"$(sed -n '/^type EpicStatus/,/;/p' docs/SCHEMA.md | grep -c \"'ARCHIVED'\")\" = 1 ] && echo EPICSTATUS-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=${SCHEMA_BASE:-$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")} && ! git diff --name-only \"$B\" -- . ':(exclude).moe' | grep -vxF docs/SCHEMA.md && echo SCOPE-FILES-OK && x(){ awk '/^##+ /{s=($0==\"## Epic\"||$0==\"## Task\"||$0==\"### Task subtypes\"||$0==\"## Team\")} !s'; } && diff <(git show \"$B:docs/SCHEMA.md\" | x) <(x < docs/SCHEMA.md) && echo SCOPE-HUNKS-OK && ! git diff -U0 \"$B\" -- docs/SCHEMA.md | grep '^+' | grep -v '^+++' | grep -iE 'never (runs|executes|touches) git|runs no git|does not run git|pacePerStepMs|TaskBudget|task\\.budget|wallClockMs|firstClaimAt|\\bseed|\\bdeprecated\\b' && echo DOC-GUARDS-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && need(){ awk -v h=\"interface $1 {\" -v k=\"$2\" '$0==h{p=1;next} p&&/^}/{exit} p&&c&&/^[[:space:]]*\\/\\//{print;next} {c=0} p&&index($0,k){c=1;print}' docs/SCHEMA.md | grep -qF -- \"$3\" || { echo \"MISSING $1 $2 $3\"; false; }; } && need Task 'requiredCheckSnapshot?:' submit_plan && need Task 'planSubmittedAt?:' submit_plan && need Task 'planApprovedAt?:' set_task_status && need Task 'workStartedAt?:' start_step && need Task 'completedAt?:' qa_approve && need Task 'comments:' add_comment && need Task 'hasPendingQuestion?:' \"'human'\" && need Task 'hasPendingQuestion?:' add_comment && need Task 'needsHumanReview?:' qa_reject && need Task 'capReplanAt?:' qa_reject && need Task 'critiqueBlockCount?:' submit_plan_critique && need Task 'priorBlockedReason?:' set_task_status && need Team 'formerMemberIds?:' evict && need PlanCritiqueResult 'category?:' 'uncategorized' && need TaskComment 'author:' add_comment && echo WRITERS-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Gate on a snapshot npm ci + vitest of the three daemon doc tests that read SCHEMA.md: rejected for a docs-only diff. Check piece 2 replicates their line predicates on every added line (the old lines already pass them), and the strip-diff confines the hunks, so a snapshot adds minutes and proves nothing more. QA may still run them in a `git clone --shared` for belt-and-braces. (2) Multi-line comments per key: rejected, because the task asks for a one-line comment and piece 3 reads the key line. (3) Copying types/schema.ts's JSDoc: rejected where it is stale. Its needsHumanReview text claims the critique cap also sets the flag; submitPlanCritique.ts:120-125 says it does not.",
+    "codebaseInsights": "The parity oracle ts-vs-doc.mjs keys on `interface X {` lines (with `{` at end of line) and on depth-1 `key?:` lines, with // and /* */ stripped, and the first occurrence wins. It prints OPTIONALITY but does not count it, so piece 1 fails on it separately. The strip-diff awk resets on every ## or ### heading, so the allowed regions are: ## Epic up to ### Epic rail limits; ## Task up to ### `affectedFiles` validation; ### Task subtypes up to ### Reopen cap; ## Team up to ## Resource. Dry run in a scratch clone at 80078651: RED at HEAD (SCHEMA-PARITY-FAIL 14, then MISSING requiredCheckSnapshot); GREEN on the suggested lines (+28/-1). 13 mutants each fail the chain: no ARCHIVED, ARCHIVED twice, dropped key, wrong optionality, slash-star in a comment, an edit in ## Worker, an edit in ### approvedPlanRevision, another file changed, 'deprecated', 'Seeded', a writer token removed (twice) and a renamed key. Dirty .moe/ files do not trip it.",
+    "risks": "- EpicStatus: the `;` must move to the new ARCHIVED line, or the DoD's sed range ends early.\n- `interface TaskComment {` must stand alone on its line.\n- No slash-star inside a // comment in an interface body (e.g. tasks/*.json).\n- The command needs bash (process substitution) and WSL paths (/mnt/d).\n- In worktree mode, edit only your worktree's docs/SCHEMA.md; an edit in the control checkout is MOE_WORKTREE_STRAY_EDIT.\n- isEpicFinal is set only because this perpetual Stability & Hardening bucket ranks by order. For a docs-only row the regression surface is the SCHEMA.md doc-contract tests, which piece 2 guards.\n- docs/MCP_SERVER.md belongs to the sibling hunt #24 row task-88ddcac0. Do not touch it.",
+    "keyFiles": [
+      "docs/SCHEMA.md",
+      "packages/moe-daemon/src/types/schema.ts",
+      "/mnt/d/moe-scratch/hunt24/ts-vs-doc.mjs",
+      "/mnt/d/moe-scratch/hunt24/README.md",
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts",
+      "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "800786516043e13f0b8c6a503642ca4916a79011",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T13:42:54.217Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T13:43:44.447Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T13:46:03Z",
+    "at": "2026-11-04T13:48:16.376Z"
+  },
+  "reviewStartedAt": "2026-11-04T13:44:45.711Z",
+  "verification": {
+    "command": "checkRefs chain (lint, ts-vs-doc.mjs, EpicStatus, scope, doc guards, writers)",
+    "exitCode": 0,
+    "outputTail": "LINT-OK\nSCHEMA-PARITY-OK\nEPICSTATUS-OK\nSCOPE-FILES-OK\nSCOPE-HUNKS-OK\nDOC-GUARDS-OK\nWRITERS-OK",
+    "reportedAt": "2026-11-04T13:44:45.711Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/SCHEMA.md"
+  ],
+  "completionSummary": "SCHEMA.md: declared 11 Task keys, TaskComment, EpicStatus ARCHIVED, Team.formerMemberIds, PlanCritiqueResult.category",
+  "commits": [
+    {
+      "sha": "1bdc9c7b905a83ac84a5be0edeb43fd8392fc80b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T13:42:58Z",
+      "paths": [
+        "docs/SCHEMA.md"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T13:45:39.568Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T13:47:42.556Z",
+  "reviewCompletedAt": "2026-11-04T13:47:42.556Z",
+  "reviewSummary": "Reviewed completion 1bdc9c7b (on moe/work-2026-10-24; +28/-1, docs/SCHEMA.md only, well under 400 LOC). Re-ran the checkRefs chain on control with base=1bdc9c7b^ and the diff pinned to the sha (HEAD is later): LINT-OK; ts-vs-doc.mjs SCHEMA-PARITY-OK (Task 77/77, TaskComment 4/4, Epic 11/11, Team 9/9, PlanCritiqueResult 5/5, Worker 16/16, ExecutionAttempt 17/17), no OPTIONALITY line; EPICSTATUS-OK (count 1); name-only diff = docs/SCHEMA.md; strip-diff outside Epic/Task/Task subtypes/Team empty (SCOPE-HUNKS-OK); doc-guard grep over added lines empty (DOC-GUARDS-OK); WRITERS-OK (15 checks). Only removed line is EpicStatus 'COMPLETED' losing its ';' (allowed). Traced each new comment to its writer: completedAt qaApprove.ts:247, cleared reopen.ts:58; workStartedAt startStep.ts:72-74 first step only; hasPendingQuestion true only for board author 'human' (WebSocketServer.ts:974-976), false in addComment.ts:123; comments capped by MAX_COMMENTS_PER_TASK in both writers; needsHumanReview set qaReject.ts:321, cleared by qaApprove, reopen, releaseTask, setTaskStatus:242-243, board move into REVIEW; capReplanAt only qaReject.ts:323, never cleared; critiqueBlockCount +1 per flip, cap MAX_CRITIQUE_BLOCKS_DEFAULT=2, cleared by qaApprove/reopen; priorBlockedReason writers setTaskStatus:203, WebSocketServer:532, archiveTask:25, resourceStore:404/543, nothing clears it; category and formerMemberIds match submitPlanCritique.ts and teamStore.ts. Optionality matches types/schema.ts. No code/types/MCP_SERVER.md/.moe changes. Not run (rail: no in-place npm test): util/*Docs.test.ts doc-contract tests; the guard grep replicates them.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

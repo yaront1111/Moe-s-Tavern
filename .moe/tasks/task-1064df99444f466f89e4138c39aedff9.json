@@ -1,0 +1,240 @@
+{
+  "id": "task-1064df99444f466f89e4138c39aedff9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: archive_epic shelves a BLOCKED task another seat holds, which archive_task refuses to the same caller, and records no actor on TASK_ARCHIVED, so #general reads \"Task moved to ARCHIVED by unknown\" (the archive_task fix 2e3012b9 never reached its sibling)",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Reproduced on moe/work-2026-10-24 22348856; the tool files are unchanged at c89e4c59.\n\nPROBLEM (packages/moe-daemon/src/tools/):\n- Sibling archive_task (archiveTask.ts):\n  - :71-77 refuses a held PLANNING/BLOCKED row (HOLDER_ONLY_FROM, :18) when the caller's workerId is not the holder. A caller with no workerId (a human) is allowed.\n  - :79 passes params.workerId as the TASK_ARCHIVED actor (2e3012b9).\n- Member archive_epic (archiveEpic.ts):\n  - Its schema (:19-26) has no workerId. The proxy injects one anyway, McpAdapter does not enforce additionalProperties, and the handler ignores it.\n  - Its IN_FLIGHT gate (:12) covers only PLANNING/AWAITING_APPROVAL/WORKING, so a BLOCKED task passes with no holder check.\n  - :64 calls `state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED')` with no 4th (actor) argument.\n- Effect:\n  - An architect's or governor's archive_epic shelves a task that a resourceId block keeps parked on worker-x. The same caller's archive_task on that row is refused \"held by worker-x\". archiveUpdates also clears blockedResourceId, so the lease grant can no longer restore the row.\n  - Every TASK_ARCHIVED that archive_epic writes has no workerId, so get_activity_log { workerId } misses it.\n  - #general reads \"Task moved to ARCHIVED by unknown\". For a held row it names the assignee instead, because the notice falls back to assignedWorkerId (mem:gotcha-task-event-actor-inventory).\n\nEVIDENCE: repro at /mnt/d/moe-scratch/hunt-44785c82/A/archiveEpic.holderActor.test.ts, run in a git-archive snapshot (/tmp/hunt-44785c82-A/packages/moe-daemon):\n`LOG_LEVEL=silent npx vitest run src/tools/archiveTask.test.ts src/tools/archiveEpic.holderActor.test.ts`\n- The archive_task baseline passes: it refuses the non-holder with \"held by worker-x\".\n- FAIL \"archive_epic applies the same holder-only refusal to the same caller\": expected { outcome: 'rejected', taskStatus: 'BLOCKED' }, got { outcome: 'resolved', taskStatus: 'ARCHIVED' }.\n- FAIL \"archive_epic records the caller on each TASK_ARCHIVED and names it in #general\": expected { archived: [ 'architect-c' ], lines: [ 'task-done: Task moved to ARCHIVED by architect-c' ] }, got archived [ null ] and \"task-done: Task moved to ARCHIVED by unknown\".\n\nFIX DIRECTION:\n- Add workerId to archive_epic's schema, worded like archive_task's.\n- Extend the all-or-nothing gate before the first write. Refuse NOT_ALLOWED, naming the task and its holder, when any not-yet-archived BLOCKED task in the epic is assigned to a seat other than a caller that has a workerId. That is archive_task's exact condition: reuse HOLDER_ONLY_FROM by exporting it from archiveTask.ts, rather than copying it.\n- Pass params.workerId as the 4th argument of each updateTask(..., 'TASK_ARCHIVED', ...). Never record a placeholder; a caller-less call records no workerId.\n- Touch docs/MCP_SERVER.md's archive_epic section only if it contradicts the new rule. Check lanes first, because that file is often held.\n\nFILES: packages/moe-daemon/src/tools/archiveEpic.ts; packages/moe-daemon/src/tools/archiveTask.ts (export only); new packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts (adopt the repro).",
+  "definitionOfDone": [
+    "In a git-archive snapshot outside the shared checkout, `npx vitest run src/tools/archiveEpic.holderActor.test.ts` (the hunt repro, adopted) passes 3/3. archive_epic refuses an epic holding a BLOCKED task assigned to another seat, and no task in that epic changes status. Each TASK_ARCHIVED carries the caller's workerId, and #general reads \"Task moved to ARCHIVED by <caller>\".",
+    "A test pins the allowed paths. archive_epic with no workerId (a human) still archives that epic, and so does the holder itself. A caller-less call records no workerId on TASK_ARCHIVED.",
+    "In that snapshot, `npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts` stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED). Read mem:gotcha-task-event-actor-inventory (actor rules and the actor-map test pattern) and mem:gotcha-blocked-archive-lifecycle first. Write tracked files only with the Edit/Write tools (project rail; never cp/heredoc into the tree).\n(a) Adopt the hunt repro /mnt/d/moe-scratch/hunt-44785c82/A/archiveEpic.holderActor.test.ts as packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts (Read it, then Write it). Keep EXACTLY its 3 `it` blocks: DoD 1 pins that file at 3/3, so the allowed paths go to archiveEpic.test.ts in (b). The `as never` cast on createTask is unnecessary (Task has the block fields); drop it or keep it. Harden test 2 ('archive_epic applies the same holder-only refusal to the same caller') so it proves atomicity and the refusal shape:\n - beforeEach: add a resting sibling `h.createTask({ id: 'task-rest', epicId: 'epic-held', status: 'DONE' })`.\n - In test 2, before the call, move task-held to the END of h.state.tasks: `const held = h.state.tasks.get('task-held')!; h.state.tasks.delete('task-held'); h.state.tasks.set('task-held', held);`. Load order is readdir order (state/persistence.ts loadEntities), so task names cannot fix it; this is the precedent at src/state/attemptHandback.test.ts:846-851. A holder check raised inside the write loop would then have archived task-rest already.\n - Capture the rejection's codeName (`(e as MoeError).codeName`, MoeError from '../util/errors.js') and assert outcome 'rejected', codeName 'NOT_ALLOWED', and that the message contains both 'task-held' and 'worker-x'.\n - After the refusal assert: task-held is still BLOCKED with assignedWorkerId 'worker-x' and blockedResourceId 'bench-box' (archiveUpdates never ran on it); task-rest is still DONE; epic-held is still 'ACTIVE'; and, after `await flushActivityLog(h.state)`, getActivityLog(200) holds no TASK_ARCHIVED event for task-held or task-rest.\n Tests 1 and 3 stay as filed. Test 3 already pins archived ['architect-c'] and the exact line 'task-done: Task moved to ARCHIVED by architect-c'.\n(b) In packages/moe-daemon/src/tools/archiveEpic.test.ts add ONE `it` that pins the allowed paths (DoD 2), in the actor-map style of taskMoveActor.test.ts. Fixture (create, then `await h.state.load()`): three epics, each with one BLOCKED row (blockedReason set, blockedFromStatus 'WORKING'):\n - epic-hu / task-hu, assignedWorkerId 'worker-x', blockedResourceId 'bench-box', plus `h.createWorker({ id: 'worker-x', epicId: 'epic-hu', currentTaskId: 'task-hu', status: 'BLOCKED' })`. Archived by a caller-less call `{ epicId: 'epic-hu' }` (a human).\n - epic-ho / task-ho, assignedWorkerId 'worker-y', with a matching worker record. Archived by its holder `{ epicId: 'epic-ho', workerId: 'worker-y' }`.\n - epic-un / task-un, unassigned. Archived by `{ epicId: 'epic-un', workerId: 'architect-c' }`: the check fires only on a HELD row, archive_task's exact condition.\n Assert each call resolves with epicStatus 'ARCHIVED' and archivedTaskCount 1, and each task is ARCHIVED. After `await flushActivityLog(h.state)` (import from '../state/activityLog.js'), the TASK_ARCHIVED actor map built from h.state.getActivityLog(200) (`e.workerId ?? null`, keyed by taskId, filtered to these three tasks) must equal `{ 'task-hu': null, 'task-ho': 'worker-y', 'task-un': 'architect-c' }`. The null pins that a caller-less call records NO workerId, never a placeholder. The sorted #general 'Task moved to' lines for these three tasks must equal ['task-ho: Task moved to ARCHIVED by worker-y', 'task-hu: Task moved to ARCHIVED by unknown', 'task-un: Task moved to ARCHIVED by architect-c']. Read the general channel jsonl exactly as the repro's test 3 does. 'by unknown' is the notice's own fallback, because updateTask clears the assignee in the same write (state/taskStore.ts:545-549 and :659). Reading #general right after the handler resolves is deterministic (per-channel FIFO append).\nConfirm RED by running the final step's gate command once now. It must stop at the holderActor stage with 'Tests 2 failed | 1 passed (3)': test 2 resolves instead of rejecting, and test 3 records [null] and 'by unknown'. That baseline was measured at c99801aa.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts"
+      ],
+      "note": "Adopted the hunt repro as archiveEpic.holderActor.test.ts (3 its; test 2 hardened: resting DONE sibling task-rest, held row moved last in state.tasks, NOT_ALLOWED codeName + message names task-held/worker-x, nothing changed, no TASK_ARCHIVED event). Added one allowed-paths it to archiveEpic.test.ts (caller-less, holder, unassigned; actor map {hu:null, ho:worker-y, un:architect-c}; #general lines). RED confirmed in a git-archive snapshot: tsc clean (package + tt.json); holderActor 2 failed | 1 passed (3), as predicted.",
+      "startedAt": "2026-11-03T18:32:02.860Z",
+      "completedAt": "2026-11-03T18:32:58.466Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (GREEN) in packages/moe-daemon/src/tools/archiveTask.ts and packages/moe-daemon/src/tools/archiveEpic.ts.\n- archiveTask.ts: export only. Line 18 becomes `export const HOLDER_ONLY_FROM: TaskStatus[] = ['PLANNING', 'BLOCKED'];`. Nothing else in that file changes: its handler, wording and actor stay exactly as 2e3012b9 left them.\n- archiveEpic.ts:\n 1. Import `{ archiveUpdates, HOLDER_ONLY_FROM }` from './archiveTask.js'. Never copy the status list.\n 2. inputSchema: add `workerId: { type: 'string', description: 'Caller worker ID (auto-injected by proxy); recorded as the actor of each TASK_ARCHIVED, and a BLOCKED row held by another worker may only be archived by its holder' }`, worded like archive_task's. Keep `required: ['epicId']` and `additionalProperties: false`. The params type becomes `{ epicId?: string; workerId?: string }`.\n 3. Holder check, with explicit error handling. Right after the existing IN_FLIGHT refusal (:42-50), and BEFORE the assertNoFinalizingAttempt loop (:55-57) and the first write, compute `const held = tasksInEpic.filter((t) => HOLDER_ONLY_FROM.includes(t.status) && t.assignedWorkerId && params.workerId && params.workerId !== t.assignedWorkerId);`. That is archive_task's exact condition (archiveTask.ts:71-72). A BLOCKED row is never ARCHIVED, so already-archived rows never match. If held is non-empty, throw `notAllowed('archive epic', ...)` (NOT_ALLOWED, -32003). Its reason names the epic and every held row with its holder, e.g. `Epic \"${params.epicId}\" has ${held.length} BLOCKED task(s) held by another worker (${held.map((t) => `${t.id} held by ${t.assignedWorkerId}`).join(', ')}). Only each holder, or a caller with no workerId (a human), may archive them; or move them first via moe.set_task_status.` Nothing is written before the throw, so the epic and every task stay unchanged: all-or-nothing, like the IN_FLIGHT and finalizing gates. PLANNING stays refused by IN_FLIGHT for every caller; do not relax it. HOLDER_ONLY_FROM's PLANNING entry is unreachable here.\n 4. Actor: line 64 becomes `await state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED', params.workerId);`. Pass the bare params.workerId, never a placeholder ('unknown', 'human', 'agent' or the assignee). A caller-less call passes undefined and records no workerId (mem:gotcha-task-event-actor-inventory). An explicit '' passes through as it does in archive_task; normalizing it is out of scope. updateEpic stays as is.\n 5. Tool description string: add the new refusal, e.g. '... Refuses if any task is in-flight (PLANNING/AWAITING_APPROVAL/WORKING), so release or move those first, or, for a caller with a workerId, if a BLOCKED task is held by another worker (archive_task's holder-only rule). Idempotent.'\nKeep the existing comments accurate. Update the IN_FLIGHT doc comment only if it now misleads.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveTask.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts"
+      ],
+      "note": "archiveTask.ts: export on HOLDER_ONLY_FROM only. archiveEpic.ts: optional workerId in schema/params; holder-only gate (archive_task's exact condition, shared HOLDER_ONLY_FROM) before the finalizing loop and any write, NOT_ALLOWED naming each held task and holder; bare params.workerId as the 4th updateTask arg; description updated. Snapshot gate GREEN: tsc clean, holderActor 3/3, archiveEpic+archiveTask+taskMoveActor 15/15, attemptHandback 41/41.",
+      "startedAt": "2026-11-03T18:33:00.263Z",
+      "completedAt": "2026-11-03T18:33:37.444Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCS: docs/MCP_SERVER.md, the `### moe.archive_epic` section only (about lines 1784-1802 at c99801aa). Its refusal list and its Parameters block `{ epicId: string }` would contradict the new rule. At planning, no open task declared this file. Re-check lanes right before editing (the board's open rows, or `git log -3 -- docs/MCP_SERVER.md`), and touch only this section's hunk with the Edit tool.\n - After the in-flight / ATTEMPT_FINALIZING sentence, add: 'A caller whose `workerId` names another worker is also refused `-32003` / `NOT_ALLOWED`, before any write, when a `BLOCKED` task of the epic is held by that other worker. This is the same holder-only rule as `moe.archive_task`; the holder itself, or a caller with no `workerId` (a human), may archive it. Each `TASK_ARCHIVED` records the caller's `workerId` as its actor.'\n - Parameters: a typescript fence holding `{ epicId: string, workerId?: string }`, with the comment 'Caller (auto-injected by moe-proxy); a BLOCKED task held by another worker refuses the archive'. Mirror archive_task's Parameters block, which puts the comment inside the fence.\n No other section changes; the archive_task section already states the rule.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md: ### moe.archive_epic section only. Added the holder-only refusal sentence (NOT_ALLOWED before any write, same rule as archive_task, holder or caller-less may archive, TASK_ARCHIVED records caller) and the optional workerId in the Parameters block. Lanes checked: only task-68a47060 (create_epic section, a different hunk) also touches the file; it merges cleanly in worktree mode.",
+      "startedAt": "2026-11-03T18:33:39.475Z",
+      "completedAt": "2026-11-03T18:34:03.434Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY (the one gate; its fresh output is the complete_task evidence). From the task worktree root run executionContract checkRefs[0] exactly as written. It builds a git-archive snapshot outside the shared checkout and overlays the 5 owned files. Rail: never run npm ci/install/test in /mnt/d/projexts/moes. In the snapshot it runs npm ci, typechecks the package (`npx tsc --noEmit`) and both archive_epic test files (tt.json, because the package tsconfig excludes tests), then runs three vitest stages:\n 1. `npx vitest run src/tools/archiveEpic.holderActor.test.ts`, which must read Tests 3 passed (3) (DoD 1).\n 2. DoD 3's exact command, `npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts`, which also carries the new allowed-path test (DoD 2).\n 3. `npx vitest run src/state/attemptHandback.test.ts`, which also drives archive_epic's finalizing refusal and its map-order atomicity.\n Baseline at c99801aa: stages 2 and 3 green (4 files, 55 tests); stage 1 RED, 2 failed | 1 passed (3).\nError handling for a red run:\n - npm ci fails: re-run once (a cache or network flake), and report its stderr if it repeats.\n - tsc error: a type slip in a touched file. Fix it; never loosen tsconfig or add casts to silence it.\n - Test failure: fix the code or the fixture setup. Never weaken an assertion.\nOnly if mktemp's default directory is unwritable, prefix the OUTER command with TMPDIR=<a scratch dir outside the repo>. Never pass TMPDIR inside `env -i` (mem:convention-daemon-full-suite-gate-checkref). Submit the command, exitCode and outputTail via moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification gate (checkRefs[0] verbatim, git-archive snapshot outside the checkout) EXIT=0: tsc --noEmit and tt.json clean; holderActor Tests 3 passed (3); archiveEpic+archiveTask+taskMoveActor 15 passed (15); attemptHandback 41 passed (41).",
+      "startedAt": "2026-11-03T18:34:05.281Z",
+      "completedAt": "2026-11-03T18:34:29.207Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW (load the adversarial-self-review skill) of this task's own diff only:\n - Is every gate before the first write? The holder filter must sit before the finalizing loop and every updateTask. Test 2's map reorder proves it.\n - Is the condition identical to archiveTask.ts:71-72? Each mutant below must turn a test RED. Reason it through, or try it in a throwaway snapshot copy, never in the worktree.\n   - Drop `params.workerId &&`: the human is refused, so the allowed-path test fails.\n   - Drop `!== t.assignedWorkerId`: the holder is refused.\n   - Drop `t.assignedWorkerId &&`: the unassigned row is refused.\n   - Drop the 4th updateTask argument: the actor maps fail.\n   - Pass `params.workerId ?? 'unknown'`: the task-hu null pin fails.\n   - Move the check into the write loop: task-rest is archived.\n - Concurrency: tool dispatch is serialized under the global state mutex, so nothing interleaves between the check and the writes. A repeat archive_epic on the same epic is idempotent.\n - Null or empty input: a missing epicId still throws missingRequired, an unknown epic throws notFound, and an empty epic archives with archivedTaskCount 0.\n - The archiveTask.ts diff is the single `export` keyword. `grep -n HOLDER_ONLY_FROM packages/moe-daemon/src/tools/*.ts` shows the literal list only in archiveTask.ts.\n - No added line contains a project.json globalRails.forbiddenPatterns string. No .moe/ edits. Every tracked write went through Edit/Write.\nThen add 'archive_epic: task-1064df99 (archiveEpic.holderActor.test.ts, plus the allowed paths in archiveEpic.test.ts)' to the Fixed list of mem:gotcha-task-event-actor-inventory with Serena edit_memory.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts"
+      ],
+      "note": "Adversarial self-review done. Mutants M1-M6 (drop params.workerId&&, drop !== holder compare, drop t.assignedWorkerId&&, drop 4th updateTask arg, workerId ?? 'unknown', check inside write loop) each turned 1-2 tests RED in a throwaway snapshot; file restored. One quality-bar issue found: the handler grew to ~68 lines (>50), so the holder check was extracted into assertNoRowHeldByOthers in archiveEpic.ts (same condition, still before the finalizing loop and the first write) and the gate was re-run green (EXIT=0). Concurrency: tool dispatch is serialized under the global state mutex; a repeat archive_epic is idempotent. Inputs: missing epicId still missingRequired, unknown epic notFound, empty epic archives 0 (existing tests). archiveTask.ts diff is the single export keyword; the literal status list exists only in archiveTask.ts. No forbidden patterns, no .moe/ edits. Memory: archive_epic added to the Fixed list of gotcha-task-event-actor-inventory.",
+      "startedAt": "2026-11-03T18:35:45.570Z",
+      "completedAt": "2026-11-03T18:35:49.204Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 398.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:19:28.473Z",
+  "updatedAt": "2026-11-04T19:20:44.441Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:20:06.822Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T18:39:43.947Z",
+    "wallClockMs": 1177125
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:30:27.252Z",
+  "executionContract": {
+    "intendedBehavior": "moe.archive_epic applies moe.archive_task's holder-only rule and actor attribution. When a caller whose workerId names another worker targets an epic that holds a BLOCKED task assigned to that other worker, the call is refused NOT_ALLOWED (-32003) before any write. The message names each held task and its holder, and the epic and every task stay unchanged. Every TASK_ARCHIVED it writes carries the caller's bare workerId as the event actor, so get_activity_log { workerId } finds it and #general reads 'Task moved to ARCHIVED by <caller>'. A caller with no workerId (a human) and the holder itself still archive the epic, and a caller-less call records no workerId.",
+    "acceptanceCriteria": [
+      "In a git-archive snapshot, npx vitest run src/tools/archiveEpic.holderActor.test.ts passes 3/3. archive_epic refuses an epic holding a BLOCKED task assigned to another seat, and no task in that epic, nor the epic, changes status. Each TASK_ARCHIVED carries the caller's workerId, and #general reads 'Task moved to ARCHIVED by <caller>'.",
+      "A test in archiveEpic.test.ts pins the allowed paths. A caller-less call (a human) and the holder still archive such an epic, and so does any caller when the BLOCKED row is unassigned. A caller-less call records no workerId on TASK_ARCHIVED.",
+      "In that snapshot, npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts stays green, and so does src/state/attemptHandback.test.ts."
+    ],
+    "invariants": [
+      "All-or-nothing: no task or epic write happens before every gate (IN_FLIGHT, holder, finalizing) has passed.",
+      "The TASK_ARCHIVED actor is the bare params.workerId; never 'unknown', 'agent', 'human' or the assignee.",
+      "archive_epic and archive_task share one holder-only status list (HOLDER_ONLY_FROM) and one archiveUpdates."
+    ],
+    "compatibility": [
+      "workerId is optional and additive: required stays ['epicId'] and additionalProperties stays false. The result shape {success, epicId, epicStatus, archivedTaskCount, totalTasks} is unchanged.",
+      "A caller with no workerId (a human) keeps today's behaviour. The board has no archive_epic path; it uses ARCHIVE_DONE_TASKS.",
+      "No .moe/ state shape change. archiveUpdates and the BLOCKED clear-on-exit fields are unchanged.",
+      "PLANNING/AWAITING_APPROVAL/WORKING stay refused by the IN_FLIGHT gate for every caller. The ATTEMPT_FINALIZING gate is unchanged."
+    ],
+    "approvedScope": [
+      "archiveEpicTool (packages/moe-daemon/src/tools/archiveEpic.ts): an optional workerId in inputSchema, the holder-only check before the first write, updateTask's 4th (actor) argument, and the description string",
+      "archiveTask.ts: `export` on HOLDER_ONLY_FROM only",
+      "docs/MCP_SERVER.md: the ### moe.archive_epic section only",
+      "Tests: the new src/tools/archiveEpic.holderActor.test.ts (exactly 3 its) and one new it in src/tools/archiveEpic.test.ts"
+    ],
+    "reuse": [
+      "HOLDER_ONLY_FROM and archiveUpdates from archiveTask.ts; notAllowed from util/errors.ts; StateManager.updateTask's 4th actorWorkerId argument, which feeds the taskStore.ts:659 notice",
+      "Test patterns: the actor map and the #general jsonl read from taskMoveActor.test.ts; the map-order reorder from state/attemptHandback.test.ts:846-851; ToolTestHarness createEpic/createTask/createWorker"
+    ],
+    "sourceAssumptions": [
+      "archiveTask.ts:18 `const HOLDER_ONLY_FROM: TaskStatus[] = ['PLANNING', 'BLOCKED']` (not exported); :71-72 the holder condition; :79 passes params.workerId as the actor",
+      "archiveEpic.ts:12 IN_FLIGHT; :19-26 schema with only epicId; :55-57 the finalizing loop; :64 updateTask with no 4th argument",
+      "state/taskStore.ts:545-549 clears assignedWorkerId on any status change that does not set it; :659 the notice actor is actorWorkerId || updated.assignedWorkerId || 'unknown'",
+      "moe-proxy injectWorkerId (packages/moe-proxy/src/utils.ts) adds MOE_WORKER_ID to every tools/call that omits workerId; McpAdapter.ts:304 hands params.arguments to the handler",
+      "state/persistence.ts loadEntities fills state.tasks in readdir order"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/{archiveEpic.ts,archiveTask.ts,archiveEpic.holderActor.test.ts,archiveEpic.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/archiveEpic*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 LOG_LEVEL=silent sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/archiveEpic.holderActor.test.ts && npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts && npx vitest run src/state/attemptHandback.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Export a shared predicate such as heldByAnother(task, caller) and call it from both tools. Rejected: the row limits archiveTask.ts to an export, and the one-line condition is pinned by tests on both sides. 2) Check the holder per task inside the write loop. Rejected: it half-archives an epic whose held row iterates after a resting one. 3) Let a holder archive its own PLANNING row through archive_epic (relaxing IN_FLIGHT). Out of scope; PLANNING stays refused. 4) Add the allowed-path cases to the holderActor file. Rejected: DoD 1 pins that file at 3/3, and archiveEpic.test.ts is already in DoD 3's run. 5) Skip the docs. Rejected: the section's Parameters block and refusal list would contradict the schema and the new refusal, and the lane is free.",
+    "codebaseInsights": "updateTask(taskId, updates, event, actorWorkerId) is the only actor channel. It feeds the event's top-level workerId and the #general notice. The proxy injects workerId into every tools/call, so after this fix an agent's archive_epic always carries its seat id, while a human (no workerId) keeps today's behaviour. updateTask clears the assignee on every status change, so a caller-less archive of a held row reads 'by unknown'; that is expected and pinned. archive_epic already has two all-or-nothing gates (IN_FLIGHT, finalizing); the holder gate is a third in the same pre-write block. The board never calls archive_epic. Hunt repro baseline at c99801aa, in a git-archive snapshot: 2 failed | 1 passed (3). archiveEpic, archiveTask, taskMoveActor and attemptHandback were 55/55 green, and the package tsc and test tsc were clean.",
+    "risks": "- state.tasks iterates in readdir order. Use the delete/set reorder for the atomicity assertion; never rely on task names. - Call flushActivityLog before getActivityLog. - Never run npm in the shared checkout; the gate builds its own snapshot. - docs/MCP_SERVER.md is often held: re-check lanes and touch only the archive_epic hunk. - Keep archiveTask.ts to the export, since QA diffs it. - The epic rail forbids breaking MCP contracts. The schema change is additive, and the new refusal is the bug fix the row asks for, using the NOT_ALLOWED code the tool already raises. - Whatever updateTask does to a held seat's worker record on archive is existing archive_task behaviour; do not change it here.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/archiveEpic.ts",
+      "packages/moe-daemon/src/tools/archiveTask.ts",
+      "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+      "packages/moe-daemon/src/tools/taskMoveActor.test.ts",
+      "packages/moe-daemon/src/state/attemptHandback.test.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "/mnt/d/moe-scratch/hunt-44785c82/A/archiveEpic.holderActor.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c99801aaf8f68b714cf86b459dbf21b53c05627b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:30:27.287Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:32:02.860Z",
+  "reviewStartedAt": "2026-11-03T18:36:09.656Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/{archiveEpic.ts,archiveTask.ts,archiveEpic.holderActor.test.ts,archiveEpic.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/archiveEpic*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 LOG_LEVEL=silent sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/archiveEpic.holderActor.test.ts && npx vitest run src/tools/archiveEpic.test.ts src/tools/archiveTask.test.ts src/tools/taskMoveActor.test.ts && npx vitest run src/state/attemptHandback.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/tools/archiveEpic.holderActor.test.ts (3 tests)\n Test Files  1 passed (1)\n      Tests  3 passed (3)\n ✓ src/tools/taskMoveActor.test.ts (1 test)\n ✓ src/tools/archiveTask.test.ts (8 tests)\n ✓ src/tools/archiveEpic.test.ts (6 tests)\n Test Files  3 passed (3)\n      Tests  15 passed (15)\n ✓ src/state/attemptHandback.test.ts (41 tests)\n Test Files  1 passed (1)\n      Tests  41 passed (41)\nEXIT=0",
+    "reportedAt": "2026-11-03T18:36:09.656Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts",
+    "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+    "packages/moe-daemon/src/tools/archiveTask.ts",
+    "packages/moe-daemon/src/tools/archiveEpic.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "archive_epic now applies archive_task's holder-only rule and actor attribution. archiveTask.ts: `export` on HOLDER_ONLY_FROM only. archiveEpic.ts: optional workerId in the schema; a helper assertNoRowHeldByOthers runs after the IN_FLIGHT gate and before the finalizing loop and the first write, refusing NOT_ALLOWED (-32003) with archive_task's exact condition and naming each held row and its holder, so the epic and every task stay unchanged; the bare params.workerId is passed as updateTask's 4th (actor) argument, so a caller-less call records no workerId. docs/MCP_SERVER.md: archive_epic section only (refusal sentence + workerId? param). Tests: new archiveEpic.holderActor.test.ts (3 its; test 2 hardened with a resting DONE sibling, the held row moved last in state.tasks, NOT_ALLOWED codeName + message naming task-held/worker-x, and nothing-changed/no-TASK_ARCHIVED assertions) and one allowed-paths it in archiveEpic.test.ts (caller-less, holder, unassigned row; actor map {hu:null, ho:worker-y, un:architect-c}; #general lines 'by unknown'/'by worker-y'/'by architect-c'). Gate in a git-archive snapshot: tsc + tt.json clean; holderActor 3/3 (RED baseline was 2 failed | 1 passed); archiveEpic+archiveTask+taskMoveActor 15/15; attemptHandback 41/41. Mutants M1-M6 each killed by 1-2 tests.",
+  "commits": [
+    {
+      "sha": "b9119a93a1d5044161e92ae40aff0170706d0804",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T18:30:34Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/archiveTask.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T18:37:23.342Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:38:10Z",
+    "at": "2026-11-03T18:40:09.861Z"
+  },
+  "completedAt": "2026-11-03T18:39:43.947Z",
+  "reviewCompletedAt": "2026-11-03T18:39:43.947Z",
+  "reviewSummary": "APPROVE. Reviewed completion b9119a93 (on moe/work-2026-10-24, in HEAD cc84c88a; 5 files, +175/-8 = 167 net LOC, under cap; code files unchanged since). Diff: archiveTask.ts is only `export` on HOLDER_ONLY_FROM. archiveEpic.ts adds optional workerId to the schema (required ['epicId'], additionalProperties false) and assertNoRowHeldByOthers, run after the IN_FLIGHT gate and before the finalizing loop and first write. Its condition is identical to archive_task's (archiveTask.ts:71-72); it throws NOT_ALLOWED naming each held task and holder. The bare params.workerId is updateTask's 4th arg, so a caller-less call records none. docs: archive_epic section only. Re-ran the worker's verification command verbatim in a git-archive snapshot outside the checkout (npm ci, tsc, tt.json typecheck): EXIT=0. holderActor 3/3 (DoD1); archiveEpic 6 + archiveTask 8 + taskMoveActor 1 = 15/15 (DoD3); attemptHandback 41/41. DoD2: the new allowed-paths it covers a caller-less call (actor null, #general 'by unknown'), the holder (worker-y) and an unassigned row with another caller (architect-c), with the actor map asserted exactly. Test 2 pins atomicity (held row moved last, DONE sibling, NOT_ALLOWED codeName, message names task-held/worker-x, nothing changed, no TASK_ARCHIVED). Mutants in the snapshot copy (restored, 9/9 green): dropping `callerId &&` and `?? 'unknown'` are each killed by the allowed-paths test; dropping the 4th arg by the holderActor actor test and the allowed-paths test. Not run: full daemon suite (plan scopes the gate to these files). No forbidden patterns, no .moe/ edits, no weakened tests. Complexity: nothing to cut.",
+  "requiredCheckAtDone": null
+}

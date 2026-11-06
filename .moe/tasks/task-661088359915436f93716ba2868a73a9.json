@@ -1,0 +1,268 @@
+{
+  "id": "task-661088359915436f93716ba2868a73a9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_wait's backlog drain returns the whole tail of every unread channel, so one message routed to a seat in an unwatched channel delivers every other seat's messages there too, and the channels filter (\"routed mentions still arrive from any channel\") is not honored",
+  "description": "Found by the governor at 18:20Z on 2026-11-03, live on its own seat. Code read at moe/work-2026-10-24 c99801aa.\n\nPROBLEM:\n- The live wake path filters correctly. ChatWaiter.isRelevant (packages/moe-daemon/src/tools/chatWait.ts:169-183) admits a message from a watched channel, or one whose routingTargets include the caller (:179). With no filter, it admits routed messages and humans only (:183).\n- The backlog drain does not. backlogChannelIds (packages/moe-daemon/src/util/chatBacklog.ts:125) scans the filter's channels PLUS every channel with an unread count, on the assumption that \"Unread channels are already mention-routed (including groups)\" (:133). With no filter it scans the unread channels.\n- collectChatBacklog (:153) then returns EVERY message after the caller's cursor in each scanned channel (:196 pushes everything not sent by the caller). The doc comment at :147 says so: \"No mention/human relevance filter is applied\".\n- So one routed message in an unwatched channel marks it unread, and the next drain (entry drain or wake drain) delivers that channel's whole tail, including threads addressed to other seats.\n\nLIVE EVIDENCE (governor-e6b40560, chat_wait channels [\"#governors\",\"#general\"]):\n- Trigger: mention-less system lines in #workers, the file-collision notices msg-f9df6a37 (17:26:17Z) and msg-3f3261f9 (18:14:48Z). These route to every busy seat (packages/moe-daemon/src/state/chatStore.ts:228, unread at :247), the governor included.\n- The 18:14Z wake then returned 7 #workers messages. 6 were addressed to other seats: msg-95448c0a and msg-4212ed1d mention worker-26483323/qa-7328a40d and worker-d6c1cb7a/qa-7328a40d; msg-ad0a356c and msg-eaeef84f are QA replies to those workers; msg-e841d20d and msg-3d887c9d are a worker's acks with no mentions.\n- The 17:26Z wake likewise returned three 16:25Z worker acks (msg-2b4bea99, msg-23f5966d, msg-d6485b61) next to the routed msg-f9df6a37.\n- The tool contract (chatWait.ts:371) promises \"Optional ambient channel filter ... Routed mentions still arrive from any channel\", i.e. only the routed ones.\n\nIMPACT: every seat that gets one routed line in a busy channel such as #workers receives that channel's chatter. Notification-only worker sessions then \"acknowledge\" threads that were never theirs (e.g. msg-2b4bea99), adding to the collision/ack churn the governor measured on 11-02 (56 collision notices, 349 pages and 133 threaded acks in 3h). Related, already DONE: 48edc21b (deregistration presence lines defeating the filter) and 06cf7baf (which added unread channels to the drain).\n\nFIX DIRECTION (the planner decides): make the drain apply the live path's relevance to every channel the caller doesn't watch (and to all channels when there is no filter). Deliver a message there only if it is routed to the caller: its raw mentions name the caller or a group token that resolves to it, a human sent it, or it is a mention-less system line (which routes to busy seats). Skipped messages still advance that channel's cursor and clear its unread, so they are never re-delivered later. Watched channels keep returning everything. Optional, as a separate call: whether mention-less #workers system lines should route to governor seats at all.",
+  "definitionOfDone": [
+    "With a channels filter, chat_wait's backlog drains (entry and wake) deliver from an unwatched channel only messages routed to the caller, the same relevance isRelevant applies to live events. With no filter, the same holds for every scanned channel. Skipped messages advance that channel's cursor and are not delivered by a later call.",
+    "A vitest reproduces the defect: a caller watching #governors, a #workers message mentioning another seat, then a mention-less system line in #workers. The caller's chat_wait returns the system line but not the other seat's message. It fails on c99801aa (RED evidence in a task comment) and passes with the fix.",
+    "The existing chat_wait and chatBacklog tests stay green, including the routed-mention-outside-watched-channels case (06cf7baf), the registration floor (5902a670) and the sinceId cases (8b0b3edc). The vitest command and its result are in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED), per test-driven-development, all in packages/moe-daemon/src/tools/chatWait.test.ts. Edit with the session's own editing tool (Edit on a Claude seat, a Serena editor on a one-shot seat, apply_patch on a codex exec seat; no shell or subagent writes). Import nothing c99801aa lacks: only chatWaitTool, summarizeChatBurst, MAX_BURST_MESSAGES and PER_CHANNEL_SCAN_LIMIT from ./chatWait.js, and MAX_CHAT_RESPONSE_CHARS from ../util/chatPayload.js. Then the RED run fails on assertions, not on a missing export.\n\nAdd a describe block 'drains deliver only routed lines outside the watched channels', reusing the fixture (WORKER_ID, PEER_ID, post(), wait(), cursorFor()). In each async row, first make the caller busy with state.updateWorker(WORKER_ID, { status: 'GOVERNING' }), as the 'routine presence lines' row at :203 does: a mention-less system line routes only to non-IDLE, non-DEAD seats. The routed line is a mention-less system post in #workers that is NOT a routine presence line, e.g. 'file collision: task-1 and task-2 both touch x.ts'. Build at-mentions the way the file already does (a template literal on the id), never with a group token the caller's team holds.\n\nRows:\n(a) DoD-2 case, entry drain, filter [#governors]. In #workers post a 'human' line addressed to PEER_ID, then the system line, then a mention-less PEER_ID reply. Assert:\n- messages equal exactly [system line id];\n- cursorFor(#workers) is the reply's id (a skipped line after the last delivered one still advances the cursor);\n- getUnreadSummary(WORKER_ID) is null;\n- a second wait with the same filter times out.\n(b) The same three posts made after that wait has parked (wake path): messages equal [system line id].\n(c) No filter, wait({}). In #workers post a PEER_ID line addressed to an unregistered id, a mention-less PEER_ID ack, a 'human' line addressed to PEER_ID, then the system line. Messages equal [human line id, system line id]: with no filter the live rule admits every human line.\n(d) Paging. Seed the #workers cursor on an anchor with state.updateWorkerCursors, post PER_CHANNEL_SCAN_LIMIT + 10 mention-less PEER_ID lines, then the system line. One wait with filter [#governors] returns [system line id] and leaves the cursor on it.\n(e) Nothing deliverable. No filter, sinceId = an anchor in #workers followed only by two mention-less PEER_ID lines. The result equals { hasMessage: false, timedOut: true }, and cursorFor(#workers) is the second line's id.\n(f) Unit row beside the off-bus row at :342. Call summarizeChatBurst over scanned [r1 in chan-a, rB in chan-b] with maxContentChars 0. rB has a later timestamp and content of MAX_CHAT_RESPONSE_CHARS chars. The scope is { partialChannels: empty, scannedChannels: {chan-a, chan-b}, skipAfter: {r1 -> 's1'}, skipLead: {chan-b -> 'sB0'} }. Expect messages [r1], cursorUpdates { chan-a: 's1', chan-b: 'sB0' }, fullyDrained ['chan-a'] and hasMore true: a skip run moves a cursor, never past a line the budget dropped.\n\nAlso adapt the two existing no-filter rows that assert the whole-tail delivery DoD 1 removes (see the architect comment on this task):\n- ':252 returns every message that arrived' becomes the no-filter wake regression: expect [trigger.id], cursorFor(#general) is trigger.id, and a follow-up wait({}) times out. Rename it to say unrouted chatter is skipped.\n- ':364 ... (wake path)' posts its fillers as 'human' (the post() default, admitted with no filter) and keeps every assertion; update its comment to say why.\n\nThen run the RED check:\nS=$(mktemp -d /tmp/moe-6610-red.XXXXXX) && git archive c99801aa | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/chatWait.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatWait.test.ts --reporter=verbose'\nExactly rows (a)-(f) and the adapted :252 row should fail, and every other row should pass, the adapted :364 included. Before editing source, post a task comment with the failing row names and each one's expected and received ids (DoD 2 RED evidence).\n\nError handling for a red run that fails some other way (a load error, 'no tests', an extra failing row): fix the test file, not the source, and rerun. mem:gotcha-chat-wait-burst-drain, mem:gotcha-daemon-linux-snapshot-gate.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "note": "RED in place. Added describe 'drains deliver only routed lines outside the watched channels' with rows a-e, plus unit row f next to the off-bus row. Adapted :252 (now asserts the trigger only, then a follow-up timeout) and :364 (fillers are now human). The RED run on c99801aa: exactly the 7 intended rows fail on assertions, and 28 pass (35 total). Evidence is in task comment comment-70c9b7cf.",
+      "startedAt": "2026-11-03T19:04:07.259Z",
+      "completedAt": "2026-11-03T19:06:17.565Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add drain relevance and skip cursors to packages/moe-daemon/src/util/chatBacklog.ts. Use the session's own editing tool; Serena symbol editors fit this file. No shell writes.\n\n1) Export chatWaitAdmits(channelSet: Set<string> | null, message: ChatMessage, routedToCaller: boolean): boolean. It is the one relevance rule:\n- with a filter: channelSet.has(message.channel) || routedToCaller;\n- with no filter: routedToCaller || message.sender === 'human'.\n\n2) Add a non-exported routedToCaller(state, workerId). It returns a per-drain predicate over a STORED line; stored lines keep raw mentions, never routingTargets.\n- When message.mentions is non-empty, resolve it with state.mentionRouter.parseMentions(message.content, ids, workers, teams). Build ids, workers and teams once per drain from Array.from(state.workers.values()) and Array.from(state.teams.values()). This is the router's own parser: code spans stripped, group tokens only in the addressing prefix, groups resolved by team role with the id-substring fallback. Never use the raw stored tokens (mem:gotcha-chat-group-token-line-start-and-two-parsers). If the parse names anyone, the line is routed only when it names workerId.\n- If the line names nobody, it is routed only when the sender is 'system' or 'human'. The router broadcasts those to busy seats. An agent line addressed to nobody routes nowhere, and a departed seat's line must not pass as human.\n- Never call MentionRouter.route() here: it changes hop counts and pauses.\n- Comment the known over-deliveries. Each of these counts as routed, and none of them loses a routed line: a line in a paused (loop-guarded) channel, a line sent while the caller was not busy, and a parseMentions:false daemon echo (releaseTask's #workers copy).\n\n3) BurstScope and ChatBurst gain two optional maps:\n- skipAfter: Map<deliverable id, the last skipped id after it and before the channel's next deliverable line>;\n- skipLead: Map<channelId, the last skipped id before the channel's first deliverable line, or its last skipped id when there is none>.\nsummarizeChatBurst sets a delivered scanned line's cursor to skipAfter.get(id) ?? id. It then gives each scanned channel that got no cursor its skipLead entry, and returns both maps on the burst so the entry and wake merge keeps them. A channel's delivered scanned lines are always a prefix: the caps keep the oldest slice, and the sort stays the stable, timestamp-only sort. So no cursor passes a deliverable line the caps dropped. fullyDrained keeps its rule, so a skip-only channel that was read to its end clears its unread.\n\n4) collectChatBacklog (:153-205):\n- Per channel, keep the own-post exclusion and the registration floor. Both stay transparent: they neither deliver nor move a cursor.\n- Every other line is delivered when chatWaitAdmits(channelSet, line, isRouted(line)) holds. Otherwise it is recorded as skipped, for the two maps. Watched channels therefore return everything, as before.\n- Paging: a filtered channel (no filter, or not in channelSet) that returns a full page with nothing deliverable reads on from that page's last id. The cap is a new exported MAX_SKIP_PAGES = 10 pages per channel per drain; the bound matters because each getMessages call re-reads up to 1 MB.\n- A page with something deliverable, a watched channel, or the page cap stops the scan as today. Mark the channel partial when its last page was full.\n- Error handling: the per-channel try/catch stays. A page that throws mid-channel is logged, leaves that channel's pending skipped run unrecorded (its cursor stays put), and never fails the tool.\n\n5) Rewrite the doc comments that state the old behaviour: :144-152 ('No mention/human relevance filter is applied') and the backlogChannelIds note at :131-133.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/chatBacklog.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/chatBacklog.ts"
+      ],
+      "note": "chatBacklog.ts changes:\n- Added the exported chatWaitAdmits and MAX_SKIP_PAGES=10, the private routedToCaller (MentionRouter.parseMentions over the current roster), and the optional skipAfter/skipLead maps via an exported SkipCursors that BurstScope and ChatBurst extend.\n- summarizeChatBurst derives the skip cursors.\n- collectChatBacklog now calls a scanChannel helper: relevance, skip-run paging, own-post and floor lines transparent, a throw records nothing for that channel.\n- Doc comments rewritten.\nExtra beyond the plan text, within the 'summarizeChatBurst cursor derivation' scope: if the caps drop an off-bus line that the scan never read, that channel keeps its plain cursor and ignores skip cursors. Such a line may be one the drain skipped while the live wake admitted it (e.g. an unknown sender), so this keeps the invariant that a cursor never passes the off-bus trigger.\nThe file is now 369 lines, over the 300 soft cap. The plan pins all drain logic to this one file.\nChecks in a HEAD snapshot: tsc --noEmit exit 0; chatWait.test 33/35. The two remaining failures, (a)'s cursor and (e), wait on step 3's wiring.",
+      "startedAt": "2026-11-03T19:06:19.621Z",
+      "completedAt": "2026-11-03T19:09:20.026Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Wire the shared rule and the skip cursors through packages/moe-daemon/src/tools/chatWait.ts, using the session's own editing tool.\n\n(1) isRelevant (:169-184) keeps the #general feed check, its routingTargets source, and its refusal of the caller's own post when a filter is set. It returns chatWaitAdmits(this.ctx.channelSet, message, targets.includes(this.ctx.workerId)). The live path's behaviour does not change.\n\n(2) Pass the skip maps into the merge:\n- wake() (:258-263) passes drained itself as the merge scope;\n- drainOnEntry (:297-300) passes drained ?? { partialChannels: new Set(), scannedChannels: new Set() }.\nThe final burst then keeps skipAfter and skipLead.\n\n(3) drainOnEntry handles a skip-only scan: the drain found nothing to deliver, nothing is buffered, and drained.cursorUpdates is non-empty. In that case it awaits applyChatDelivery(state, workerId, drained) BEFORE this.entryDrainDone = true (:288), then returns if this.finished. The order matters. Events that arrive during that await are only buffered, so no wake can write a cursor at the same time. A buffered event then ships through the existing path with the same skip cursors, which rewrites them idempotently. Error handling: applyChatDelivery already logs its own failures and never throws, so the session still blocks or delivers.\n\nLeave the tool description and the inputSchema text unchanged: its line 'Routed mentions still arrive from any channel' becomes true.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWait.ts",
+        "packages/moe-daemon/src/tools/chatWait.test.ts"
+      ],
+      "note": "chatWait.ts changes:\n- isRelevant: the feed check, the routingTargets source and the own-post refusal under a filter are unchanged; it now returns chatWaitAdmits.\n- wake() passes the drained burst as the merge scope.\n- drainOnEntry passes `drained ?? empty scope`. A skip-only drain (nothing delivered, nothing buffered, cursorUpdates non-empty) awaits applyChatDelivery BEFORE entryDrainDone, then returns if finished.\n- The tool description and inputSchema are unchanged.\nchatWait.test.ts gets one more unit row (g), for the step-2 off-bus guard: a dropped off-bus line keeps the plain cursor.\nChecks in a HEAD snapshot: tsc exit 0. Seven chat files (chatWait, chatBudgets, chatSystemFeed, chatChannelRef, addComment, accountTools, chatRead.cursor): 126/126 passed, 36/36 in chatWait after row g.\nEach mutant was killed by a row:\n- no off-bus guard: g;\n- MAX_SKIP_PAGES=1: d;\n- no skipAfter: a and f;\n- no entry bookkeeping: e;\n- agent line naming nobody counted as routed: 5 rows;\n- 'named anyone' counted as routed: a and b.",
+      "startedAt": "2026-11-03T19:09:20.855Z",
+      "completedAt": "2026-11-03T19:11:41.543Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Edit docs/MCP_SERVER.md with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat, never Serena or a shell write. Touch only the moe.chat_wait Notes bullets (c99801aa :2640-2645; find them by their text in the worktree).\n\n(1) The 'When channels is explicitly provided' bullet: drains still scan routed unread channels, but from a channel outside the filter they deliver only lines routed to the caller, under the same rule as a wake, and skip the rest. Drop 'preserving their surrounding context'.\n(2) The 'When channels is omitted' bullet: replace 'The drain applies no such filter ...' with: the drain applies the same rule. A stored line counts as routed when the router's mention parse (code spans stripped, group tokens resolved against current teams) names the caller, or when it names no seat and was sent by 'system' or 'human'.\n(3) The sinceId bullet: the widened no-filter scan also delivers only routed and human lines.\n(4) The cursor bullet:\n- cursors also advance past skipped lines the drain read, and a skipped line is never delivered later;\n- a cursor never passes a deliverable line a cap left behind;\n- a filtered channel reads past up to MAX_SKIP_PAGES (10) full pages of skipped lines, so a routed line further down is reached in the same call;\n- unread clears for a channel read to its end, even when nothing in it was delivered.\n\nKeep the 'Backfill on entry' and 'Full burst on wake' bullets, but say the burst is watched-channel traffic plus routed lines. Change no other section.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Edited only the moe.chat_wait Notes bullets in docs/MCP_SERVER.md, with Edit:\n- Full burst on wake: the burst is watched-channel traffic plus routed lines.\n- channels-provided bullet: a channel outside the filter delivers only routed lines; dropped 'preserving their surrounding context'.\n- channels-omitted bullet: the drain applies the same rule, with the stored-line routed definition.\n- sinceId bullet: the widened scan also delivers only routed and human lines.\n- cursor bullet: skips advance cursors, never past a deliverable line a cap left behind; MAX_SKIP_PAGES (10); unread clears for a channel read to its end.\nNo test reads these bullets (grep found no doc guard for chat_wait text). Backfill bullet, intro and schema are unchanged.",
+      "startedAt": "2026-11-03T19:11:42.542Z",
+      "completedAt": "2026-11-03T19:12:17.740Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Run the one verification command. It is the complete_task evidence, and QA re-runs it. From the task worktree root:\nS=$(mktemp -d /tmp/moe-6610-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatBacklog.ts packages/moe-daemon/src/tools/chatWait.ts packages/moe-daemon/src/tools/chatWait.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatWait.test.ts src/tools/chatBudgets.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatChannelRef.test.ts src/tools/addComment.test.ts src/tools/accountTools.test.ts && npx vitest run'\n\nThe command snapshots HEAD outside the repo, overlays this task's four files, installs natively, then runs the six chat test files and the whole daemon suite. It takes about 1 min. The global rail forbids npm install and npm test in the shared checkout, hence the snapshot.\n\nExpect exit 0:\n- the chat run shows every row from step 1 passing, including the rows for routed mentions outside watched channels (06cf7baf), the registration floor (5902a670) and sinceId (8b0b3edc);\n- the full run shows 0 failed.\nPut the command, its exit code and both 'Tests' summary lines in the completion evidence (DoD 3).\n\nError handling for a red run:\n- Under host load, src/index.version.test.ts and src/server/bindHosts.test.ts can time out. Rerun those files alone before calling them regressions (mem:gotcha-daemon-linux-snapshot-gate).\n- Any chat failure goes back to steps 2-3.\n\nCross-platform: this is the bash gate for this repo's WSL/Linux seats. A host without that nvm path substitutes any Node 22.22+ bin directory.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the step-5 gate verbatim from the worktree root: exit 0, HEAD 99d39004. The snapshot is /tmp/moe-6610-gate.ZK7Iqx; cmp confirmed all four overlaid files match the worktree bytes.\n- Six chat files: Test Files 6 passed (6), Tests 121 passed (121).\n- Full daemon suite: Test Files 247 passed (247), Tests 7117 passed | 24 skipped (7141), 43s.\nHost load average was 12.5, with no flakes.",
+      "startedAt": "2026-11-03T19:12:18.630Z",
+      "completedAt": "2026-11-03T19:13:35.472Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Do an adversarial self-review of this task's diff (load the adversarial-self-review skill), then post one task comment for QA.\n\nCheck:\n(1) Parity. Take each sender (system, human, agent) against each address (addressed to the caller, addressed elsewhere, a group token, no mention). Compare chatWaitAdmits plus the stored-line predicate against MentionRouter.route plus isRelevant. List any divergence beyond the three documented over-deliveries.\n(2) No cursor ever passes a deliverable line that was not delivered: burst count cap, response budget, partial page, off-bus trigger, failed page read.\n(3) Concurrency: the entry skip bookkeeping against a wake, a session cancelled or timed out mid-await, and two sessions of one worker.\n(4) Inputs: channels: [] (a filter that watches nothing), an explicit sinceId in a filtered channel, an unregistered caller (no cursors, no roster entry), a 10-page skip run, empty pages.\n(5) Cost: the MAX_SKIP_PAGES x 1 MB tail reads per filtered channel happen only on full skip-only pages.\n\nThe comment states which existing rows changed and why:\n- :252 asserted the whole-tail no-filter delivery DoD 1 removes, so it now asserts the opposite.\n- :364 changed only its fillers' sender and keeps its partial-scan cursor intent.\n- The three protections DoD 3 names are untouched.\nAlso list any divergence the review found. Fix any defect it finds in steps 2-4's files, and re-run step 5's command afterwards.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "The adversarial self-review covered parity, cursors, concurrency, inputs and cost, and found no defect, so the step-4 bytes are unchanged and step 5's gate still holds for them. The QA comment is comment-35c8c490. It lists the adapted rows (:252, :364), the extra row (g) and the divergences beyond the documented three: roster/team drift, and an unknown sender, which cannot occur at send time.",
+      "startedAt": "2026-11-03T19:13:36.322Z",
+      "completedAt": "2026-11-03T19:15:08.322Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 402.7,
+  "comments": [
+    {
+      "id": "comment-cbf7b2c4a54a4f4c82615e8ae018b6ff",
+      "author": "architect-74d9e1c7",
+      "content": "Architect decision on DoD 1 vs DoD 3, recorded before the plan:\n\nDoD 1 requires the no-filter drain to apply the live relevance rule. Two existing no-filter rows in packages/moe-daemon/src/tools/chatWait.test.ts assert the opposite, whole-tail delivery:\n- 'returns every message that arrived, not just the one that woke the waiter' (:252). Its unrouted worker-peer chatter is exactly what DoD 1 now skips.\n- 'does not advance a partially scanned channel past what the scan read (wake path)' (:364). Its unrouted worker-peer fillers would now be skipped.\n\nThe plan adapts these two rows rather than keeping them green as written:\n- :252 becomes the no-filter wake regression: it returns the trigger only, the cursor lands on the trigger, and a follow-up wait times out.\n- :364 posts its fillers as 'human', which the no-filter rule admits. Every assertion stays, so it still pins the partial-scan cursor.\n\nThe protections DoD 3 names keep their rows unchanged: routed mentions outside watched channels (06cf7baf), the registration floor (5902a670) and sinceId (8b0b3edc).\n\nPrototype check in a scratch snapshot of c99801aa:\n- With the fix, the full daemon suite passes: 244 files, 7096 passed, 24 skipped.\n- The planned new rows and the adapted :252 fail on the c99801aa source. Every other row passes.\n\nTwo parts of the design were added because without them the fix would cause regressions:\n- A filtered channel reads past full pages of skipped lines, up to 10 pages per drain.\n- A skip-only entry drain writes its cursor and unread bookkeeping before it blocks.\nWithout these, a routed line behind 50 skipped lines in an unwatched channel would stall until a timeout.",
+      "timestamp": "2026-11-03T18:58:39.642Z"
+    },
+    {
+      "id": "comment-70c9b7cf50194e5ebff5775da98fbe44",
+      "author": "worker-8cf0816c",
+      "content": "RED evidence (DoD 2), step 1. Ran packages/moe-daemon/src/tools/chatWait.test.ts from this worktree against a `git archive c99801aa` snapshot, with only the test file overlaid (npm ci, node v24.21.0, env -i). Result: Tests 7 failed | 28 passed (35), exit 1. Every failure is an assertion failure; there were no load errors. The 28 passing rows include the adapted :364 wake-path row (now with human fillers) and the protections DoD 3 names (06cf7baf routed-mention rows, the 5902a670 registration floor rows, the 8b0b3edc sinceId rows).\n\nFailing rows, with expected and received values:\n(a) 'entry drain returns only the routed system line from an unwatched channel': expected [system], received 3 ids [human→PEER line, system, PEER reply].\n(b) 'wake drain returns only the routed system line from an unwatched channel': expected [system], received 2 ids [human→PEER line, system].\n(c) 'with no filter delivers routed and human lines, never another seat's unrouted line': expected [human, system], received 4 ids [PEER→ghost line, PEER ack, human, system].\n(d) 'reads past more than one page of skipped lines to a routed line in the same call': expected [system], received the first 50 PEER chatter lines.\n(e) 'a skip-only entry drain blocks with the cursor on its last skipped line': expected { hasMessage: false, timedOut: true }, received hasMessage: true with ['peer chatter one', 'peer chatter two'].\n(f) 'moves a cursor over skipped lines but never past a line the response budget dropped' (summarizeChatBurst unit): expected cursorUpdates { chan-a: 's1', chan-b: 'sB0' }, received { chan-a: 'r1' }.\nAdapted :252, now 'skips unrouted chatter on a no-filter wake and delivers only the routed trigger': expected [trigger], received 3 ids [quiet1, quiet2, trigger].",
+      "timestamp": "2026-11-03T19:06:13.774Z"
+    },
+    {
+      "id": "comment-35c8c49022474e9ab9e763c5b786cdf9",
+      "author": "worker-8cf0816c",
+      "content": "Adversarial self-review (step 6), for QA. The diff covers chatBacklog.ts +168/-40, chatWait.ts +25/-21, chatWait.test.ts +132/-7 and docs/MCP_SERVER.md +5/-5. It found no defect, so no fix and no gate re-run were needed. The step-5 gate passed on the final bytes: exit 0; chat files 121/121; full suite 247 files, 7117 passed, 24 skipped.\n\nChanged existing rows:\n- :252 asserted the no-filter whole-tail delivery that DoD 1 removes. It now asserts the reverse: only [trigger] is delivered, the #general cursor lands on the trigger, and a follow-up wait({}) times out. It is renamed 'skips unrouted chatter on a no-filter wake and delivers only the routed trigger'.\n- :364 (wake path, partial scan) changed only its fillers' sender, to 'human' (the post() default, which the no-filter rule admits). Every assertion is unchanged, so it still pins the partial-scan cursor.\n- The protections DoD 3 names are untouched and pass: routed mentions outside watched channels (06cf7baf, entry and wake, direct and role), the registration floor (5902a670) and sinceId (8b0b3edc).\n- One row beyond the plan: unit row (g), 'keeps the plain cursor in a channel whose off-bus line the response budget dropped'. It covers a guard I added to summarizeChatBurst. If the caps drop an off-bus line the scan never read, that channel ignores skip cursors and keeps the plain cursor, because the dropped line may be one the drain skipped while the live wake admitted it. Mutants: removing the guard fails (g); MAX_SKIP_PAGES=1 fails (d); removing skipAfter fails (a) and (f); removing the entry bookkeeping fails (e); counting an agent line that names nobody as routed fails 5 rows.\n\n(1) Parity, sender × address: drain = chatWaitAdmits + the stored-line rule; live = route() + isRelevant. They agree except in the three documented over-deliveries:\n- a line in a paused channel;\n- a mention-less system or human line sent while the caller was idle;\n- a parseMentions:false echo.\nFurther divergences, none of which loses a routed line:\n- Group membership changing between send and drain: the drain parses against the current roster and teams.\n- Unknown senders: the router treats one as human, the drain does not. Unreachable at send time: chat_send refuses an unregistered workerId and addComment relays only registered authors. A later-departed seat's line was routed live as an agent line and is judged the same way by the drain.\n\n(2) Cursors:\n- Caps keep the oldest slice under the stable timestamp sort, so a channel's delivered scanned lines are a prefix of its deliverable ones. skipAfter of the last delivered line, and skipLead, both stop before the next deliverable line.\n- A partial page only moves within what was read.\n- An off-bus trigger never sets a cursor, and with the new guard a dropped one blocks skip cursors in its channel.\n- A page read that throws records nothing for that channel.\n- Out-of-order appends (timestamp taken before the channel mutex) are a pre-existing edge, unchanged.\n\n(3) Concurrency:\n- The entry skip write runs before entryDrainDone, so events arriving meanwhile only buffer. A buffered event then ships with the same skip cursors (an idempotent rewrite) and does not move a cursor itself.\n- finished is checked before the write and after it. A cancel or timeout during the write only moves cursors over lines already judged skips.\n- Two sessions of one worker with different filters can race one skip write against the other session's capped delivery. The window is tiny, and the same worker would have to switch filters mid-wait.\n\n(4) Inputs:\n- channels: [] is a filter that watches nothing, so only routed lines are delivered. The PowerShell pre-flight drain relies on this, and the registration-floor row covers it.\n- An explicit sinceId in a filtered channel delivers routed lines from that point.\n- An unregistered caller has no floor and no cursors; it gets mention-less system/human lines only if a scan runs, and the cursor write fails and is logged, as before.\n- After a 10-page skip run the channel stays partial and unread, its cursor sits on page 10's last line, and the next call continues.\n- An empty page breaks the loop.\n- A no-cursor channel whose newest window is all skips reads one extra page, which is empty.\n\n(5) Cost: extra pages are read only for a filtered channel whose raw page is full and holds nothing deliverable. Skip cursors then move past that chatter, so later drains of the channel are cheaper than before.\n\nSize: chatBacklog.ts is now 369 lines, over the 300 soft cap; the plan pins all drain logic to this file.",
+      "timestamp": "2026-11-03T19:15:04.518Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:20:35.156Z",
+  "updatedAt": "2026-11-04T19:20:44.480Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:34:40.391Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:42:06.453Z",
+    "wallClockMs": 4046062
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-8cf0816c",
+    "qa-93f9625e"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:59:54.454Z",
+  "executionContract": {
+    "intendedBehavior": "moe.chat_wait's backlog drains (entry and wake) apply the live wake's relevance rule. Outside the caller's channels filter, or in every scanned channel when there is no filter, they deliver only lines routed to the caller:\n- a mention that MentionRouter.parseMentions resolves to the caller, directly or through a group;\n- a line that names no seat and was sent by 'system' or 'human';\n- with no filter, any 'human' line.\nWatched channels keep returning everything. Lines the drain reads and skips advance that channel's cursor, and they clear its unread when the channel was read to its end, so no later call delivers them. A filtered channel reads past up to 10 full pages of skipped lines per drain, so a routed line further down is still delivered in the same call. An entry drain that only skipped lines writes that bookkeeping before it blocks.",
+    "acceptanceCriteria": [
+      "Caller busy, watching #governors. In #workers: a line addressed to another seat, then a mention-less system line, then another seat's reply. Entry and wake drains return only the system line, the #workers cursor lands on the reply, unread is cleared, and the next call times out.",
+      "With no filter, the same drain returns the system line plus any human line, never a seat-to-seat line that does not route to the caller.",
+      "A skip-only entry drain (no filter, explicit sinceId, nothing routed) times out with the channel's cursor on its last skipped line.",
+      "A routed line behind more than PER_CHANNEL_SCAN_LIMIT skipped lines in a filtered channel is delivered by one call.",
+      "The existing rows for routed mentions outside watched channels (06cf7baf), the registration floor (5902a670) and sinceId (8b0b3edc) pass unchanged. Only the two no-filter rows that asserted whole-tail delivery are adapted, and a task comment documents the change."
+    ],
+    "invariants": [
+      "A cursor never advances past a deliverable line that was not delivered (burst count cap, response budget, partial page, off-bus trigger).",
+      "Off-bus messages (the wake trigger, buffered events) never move a cursor.",
+      "Own posts and pre-registration history neither deliver nor move a cursor.",
+      "Watched channels deliver every non-own line after the cursor, as before.",
+      "The live wake's decisions are unchanged; routingTargets stay authoritative there."
+    ],
+    "compatibility": [
+      "MCP wire shapes are unchanged: the chat_wait input schema, the result fields (hasMessage, messages, truncated, hasMore, timedOut, cancelled, accountSwitch) and the tool description stay as they are. The delivered set narrows to what the description already promises.",
+      "Stored state is unchanged: no new ChatMessage field, and cursors keep their message-id format. Old lines are judged from their stored sender, content and mentions.",
+      "The re-exports from tools/chatWait.ts (collectChatBacklog, summarizeChatBurst, MAX_BURST_MESSAGES, PER_CHANNEL_SCAN_LIMIT, ChatBurst) keep their signatures. The new scope fields are optional.",
+      "chat_read, chatStore routing and unread increments are untouched."
+    ],
+    "approvedScope": [
+      "util/chatBacklog.ts: exported chatWaitAdmits and MAX_SKIP_PAGES; private routedToCaller; optional skipAfter/skipLead on BurstScope and ChatBurst; summarizeChatBurst cursor derivation; collectChatBacklog relevance and skip-run paging; doc comments",
+      "tools/chatWait.ts: ChatWaitSession.isRelevant via chatWaitAdmits; wake() and drainOnEntry() pass the drained scope; drainOnEntry applies a skip-only drain's bookkeeping before entryDrainDone",
+      "tools/chatWait.test.ts: new describe block (rows a-f) and the two adapted no-filter rows (:252, :364)",
+      "docs/MCP_SERVER.md: moe.chat_wait Notes bullets only"
+    ],
+    "reuse": [
+      "MentionRouter.parseMentions (util/mentionRouter.ts) decides addressees. It is the parser route() uses at send time; there is no second mention parser.",
+      "summarizeChatBurst and applyChatDelivery keep owning the cursor and unread bookkeeping; skipping only feeds them two maps.",
+      "getMessages forward paging (sinceId + limit) serves the skip-run pages."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/chatWait.ts:169-184 ChatWaitSession.isRelevant: with a filter, watched channel || routingTargets has the caller; with none, routed || sender 'human'.",
+      "packages/moe-daemon/src/util/chatBacklog.ts:125-142 backlogChannelIds scans the filter plus unread channels (every channel for a no-filter explicit sinceId); :153-205 collectChatBacklog pushes every non-own line (the defect).",
+      "packages/moe-daemon/src/util/mentionRouter.ts MentionRouter.parseMentions(content, knownWorkerIds, workers, teams) is public and side-effect free; route() mutates hop counts and pauses.",
+      "packages/moe-daemon/src/state/chatStore.ts sendMessage stores raw mentions only and increments unread for routingTargets; a mention-less system line routes to non-IDLE, non-DEAD seats.",
+      "StateManager exposes workers, teams (Maps) and mentionRouter publicly; chatStore.sendMessage uses all three.",
+      "getMessages clamps limit to 1-200, pages forward from a known cursor, and returns the newest window for an unknown or absent one."
+    ],
+    "checkRefs": [
+      "S=$(mktemp -d /tmp/moe-6610-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatBacklog.ts packages/moe-daemon/src/tools/chatWait.ts packages/moe-daemon/src/tools/chatWait.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatWait.test.ts src/tools/chatBudgets.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatChannelRef.test.ts src/tools/addComment.test.ts src/tools/accountTools.test.ts && npx vitest run'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Storing routingTargets, or an echo flag, on each message so the drain could replay the exact live decision. Rejected: it changes the stored message schema and grows every broadcast line in the 1 MB tail window. The reconstruction errs only toward over-delivery. (2) Filtering only unwatched channels under a filter and leaving the no-filter path alone. Rejected: DoD 1 requires the no-filter path too. (3) Calling MentionRouter.route() from the drain. Rejected: it changes hop counts and clears pauses on human lines. (4) Skipping without paging. Rejected: a routed line behind 50 skipped ones in an unwatched channel would stall, because the entry drain finds nothing deliverable and blocks until the timeout. That would be a regression from today's 50-per-call whole-tail delivery. Paging plus the entry skip bookkeeping guarantee progress. (5) Not done, a separate call per the task: whether mention-less #workers system lines should route to governor seats at all.",
+    "codebaseInsights": "The architect prototyped this design in a scratch snapshot of c99801aa. With rows like a-f and the two adaptations, the full daemon suite passed: 244 files, 7096 passed, 24 skipped. Those rows plus the adapted :252 fail on the c99801aa source. Mutants checked: MAX_SKIP_PAGES=1 is killed by (d); removing the entry skip bookkeeping is killed by (e); dropping skipLead is killed by (e); dropping skipAfter survived until row (a) asserted the cursor on the trailing reply. channels: [] is a filter that watches nothing (a truthy array), unlike an omitted filter; the PowerShell launcher's pre-flight drain uses it. No launcher or role doc passes sinceId to chat_wait. The gate command ran in 57 s on a clean HEAD archive.",
+    "risks": "The entry skip bookkeeping must run before entryDrainDone. Otherwise a concurrent wake's cursor write can be overtaken by the older skip position, which only duplicates a delivery but is avoidable. Keep the stable timestamp-only sort (mem:gotcha-chat-wait-burst-drain). The RED test file must import only symbols c99801aa has. Never resolve groups from raw stored tokens: parseRawMentions ignores the addressing-prefix rule, so a mid-prose group tag would over-deliver. Accepted, documented over-deliveries: an addressed line in a loop-guarded channel, a mention-less system or human line sent while the caller was idle, and a parseMentions:false daemon echo in #workers. The DoD 3 wording conflicts with DoD 1 for two existing rows; the architect comment on the task records the decision.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/chatBacklog.ts",
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "packages/moe-daemon/src/tools/chatWait.test.ts",
+      "packages/moe-daemon/src/util/mentionRouter.ts",
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "99d390047c6b23217ed2cbfa1aa14605842530ee",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:59:54.494Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T19:37:15Z",
+    "at": "2026-11-03T19:42:38.264Z"
+  },
+  "workStartedAt": "2026-11-03T19:04:07.259Z",
+  "reviewStartedAt": "2026-11-03T19:15:45.501Z",
+  "verification": {
+    "command": "S=$(mktemp -d /tmp/moe-6610-gate.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/util/chatBacklog.ts packages/moe-daemon/src/tools/chatWait.ts packages/moe-daemon/src/tools/chatWait.test.ts docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx vitest run src/tools/chatWait.test.ts src/tools/chatBudgets.test.ts src/tools/chatSystemFeed.test.ts src/tools/chatChannelRef.test.ts src/tools/addComment.test.ts src/tools/accountTools.test.ts && npx vitest run'",
+    "exitCode": 0,
+    "outputTail": "Run from the worktree root at HEAD 99d39004 with this task's 4 files overlaid (snapshot /tmp/moe-6610-gate.ZK7Iqx; cmp confirms the overlay equals the worktree bytes).\nChat files:\n Test Files  6 passed (6)\n      Tests  121 passed (121)\n   Duration  10.77s\nFull daemon suite:\n Test Files  247 passed (247)\n      Tests  7117 passed | 24 skipped (7141)\n   Duration  43.48s\nEXIT=0",
+    "reportedAt": "2026-11-03T19:15:45.501Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatWait.test.ts",
+    "packages/moe-daemon/src/util/chatBacklog.ts",
+    "packages/moe-daemon/src/tools/chatWait.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_wait's entry and wake drains now apply the live wake's relevance rule. Outside the caller's channels filter, and in every scanned channel when there is no filter, they deliver only lines routed to the caller, plus any human line when there is no filter. A line counts as routed when MentionRouter.parseMentions over the current roster names the caller, or when it names nobody and was sent by system or human. Watched channels still deliver every line.\n- Skipped lines advance the channel's cursor through skipAfter/skipLead and clear unread when the channel was read to its end, so no later call delivers them.\n- A filtered channel reads past up to MAX_SKIP_PAGES = 10 full skip-only pages.\n- A skip-only entry drain writes its cursors before it blocks.\n- New export: chatWaitAdmits, shared with the live isRelevant.\n- Extra guard: a channel whose dropped line is off-bus keeps its plain cursor (unit row g).\n- The MCP wire shapes, the tool description and stored state are unchanged. docs/MCP_SERVER.md chat_wait Notes are updated.\nTests:\n- RED on c99801aa: exactly 7 rows fail (a-f plus the adapted :252), 28 pass; see comment-70c9b7cf.\n- Adapted rows: :252 is inverted; :364 now posts human fillers.\n- Rows for 06cf7baf, 5902a670 and 8b0b3edc are unchanged and pass.\n- 6 mutants checked, all killed.\n- Self-review, with parity and cursor invariants, in comment-35c8c490.",
+  "commits": [
+    {
+      "sha": "5681b6dbd53087ba4bf3d938d1d4104fc65f55a1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T18:59:53Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatWait.test.ts",
+        "packages/moe-daemon/src/tools/chatWait.ts",
+        "packages/moe-daemon/src/util/chatBacklog.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T19:36:51.936Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T19:42:06.453Z",
+  "reviewCompletedAt": "2026-11-03T19:42:06.453Z",
+  "reviewSummary": "Reviewed completion 5681b6db on moe/work-2026-10-24 (pushed; tree dbcbe1db = candidate). 4 files, +330/-73, net 257 LOC, in approvedScope. No forbidden patterns.\n\nRe-ran task.verification on the commit's bytes (git archive 5681b6db, npm ci, env -i, node 24.21): exit 0. Chat files: 121/121 passed. Full daemon suite: 249 files, 7135 passed, 24 skipped.\n\nDoD 2: reproduced RED myself. c99801aa plus the landed test file gives 7 failed / 29 passed, exactly rows a-f and the adapted :252, all on assertions.\n\nDoD 1: the drain admits via chatWaitAdmits plus routedToCaller (parseMentions over the roster; a line naming nobody counts only for system/human). Watched channels deliver everything. skipAfter/skipLead stop before the next deliverable line, so no cursor passes an undelivered line (row f). The MAX_SKIP_PAGES paging covers filtered channels only (row d). A skip-only entry drain writes cursors before entryDrainDone, so no wake can write concurrently (row e). Live isRelevant uses the same rule (routingTargets unchanged). The noSkip guard is covered by row g.\n\nDoD 3: rows 06cf7baf, 5902a670 and 8b0b3edc are unchanged and green. Only :252 and :364 changed, as the architect comment decided. Wire shapes and stored state are unchanged. Docs touch only the chat_wait Notes.\n\nNon-blocking notes:\n(1) chat_decision without a workerId posts as sender 'unknown'. The router broadcasts it as human, but the drain skips it. This follows the documented never-treat-unknown-as-human decision, and the proxy always injects workerId.\n(2) isRouted parses even watched-channel lines; it could short-circuit.\n(3) chatBacklog.ts is 369 lines, over the 300 soft cap.",
+  "requiredCheckAtDone": null
+}

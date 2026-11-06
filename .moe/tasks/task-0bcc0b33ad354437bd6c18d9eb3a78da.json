@@ -1,0 +1,194 @@
+{
+  "id": "task-0bcc0b33ad354437bd6c18d9eb3a78da",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07w] check-dispatch.mjs: the unapproved-environment stop names the check environment id the operator must approve",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04.\n\nWHY. A verified-local required check counts only in an environment that settings.checkEnvironments lists. The human sets that list by hand in .moe/project.json. The id is `moe-local-vm-v1:<sha256>` (scripts/local-runner/check-evidence.mjs checkEnvironment). It hashes the observed image, the supervisor, the VM size, the pinned toolchain and the installed dependency tree, so an operator cannot work it out by hand. Today the only place it shows up is a refusal that hides it: check-dispatch.mjs:111 (runOnce onReady) throws with stop = { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED' }, and the CLI's report line carries only that code. So nobody can approve the first environment, and the CQ-M07 real-board run cannot pass its first check.\n\nOBJECTIVE. When a dispatch stops because the ready check VM's environment is not listed, the stop names that environment:\n`{ code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: 'moe-local-vm-v1:<64 lowercase hex>' }`.\n- The field is present only when the value matches exactly /^moe-local-vm-v1:[0-9a-f]{64}$/. Any other value omits it (fail closed). No other text leaves the module.\n- runDispatchCli's one JSON line therefore carries it, and the exit code stays 2.\n- No VM-cleanup behavior changes: the cleanup merge in withCleanup/cleanupOf keeps the field, and the delete-failed path keeps its own code and causeCode.\nCQ-M07r/s (the wrappers' check-VM gate, task-ba7a8c84 and task-74fe4c99) print the field in their gate line when it is present. Their fakes emit it, so neither row waits on this one.\n\nDELIVERABLE: scripts/local-runner/check-dispatch.mjs (the stop at the onReady refusal) and rows in scripts/tests/local-runner-dispatch.test.mjs. The existing rows near :133 and :422 change only to expect the new field.\n\nNOT IN SCOPE: the daemon (CHECK_ENVIRONMENT_NOT_APPROVED is unchanged); checkEnvironment's formula; any other stop code; guest-supervisor.py, the certified-provider.json pins, readiness. No seat runs Multipass.\n\nVERIFICATION: `node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs`, from the task worktree under env -i with Linux node 24.",
+  "definitionOfDone": [
+    "A dispatch whose ready environment is not listed stops with exactly {code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: <that id>} when the id matches /^moe-local-vm-v1:[0-9a-f]{64}$/, and runDispatchCli prints it in its one JSON line with exit 2. Tested.",
+    "A malformed environment value (wrong prefix, uppercase hex, short, control characters, a non-string) stops with the code alone. One row per kind.",
+    "The cleanup paths keep their codes: a failed delete after the refusal still reports RUNNER_VM_DELETE_FAILED with causeCode RUNNER_ENVIRONMENT_NOT_APPROVED, as the row near :422 asserts today.",
+    "`node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs` passes."
+  ],
+  "taskRails": [
+    "Only the fixed-format environment id may leave the module: never an error message, a path or upstream text."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Implement and test. This is a two-line runtime change plus rows.\n\nscripts/local-runner/check-dispatch.mjs, runOnce's onReady (line 111):\n- Add a module constant `const ENVIRONMENT_ID_RE = /^moe-local-vm-v1:[0-9a-f]{64}$/;` next to CODE_RE and NAME_RE.\n- Build the stop as `{ code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', ...(typeof environment === 'string' && ENVIRONMENT_ID_RE.test(environment) ? { environment } : {}) }`.\n- The thrown Error's message stays the fixed 'Unlisted environment.' It never carries the value.\n- Nothing else changes. withCleanup and cleanupOf already spread the stop, so the delete-failed path keeps code RUNNER_VM_DELETE_FAILED and causeCode RUNNER_ENVIRONMENT_NOT_APPROVED and also carries the id; done() freezes it; runDispatchCli prints it, and allPassed keeps the exit at 2.\n- Error handling: any other value, including a non-string and a string with a trailing newline (the regex has no m flag, so `$` cannot match before a newline), takes the code-only stop.\n\nscripts/tests/local-runner-dispatch.test.mjs:\n- Note that the file's ENV (line 17) is `check-env-<64 e>`, which does not match the regex. So test E (line 131) keeps its expectations unchanged; do not edit it.\n- Add test E2, in the harness() style of E: an unlisted environment that is a well-formed `moe-local-vm-v1:` + 64 lowercase hex stops with exactly {code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: that id}, the trace is ['get_context','create','delete'], and the summary is frozen.\n- Add test E3, a table with one row per malformed kind, each stopping with {code} alone: wrong prefix ('moe-local-vm-v2:'+hex), uppercase hex, 63 hex, 65 hex, a trailing '\\n', an embedded control character, a number, null, an object.\n- CD3 (near line 422), the 'unlisted environment' case: the landed seam's job environment is JOB_ENV (line 295, a real checkEnvironment id), so its expected stopped gains `environment: JOB_ENV` in both the deleted and the gone (delete-failed) variants. causeCode stays RUNNER_ENVIRONMENT_NOT_APPROVED. Change nothing else in CD3.\n- Add a CLI row with the dispatchCli helper: the one printed JSON line holds stopped.environment === JOB_ENV, and the exit is 2.\n\nMutation check on a scratch copy, reverted after: (a) always omit the field, and E2 plus CD3 must fail; (b) drop the `^` or `$` anchor, and E3 must fail; (c) drop the typeof guard, and the non-string row must fail. Put the results in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Added ENVIRONMENT_ID_RE and the typeof+regex guarded environment field on the onReady stop; tests E2, E3 (10 malformed kinds), E4 (CLI), CD3 unlisted expects environment: JOB_ENV. Mutations on a scratch copy: (a) always omit -> E2, E4, CD3 fail; (b) drop $ -> E3 fails; drop ^ initially survived, so I added a 'text before prefix' row and it now fails E3; (c) drop typeof -> E3 fails. Scratch removed.",
+      "startedAt": "2026-11-04T12:15:51.108Z",
+      "completedAt": "2026-11-04T12:20:32.131Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, once: run checkRefs[0] exactly from the task worktree. It runs `node --test` on local-runner-dispatch.test.mjs and local-runner.test.mjs under env -i with Linux node 24. complete_task's verification is that command, and the summary gives its tests/pass/fail/skip counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] after the last edit: tests 411, pass 410, fail 0, skipped 1.",
+      "startedAt": "2026-11-04T12:20:32.973Z",
+      "completedAt": "2026-11-04T12:20:37.338Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this diff, the final step.\n\n(1) Only the fixed-format id can leave the module: grep the diff for any other value reaching a stop, a report or stdout.\n(2) The regex accepts only the 64-hex lowercase form. An input from a hostile runCheck seam (a getter, a Proxy, a String object) cannot throw out of onReady differently from today. The typeof check rejects a String object.\n(3) The CD rows' cleanup codes and causeCode are unchanged.\n(4) The daemon's CHECK_ENVIRONMENT_NOT_APPROVED is untouched.\n\nUse the adversarial-self-review skill.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "note": "Self-review of the diff. (1) The only new value on any stop is `environment`, gated by typeof==='string' plus the anchored fixed-format regex; the Error message stays 'Unlisted environment.'. (2) The guard runs only on a string primitive, so a String object, Proxy or getter-bearing object takes the code-only stop, and `.test` on a primitive string cannot throw. The `includes` call is unchanged. The one thing carried beyond the stop is that Object.assign copies the field onto the thrown Error; runOnce swallows that error (`catch { rejected = true }`), and the value is the fixed-format id anyway. (3) Cleanup merge and the delete-failed codes are untouched; CD3 only gained the `environment` expectation. (4) No daemon file touched (git diff --name-only shows 2 scripts files only). Concurrency/IO: none added.",
+      "startedAt": "2026-11-04T12:20:38.227Z",
+      "completedAt": "2026-11-04T12:20:53.399Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.215,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:00:43.663Z",
+  "updatedAt": "2026-11-04T19:20:41.138Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T12:13:45.728Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T12:25:08.581Z",
+    "wallClockMs": 682853
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-5772dacf",
+    "qa-96811257"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:15:01.426Z",
+  "executionContract": {
+    "intendedBehavior": "When a check VM's environment is not in settings.checkEnvironments, check-dispatch.mjs stops with {code: 'RUNNER_ENVIRONMENT_NOT_APPROVED', environment: <id>}, but only when the id matches ^moe-local-vm-v1:[0-9a-f]{64}$. The CLI's one JSON line then names the id the operator must approve. Any other value gives the code alone. Cleanup codes and the exit code are unchanged.",
+    "acceptanceCriteria": [
+      "E2: a well-formed unlisted id is named in the stop; the trace is get_context, create, delete.",
+      "E3: each malformed kind (wrong prefix, uppercase, 63/65 hex, trailing newline, control character, number, null, object) gives the code alone.",
+      "CD3: the unlisted case carries environment: JOB_ENV, with RUNNER_VM_DELETE_FAILED and causeCode kept on a failed delete.",
+      "The CLI's printed line carries stopped.environment, and the exit is 2.",
+      "The existing test E is unchanged and passes."
+    ],
+    "invariants": [
+      "Only the fixed-format environment id may leave the module: never an error message, a path or upstream text.",
+      "No other stop code, cleanup path or daemon behavior changes.",
+      "No seat runs Multipass; the tests use the existing fakes and seams."
+    ],
+    "compatibility": [
+      "Every other stop shape is unchanged. The new field is additive on one code, so the wrappers' fixed-code parse is unaffected."
+    ],
+    "approvedScope": [
+      "check-dispatch.mjs: ENVIRONMENT_ID_RE and the onReady stop.",
+      "local-runner-dispatch.test.mjs: new E2, E3 and a CLI row; CD3's unlisted expectation."
+    ],
+    "reuse": [
+      "The harness() and dispatchCli/landedSeam helpers already in local-runner-dispatch.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "scripts/local-runner/check-dispatch.mjs:111, runOnce onReady: `throw Object.assign(new Error('Unlisted environment.'), stop = { code: 'RUNNER_ENVIRONMENT_NOT_APPROVED' })`.",
+      "check-dispatch.mjs withCleanup and cleanupOf spread the prior stop. runDispatchCli writes JSON.stringify(report) and exits 2 unless allPassed.",
+      "scripts/tests/local-runner-dispatch.test.mjs: line 17 ENV = `check-env-<64 e>` (not the moe-local-vm-v1 form); line 295 JOB_ENV = checkEnvironment(...) (the real form); test E at line 131; CD3 at about line 420; UNREADY at line 382.",
+      "scripts/local-runner/check-evidence.mjs ENVIRONMENT_PREFIX 'moe-local-vm-v1:' plus a sha256 hex digest."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes/.worktrees/task-0bcc0b33ad354437bd6c18d9eb3a78da && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Print the environment from the wrappers instead: rejected. Only check-dispatch sees it, and only fixed codes leave that module by design.\n- Compute the id from certified-provider.json and the toolchain pins in a CLI: rejected. It hashes observed values (the provider image hash, the dependency tree digest) that only a ready VM knows.",
+    "codebaseInsights": "The test file's ENV deliberately uses a non-production format (`check-env-…`), while JOB_ENV is the real checkEnvironment output. That is why the existing E row stays unchanged and only CD3's landed-seam case gains the field.",
+    "risks": "A String object or a Proxy from a hostile seam: guard with typeof === 'string' before the regex.",
+    "keyFiles": [
+      "scripts/local-runner/check-dispatch.mjs",
+      "scripts/tests/local-runner-dispatch.test.mjs",
+      "scripts/local-runner/check-evidence.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0fa7750ee23b15a1c174a557b723a21a8988023f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:15:01.466Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:15:51.108Z",
+  "reviewStartedAt": "2026-11-04T12:20:58.137Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-0bcc0b33ad354437bd6c18d9eb3a78da && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin node --test scripts/tests/local-runner-dispatch.test.mjs scripts/tests/local-runner.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 411\nℹ suites 0\nℹ pass 410\nℹ fail 0\nℹ cancelled 0\nℹ skipped 1\nℹ todo 0\nℹ duration_ms 105318.99103",
+    "reportedAt": "2026-11-04T12:20:58.137Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/local-runner/check-dispatch.mjs",
+    "scripts/tests/local-runner-dispatch.test.mjs"
+  ],
+  "completionSummary": "check-dispatch.mjs: the RUNNER_ENVIRONMENT_NOT_APPROVED stop now carries `environment` only when it is a string matching /^moe-local-vm-v1:[0-9a-f]{64}$/ (ENVIRONMENT_ID_RE, typeof guard); any other value gives the code alone. The CLI line carries stopped.environment, and the exit stays 2. The cleanup merge and the delete-failed code and causeCode are unchanged. Tests added: E2 (named id), E3 (11 malformed kinds), E4 (CLI line and exit 2); CD3's unlisted case now expects environment: JOB_ENV. Test E is unchanged. Mutation checks: omit the field, drop `$`, drop `^` (after adding a text-before-prefix row) and drop the typeof guard each fail a test. Verification: 411 tests, 410 pass, 0 fail, 1 skipped.",
+  "commits": [
+    {
+      "sha": "54dd64fb4fffd59906c221bdeec934f095d86c0b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T12:15:03Z",
+      "paths": [
+        "scripts/local-runner/check-dispatch.mjs",
+        "scripts/tests/local-runner-dispatch.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T12:21:48.132Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T12:21:55Z",
+    "at": "2026-11-04T12:25:39.786Z"
+  },
+  "completedAt": "2026-11-04T12:25:08.581Z",
+  "reviewCompletedAt": "2026-11-04T12:25:08.581Z",
+  "reviewSummary": "Reviewed completion 54dd64fb (on moe/work-2026-10-24 and contained in control HEAD): 2 files, +33/-3 (net 30), scope exactly check-dispatch.mjs and local-runner-dispatch.test.mjs. Re-ran the task.verification command in the task worktree (clean; the 2 files are byte-identical to 54dd64fb) under env -i with Linux node v24.21.0: tests 411, pass 410, fail 0, skipped 1 (the skip is a pre-existing environment skip, not this change). Also ran the E, E2, E3, E4 and CD3 rows alone: 5/5 pass.\n\nDoD 1: the onReady stop is now {code:'RUNNER_ENVIRONMENT_NOT_APPROVED', environment} only when typeof environment === 'string' and it matches ENVIRONMENT_ID_RE = /^moe-local-vm-v1:[0-9a-f]{64}$/. E2 asserts the exact stop, the trace get_context/create/delete and a frozen summary. E4 asserts the CLI line has stopped.environment === JOB_ENV and exit 2.\nDoD 2: E3 has one row per kind: wrong prefix, text before the prefix, uppercase hex, 63 hex, 65 hex, trailing newline, control character, number, null, object with toString, String object. Each stops with the code alone. The regex has no m flag, so $ does not match before a trailing newline.\nDoD 3: withCleanup and cleanupOf are untouched. CD3's unlisted variant still reports RUNNER_VM_DELETE_FAILED with causeCode RUNNER_ENVIRONMENT_NOT_APPROVED and now also expects environment: JOB_ENV. The dispatch-refused variant is unchanged. Test E is unchanged and passes.\nDoD 4: the verification command passes, as above.\nRail: the thrown Error message stays the fixed 'Unlisted environment.'. The only new value on any stop is the fixed-format id. Object.assign copies the stop onto the Error, but runOnce swallows that error and the value is the fixed-format id anyway. No daemon, formula or other stop code changed. Seams stay faked, so no Multipass runs. The worker's mutation checks (omit field, drop $, drop ^, drop typeof) match what E2, E3, E4 and CD3 would catch. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

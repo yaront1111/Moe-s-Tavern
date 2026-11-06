@@ -1,0 +1,262 @@
+{
+  "id": "task-2f22237b0e30499c907ffe9ff5048c37",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "bug: under MOE_RUNTIME_PROTECTED=1 on Windows, npm .cmd shims (claude.cmd, codex.cmd) and cmd.exe search the project directory before PATH, so a project-root node.exe still runs",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review. It is residual 3 in architect-54e5eb09's comment-1deae51a on that row, and task-64809b19 does not fix it.\n\nEvidence at 28df02f7: moe-agent.ps1 pins node (Find-MoeProtectedFile, MOE_PROTECTED_INTERPRETER_NOT_FOUND) and resolves the agent CLI to an absolute path outside the project. But the seat runs with the project as its working directory, and the resolved CLI is typically an npm shim (`claude.cmd`) that runs `node` by bare name when no node.exe sits beside it. cmd.exe, and CreateProcess without NoDefaultCurrentDirectoryInExePath, look in the current directory before PATH. A repository that ships `node.exe` at its root therefore runs it inside the protected seat, whatever PATH order the wrapper sets.\n\nFix direction: under the marker, set NoDefaultCurrentDirectoryInExePath=1 in the environment the wrapper gives the CLI (cmd.exe and CreateProcess both honour it), or run a resolved .cmd CLI through the pinned node directly. Pin the behaviour with a ps1 row that plants <project>\\node.exe and asserts it never runs.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a node.exe (or other bare-named helper) planted at the project root never runs through the agent CLI's shim or any cmd.exe child of the seat; a postflight or node --test row on Windows node.exe proves it with a planted file.",
+    "Legacy seats are unchanged, and the sh/ps1 parity check passes.",
+    "The protected-agent-command and launcher suites exit 0 on Linux and through Windows node.exe."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED rows first (test-driven-development), in scripts/tests/protected-agent-command.test.mjs. Use an editor tool (Edit on Claude, apply_patch on Codex), not a shell write. The file is LF with no BOM.\n\nThe exact hunks were dry-run at planning on 717c4019 and a0269bcd: /mnt/d/moe-scratch/2f22237b-plan/test.diff. Re-make them by hand; never run apply-planned-changes.cjs in the worktree.\n\n1. run():\n   - add the option `role = 'worker'`, and build `const common = { role, id: `${role}-protected-cmd` };` (every existing row keeps the id 'worker-protected-cmd');\n   - widen the baseline env filter to `/^(MOE_|CLAUDE|FAKE_|NoDefaultCurrentDirectoryInExePath$)/i`, so an inherited value on a hardened host never masks a legacy assertion.\n2. Above `tailHas`, add GIT_DIR: on Windows, the folder of the first `where.exe git` hit; otherwise null. Every CLI launch first runs the agent Git guard (moe-agent.ps1 Initialize-MoeAgentGitGuard spawns git), and a Windows TAIL has no git. Without it the launch stops at MOE_AGENT_GIT_GUARD_FAILED (seen at planning).\n3. Append after the last loop, under a comment saying:\n   - why a governor seat: it launches its CLI without a claimed task, so the inert runtime reaches the CLI, while worker rows stop at MOE_TASKLESS_NO_LAUNCH reason=claim-failed;\n   - that Node's own spawn of a bare name ignores the variable.\n   (a) 'bash: C1 only the marker gives the CLI NoDefaultCurrentDirectoryInExePath=1' { skip: sh.skip }.\n     - A trusted POSIX `claude` stub (chmod 755) appends `env [${NoDefaultCurrentDirectoryInExePath-unset}]` to ran.log.\n     - For marker '1', null and '01': clear ran.log, then run with role 'governor', pathEntries [nodeBin(fx), fx.trusted, ...TAIL] and MOE_NODE_COMMAND unset.\n     - Assert exit 0, and ran.log exactly 'env [1]\\n', then 'env [unset]\\n', then 'env [unset]\\n'.\n   (b) For each ps1 engine: '<engine.name>: C2 a node.exe or .cmd helper planted at the project root never runs through the CLI's .cmd shim'.\n     - Skip when engine.skip, when not Windows ('cmd.exe lookup order is Windows-only'), or when there is no GIT_DIR.\n     - Plant `copyFileSync(process.execPath, <project>\\\\node.exe)`, and cliStub moehelper in fx.project ('project') and in fx.trusted ('trusted').\n     - fx.root/which-node.js appends 'node ' + process.execPath to argv[2].\n     - The trusted claude.cmd takes npm's shim shape: `@echo env [%NoDefaultCurrentDirectoryInExePath%]>>\"<ran>\"`, then `@node \"<which-node.js>\" \"<ran>\"`, then `@call moehelper`.\n     - Run marker '1', then null, in the SAME fixture, with role 'governor', pathEntries [nodeBin(fx), fx.trusted, ...TAIL, GIT_DIR] and MOE_NODE_COMMAND unset.\n     - Assert exit 0 and ran.log's non-empty lines, compared lowercase:\n       - marker: ['env [1]', `node ${pinnedNode(fx)}`, 'trusted moehelper'];\n       - legacy: ['env []', `node ${path.join(fx.project,'node.exe')}`, 'project moehelper'].\n     - The legacy half proves the fixture really exercises cmd.exe's cwd-first lookup, so the row cannot pass vacuously.\n\nRED: before step 2, run C1 on Linux and C2 through Windows node.exe:\n- `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" node --test --test-name-pattern='C1 ' scripts/tests/protected-agent-command.test.mjs`\n- `\"/mnt/c/Program Files/nodejs/node.exe\" --test --test-name-pattern='C2 ' scripts/tests/protected-agent-command.test.mjs`, run from your normal shell, not env -i: the Windows PATH must keep git.\nC1 must fail with 'env [unset]'. C2 must fail on both engines with the project node.exe and 'project moehelper' under the marker. Quote both in complete_step (planning logs: 2f22-win-c2-red.log).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "I made the RED rows with Edit, following the planned test.diff:\n- run() gains `role = 'worker'`, with id `${role}-protected-cmd`. The existing rows keep worker-protected-cmd.\n- The baseline env filter is widened with `NoDefaultCurrentDirectoryInExePath$`.\n- GIT_DIR comes from the first `where.exe git` hit on Windows, else null.\n- New rows: C1 for bash, and C2 for each ps1 engine. Both run a governor seat. The comment explains why: a worker row stops at MOE_TASKLESS_NO_LAUNCH, and Node's own spawn ignores the variable.\n\nThe base includes 1b754809 (`merge-base --is-ancestor` passes).\n\nRED, before the fix:\n- C1 on Linux, under env -i: 1 test, 0 pass, 1 fail. `+ 'env [unset]\\n' - 'env [1]\\n'` on the marker run.\n- C2 through Windows node.exe: 2 tests, 0 pass, 2 fail.\n  - The failing rows are \"PowerShell 5.1: C2 …\" (3.06 s) and \"PowerShell 7: C2 …\" (3.14 s).\n  - Both show actual `['env []', 'node c:\\\\users\\\\yaron\\\\appdata\\\\local\\\\temp\\\\moe-protected-cmd-…\\\\project\\\\node.exe', 'project moehelper']`, where `['env [1]', 'node c:\\\\program files\\\\nodejs\\\\node.exe', 'trusted moehelper']` was expected.\n  - Log: /mnt/d/moe-scratch/2f22237b-work/c2-red.log.",
+      "startedAt": "2026-11-02T23:51:37.368Z",
+      "completedAt": "2026-11-02T23:53:36.959Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix: one line per twin, right after the marker is read (DoD 1 and 2). Use an editor tool.\n- moe-agent.ps1 starts with a UTF-8 BOM and is LF; keep both. moe-agent.sh is LF.\n- The exact hunks are in /mnt/d/moe-scratch/2f22237b-plan/ps1.diff and sh.diff.\n\nscripts/moe-agent.ps1, directly after `$script:MoeRuntimeProtected = ($env:MOE_RUNTIME_PROTECTED -ceq '1')` (:469 at a0269bcd):\n# cmd.exe, which runs an npm .cmd shim such as claude.cmd, looks a bare name up in\n# the current directory (the project) before PATH unless this is set; every child\n# inherits it. Node's own spawn of a bare name ignores it. Same line in moe-agent.sh.\nif ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1' }\n\nscripts/moe-agent.sh, directly after `if [ \"${MOE_RUNTIME_PROTECTED:-}\" = 1 ]; then RUNTIME_PROTECTED=1; else RUNTIME_PROTECTED=0; fi` (:51): the same three comment lines, ending 'Same line in moe-agent.ps1.', then\nif [ \"$RUNTIME_PROTECTED\" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi\n\nWhy here:\n- This is the earliest point that knows the marker, before any child process. The CLI inherits it (PowerShell runs a .cmd CLI through cmd.exe, from Invoke-MoeGuardedCommand), and so does every other child.\n- cmd.exe honours the variable. On Linux and macOS it is inert.\n- Legacy (marker unset, or not exactly '1') never sets it and never clears an inherited value.\n- Under Git Bash, Cygwin also runs a .cmd CLI through cmd.exe, so the sh line covers that seat. The suite cannot run Git Bash rows; its own comment says why.\n\nError handling: an env assignment cannot fail, and nothing new can refuse or exit. No new MOE_ code, so parity-check.sh needs no new literal.\n\nRe-run C1 and C2: both must pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Fix applied with Edit, following the planned ps1.diff and sh.diff. Each twin gets three comment lines and one line, directly after the marker read:\n- ps1 :470-473: `if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1' }`\n- sh :52-55: `if [ \"$RUNTIME_PROTECTED\" = 1 ]; then export NoDefaultCurrentDirectoryInExePath=1; fi`\n\nLegacy never sets the variable and never clears it. There is no new MOE_ code and no new exit path.\n\nThe BOM is kept: `head -c3` gives ef bb bf. There are no CR bytes in any of the three files. `git diff --stat` equals `--ignore-cr-at-eol --stat` (+52/-3 so far). `bash -n` passes.\n\nGREEN:\n- C1 on Linux, under env -i: 1 test, 1 pass, 0 fail.\n- C2 through Windows node.exe: 2 tests, 2 pass, 0 fail. PS 5.1 took 6.2 s and PS 7 took 5.5 s. Log: /mnt/d/moe-scratch/2f22237b-work/c2-green.log.",
+      "startedAt": "2026-11-02T23:53:39.133Z",
+      "completedAt": "2026-11-02T23:55:02.184Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (Phase 6). In docs/ARCHITECTURE.md, in the 'Protected control plane' bullet, add these lines directly after the line ending `MOE_PROTECTED_INTERPRETER_NOT_FOUND`).` (about :420). Keep the bullet's two-space continuation indent and width. The exact hunk is /mnt/d/moe-scratch/2f22237b-plan/docs.diff.\n  Both export `NoDefaultCurrentDirectoryInExePath=1`, so on Windows cmd.exe (an npm `.cmd` CLI shim, or any cmd.exe\n  in the seat) never looks a bare name up in the current directory, the project; Node's own `spawn` of a bare name\n  still does, because libuv ignores that variable.\nThis names the residual honestly. Its wrapper-owned instance, the agent Git guard's bare `git` spawn, is filed as task-525551023b9d4931a1cf983ce02a6cfb (BACKLOG). Do not fix it here.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "I made the docs edit with Edit, as planned in docs.diff. It adds three lines to the Protected control plane bullet, directly after the line ending with MOE_PROTECTED_INTERPRETER_NOT_FOUND (now :421-423).\n- The lines keep the bullet's two-space continuation indent and stay within its width.\n- They name the libuv residual honestly: Node's own `spawn` of a bare name still searches the current directory.\n- That residual stays with task-525551023b9d4931a1cf983ce02a6cfb. Nothing else is claimed.",
+      "startedAt": "2026-11-02T23:55:04.364Z",
+      "completedAt": "2026-11-02T23:55:15.760Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once (DoD 3). This row dependsOn task-e54bab27: until its one-line fixture fix lands, prompt-cache-launcher has 22 failing PowerShell compact-window rows on Windows at HEAD (a 373dc3d4 regression). The claim gate already waits for it.\n\nRun this ONE command fresh from the task worktree root, from your normal shell. Only the Linux leg runs under env -i, because the Windows node.exe leg needs the Windows PATH, with git, carried through WSL interop. Its output tail is the complete_task evidence:\n\nR=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint\n\nPlanning dry run, with task-e54bab27's line simulated:\n- Linux: 157 tests, 130 pass, 0 fail, 27 skipped (pwsh rows, no pwsh in WSL).\n- Windows: 217 tests, 177 pass, 0 fail, 40 skipped (bash rows), about 2 minutes.\n- parity-check PASS, lint OK.\nCounts move with HEAD; exit 0 is the gate.\n\nThese launcher harnesses run in place; the rails allow that, and each suite sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER. Declare the four files as modifiedFiles. Size: about +55 net lines, most of them the two test rows.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "I ran the plan's single verification command fresh from the worktree root, from my normal shell. It exited 0.\n\n- Linux leg (env -i), 5 suites: 157 tests, 130 pass, 0 fail, 27 skipped (pwsh rows; there is no pwsh in WSL).\n- Windows node.exe leg, 3 suites: 217 tests, 177 pass, 0 fail, 40 skipped (bash rows), in 118.5 s.\n- parity-check.sh: PASS.\n- npm run lint: OK. Role-doc line counts are architect 39, worker 30, qa 36.\n\nThe counts match the planning dry run exactly. The base includes 1b754809, task-e54bab27's fixture fix.\n\nLog: /mnt/d/moe-scratch/2f22237b-work/verify.log.",
+      "startedAt": "2026-11-02T23:55:20.467Z",
+      "completedAt": "2026-11-02T23:57:47.548Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n\nRun the mutants in a scratch copy: `git archive HEAD scripts docs package.json` into a fresh mktemp dir under /mnt/c/Users/Yaron/AppData/Local/Temp/ for the Windows rows, or under /tmp for C1. Overlay your files with cp, mutate there, and delete the dir afterwards by its prefix. Never mutate the worktree.\n(a) Drop the ps1 line: C2 fails on both PowerShell engines.\n(b) Drop the sh line (replace it with `:`, so the file still parses): C1 fails on 'env [1]'.\n(c) Set the variable unconditionally in each twin: C1's legacy runs fail ('env [unset]'), and C2's legacy half fails (it no longer runs the project node.exe). This proves legacy stays unchanged.\n(d) Vacuity: run C2 with its legacy half removed and the ps1 fix absent. It must still fail, from the marker half alone.\n(e) Claims check: the variable closes only cmd.exe's cwd-first lookup.\n  - Relative and in-project PATH entries remain task-0b2ea570's scope; that row now dependsOn this one.\n  - Node or libuv bare-name spawns remain task-525551023b9d4931a1cf983ce02a6cfb's.\n  - 8.3, subst and UNC PATH aliases remain task-895791375f1341f5914c93e81348c083's.\n  Make no wider claim in comments or docs.\n(f) BOM/LF: `head -c3 scripts/moe-agent.ps1` is still ef bb bf. `git diff --stat` equals `git diff --ignore-cr-at-eol --stat`.\n(g) Process safety: kill nothing by name or pattern; the suite's killTree touches only its own children.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Adversarial self-review done.\n\nSetup:\n- Mutants ran in mktemp copies (git archive HEAD scripts docs package.json, with my 4 files overlaid): /mnt/c/.../Temp/moe-2f22-mut-* for Windows and /tmp/moe-2f22-mut-* for Linux.\n- /mnt/d/moe-scratch/2f22237b-work/mutate.cjs applied each mutation and required exactly one hit per replacement.\n- Both dirs are deleted, each by a prefix-checked path. The logs are kept in /mnt/d/moe-scratch/2f22237b-work/mut-*.log.\n\nResults:\n- Control (unmutated copies): C1 passes 1/1 and C2 passes 2/2, so the scratch environment is sound.\n- (a) ps1 line dropped: C2 fails on PS 5.1 and PS 7 (0/2). It ran the project node.exe and 'project moehelper', with 'env []'.\n- (b) sh line replaced with `:`: C1 fails with `+ 'env [unset]' - 'env [1]'`.\n- (c) variable set unconditionally in both twins: C1 fails on its legacy run (`+ 'env [1]' - 'env [unset]'`). C2 fails 0/2 on its legacy half, where the trusted copy ran instead of the planted one. So legacy is pinned as unchanged.\n- (d) vacuity (legacy half removed, ps1 fix absent): C2 still fails 0/2 from the marker half alone.\n- (e) Claims: the comments and docs claim only cmd.exe's lookup, and the docs name the libuv/Node spawn residual. Nothing claims CreateProcess, PATH aliases or relative PATH entries. Those stay with task-52555102, task-89579137 and task-0b2ea570.\n- (f) BOM and line endings: ef bb bf is kept, and `git diff --stat` equals `--ignore-cr-at-eol --stat`. The diff is 4 files, +55/-3.\n- (g) Process safety: nothing was killed by name or pattern. Only the suite's own killTree acts, on the child PIDs it recorded.\n\nChecklist:\n- Concurrency: an environment export before any child starts carries no race.\n- Inputs: the export reuses the existing strict marker check (`-ceq '1'` and `= 1`). '01' and an unset marker stay legacy, which C1 pins.\n- Hot reload: sh `exec` and the ps1 supervisor keep env and re-read the marker, so the export is idempotent.\n- Legacy: never set, and an inherited value is never cleared.\n- Linux/macOS: the variable is inert.\n- Test fixture: it copies about 90 MB of node.exe per engine, inside fx.root, which t.after removes.\n\nNo real risks found.",
+      "startedAt": "2026-11-02T23:58:04.085Z",
+      "completedAt": "2026-11-03T00:00:45.314Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\": CQ-RF07 epic-final review residual (Windows .cmd shim project-dir search under protected runtime).",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 316.6,
+  "comments": [
+    {
+      "id": "comment-eb0524a43d0f46c491fba9c1fcc99108",
+      "author": "worker-c9368191",
+      "content": "Planner input from CQ-RF07 (task-f3f364a6), epic-final review, finding 6 (LOW, Windows ps1, same class as this row).\n\n`Find-MoeProtectedFile` (scripts/moe-agent.ps1 ~499-523) skips in-project PATH entries by comparing `Get-MoeRealPath` strings (`$real.Equals($project)` or the `\"$real$sep\".StartsWith(\"$project$sep\")` check at ~518). It compares spellings, not file identity, so the same folder reached through an 8.3 short name, a `subst` drive or a `\\\\?\\`/UNC spelling slips past the containment check, and a node.exe there would be pinned. The JetBrains side matches by file identity (task-9a1da6f6).\n\nThis needs the user's own PATH to carry such an alias of the project, which is why it is LOW. Fold an identity compare (volume serial plus file index, as the plugin does), or an explicit refusal of 8.3/subst/UNC entries, into this row's Windows fix, with a postflight.ps1 row.",
+      "timestamp": "2026-11-02T23:06:15.965Z"
+    },
+    {
+      "id": "comment-c5e11b0da16643519bb4cb92f53b46f6",
+      "author": "architect-24611a0a",
+      "content": "Planner note, plan rev 1. This replies to worker-c9368191's finding 6 above.\n\nFinding 6 (Find-MoeProtectedFile compares spellings, so 8.3, subst and UNC aliases of the project slip past) is NOT folded in. This row's DoD covers only cmd.exe's cwd-first lookup, and an identity compare needs its own design and tests. It is filed as task-895791375f1341f5914c93e81348c083 (BACKLOG, LOW).\n\nAlso filed or wired:\n- task-525551023b9d4931a1cf983ce02a6cfb (BACKLOG, MEDIUM): libuv ignores NoDefaultCurrentDirectoryInExePath, so the agent Git guard's Node program still runs a project-root git.exe.\n- task-0b2ea570 now dependsOn this row, because its PATH rewrite touches the same marker lines.\n- This row dependsOn task-e54bab27, because prompt-cache-launcher's Windows ps1 compact-window rows are red at HEAD (a 373dc3d4 regression), and DoD 3 needs that suite green.\n\nEvidence (RED and GREEN on Windows PS 5.1 and PS 7, Linux) is in /mnt/d/moe-scratch/2f22237b-plan/.",
+      "timestamp": "2026-11-02T23:40:07.419Z"
+    },
+    {
+      "id": "comment-c8e74be8d47046249855b8da0eadc649",
+      "author": "governor-e6b40560",
+      "content": "Governor early start (23:51Z): I dropped dependsOn task-e54bab27. Its only change, 1b754809 (scripts/tests/prompt-cache-launcher.test.mjs +1/-1), has already landed on moe/work-2026-10-24, and that row is just waiting for QA. This row shares no file with it: this row's files are protected-agent-command.test.mjs, moe-agent.{ps1,sh} and docs/ARCHITECTURE.md. Your worktree is cut from the current target, so it already holds the fixture fix your Windows prompt-cache-launcher run needs. Before your verification, check that 1b754809 is an ancestor of your base (`git merge-base --is-ancestor 1b754809 HEAD`). If a QA reject later changes prompt-cache-launcher.test.mjs, re-sync before you land.",
+      "timestamp": "2026-11-02T23:50:27.737Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:23.628Z",
+  "updatedAt": "2026-11-04T19:20:43.459Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T22:26:12.756Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T23:13:45.650Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T00:18:10.000Z",
+    "wallClockMs": 3864350
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-ed0f6a9e",
+    "qa-7328a40d"
+  ],
+  "dependsOn": [],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T23:39:28.595Z",
+  "executionContract": {
+    "intendedBehavior": "Under MOE_RUNTIME_PROTECTED=1 both wrappers export NoDefaultCurrentDirectoryInExePath=1 before any child starts. On Windows, cmd.exe (an npm .cmd CLI shim such as claude.cmd, and any cmd.exe child of the seat) then never looks a bare name up in the current directory, which is the project: a node.exe or helper .cmd planted at the project root does not run, and the PATH copy runs instead. Legacy seats (marker unset, or not exactly '1') leave the variable as inherited.",
+    "acceptanceCriteria": [
+      "C1 (bash): under the marker the CLI's environment carries NoDefaultCurrentDirectoryInExePath=1; with the marker unset or '01' it is unset.",
+      "C2 (PowerShell 5.1 and 7, Windows): under the marker the CLI's .cmd shim runs the PATH node and the trusted helper, never <project>\\node.exe or <project>\\moehelper.cmd. A legacy run in the same fixture runs the planted copies.",
+      "C1 fails against the unchanged moe-agent.sh, and C2 against the unchanged moe-agent.ps1 (RED first).",
+      "The protected-agent-command and launcher suites exit 0 on Linux and through Windows node.exe; parity-check.sh and npm run lint pass."
+    ],
+    "invariants": [
+      "Legacy seats behave exactly as before; the variable is never set without the marker and never cleared.",
+      "No new refusal, exit path or MOE_ code; moe-agent.ps1 keeps its UTF-8 BOM and LF endings.",
+      "No claim beyond cmd.exe's lookup: Node/libuv spawns, relative or in-project PATH entries, and 8.3/subst/UNC PATH aliases stay with task-525551023b9d4931a1cf983ce02a6cfb, task-0b2ea5709415489ea9b6fef528bef5df and task-895791375f1341f5914c93e81348c083."
+    ],
+    "compatibility": [
+      "Existing protected-agent-command rows keep role 'worker' and the id 'worker-protected-cmd'; the widened filter only drops an inherited NoDefaultCurrentDirectoryInExePath from the fixture's baseline env."
+    ],
+    "approvedScope": [
+      "The two marker lines and their comments in moe-agent.ps1 and moe-agent.sh.",
+      "In protected-agent-command.test.mjs: run()'s role option and widened env filter, GIT_DIR, and rows C1 and C2.",
+      "One sentence in the docs/ARCHITECTURE.md protected control plane bullet."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:469 (a0269bcd) reads the marker. Invoke-MoeGuardedCommand (~:8342) runs `& $Command`, and PowerShell runs a .cmd through cmd.exe. Initialize-MoeAgentGitGuard (~:8267) spawns git before every launch.",
+      "scripts/moe-agent.sh:51 reads the marker. A governor seat synthesizes {\"hasNext\":false} (~:9072) and launches its CLI, while a worker with no claim reply stops at MOE_TASKLESS_NO_LAUNCH (~:10113)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Export NoDefaultCurrentDirectoryInExePath=1 under the marker in both twins, CHOSEN. It is one line each. cmd.exe honours it, so it closes the npm .cmd shim and every cmd.exe child, and it is inert elsewhere. 2) Run a resolved .cmd CLI through the pinned node directly (parse the shim's JS entry). Rejected: it parses third-party shim text per CLI (claude, codex, gemini, grok), and it still leaves the CLI's own cmd.exe children exposed. 3) Run the CLI with a cwd outside the project. Rejected: it breaks the agent's working tree. Folding finding 6 (the spelling-based PATH containment) into this row was declined: the DoD does not cover it, and it needs its own identity-compare design. It is filed as task-89579137.",
+    "codebaseInsights": "In this suite's fixture, worker rows never launch a CLI: the inert runtime answers no claim, so they stop at MOE_TASKLESS_NO_LAUNCH reason=claim-failed. A governor seat synthesizes hasNext:false and launches its CLI, which makes it the cheap way to observe the CLI's environment through the real launcher. On Windows the launch first runs the agent Git guard, whose Node program spawns git, so a row that reaches the CLI needs git on PATH. Planning probes on native Windows showed, for PS 5.1 and PS 7: at HEAD under the marker, the trusted claude.cmd shim ran <project>\\node.exe; with the line set, it runs the PATH node, and legacy still runs the planted copy.",
+    "risks": "(1) prompt-cache-launcher's Windows ps1 compact rows are red at HEAD (373dc3d4). This row dependsOn task-e54bab27 for that. (2) The Windows leg must not inherit env -i, or git, and even where.exe, drop off the Windows PATH. (3) Keep the ps1 BOM. (4) task-0b2ea570 now dependsOn this row, because its PATH rewrite sits next to the same marker lines. (5) A host-level NoDefaultCurrentDirectoryInExePath would mask the legacy assertions; the widened fixture filter drops it. (6) node.exe is about 90 MB, and C2 copies it once per engine, inside the fixture root that t.after removes.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0c44ccf0aa5656d53dc61579373e16722e289c33",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T23:39:28.625Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:51:37.368Z",
+  "reviewStartedAt": "2026-11-03T00:01:09.442Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ] && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "✔ /bin/bash: Codex launch without a hint keeps the default argv (244.457355ms)\nℹ tests 157\nℹ suites 0\nℹ pass 130\nℹ fail 0\nℹ cancelled 0\nℹ skipped 27\nℹ todo 0\nℹ duration_ms 14696.402027\n✔ C:/Program Files/Git/bin/bash.exe: Codex launch without a hint keeps the default argv (469.3228ms)\nℹ tests 217\nℹ suites 0\nℹ pass 177\nℹ fail 0\nℹ cancelled 0\nℹ skipped 40\nℹ todo 0\nℹ duration_ms 118477.999\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-03T00:01:09.442Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "docs/ARCHITECTURE.md"
+  ],
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, both wrappers now export NoDefaultCurrentDirectoryInExePath=1 directly after reading the marker.\n- moe-agent.ps1 :470-473 and moe-agent.sh :52-55 each get one line plus three comment lines.\n- On Windows, cmd.exe then never looks a bare name up in the current directory, which is the project. This covers an npm .cmd CLI shim such as claude.cmd and any cmd.exe child of the seat. A planted <project>\\node.exe or helper .cmd does not run; the copy on PATH runs instead.\n- Legacy seats (marker unset, or not exactly '1') never set the variable and never clear it.\n- There is no new MOE_ code and no new exit path. The ps1 file keeps its BOM and LF endings.\n- docs/ARCHITECTURE.md gets three lines naming the remaining gap: Node/libuv spawns still search the current directory. That stays with task-52555102.\n\nTests (protected-agent-command.test.mjs):\n- run() gains a `role` option (default 'worker', so existing ids are unchanged) and a widened env filter.\n- GIT_DIR comes from `where.exe git` on Windows.\n- C1 (bash) checks the CLI's environment: '1' under the marker, unset when the marker is unset or '01'.\n- C2 runs on PS 5.1 and PS 7 through Windows node.exe. Under the marker the npm-shaped claude.cmd runs the PATH node and the trusted moehelper. A legacy run in the same fixture runs the planted copies, which proves the row is not vacuous.\n\nRED before the fix: C1 got 'env [unset]'; C2 failed 0/2, running the project node.exe and 'project moehelper'.\n\nMutants in scratch copies, all failing as expected:\n- (a) ps1 line dropped: C2 fails 0/2.\n- (b) sh line dropped: C1 fails.\n- (c) variable set unconditionally: the legacy halves of C1 and C2 fail.\n- (d) legacy half removed with the fix absent: C2 still fails.\n\nVerification passed: Linux 157 tests (130 pass, 0 fail); Windows 217 tests (177 pass, 0 fail); parity-check PASS; lint OK. Logs are in /mnt/d/moe-scratch/2f22237b-work/.",
+  "commits": [
+    {
+      "sha": "5c5b3706f3ddc37c464ea09638a61110ad5db9c0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-02T23:50:26Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T00:02:15.529Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T00:12:09Z",
+    "at": "2026-11-03T00:18:38.151Z"
+  },
+  "completedAt": "2026-11-03T00:18:10.000Z",
+  "reviewCompletedAt": "2026-11-03T00:18:10.000Z",
+  "reviewSummary": "Reviewed completion 5c5b3706 (tree 2b3ebaef = candidate cand-323ec1b2), which is on moe/work-2026-10-24 and origin. Diff: 4 files, +55/-3 (net 52), within the plan's approvedScope. BOM ef bb bf kept, 0 CR bytes in all 4 files, and --stat equals --ignore-cr-at-eol --stat.\n\nRe-ran task.verification verbatim from the control checkout, whose HEAD is 5c5b3706 and whose scripts/, docs/ and package.json are clean. GATE_EXIT=0:\n- Linux env -i leg: 157 tests, 130 pass, 0 fail, 27 skip.\n- Windows node.exe leg: 217 tests, 177 pass, 0 fail, 40 skip.\n- parity-check PASS; lint OK.\nLog: /mnt/d/moe-scratch/2f22237b-qa/verify.log.\n\nThe new rows really run:\n- C1 passes on Linux.\n- C2 passes on PS 5.1 (5.3 s) and PS 7 (5.1 s) through Windows node.exe.\n\nIndependent mutants, in a git-archive scratch copy under Windows Temp, removed afterwards:\n- ps1 line dropped: C2 fails 0/2 and runs the project node.exe and 'project moehelper'.\n- sh line replaced with ':': C1 fails, getting 'env [unset]' where 'env [1]' was expected.\n\nDoD:\n1. Planted <project>\\node.exe and moehelper.cmd never run under the marker. The PATH node and the trusted helper run instead, and the legacy half proves the fixture is not vacuous.\n2. Legacy is unchanged: the variable is set only under the strict marker check, never cleared, and C1 pins marker unset and '01'. Parity passes.\n3. Both suites exit 0 on Linux and on Windows.\n\nAudit:\n- Nothing before the marker line spawns cmd.exe. The pre-marker calls are PowerShell/bash bare-git calls, which resolve on PATH only.\n- The codex ProcessStartInfo path inherits the process env, and there is no env -i in sh.\n- The docs claim only cmd.exe and name the libuv residual (task-52555102).\n- Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

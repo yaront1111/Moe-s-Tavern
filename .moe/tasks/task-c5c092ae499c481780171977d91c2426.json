@@ -1,0 +1,192 @@
+{
+  "id": "task-c5c092ae499c481780171977d91c2426",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-compaction-keeper's post-compaction task snapshot prints each step's original description instead of its active amendment, so a seat that auto-compacts on an amended step is handed superseded instructions (the keeper twin of the DONE JetBrains fix 37e03b91)",
+  "description": "Filed by the 11-03 #6 defect hunt (task-cea8fa39, architect-1dd28c7c).\n\nPROBLEM\nscripts/mods/moe-compaction-keeper/hooks/register.ts:57 builds each \"Steps:\" line of the post-compaction snapshot from `s.description`. The current step gets up to 1500 chars of it.\n- The daemon never rewrites `description` when a step is amended. packages/moe-daemon/src/types/schema.ts:458-463 says: \"The step as originally planned. Never rewritten by an amendment — read `effectiveStepDescription(step)` (util/planAmendments.ts) for the text a worker must actually follow\".\n- packages/moe-daemon/src/util/planAmendments.ts:38-44 resolves the effective text as `activeAmendmentId ? amendments[match].description : description`. Its comment reads \"This is the ONE resolution point\".\n- The keeper's own `Step` type (register.ts:23) declares neither `amendments` nor `activeAmendmentId`.\nSo after an auto-compaction, the snapshot (which the keeper heads \"The board is the source of truth\") hands the seat the step text as first planned. This is the same defect class as the DONE JetBrains fix task-37e03b91.\n\nLIVE IMPACT\n- 32 task records under .moe/tasks carry an activeAmendmentId.\n- The WORKING row task-23c803d2 (CQ-M07n3) has amended steps 1, 2, 3 and 5. Its step-2 amendment exists because the plan now \"pins five scrubbed credential variables (not four)\". A worker seat that compacts on that step would be shown the original text, which says four.\n\nEVIDENCE (HEAD 19d5e67a; git-archive snapshot /tmp/hunt-cea8-snap; MOE_* env unset)\n1. Red mod test. Copy /mnt/d/moe-scratch/hunt-cea8/mine/zzAmendedStep.test.ts into scripts/mods/moe-compaction-keeper/hooks/ and run `claude plugin test scripts/mods/moe-compaction-keeper`. Result: \"6 pass / 1 fail\", rc=1:\n   Expected: containing \"- step-1 IN_PROGRESS: AMENDED step text\"\n   Received: \"...Steps:\\n- step-1 IN_PROGRESS: ORIGINAL step text\\n...\"\n   Full output: /mnt/d/moe-scratch/hunt-cea8/mine/zzAmendedStep.output.txt.\n2. Plain-node repro: `node /mnt/d/moe-scratch/hunt-cea8/mine/keeper-amended-step.repro.mjs <path to register.ts>` prints \"shows ORIGINAL: true | shows AMENDED: false\". Output: keeper-amended-step.output.txt in the same folder.\n\nFIX DIRECTION\nIn register.ts, resolve each step's text the way util/planAmendments.ts does:\n- When `activeAmendmentId` is a non-empty string and `amendments` is an array holding an entry with that amendmentId and a string description, use that entry's description.\n- Otherwise use `description`. A dangling id degrades to the original and never throws.\nAdd `amendments?` and `activeAmendmentId?` to the `Step` type. The mod ships standalone in both IDE bundles and can't import daemon code, so copy the few-line rule and mark it with a `Twin: effectiveStepDescription (packages/moe-daemon/src/util/planAmendments.ts)` comment. You may also tag an amended line \"(amended)\" so the seat knows the plan changed. No doc change is needed: scripts/CLAUDE.md:41 says only that the snapshot carries \"steps\".\n\nFILES\n- scripts/mods/moe-compaction-keeper/hooks/register.ts\n- scripts/mods/moe-compaction-keeper/hooks/register.test.ts (test)\nOut of scope: scripts/moe-agent.* (the CQ-M07 lane) and docs/MCP_SERVER.md.\n\nNOTE FOR THE PLANNER\nRun the mod suite with every MOE_* variable unset (for example `env -u MOE_WORKER_ID -u MOE_PROJECT_PATH ... claude plugin test ...`). A seat exports them, and the tests mock their own env.",
+  "definitionOfDone": [
+    "scripts/mods/moe-compaction-keeper/hooks/register.test.ts gains two cases. (1) A task whose IN_PROGRESS step has amendments [amend-1] and activeAmendmentId \"amend-1\": the snapshot's line for that step contains the amendment's description and does not contain the original description. (2) A dangling activeAmendmentId with no matching entry: that line shows the original description.",
+    "`claude plugin test scripts/mods/moe-compaction-keeper` exits 0 with every test passing, including the 6 existing ones, run in a snapshot with the MOE_* env unset.",
+    "The diff touches only scripts/mods/moe-compaction-keeper/hooks/register.ts and register.test.ts."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, then the fix (TDD). Edit both files with the Edit tool only; a shell write leaves no TOOL witness. Keep the files ASCII.\n\nTESTS (scripts/mods/moe-compaction-keeper/hooks/register.test.ts). Add a second fixture next to TASK, an AMENDED task 'task-amd' (status WORKING, reopenCount 0) with two steps:\n- step-1, IN_PROGRESS: description 'Original step text', amendments [{ amendmentId 'amend-1', description 'Amended step text', reason, amendedBy, amendedAt }], activeAmendmentId 'amend-1';\n- step-2, PENDING: description 'Dangling original', amendments [{ amendmentId 'amend-1', description 'Not in force', ... }], activeAmendmentId 'amend-9', which matches no entry.\nRegister FILES[`${ROOT}/.moe/workers/worker-3.json`] = { currentTaskId: 'task-amd' } and FILES[`${ROOT}/.moe/tasks/task-amd.json`] = AMENDED.\nAdd two tests in the file's own style: `mock.env(on, { ...SEAT, MOE_WORKER_ID: 'worker-3' })`, `engine(on)`, `const note = (await compact($))[1] ?? ''`.\n(1) 'a step shows the amendment in force, not the text it replaced': the note contains '- step-1 IN_PROGRESS: Amended step text' and does not contain 'Original step text'.\n(2) 'a dangling activeAmendmentId keeps the original text': the note contains '- step-2 PENDING: Dangling original' and does not contain 'Not in force'.\nRun the suite red first. The expected result is 7 pass / 1 fail: case (1) fails, and case (2) already passes by design. Case (2) guards the fallback: a 'last amendment wins' fix shows 'Not in force' and fails it (the architect's dry run confirmed this). Do not change the 6 existing tests.\n\nFIX (scripts/mods/moe-compaction-keeper/hooks/register.ts):\n- Add `type Amendment = { amendmentId?: string; description?: string }` and give the `Step` type (:23) the fields `amendments?: Amendment[]` and `activeAmendmentId?: string`.\n- Add a small `stepText(s: Step)` helper, commented `// Twin: effectiveStepDescription (packages/moe-daemon/src/util/planAmendments.ts)`. When activeAmendmentId is a non-empty string and amendments is an array, return the description of the first entry that is truthy, has a string description and has amendmentId === activeAmendmentId. Otherwise, and when nothing matches, return s.description.\n- Use stepText(s) in place of s.description in the Steps line at :57. Keep the line format `- <stepId> <status>: <text>` and the 1500/120 clip exactly as they are. Add no '(amended)' tag (YAGNI): the existing assertion '- step-2 IN_PROGRESS: Add validation and tests' must keep passing.\n- The mod ships standalone in both IDE bundles (scripts/bundle-manifest.json copies only scripts/mods), so it must not import daemon code.\n\nError handling: stepText must be total and never throw. snapshot()'s caller is fail-open: register.ts's `.catch(($, e, next) => next(e))` turns any throw into plain compaction, which silently drops the whole snapshot. So a hand-edited record (amendments not an array, null entries, a non-string description, an empty or non-string activeAmendmentId) must fall back to s.description and needs no new try/catch. Then run the suite green: 8 pass / 0 fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/mods/moe-compaction-keeper/hooks/register.test.ts",
+        "scripts/mods/moe-compaction-keeper/hooks/register.ts"
+      ],
+      "modifiedFiles": [
+        "scripts/mods/moe-compaction-keeper/hooks/register.ts",
+        "scripts/mods/moe-compaction-keeper/hooks/register.test.ts"
+      ],
+      "note": "Red 7 pass/1 fail, then added stepText (Twin of effectiveStepDescription) and used it in the Steps line.",
+      "startedAt": "2026-11-03T17:38:24.862Z",
+      "completedAt": "2026-11-03T17:38:43.296Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification (run once, fresh). From the task worktree, run the two executionContract.checkRefs joined with ' && ', the scope check first and the mod suite second. Submit that exact joined text, its exit code and its output tail as complete_task's verification.\n- The scope check compares the tree with the merge base of HEAD and MOE_LAND_TARGET. Besides .moe/, only register.ts and register.test.ts may differ, and there may be no untracked non-ignored file.\n- The mod suite copies scripts/mods/moe-compaction-keeper into a fresh mktemp dir outside the checkout and runs `claude plugin test` there with MOE_WORKER_ID and MOE_PROJECT_PATH unset. That is DoD 2's snapshot run, and it includes the uncommitted edits.\nThe expected output ends with '8 pass', '0 fail' and 'Ran 8 tests across 1 file', with exit 0.\nError handling for a red run: if a test fails, fix register.ts and re-run. Never weaken or delete the new assertions. If the scope check prints 'out of scope: <path>', revert that path (a stray scratch file belongs outside the checkout).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Joined checkRefs: scope clean, 8 pass / 0 fail, rc=0.",
+      "startedAt": "2026-11-03T17:38:44.001Z",
+      "completedAt": "2026-11-03T17:38:56.291Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this row's diff. Load the adversarial-self-review skill first.\nChecklist:\n- Dangling id: an activeAmendmentId that matches no entry must show the original text, not the last amendment.\n- Odd values: an empty-string id, `amendments: null`, a non-array amendments, a null entry and a numeric description must all fall back without a throw. A throw silently drops the snapshot, because the hook fails open.\n- Several amendments on one step: the one named by activeAmendmentId wins.\n- An amended COMPLETED or PENDING step still gets the 120-char clip, and the current step the 1500-char clip.\n- A legacy task with no amendments renders byte-identical to before.\n- The Twin comment names the real symbol and path.\n- Both files are ASCII, and the 6 original tests are untouched.\n- `git diff` touches only the two files.\nIf you find something, fix it inside the same two files and re-run step 2's command before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/mods/moe-compaction-keeper/hooks/register.ts",
+        "scripts/mods/moe-compaction-keeper/hooks/register.test.ts"
+      ],
+      "note": "Self-review: stepText is total (non-array/null amendments, null entry, non-string description, empty/non-string id all fall back to description); id match picks the named amendment, not the last; clip sizes and line format unchanged; legacy tasks unchanged; diff only the 2 files, ASCII.",
+      "startedAt": "2026-11-03T17:38:57.031Z",
+      "completedAt": "2026-11-03T17:39:08.155Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 386.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:23:13.101Z",
+  "updatedAt": "2026-11-04T19:20:44.319Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:33:39.202Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T17:41:39.876Z",
+    "wallClockMs": 480674
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-8cf0816c",
+    "qa-7328a40d"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:37:09.545Z",
+  "executionContract": {
+    "intendedBehavior": "After an auto-compaction, each step line of the moe-compaction-keeper's task snapshot shows the step's effective text: the description of the amendment named by activeAmendmentId when that entry exists, otherwise the step's original description. That is the same rule as the daemon's effectiveStepDescription.",
+    "acceptanceCriteria": [
+      "The snapshot of a task whose IN_PROGRESS step has an active amendment shows the amendment text and never the superseded original.",
+      "A dangling activeAmendmentId shows the original text."
+    ],
+    "invariants": [
+      "The snapshot line format `- <stepId> <status>: <text>` and its 1500/120 clip are unchanged.",
+      "The session.compact hook stays fail-open, and stepText never throws on hand-edited task JSON.",
+      "The mod imports no daemon code; it ships standalone in both IDE bundles.",
+      "A task record without amendments renders exactly as before."
+    ],
+    "compatibility": [
+      "Legacy task records with no amendments or activeAmendmentId fields.",
+      "A dangling activeAmendmentId degrades to the original description, as util/planAmendments.ts activeAmendment does."
+    ],
+    "reuse": [
+      "Mirrors util/planAmendments.ts's resolution rule in a few lines with a Twin comment, because the standalone mod cannot import it."
+    ],
+    "sourceAssumptions": [
+      "scripts/mods/moe-compaction-keeper/hooks/register.ts:23 `type Step = { stepId?, status?, description? }`; :57 builds each Steps line from `s.description`.",
+      "packages/moe-daemon/src/util/planAmendments.ts:29-44: activeAmendment matches `a && typeof a.description === 'string' && a.amendmentId === step.activeAmendmentId`; effectiveStepDescription returns `activeAmendment(step)?.description ?? step?.description ?? ''`.",
+      "packages/moe-daemon/src/types/schema.ts:447-500: StepAmendment { amendmentId, description, reason, amendedBy, amendedAt }; ImplementationStep.amendments? / activeAmendmentId?, where description is never rewritten by an amendment.",
+      "register.test.ts helpers engine(on), compact($), FILES, SEAT and ROOT exist and are reused."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && K=scripts/mods/moe-compaction-keeper/hooks && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$K/register.ts\" \":(exclude)$K/register.test.ts\"; git ls-files --others --exclude-standard -- . ':(exclude).moe') && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && cp -r scripts/mods/moe-compaction-keeper \"$S/\" && env -u MOE_WORKER_ID -u MOE_PROJECT_PATH claude plugin test \"$S/moe-compaction-keeper\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Import effectiveStepDescription from the daemon. Rejected: the mod is copied standalone into both IDE bundles (scripts/bundle-manifest.json `scripts/mods` entry) and runs inside Claude Code, which has no access to daemon modules. (2) Tag amended lines '(amended)'. Rejected as YAGNI: it changes the line format the existing test pins, and the seat gets the amendment history from moe.get_context anyway. (3) Show every amendment. Rejected: the snapshot exists to carry the text in force, compactly.",
+    "codebaseInsights": "The architect dry-ran this exact plan in a scratch clone at HEAD 19d5e67a. Red run: 7 pass / 1 fail. Green run: 8 pass / 0 fail. The fix is about +11/-2 runtime lines and the tests +29. `claude plugin test <dir>` builds nothing, needs no gitignored .claude-plugin/types/, and runs fine from a standalone copy of the mod folder. Its mock.env replaces the env, but the checkRef unsets MOE_WORKER_ID/MOE_PROJECT_PATH anyway, because a seat exports them. Live motivation: WORKING task-23c803d2 has 4 amended steps.",
+    "risks": [
+      "A stepText that throws (e.g. `.find` on a non-array) silently drops the WHOLE snapshot, because the hook's .catch falls back to plain compaction. The test for case (1) would catch that in the fixture, but hand-edited records need the guards too.",
+      "Case (2) passes before the fix by design. Do not 'fix' it into a red test: it guards the fallback rule.",
+      "The scope checkRef is vacuous for QA in the control checkout (MOE_LAND_TARGET unset, so B=HEAD). QA reviews `git diff <sha>^ <sha>` instead."
+    ],
+    "keyFiles": [
+      "scripts/mods/moe-compaction-keeper/hooks/register.ts",
+      "scripts/mods/moe-compaction-keeper/hooks/register.test.ts",
+      "packages/moe-daemon/src/util/planAmendments.ts",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6d6bdc517720e56e57a755a76bc9e5b33158eb65",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:37:09.580Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:38:24.862Z",
+  "reviewStartedAt": "2026-11-03T17:39:13.853Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && K=scripts/mods/moe-compaction-keeper/hooks && D=$(git diff --name-only \"$B\" -- . ':(exclude).moe' \":(exclude)$K/register.ts\" \":(exclude)$K/register.test.ts\"; git ls-files --others --exclude-standard -- . ':(exclude).moe') && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; } && S=$(mktemp -d) && cp -r scripts/mods/moe-compaction-keeper \"$S/\" && env -u MOE_WORKER_ID -u MOE_PROJECT_PATH claude plugin test \"$S/moe-compaction-keeper\"",
+    "exitCode": 0,
+    "outputTail": "(pass) a seat gets Moe instructions and the task snapshot after the summary\n(pass) a step shows the amendment in force, not the text it replaced\n(pass) a dangling activeAmendmentId keeps the original text\n(pass) outside a Moe seat the compaction is untouched\n(pass) a subagent's compaction is left alone\n(pass) precompute gets the instructions but no snapshot\n(pass) a seat with no current task gets the instructions but no snapshot\n(pass) an unreadable board falls back to the engine compaction\n\n 8 pass\n 0 fail\nRan 8 tests across 1 file. [0.46s]\nrc=0",
+    "reportedAt": "2026-11-03T17:39:13.853Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/mods/moe-compaction-keeper/hooks/register.ts",
+    "scripts/mods/moe-compaction-keeper/hooks/register.test.ts"
+  ],
+  "completionSummary": "moe-compaction-keeper snapshot now shows each step's effective text: added stepText() in register.ts (Twin of effectiveStepDescription), which uses the amendment named by activeAmendmentId and falls back to the original description when the id is dangling or the record is malformed. Step/Amendment types extended. Two new tests in register.test.ts (amended step shows amendment; dangling id keeps the original). Diff touches only those two files.",
+  "commits": [
+    {
+      "sha": "ff65204820df7c3e46e46aca94d5b598e8788f06",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T17:37:08Z",
+      "paths": [
+        "scripts/mods/moe-compaction-keeper/hooks/register.test.ts",
+        "scripts/mods/moe-compaction-keeper/hooks/register.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T17:40:16.390Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T17:40:34Z",
+    "at": "2026-11-03T17:42:08.487Z"
+  },
+  "completedAt": "2026-11-03T17:41:39.876Z",
+  "reviewCompletedAt": "2026-11-03T17:41:39.876Z",
+  "reviewSummary": "Reviewed completion ff652048 (on moe/work-2026-10-24, HEAD of moe/control): `git show` diff is 2 files, +51/-2 (net +49): scripts/mods/moe-compaction-keeper/hooks/register.ts and register.test.ts only; ASCII-only; the 6 existing tests are untouched. DoD1: register.test.ts gains the two required cases. The first shows the amendment text for an IN_PROGRESS step with activeAmendmentId amend-1 and lacks the original. The second shows the original for a dangling id (amend-9). DoD2: I extracted `git archive ff652048 scripts/mods/moe-compaction-keeper` into a fresh /tmp dir and ran `env -u MOE_WORKER_ID -u MOE_PROJECT_PATH claude plugin test <dir>/scripts/mods/moe-compaction-keeper`: 8 pass / 0 fail, rc=0, matching the worker's task.verification. DoD3: the commit touches only those two paths. Fix: stepText() mirrors util/planAmendments.ts activeAmendment/effectiveStepDescription: it requires a non-empty string id and an array, then the first truthy entry with a string description and a matching amendmentId. Anything else falls back to s.description, with no throw, so the hook stays fail-open. The Twin comment names the real symbol and path. Line format and the 1500/120 clip are unchanged, and no daemon import was added. Mutation checks in the scratch copy: (a) use s.description again -> amended-step test fails (7/1); (b) last-amendment-wins -> dangling-id test fails (7/1); (c) dropping the null-entry guard is accepted by the unchanged suite, but the code keeps the guard and it mirrors the daemon's. Size 49 net LOC, well under the cap. Not run: the mod's stepText has no dedicated odd-value tests (null entry, non-array amendments, empty id), covered by code reading only; this is non-blocking and not a DoD item. Ponytail pass: nothing to cut (single small helper, no new deps).",
+  "requiredCheckAtDone": null
+}

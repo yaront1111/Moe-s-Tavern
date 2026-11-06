@@ -12,7 +12,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "BACKLOG",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -47,11 +47,17 @@
       "author": "governor-e6b40560",
       "content": "Governor, about 15:16Z: I added a new prerequisite, task-3c4be125. The full title is \"bug: MOE_WRAPPER_IN_WORKTREE refuses the wrapper test harnesses when a worker runs them inside its task worktree\". It is HIGH, in PLANNING, and depends on WT-13.\n\n**Why it gates the switch:**\n- WT-13's §6.1 guard refuses any moe-agent.{sh,ps1} whose path is under <repo>/.worktrees/task-*.\n- After the switch, every wrapper-lane row, WT-10M first, runs `bash scripts/tests/postflight.sh`, worktree-landing and the ps1 twins from its own task worktree. Those harnesses launch W's wrapper copy, so every wrapper case fails with MOE_WRAPPER_IN_WORKTREE and none of those rows can verify.\n- The fix is a harness-only opt-out, or a ruling, and it must land in shared mode before the gate opens.\n\nThe gate's prerequisites are now WT-13, WT-19b and 3c4be125; WT-18a and WT-18c are DONE.\n\n**Runbook addendum:** if 3c4be125 lands wrapper bytes after WT-19b's verification ran, re-run WT-19b's command on the switch commit first. This is the same rule as for 31187ec1.",
       "timestamp": "2026-11-02T15:15:54.668Z"
+    },
+    {
+      "id": "comment-1491fa908b27425b8725e8e546edfe32",
+      "author": "governor-e6b40560",
+      "content": "The governor ran the switch at 19:11-19:14Z on 2026-11-02, under the human's \"do all\" and their 18:33Z \"do whats needed for the switch\", then archived this row.\n\nPreconditions:\n- WT-13, WT-19b and 3c4be125 were DONE.\n- I re-ran WT-19b's dry run on 3c4be125's completion 7c60841f: 2 ok, 0 failed (/mnt/d/moe-scratch/governor/wt19b-rerun-7c60841f.log).\n- The drain held: 0 rows assigned and every one of the 1770 attempts in phase 'closed'.\n- Rescue refs: 9, all on DONE/ARCHIVED tasks, except CQ-M07's, which holds board files only.\n\nEvidence for each DoD item:\n1. HEAD is refs/heads/moe/control, created at 0d8422ce, the moe/work-2026-10-24 tip. It has since followed the target to edb48d05 on its own.\n2. Settings: worktreeMode 'on', consolidationBranch 'moe/work-2026-10-24', qualityGate `bash scripts/tests/parity-check.sh && npm run lint`, resource git-land-moe-work-2026-10-24 (capacity 1, maxLeaseMs 7200000, releaseOnDeregister true). Also extensions.worktreeConfig=true.\n3. The live daemon was rebuilt from 7262e53f (D:\\projexts\\moe-rebuild-7262e53f) and restarted: supervisor 29004, _run 38660, old dist kept at D:\\moe-scratch\\dist-bak-20261102T211322. `doctor --project D:/projexts/moes` exited 0 with the worktree probes as hard checks.\n4. The first WORKING claims (c7ca56e6 and 86431c31, 19:14:17Z) ran in .worktrees/task-<id> on moe/task/<id>, per their attempt workspace paths. 86431c31's completion edb48d05 then reached origin/moe/work-2026-10-24 as a fast-forward from 0d8422ce at 19:30Z, and origin/main stayed at 1b59ad8d.\n\nRollback (§7.4): set worktreeMode 'off', unset consolidationBranch, then `git switch moe/work-2026-10-24`.",
+      "timestamp": "2026-11-02T19:30:54.792Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T08:48:44.700Z",
-  "updatedAt": "2026-11-02T15:15:54.668Z",
+  "updatedAt": "2026-11-02T19:30:54.792Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T08:49:58.314Z",

@@ -1,0 +1,219 @@
+{
+  "id": "task-42aeed8accc54ac799b1f22c1d8a12b6",
+  "epicId": "epic-be924fb8",
+  "title": "bug: switching approvalMode on the board neither cancels nor arms SPEED auto-approval timers, so a plan armed under SPEED is still auto-approved seconds after the human switches to CONTROL, and plans pending when the human switches to SPEED wait until the next daemon restart",
+  "description": "Filed by defect hunt #12 (task-f6f0b580, architect-1dd28c7c). Reproduced at moe/work-2026-10-24 f159784e; the files are unchanged at cbae6070.\n\nPROBLEM (packages/moe-daemon/src/):\n- The only settings write path is /ws UPDATE_SETTINGS (server/WebSocketServer.ts:828-833) → StateManager.updateSettings (StateManager.ts:1308) → updateProjectSettings (state/profileRollout.ts:140). That function validates, writes and emits, but never touches the SPEED timers.\n- Under SPEED, submit_plan arms a per-task timer (tools/submitPlan.ts armSpeedModeApproval, :114-155).\n  - The timer re-checks only that the task is still AWAITING_APPROVAL (:127-128), then writes WORKING with PLAN_AUTO_APPROVED.\n  - It never re-reads approvalMode.\n- The twin rule: under CONTROL, set_task_status refuses AWAITING_APPROVAL→WORKING (\"requires human approval in CONTROL mode\", setTaskStatus.ts:151-162). An armed timer bypasses that gate for up to speedModeDelayMs (default 2000 ms) after the human switches to CONTROL.\n- The reverse direction: rearmSpeedModeApprovals (submitPlan.ts:170) runs only at startup (index.ts:842).\n  - AWAITING_APPROVAL rows that are pending when the human switches CONTROL→SPEED are never armed.\n  - They all approve at once after the next daemon restart.\n- docs/CONFIGURATION.md:190-191 describes SPEED as \"auto after delay\". Nothing in the docs says a mode switch applies to new submissions only.\n\nEVIDENCE:\n- /mnt/d/moe-scratch/hunt-f6f0b580/B/zzHuntB_speedModeSwitch.test.ts uses zzHuntB_harness.ts: a real StateManager, McpAdapter and MoeWebSocketServer, a JetBrains-shaped UPDATE_SETTINGS { approvalMode: 'CONTROL', … } and speedModeDelayMs 400. Run in a git-archive snapshot of f159784e: Tests 1 failed | 1 passed (2).\n  - ✓ twin rule: under CONTROL, set_task_status refuses AWAITING_APPROVAL -> WORKING\n  - × a plan armed under SPEED is NOT auto-approved after the board switches the project to CONTROL → AssertionError: expected 'WORKING' to be 'AWAITING_APPROVAL'. A PLAN_AUTO_APPROVED event is logged.\n- My re-run: /mnt/d/moe-scratch/hunt-f6f0b580/me/me-zzHuntB_speedModeSwitch.log\n- Plugin reach: the JetBrains MoeSettingsDialog approval-mode combo (MoeCommandSender.kt:80-89, UPDATE_SETTINGS) and the VS Code SettingsPanel (MoeDaemonClient UPDATE_SETTINGS).\n- Exposure: this project runs TURBO, which arms no timers. SPEED users are the ones affected.\n\nFIX DIRECTION: after a successful settings write that changes approvalMode:\n- becoming CONTROL → call clearAllSpeedModeTimeouts();\n- becoming SPEED → call rearmSpeedModeApprovals(state). It is already idempotent: it skips armed rows and non-SPEED projects.\n- TURBO can keep armed timers, since it approves anyway.\nBoth functions are exported from tools/submitPlan.ts. Import them; do not edit submitPlan.ts, which task dd1e00f8 holds. Put the calls in updateProjectSettings (profileRollout.ts) so every settings path gets them. If the state→tools import is unwanted, put them in WebSocketServer.ts's UPDATE_SETTINGS case instead, a hunk distinct from the update_epic row's UPDATE_EPIC case.\n\nFILES: packages/moe-daemon/src/state/profileRollout.ts (or the UPDATE_SETTINGS case of packages/moe-daemon/src/server/WebSocketServer.ts), and a new test such as src/state/approvalModeSwitch.test.ts. docs/CONFIGURATION.md's approvalMode row may gain one sentence. No docs/MCP_SERVER.md change is needed.",
+  "definitionOfDone": [
+    "A plan armed under SPEED is not auto-approved when approvalMode changes to CONTROL before its timer fires: it stays AWAITING_APPROVAL and no PLAN_AUTO_APPROVED event is logged (fake timers or a short speedModeDelayMs).",
+    "An AWAITING_APPROVAL row pending when approvalMode changes to SPEED is auto-approved after speedModeDelayMs without a daemon restart, and a row that is already armed is not armed twice.",
+    "A new vitest file covers both directions and passes, and the existing submit_plan SPEED-mode tests stay green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Make an approvalMode switch reach the in-memory SPEED timers, and test it.\n(a) packages/moe-daemon/src/state/profileRollout.ts, function updateProjectSettings.\n- Import { clearAllSpeedModeTimeouts, rearmSpeedModeApprovals } from '../tools/submitPlan.js'. StateManager.ts:74 and taskStore.ts:37 already import from that module, and submitPlan.ts value-imports neither StateManager nor profileRollout (checked), so this adds no cycle. Do NOT edit submitPlan.ts.\n- Insert the switch right after `state.project = updated;` (the successful write) and before `state.emit({ type: 'SETTINGS_UPDATED' ... })`:\n  const fromMode = project.settings.approvalMode ?? 'CONTROL';\n  const toMode = settings.approvalMode ?? 'CONTROL';\n  if (toMode !== fromMode) {\n    if (toMode === 'CONTROL') clearAllSpeedModeTimeouts();\n    else if (toMode === 'SPEED') rearmSpeedModeApprovals(state);\n  }\n- Write a 4-line comment saying why:\n  - leaving for CONTROL cancels every armed timer, because the timer re-checks only status (submitPlan.ts:127-128), never the mode;\n  - entering SPEED arms pending rows with the daemon-start rule (bound revision, remaining delay counted from planSubmittedAt, armed rows skipped);\n  - TURBO keeps armed timers, since it approves anyway.\n- The ?? 'CONTROL' default matches setTaskStatus.ts:156.\n- rearmSpeedModeApprovals reads state.project, so it must run after the assignment. It never throws: unreadable rows are recorded per row. Neither call can undo the write.\n(b) New packages/moe-daemon/src/state/approvalModeSwitch.test.ts. Copy the harness from src/tools/automaticApprovalRevision.test.ts:20-60: boot(row, approvalMode) with speedModeDelayMs 50, submit() via submitPlanTool, taskActivity(), and afterEach running clearAllSpeedModeTimeouts() plus vi.useRealTimers(). Use vi.useFakeTimers({ toFake: ['setTimeout','clearTimeout'] }) and await vi.advanceTimersByTimeAsync(ms). Cases:\n  (s1) SPEED: submit, then h.state.updateSettings({ approvalMode: 'CONTROL' }), then advance 200 ms. The row is still AWAITING_APPROVAL and has no PLAN_AUTO_APPROVED event.\n  (s2) CONTROL: submit (no timer), then updateSettings({ approvalMode: 'SPEED' }). The row is still AWAITING_APPROVAL before the delay, and after advancing past it the row is WORKING with exactly one PLAN_AUTO_APPROVED event and approvedPlanRevision equal to its submitted planRevision.\n  (s3) SPEED: submit, switch to 'TURBO', then back to 'SPEED'. vi.getTimerCount() stays 1, and after the delay there is exactly one PLAN_AUTO_APPROVED event.\n  (s4) SPEED: submit, then a setting change that leaves the mode alone (updateSettings({ chatEnabled: false })). The armed timer still approves the row. This guards against clearing on every write.\n  (s5) SPEED: submit, then switch to 'TURBO'. The armed timer still approves (the documented choice).\nWith the hook reverted, s1 and s2 must fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/approvalModeSwitch.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.ts",
+        "packages/moe-daemon/src/state/approvalModeSwitch.test.ts"
+      ],
+      "note": "Added the post-write approvalMode switch hook in updateProjectSettings (CONTROL -> clearAllSpeedModeTimeouts, SPEED -> rearmSpeedModeApprovals, TURBO/unchanged -> nothing) and a new 7-case approvalModeSwitch.test.ts. Red first in a git-archive snapshot: with the hook absent s1 (SPEED->CONTROL) and s2 (CONTROL->SPEED) failed and the 5 guard cases passed; with it, 7/7 pass and tsc --noEmit is clean.",
+      "startedAt": "2026-11-03T22:41:39.174Z",
+      "completedAt": "2026-11-03T22:42:42.353Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs. Follow governor ruling msg-71db57ac: sync your own section. No other open row edits these two places. Edit with your own editor (Claude Edit, or apply_patch on codex). Never use Serena, which ignores docs/, and never a shell write. Work in your task checkout.\n(1) docs/MCP_SERVER.md, section `### Plan approval — expectedPlanRevision compare-and-swap`. Directly after the `- **Restart re-arm.** …` bullet under **SPEED/TURBO auto-approval.**, add this bullet:\n- **Mode switch.** The timers also follow `approvalMode` changes (the board's `UPDATE_SETTINGS`, `StateManager.updateSettings`). A switch to `CONTROL` cancels every armed SPEED timer, so nothing armed under SPEED is approved after the human asked for manual approval. A switch to `SPEED` arms every `AWAITING_APPROVAL` row by the restart re-arm rule above: bound to its submitted revision, the remaining delay counted from `planSubmittedAt`, and rows already armed skipped. A switch to `TURBO` leaves armed timers running.\n(2) docs/CONFIGURATION.md, `### SPEED Mode` list. Add after the 'bound to the revision' bullet:\n- Switching `approvalMode` to `CONTROL` cancels pending SPEED auto-approvals; switching to `SPEED` arms every plan already awaiting approval, as a daemon restart does\nTouch nothing else in either file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Added the one 'Mode switch' bullet after the Restart re-arm bullet in MCP_SERVER.md's Plan approval section, and one bullet to CONFIGURATION.md's SPEED Mode list. Edited with the Edit tool; nothing else touched in either file.",
+      "startedAt": "2026-11-03T22:42:44.140Z",
+      "completedAt": "2026-11-03T22:42:56.425Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it once, from your task checkout root. The doc greps run on the checkout. The daemon checks run in a fresh git-archive snapshot outside the repo, per the global rail. Submit this exact command and its fresh output as complete_task verification:\ncd \"$(git rev-parse --show-toplevel)\" && grep -qF -- '- **Mode switch.**' docs/MCP_SERVER.md && grep -qF -- 'Switching `approvalMode` to `CONTROL`' docs/CONFIGURATION.md && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/state/approvalModeSwitch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/approvalModeSwitch.test.ts src/state/profileRollout.test.ts src/state/StateManager.test.ts src/tools/submitPlan.test.ts src/tools/automaticApprovalRevision.test.ts src/server/planApproval.test.ts src/server/WebSocketServer.test.ts'\nWhy those files: profileRollout.test and StateManager.test drive updateSettings. submitPlan.test and automaticApprovalRevision.test own the SPEED timer and its re-arm. planApproval.test and WebSocketServer.test cover the board's approval and UPDATE_SETTINGS paths. In the completion summary, record the red-first proof: with only the profileRollout.ts hunk reverted, s1 and s2 fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's exact verification command from the checkout root (doc greps on the checkout, daemon checks in a fresh git-archive snapshot): exit 0, tsc --noEmit clean, 7 test files / 490 tests passed. Red-first proof recorded in step-1: with the profileRollout.ts hunk absent, s1 (SPEED->CONTROL) and s2 (CONTROL->SPEED) failed.",
+      "startedAt": "2026-11-03T22:42:58.828Z",
+      "completedAt": "2026-11-03T22:43:28.021Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your diff (`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")`). Expect roughly +150/-0 across profileRollout.ts, the new test and the two docs. For each item, check it and fix what fails, then for error handling confirm (1) and (2) below.\n(1) The hook runs only after a successful write. A validation refusal or a write failure (atomicWriteJsonAsync throws) must neither clear nor arm.\n(2) Neither call can throw past the write. rearmSpeedModeApprovals records failures per row; confirm no new throw path was added.\n(3) Concurrency: updateSettings runs under the state mutex (/ws withMutex). armSpeedModeApproval detaches the timer from the mutex context (submitPlan.ts:119-123), so the timer's runExclusive still locks.\n(4) A mode that is undefined on either side is treated as CONTROL, so no hook fires for an omitted key.\n(5) clearAllSpeedModeTimeouts empties the map, so a later re-arm rebuilds it cleanly. A timer that already fired and is waiting on the mutex re-checks the status only, so a switch landing in that window can still approve one row. Note this residual race in the completion summary: it needs a submitPlan.ts change, and dd1e00f8 holds that file.\n(6) The tests use fake timers with advanceTimersByTimeAsync, restore real timers in afterEach, and assert exact outcomes: the status, the count of PLAN_AUTO_APPROVED events, and approvedPlanRevision.\n(7) Nothing outside updateProjectSettings, the new test and the two doc places changed.\nIf anything changes, re-run the step-3 command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/profileRollout.ts"
+      ],
+      "note": "Self-review of the diff (+15 across profileRollout.ts and the two docs, plus the new 128-line test). (1) The hook sits after validateSettingsUpdate and atomicWriteJsonAsync, so a refusal or write failure never clears or arms; two refused-write tests (valid mode + speedModeDelayMs -1, both directions) pin it. (2) The only call that could throw past the write is rearmSpeedModeApprovals via appendActivity in its per-row failure record; it is the same unguarded call index.ts:842 makes at startup, so I added no new throw path and left it unwrapped. (3) updateSettings runs under the state mutex; armSpeedModeApproval detaches its timer from the mutex context, and s2 runs the switch inside runExclusive and the timer still approves, so its own lock works. (4) An undefined mode on either side is CONTROL, so an omitted key fires no hook (s4). (5) Residual race, not fixed: a timer that already fired and is queued on the mutex behind the settings write re-checks only the status, so a switch to CONTROL landing in that window can still approve one row. Closing it needs a mode re-check inside submitPlan.ts's timer callback, and dd1e00f8 holds that file. (6) Tests use fake timers (setTimeout/clearTimeout only), advanceTimersByTimeAsync, afterEach clearAllSpeedModeTimeouts + useRealTimers, and assert status, PLAN_AUTO_APPROVED count and approvedPlanRevision. (7) Only profileRollout.ts, the new test and the two doc places changed. Also compiled a build in the snapshot and imported profileRollout, StateManager, submitPlan and taskStore as entry points: the new state->tools import cycle loads cleanly.",
+      "startedAt": "2026-11-03T22:43:29.950Z",
+      "completedAt": "2026-11-03T22:44:04.393Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 444.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:32:36.150Z",
+  "updatedAt": "2026-11-04T19:20:44.848Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:37:25.685Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:48:01.486Z",
+    "wallClockMs": 635801
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:40:22.140Z",
+  "executionContract": {
+    "intendedBehavior": "Changing approvalMode through updateSettings, the only settings write and the one the board's UPDATE_SETTINGS uses, now reaches the in-memory SPEED timers. Switching to CONTROL cancels every armed timer, so no plan armed under SPEED is auto-approved after the switch. Switching to SPEED arms every AWAITING_APPROVAL row by the daemon-start re-arm rule. Switching to TURBO leaves armed timers running. MCP_SERVER.md's Plan approval section and CONFIGURATION.md's SPEED Mode list document the switch.",
+    "acceptanceCriteria": [
+      "SPEED then CONTROL before the timer fires: the row stays AWAITING_APPROVAL with no PLAN_AUTO_APPROVED event.",
+      "CONTROL then SPEED with a pending row: the row is approved after speedModeDelayMs with no restart, with exactly one PLAN_AUTO_APPROVED event bound to its submitted revision.",
+      "Already-armed rows are not re-armed, and a settings write that leaves the mode unchanged does not touch the timers.",
+      "Existing SPEED-mode, profileRollout, StateManager and WebSocketServer tests stay green."
+    ],
+    "invariants": [
+      "A refused or failed settings write never clears or arms a timer.",
+      "There is at most one live SPEED timer per task. armSpeedModeApproval cancels the prior timer, and rearm skips armed rows."
+    ],
+    "compatibility": [
+      "The settings wire shape, validation and SETTINGS_UPDATED emit are unchanged. Only the post-write timer side effect is new.",
+      "submitPlan.ts is not edited, because dd1e00f8 holds it. The hook uses only its existing exports.",
+      "Restart behavior is unchanged: index.ts:842 still re-arms at start."
+    ],
+    "approvedScope": [
+      "state/profileRollout.ts updateProjectSettings: one post-write mode-switch hook calling the exported clearAllSpeedModeTimeouts and rearmSpeedModeApprovals",
+      "A new src/state/approvalModeSwitch.test.ts",
+      "docs/MCP_SERVER.md: one 'Mode switch' bullet in the Plan approval section",
+      "docs/CONFIGURATION.md: one bullet in the SPEED Mode list"
+    ],
+    "reuse": [
+      "clearAllSpeedModeTimeouts (submitPlan.ts:87) and rearmSpeedModeApprovals (submitPlan.ts:170) are the existing exports the shutdown and start paths use (index.ts:915, :842).",
+      "The test harness copies automaticApprovalRevision.test.ts:20-60 (boot, submit, fake timers).",
+      "The hunt repro /mnt/d/moe-scratch/hunt-f6f0b580/B/zzHuntB_speedModeSwitch.test.ts shows the /ws path end to end."
+    ],
+    "sourceAssumptions": [
+      "state/profileRollout.ts:140 updateProjectSettings is the only settings write. Its sole caller is StateManager.ts:1308 updateSettings, reached from the /ws UPDATE_SETTINGS case at WebSocketServer.ts:828-833.",
+      "tools/submitPlan.ts armSpeedModeApproval (:114-155): the timer re-checks only status === 'AWAITING_APPROVAL' (:127-128) before writing WORKING with PLAN_AUTO_APPROVED.",
+      "tools/submitPlan.ts:170 rearmSpeedModeApprovals returns unless state.project.settings.approvalMode === 'SPEED'. It skips rows already in speedModeTimeouts and computes remaining = max(0, delay - (now - planSubmittedAt)).",
+      "Under CONTROL, setTaskStatus.ts:151-162 refuses AWAITING_APPROVAL to WORKING. That is the twin rule the armed timer bypasses."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF -- '- **Mode switch.**' docs/MCP_SERVER.md && grep -qF -- 'Switching `approvalMode` to `CONTROL`' docs/CONFIGURATION.md",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/state/approvalModeSwitch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/approvalModeSwitch.test.ts src/state/profileRollout.test.ts src/state/StateManager.test.ts src/tools/submitPlan.test.ts src/tools/automaticApprovalRevision.test.ts src/server/planApproval.test.ts src/server/WebSocketServer.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Re-check approvalMode inside the timer callback in submitPlan.ts. That is the tightest fix, and it also closes the fired-but-waiting-on-mutex window. Rejected for now because dd1e00f8 holds submitPlan.ts; report the residual race in the completion summary. (2) Put the hook in WebSocketServer.ts's UPDATE_SETTINGS case. Rejected: that file is shared with 625c7cfe's UPDATE_EPIC fix and hunt #13's Origin check, it would need a /ws harness to test, and profileRollout covers every settings path. (3) Clear the timers on a switch to TURBO. Rejected: TURBO approves anyway.",
+    "codebaseInsights": "SPEED timers live in a module-level Map in submitPlan.ts. Only submit_plan, the daemon-start re-arm and shutdown touch it. The state layer already imports cancelSpeedModeTimeout from that module, so the import direction is established.",
+    "risks": "Fake timers and the mutex: use toFake ['setTimeout','clearTimeout'] only, so Date stays real (rearm reads Date.now() against planSubmittedAt), and advance with advanceTimersByTimeAsync so the timer's runExclusive settles. A leftover timer from one test can fire in the next, so afterEach must clearAllSpeedModeTimeouts().",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/profileRollout.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/automaticApprovalRevision.test.ts",
+      "docs/MCP_SERVER.md",
+      "docs/CONFIGURATION.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3441d183aa62af61126e3d1fdbafcadd9115f835",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:40:22.179Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:41:39.174Z",
+  "reviewStartedAt": "2026-11-03T22:44:24.335Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF -- '- **Mode switch.**' docs/MCP_SERVER.md && grep -qF -- 'Switching `approvalMode` to `CONTROL`' docs/CONFIGURATION.md && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/profileRollout.ts packages/moe-daemon/src/state/approvalModeSwitch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/state/approvalModeSwitch.test.ts src/state/profileRollout.test.ts src/state/StateManager.test.ts src/tools/submitPlan.test.ts src/tools/automaticApprovalRevision.test.ts src/server/planApproval.test.ts src/server/WebSocketServer.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/server/WebSocketServer.test.ts (128 tests) 16546ms\n\n Test Files  7 passed (7)\n      Tests  490 passed (490)\n   Start at  00:43:08\n   Duration  17.83s (tests 84%, transform 13%, import 2%)\n",
+    "reportedAt": "2026-11-03T22:44:24.335Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/profileRollout.ts",
+    "packages/moe-daemon/src/state/approvalModeSwitch.test.ts",
+    "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "updateProjectSettings (state/profileRollout.ts) now applies an approvalMode switch to the in-memory SPEED timers, after the successful write and before the SETTINGS_UPDATED emit. A change to CONTROL calls clearAllSpeedModeTimeouts(); a change to SPEED calls rearmSpeedModeApprovals(state), which binds each pending row to its submitted revision, counts the remaining delay from planSubmittedAt and skips armed rows. TURBO and an unchanged mode touch nothing, an undefined mode counts as CONTROL, and a refused or failed write never reaches the hook. submitPlan.ts is untouched; the hook uses only its existing exports. New src/state/approvalModeSwitch.test.ts has 7 cases: SPEED->CONTROL leaves the row AWAITING_APPROVAL with no PLAN_AUTO_APPROVED; CONTROL->SPEED approves after the delay with exactly one event and approvedPlanRevision equal to the submitted revision; no double-arm (timer count unchanged across SPEED->TURBO->SPEED); TURBO keeps the armed timer; a chatEnabled-only write and a same-mode write leave the timers alone; a refused write to CONTROL or to SPEED changes nothing. Docs: one 'Mode switch' bullet in MCP_SERVER.md's Plan approval section and one bullet in CONFIGURATION.md's SPEED Mode list. Red-first proof: in a git-archive snapshot with the profileRollout.ts hunk absent, s1 and s2 failed and the other 5 passed. With the hook: 7/7, and the plan's verification command passes (tsc clean, 7 files / 490 tests). Also compiled a build in the snapshot and imported profileRollout, StateManager, submitPlan and taskStore as entry points: the new state->tools import cycle loads cleanly. RESIDUAL RACE, not fixed: a timer that already fired and is queued on the state mutex behind the settings write re-checks only the status, so a switch to CONTROL landing in that window can still approve one row. Closing it needs a mode re-check inside submitPlan.ts's timer callback; dd1e00f8 holds that file.",
+  "commits": [
+    {
+      "sha": "2293e2c5f1038ce8892560f111bbedc7f1e38ff4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T22:40:23Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/approvalModeSwitch.test.ts",
+        "packages/moe-daemon/src/state/profileRollout.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T22:45:54.126Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:45:59Z",
+    "at": "2026-11-03T22:48:27.559Z"
+  },
+  "completedAt": "2026-11-03T22:48:01.486Z",
+  "reviewCompletedAt": "2026-11-03T22:48:01.486Z",
+  "reviewSummary": "Reviewed completion 2293e2c5 (on moe/work-2026-10-24; git show, 4 files, +158/-0, under the 400 LOC cap; matches approvedScope: profileRollout.ts hook, new approvalModeSwitch.test.ts, one MCP_SERVER.md bullet, one CONFIGURATION.md bullet; submitPlan.ts untouched). Re-ran task.verification verbatim in a git-archive snapshot outside the repo (Node 24.21.0): doc greps pass, tsc --noEmit clean, 7 files / 490 tests passed, EXIT=0. Mutant check: with profileRollout.ts reverted to 2293e2c5^ in the snapshot, approvalModeSwitch.test.ts fails exactly 2 of 7 (SPEED->CONTROL, CONTROL->SPEED); the 5 guard cases pass, so the tests are not vacuous. DoD: (1) SPEED->CONTROL before the timer fires leaves the row AWAITING_APPROVAL, no PLAN_AUTO_APPROVED, no approvedPlanRevision. (2) CONTROL->SPEED approves after speedModeDelayMs with no restart, exactly one PLAN_AUTO_APPROVED bound to the submitted revision; an armed row is not armed twice (timer-count delta across SPEED->TURBO->SPEED). (3) New vitest file covers both directions plus TURBO-keeps-timer, same-mode/unrelated write, and refused writes in both directions; existing submitPlan/automaticApprovalRevision/profileRollout/StateManager/planApproval/WebSocketServer suites stay green. Code audit: hook runs after validateSettingsUpdate + atomic write + state.project assignment, before the SETTINGS_UPDATED emit; undefined mode counts as CONTROL (matches setTaskStatus.ts:156); updateSettings has one production caller (WebSocketServer UPDATE_SETTINGS under withMutex); wire shape, validation, emit and restart re-arm unchanged. Residual, disclosed by the worker and not a defect of this slice: a timer already fired and queued on the mutex behind the settings write re-checks only status, so a CONTROL switch in that window can still approve one row; fix needs a mode re-check in submitPlan.ts's timer callback, filed as task-8cb8ff4a (dependsOn dd1e00f8). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

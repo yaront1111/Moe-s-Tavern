@@ -1,0 +1,216 @@
+{
+  "id": "task-fa70e8356725464a88cada5f92903f5e",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the blocked-timeout sweep times a silent BLOCKED seat out as a corpse, but its IDLE write stamps a fresh lastActivityAt, unlike its two sibling seat clears (REVIEW self-heal, reconcile-window sweep). So the corpse reads alive for 120 s, a restart in that window spares it, and the same pass's Layer-3 prune slips by a full staleWorkerTimeoutMs",
+  "description": "Filed by hunt #14 (task-d5d58972, 2026-11-03, architect-1dd28c7c). Lane: dead-worker handling. This is one write skipping a convention its two siblings document and apply.\n\nPROBLEM (HEAD 942717bc)\n- The convention:\n  - workerStore.updateWorker (packages/moe-daemon/src/state/workerStore.ts:176-188) stamps lastActivityAt = now on every non-DEAD update \"unless the caller passes an explicit lastActivityAt (system-side repairs like the REVIEW self-heal, which must not gift a crashed worker a fresh heartbeat and resurrect it as alive)\".\n  - packages/moe-daemon/CLAUDE.md:7: presence (isWorkerAlive, 120 s) is display-only, and records are pruned once they own nothing.\n- The two sibling seat clears in state/sweeps.ts follow it:\n  - the reconcile-window sweep, :290-298: `updateWorker(owner.id, { currentTaskId: null, lastActivityAt: owner.lastActivityAt })`. Its comment says a fresh stamp \"would resurrect a suspected corpse as alive and defeat the Layer-3 prune that removes it once it owns nothing\";\n  - the REVIEW self-heal, :515-525, the same pattern.\n- The blocked-timeout does not. Its IDLE write, sweeps.ts:485-489, is `updateWorker(worker.id, { status: 'IDLE', lastError: null, currentTaskId: null }, 'WORKER_TIMEOUT')`, with no lastActivityAt. So the seat it has just judged a corpse (silent past blockedTimeoutMs, 1 h) gets lastActivityAt = now.\n- Effects:\n  - The corpse reads alive (isWorkerAlive) for 120 s in list_workers and chat_who. The architect page in report_blocked (findFreshestLiveWorkerByRole) can pick a timed-out architect in that window.\n  - A daemon restart in that window spares the record as recently active (purgeAllWorkers).\n  - The Layer-3 prune at the end of the same pass (sweeps.ts:567-584) skips it, so the record lingers another staleWorkerTimeoutMs (30 min) even when it owns nothing.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_blockedTimeoutHeartbeat.test.ts, run from packages/moe-daemon/src/__hunt__/ of a `git archive 942717bc` snapshot.\n- Setup: a seat parked BLOCKED by a third-party block and silent 2 h. The real checkBlockedTimeouts runs, and the row is correctly parked to BACKLOG.\n- `npx vitest run src/__hunt__/zzHuntA_blockedTimeoutHeartbeat.test.ts` → 1 failed:\n  AssertionError: expected '2026-11-03T23:28:21.322Z' to be '2026-11-03T21:28:21.286Z'   (lastActivityAt re-stamped)\n  AssertionError: expected true to be false                                              (isWorkerAlive(corpse))\n  AssertionError: expected { id: 'worker-walled', …(13) } to be null                       (the same pass's Layer-3 prune skipped it)\n- The architect re-ran it at 23:28Z with the same three failures. The output is in /mnt/d/moe-scratch/hunt-d5d58972/A/blockedTimeoutHeartbeat.vitest.txt.\n- Exposure: every blocked-timeout of a silent seat. That is any seat parked BLOCKED (a resource block, or a third-party block on an assigned row) whose wrapper died. The blocked-timeout did not fire in today's activity.log, so this is a guard gap, not a live incident. LOW.\n\nFIX DIRECTION\n- One line: pass `lastActivityAt: worker.lastActivityAt` in the IDLE write at sweeps.ts:485-489, exactly as :297 and :523 do.\n- The WORKER_TIMEOUT activity event stays.\n- Do not change the task writes above it, or the resource or dependency arms.\n\nFILES (planner to confirm)\n- packages/moe-daemon/src/state/sweeps.ts\n- packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts (new), or a new case in the existing sweeps.test.ts\n\nOUT OF SCOPE: setTaskStatus.ts and dependencyUnblock.ts (the sibling row task-a133bd6a, no shared file); the sweep's #governors stale-block alert (hunt #11's lane); chat cursor writes on DEAD records (held back, reported to the governor). Docs: no tool contract changes and no doc describes this stamp, so there is nothing to sync.\n\nVERIFICATION (in a git-archive snapshot, never in place): `cd packages/moe-daemon && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts`",
+  "definitionOfDone": [
+    "A new test runs the real checkBlockedTimeouts on a seat parked BLOCKED and silent past blockedTimeoutMs. It asserts that afterwards the record's lastActivityAt equals its pre-sweep value, and that isWorkerAlive(record) is false.",
+    "The same test asserts that, when the timed-out seat owns nothing after the park, the same pass's Layer-3 prune removes the record (getWorker returns null), matching the REVIEW self-heal and reconcile-window behaviour.",
+    "sweeps.ts's blocked-timeout IDLE write passes the worker's existing lastActivityAt, and nothing else in the sweep changes. In a snapshot, `cd packages/moe-daemon && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts` exits 0 (adjust the second path if the case lands in sweeps.test.ts)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TEST FIRST: DoD 1 and 2. Reference bytes are in /mnt/d/moe-scratch/plan-fa70e835/ (outside the repo; SHA256SUMS lists every file). The architect ran them RED and GREEN in a snapshot. Copy them with your own editor tool only (Write/Edit on Claude, apply_patch on codex exec), never a shell write (project rail).\n\nCreate packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts from blockedTimeoutPresence.test.ts (sha256 77e1347903ba7eb6f58086c47ae59e1c5a86e1e20244cc7143ab844c3af4d588). It uses ToolTestHarness, but swaps in a StateManager with explicit blockedTimeoutMs 1 h and staleWorkerTimeoutMs 3 h, so no project.json setting can move either line. Two seats are each parked BLOCKED by a third-party block on an assigned WORKING row (blockedFromStatus WORKING):\n- worker-pruned, silent 4 h: past both lines, so it is timed out and then pruned;\n- worker-kept, silent 2 h: past blockedTimeoutMs only, so it is timed out and then kept, inside the prune window.\nThe postToRoleChannel and postToGeneral spies stop chat side effects.\n\nTest 1, 'keeps the real lastActivityAt, so the seat never reads alive, and the same pass prunes the one that owns nothing', calls the real checkBlockedTimeouts once and asserts:\n- both rows are parked to BACKLOG, unassigned (the documented park is unchanged);\n- worker-kept matches { status: 'IDLE', currentTaskId: null, lastError: null, lastActivityAt: its pre-sweep value } and isWorkerAlive(record) is false (DoD 1);\n- getWorker('worker-pruned') is null: Layer 3 of the same pass removed it (DoD 2);\n- after flushActivityLog, the worker's own WORKER_TIMEOUT entry (workerId worker-kept, no taskId) still exists, and its payload carries the preserved lastActivityAt.\n\nTest 2, 'a daemon restart right after the timeout does not spare the timed-out seat', runs the sweep, then purgeAllWorkers(), and asserts worker-kept is gone. Before the fix it reads as alive, so the purge kept it.\n\nOne test holds both seats because a pruned record cannot show its stamp.\n\nRED in a snapshot, never in place (project rail): `S=$(mktemp -d) && git archive HEAD packages/moe-daemon docs scripts CLAUDE.md | tar -x -C \"$S\"`, cp --parents the new test file into it, then in $S/packages/moe-daemon run `npm ci` and `npx vitest run src/state/blockedTimeoutPresence.test.ts` under the checkRef's env -i PATH (nvm Node 24). Expected: 2 failed. Test 1 fails on lastActivityAt (re-stamped to now) and test 2 fails on 'expected { id: worker-kept … } to be null'.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts"
+      ],
+      "note": "New test file from reference; RED in git-archive snapshot: 2 failed (lastActivityAt re-stamped; purgeAllWorkers spared kept seat).",
+      "startedAt": "2026-11-03T23:55:51.224Z",
+      "completedAt": "2026-11-03T23:56:13.642Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 3, the fix, plus the one existing test that pinned the old end state.\n\n(a) In packages/moe-daemon/src/state/sweeps.ts runBlockedTimeoutSweep, the IDLE write (HEAD lines 485-489) gains `lastActivityAt: worker.lastActivityAt,` after `currentTaskId: null,`, with a 3-line comment above the call: \"Keep the corpse's real lastActivityAt, as the REVIEW self-heal and the reconcile-window sweep do: a fresh stamp would make it read alive for the presence window and defer the Layer-3 prune below.\" The whole file must equal sweeps.expected.ts (sha256 fa55ffb6e83570f0dd99793b2b8c36bdd8726ea9f8e959fae7d8b7dc7a567e72). Use the loop's own `worker`, the pre-sweep record, exactly as :297 and :525 use `owner.lastActivityAt`. A re-read of state.workers is equivalent today, because updateTask's prior-owner release (taskStore.ts, shouldClearWorker) runs only when a status change leaves assignedWorkerId unset, and the park sets it to null. The loop variable stays correct even if that changes. Nothing else in the sweep changes: the task writes, the resource and dependency arms, the WORKER_TIMEOUT event, the REVIEW self-heal, the alerts, the reaper and Layer 3 all stay. Error handling: no new failure path. It is the same updateWorker call with one more field. updateWorker throws only for a missing worker, impossible inside this loop over state.workers, and the sweep's existing logging is untouched. The WORKER_TIMEOUT worker event's payload is the updates object, so it now also carries lastActivityAt. That is additive: only schema.ts and tests name the event.\n\n(b) packages/moe-daemon/src/state/dependencyUnblock.test.ts, in 'blocked-worker timeout parks a dep-less BLOCKED hold but keeps a dependency-waiting one BLOCKED — and UNASSIGNS it' (HEAD lines 358-359): replace `// The timed-out worker itself is still released to IDLE.` and `expect(h.state.getWorker('worker-t1meout')!.status).toBe('IDLE');` with the two-line comment \"The timed-out seat owns nothing now and keeps its real lastActivityAt (2 h old), so the same pass's Layer-3 prune removes it.\" and `expect(h.state.getWorker('worker-t1meout')).toBeNull();`. The whole file must equal dependencyUnblock.expected.test.ts (sha256 959b9fa5551cc523ed5d94ad3965e1f9eaaeaea0531e89c58ac1c68ef98a82ff). Why: that seat owns nothing after the sweep and is silent 2 h, past the harness default staleWorkerTimeoutMs of 30 min. With the fix it is pruned in the same pass, exactly DoD 2. With the old assertion, `null!.status` throws, which is the one failure the architect saw. The rest of that test is unchanged and still passes: the dep row unassigned and BLOCKED, the dep-less row in BACKLOG, the restore once the dep is DONE, and worker-fresh1's claim.\n\nThe architect ran the full daemon suite in a whole-tree snapshot with exactly these three files: 275 files, 7406 passed, 24 skipped, exit 0. No other test needs a change. GREEN: the new file gives 2 passed in the snapshot.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "note": "sweeps.ts IDLE write passes worker.lastActivityAt; dependencyUnblock.test.ts assertion updated. Both byte-identical to reference files (cmp).",
+      "startedAt": "2026-11-03T23:56:14.378Z",
+      "completedAt": "2026-11-03T23:56:33.950Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run ONCE after steps 1-2. Run the checkRef exactly, from the task worktree root (copy in /mnt/d/moe-scratch/plan-fa70e835/checkref.txt, sha256 a19feee76d8877dca4a5b7916591c16185345a74d67689e765576cb235c9dc08). It archives HEAD's packages/moe-daemon, docs, scripts and CLAUDE.md into a mktemp snapshot and overlays your three files with cp --parents. Under env -i with nvm Node 24 it then runs npm ci and `npx tsc --noEmit`, typechecks the new test through a scratch tt.json (daemon tsc excludes *.test.ts), and runs the DoD's `npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts`, followed by every other suite that drives the sweep: dependencyUnblock, StateManager, resourceStore.lifecycle, teamStore.presence and accountStore.presence.\n\nThe architect dry-ran it from a scratch clone at moe/control 563b95a7 with the reference files: exit 0, 2 files / 17 tests, then 5 files / 241 tests. Totals can grow with peer landings. The negative control (HEAD's sweeps.ts) exits 1 with the two new tests failing.\n\nError handling for a red run:\n- A tsc error names the file. Fix it in your worktree, never in the snapshot.\n- An npm ci failure is environmental: rerun once.\n- Never run npm in packages/* of the live checkout (project rail).\n\nThis run's fresh output is the complete_task verification evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef exit 0: tsc clean, 2 files/17 tests, then 5 files/241 tests.",
+      "startedAt": "2026-11-03T23:56:34.833Z",
+      "completedAt": "2026-11-03T23:56:51.682Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of THIS task's diff: load adversarial-self-review. This is a mid-epic row; its gate is step 3.\n\nRun the mutants in a snapshot copy, never in the worktree, then restore and cmp each file:\n- M1: drop the new `lastActivityAt: worker.lastActivityAt,` line. Both new tests must fail (the architect measured this).\n- M2: drop the 'WORKER_TIMEOUT' argument of that updateWorker call. Test 1 must fail at the activity-event assertion (measured).\n- M3: restore dependencyUnblock.test.ts's old assertion. The second vitest command must fail with a TypeError on null.\nNote that `lastActivityAt: state.workers.get(worker.id)?.lastActivityAt` is an EQUIVALENT mutant today (measured: it passes), for the shouldClearWorker reason in step 2. Say so in the summary rather than count it.\n\nOptional extra evidence (about 45 s): the full daemon suite from a whole-tree `git archive HEAD | tar -x -C \"$S\"` plus your three files (mem:gotcha-harness-snapshot-needs-full-archive).\n\nCheck by reading:\n- The sweep runs under the state mutex, so it cannot interleave with a tool write.\n- A timed-out seat that still owns a resource-parked BLOCKED row is kept by Layer 3 (hasActiveTaskAssignment), and it now correctly reads not-alive.\n- report_blocked's architect page (findFreshestLiveWorkerByRole) can no longer pick a timed-out corpse.\n- The DEAD path and the explicit-stamp rule in workerStore.updateWorker are untouched.\n- The sibling row task-a133bd6a (WORKING) edits dependencyUnblock.ts, setTaskStatus.ts, their tests and MCP_SERVER.md. It never edits dependencyUnblock.test.ts, so there is no landing overlap.\n\nRecord the mutant results in complete_task's summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/sweeps.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts"
+      ],
+      "note": "Mutants in snapshot copy: M1 (drop line) -> both new tests fail; M2 (drop WORKER_TIMEOUT arg) -> test 1 fails at activity-event assertion; M3 (old dependencyUnblock assertion) -> TypeError on null. Re-reading state.workers instead of loop var is an EQUIVALENT mutant today (61 passed). Snapshot files restored and cmp'd. Read-checks: sweep runs under state mutex; resource-parked owner still kept by Layer 3 and now reads not-alive; DEAD path and explicit-stamp rule untouched.",
+      "startedAt": "2026-11-03T23:56:52.392Z",
+      "completedAt": "2026-11-03T23:57:14.513Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 459.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:30:26.280Z",
+  "updatedAt": "2026-11-04T19:20:44.987Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:42:40.480Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T00:10:47.072Z",
+    "wallClockMs": 1686592
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-33f67e5b",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:54:36.447Z",
+  "executionContract": {
+    "intendedBehavior": "The blocked-timeout sweep's IDLE write keeps the timed-out seat's pre-sweep lastActivityAt, as the REVIEW self-heal and the reconcile-window sweep do. The corpse therefore never reads alive, a daemon restart right after does not spare it, and the same pass's Layer-3 prune removes it once it owns nothing. The park of its rows, the resource and dependency arms and the WORKER_TIMEOUT event are unchanged.",
+    "acceptanceCriteria": [
+      "After checkBlockedTimeouts, a timed-out seat that is kept has its pre-sweep lastActivityAt, and isWorkerAlive is false for it.",
+      "In the same pass, a timed-out seat that owns nothing and is silent past staleWorkerTimeoutMs is pruned (getWorker returns null).",
+      "purgeAllWorkers right after the sweep deletes the timed-out seat.",
+      "The worker's WORKER_TIMEOUT activity event is still written.",
+      "`cd packages/moe-daemon && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts` exits 0 in a snapshot, as do the other suites that drive the sweep."
+    ],
+    "invariants": [
+      "A system-side seat clear never gifts a fresh heartbeat (workerStore.updateWorker's explicit-lastActivityAt rule).",
+      "A timed-out seat that still owns active work is never pruned (isWorkerEligibleForStaleCleanup)."
+    ],
+    "compatibility": [
+      "No MCP tool, schema or .moe/ file shape change.",
+      "The WORKER_TIMEOUT worker activity event stays; its payload gains lastActivityAt (additive).",
+      "The task writes, the resource and dependency arms, the REVIEW self-heal, the alerts and the reaper are unchanged."
+    ],
+    "approvedScope": [
+      "runBlockedTimeoutSweep's worker IDLE write in packages/moe-daemon/src/state/sweeps.ts: one added property plus a 3-line comment",
+      "New packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts (2 tests)",
+      "One assertion and its comment in packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+    ],
+    "reuse": [
+      "The sibling pattern at sweeps.ts:297 and :525 (lastActivityAt: owner.lastActivityAt).",
+      "ToolTestHarness, isWorkerAlive, StateManager.purgeAllWorkers and getActivityLog."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/workerStore.ts updateWorker: lastActivityAt = now unless the update carries one or the worker becomes DEAD.",
+      "packages/moe-daemon/src/state/sweeps.ts Layer 3 prunes a worker silent past staleWorkerTimeoutMs that holds no active task.",
+      "packages/moe-daemon/src/state/workerStore.ts purgeAllWorkers keeps isWorkerAlive (120 s) workers and seats holding open attempts.",
+      "packages/moe-daemon/src/state/taskStore.ts: the prior-owner release runs only when a status change leaves assignedWorkerId unset."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs scripts CLAUDE.md | tar -x -C \"$S\" && cp --parents $P/state/sweeps.ts $P/state/blockedTimeoutPresence.test.ts $P/state/dependencyUnblock.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf \"{\\\"extends\\\":\\\"./tsconfig.json\\\",\\\"compilerOptions\\\":{\\\"noEmit\\\":true,\\\"types\\\":[\\\"node\\\"]},\\\"include\\\":[\\\"src/state/blockedTimeoutPresence.test.ts\\\"],\\\"exclude\\\":[]}\" > tt.json && npx tsc -p tt.json && npx vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts && npx vitest run src/state/dependencyUnblock.test.ts src/state/StateManager.test.ts src/state/resourceStore.lifecycle.test.ts src/state/teamStore.presence.test.ts src/state/accountStore.presence.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Use the loop's pre-sweep `worker.lastActivityAt`, the sibling pattern at sweeps.ts:297 and :525, rather than re-reading state.workers, which is equivalent today. Put the new cases in a new file: sweeps.test.ts covers the reconcile window, arming and alerts and has no blocked-timeout case, and StateManager.test.ts builds its own fixtures. Hold both seats in one test, one pruned and one kept by a 3 h staleWorkerTimeoutMs, so DoD 1 and DoD 2 are asserted in the same test; a pruned record cannot show its stamp. Add the restart-purge case, because it is one of the three effects the row names and it costs one call. The dependencyUnblock.test.ts assertion has to change: it pinned the old end state (the corpse kept as IDLE) that DoD 2 removes.",
+    "codebaseInsights": "workerStore.updateWorker stamps lastActivityAt = now on every non-DEAD update unless the update carries one. Layer 3 prunes a worker silent past staleWorkerTimeoutMs that holds no active task (isWorkerEligibleForStaleCleanup). purgeAllWorkers keeps workers that are isWorkerAlive (120 s) or hold open attempts. updateTask's prior-owner release runs only when a status change leaves assignedWorkerId unset. The checkBlockedTimeouts/runBlockedTimeoutSweep callers are sweeps, StateManager, dependencyUnblock, resourceStore.lifecycle, teamStore.presence and accountStore.presence tests. The ToolTestHarness default StateManager uses blockedTimeoutMs 1 h and staleWorkerTimeoutMs 30 min, and explicit constructor options beat project.json settings.",
+    "risks": "The checkRef is 989 chars, under the 1000-char cap: do not lengthen it. Gate totals can grow with peer landings, so compare the passed/failed shape, not the totals. A seat whose blockedTimeoutMs is shorter than staleWorkerTimeoutMs is now correctly kept (not alive) until its own prune window: that is the intended presence fix, not a prune guarantee.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/util/workerLiveness.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "563b95a72ab652164d72991b39bbbf92cbc9a070",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:54:36.476Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:55:51.224Z",
+  "reviewStartedAt": "2026-11-03T23:57:23.193Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash /mnt/d/moe-scratch/plan-fa70e835/checkref.txt   # plan checkRef: git-archive snapshot + cp --parents of the 3 files; npm ci; tsc --noEmit; tsc on the new test; vitest run src/state/sweeps.test.ts src/state/blockedTimeoutPresence.test.ts; vitest run dependencyUnblock, StateManager, resourceStore.lifecycle, teamStore.presence, accountStore.presence",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\n      Tests  17 passed (17)\n...\n ✓ src/state/StateManager.test.ts (143 tests) 5177ms\n Test Files  5 passed (5)\n      Tests  241 passed (241)\nEXIT=0",
+    "reportedAt": "2026-11-03T23:57:23.193Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts",
+    "packages/moe-daemon/src/state/sweeps.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+  ],
+  "completionSummary": "runBlockedTimeoutSweep's worker IDLE write now passes the worker's pre-sweep lastActivityAt (3-line comment + one property in sweeps.ts), matching the REVIEW self-heal and reconcile-window sweep. A timed-out seat no longer reads alive, purgeAllWorkers deletes it, and the same pass's Layer-3 prune removes it once it owns nothing. New blockedTimeoutPresence.test.ts (2 tests; RED in snapshot before the fix: 2 failed). dependencyUnblock.test.ts's old end-state assertion (corpse kept as IDLE) now asserts getWorker(...) is null. Mutants in a snapshot copy: M1 drop the line -> both new tests fail; M2 drop the WORKER_TIMEOUT arg -> test 1 fails at the activity-event assertion; M3 restore old assertion -> TypeError on null. `lastActivityAt: state.workers.get(worker.id)?.lastActivityAt` is an EQUIVALENT mutant today (passes), so not counted. All files byte-identical to the architect's references.",
+  "commits": [
+    {
+      "sha": "0f56d3a7894ed95126b5787527015e1af8228a8a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T23:54:44Z",
+      "paths": [
+        "packages/moe-daemon/src/state/blockedTimeoutPresence.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/sweeps.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-04T00:08:15.377Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-04T00:09:18Z",
+    "at": "2026-11-04T00:11:11.895Z"
+  },
+  "completedAt": "2026-11-04T00:10:47.072Z",
+  "reviewCompletedAt": "2026-11-04T00:10:47.072Z",
+  "reviewSummary": "Reviewed completion 0f56d3a7 (on moe/work-2026-10-24; 3 files, +84/-2, net 82). sweeps.ts runBlockedTimeoutSweep IDLE write gains `lastActivityAt: worker.lastActivityAt` + 3-line comment, matching the reconcile-window and REVIEW self-heal clears; nothing else in the sweep changed (task writes, resource/dep arms, WORKER_TIMEOUT arg, Layer 3). All 3 committed files are sha256-identical to the architect's references. Re-ran the plan checkRef myself in a git-archive snapshot (env -i, nvm Node 24, npm ci), twice: tsc clean; sweeps.test + blockedTimeoutPresence.test = 2 files/17 tests pass; dependencyUnblock + StateManager + resourceStore.lifecycle + teamStore.presence + accountStore.presence = 5 files/241 tests pass; EXIT=0. Negative control (fresh snapshot, HEAD^ sweeps.ts): 3 tests fail (lastActivityAt re-stamped; purgeAllWorkers spared the seat; dependencyUnblock end state not null), so tests are mutation-resistant. DoD1: test 1 asserts lastActivityAt == pre-sweep value and isWorkerAlive false. DoD2: same test asserts the silent-4h ownerless seat is pruned in the same pass (getWorker null) while the 2h seat is kept. DoD3: one-property fix, both suites exit 0. WORKER_TIMEOUT event still written with the preserved stamp. The dependencyUnblock.test.ts edit is the single end-state assertion the plan called for, not a weakening. No doc/schema/MCP change needed; scope equals approvedScope. No npm run in the live checkout. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

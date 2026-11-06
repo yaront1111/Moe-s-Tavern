@@ -1,0 +1,224 @@
+{
+  "id": "task-6796a0f9f37f49ee9b45d70dbc107926",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin judges a Docker-run daemon's .moe/daemon.json by its container pid (MoeDaemonSupervisor.isReachable requires isProcessAlive(pid) unless the path has the WSL form), so on project open it deletes the live daemon's daemon.json and spawns a second daemon on the same .moe/ (JetBrains twin of task-da89f620)",
+  "description": "Filed by hunt #23 (task-da51c48b), from the same real-docker run at moe/work-2026-10-24 2037e856 as task-da89f620. Read that row's EVIDENCE first.\n- The container daemon writes {\"port\":19877,\"pid\":15,...,\"bindHost\":\"0.0.0.0\"} into the mounted project's .moe/daemon.json.\n- /health answers healthy for the project, and a host moe-proxy bridges to it.\n- On the host, `kill -0 15` reports \"No such process\".\n\nPROBLEM (code at 2037e856)\n- moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:948-952:\n  `isReachable = (isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid)) && isPortOpen(info.port)`\n  - isOtherSideOfWsl only recognizes the WSL/Windows path form.\n  - A container record has a native path, so the dead host pid makes it unreachable.\n- MoeDaemonSupervisor.kt:153-176: the start path then sees no live daemon. `deleteDaemonInfoIfUnchanged(info)` removes the record (\"Removed stale daemon.json (PID 15 not reachable or another project)\"), and the supervisor spawns its own daemon.\n- MoeProjectService.kt:177-188: connect() does the same (\"Removed stale daemon.json in connect() (PID 15 not reachable)\") and schedules a reconnect that spawns one.\n- The result is the duplicate-writer outcome task-da89f620 demonstrates for the CLI: daemon pid 15 (container) and a second daemon (host) both serve one .moe/.\n- docs/DEVELOPMENT.md:460 promises that host clients use the daemon.json the container writes. CLAUDE.md makes JetBrains the primary IDE, so it must not lag the daemon fix.\n\nFIX DIRECTION\n- Read the pidNamespace field task-da89f620 adds to daemon.json, in DaemonInfo (moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt:290) and parseDaemonInfo.\n- Treat a record whose namespace differs from the plugin's own like isOtherSideOfWsl: skip the pid, and require the port plus the existing /health identity check (DaemonIdentityProbe). The plugin's own namespace is readlink of /proc/self/ns/pid on Linux. On another OS, or when the value cannot be read, any recorded value counts as different.\n- Never delete a record, and never spawn, while that check answers for this project.\n- offLoopbackBindRefusal (:957-975) and the other `isOtherSideOfWsl(...) || isProcessAlive(...)` sites (:317, :358, :386, :969) take the same rule.\n- A record without the field keeps today's behavior.\n\nPLACEMENT\n- No open row holds MoeDaemonSupervisor.kt, MoeProjectService.kt or Models.kt (lanes.js -v at 12:10Z).\n- dependsOn task-da89f620, which fixes the field's name and format.\n- Run `./gradlew test` under the jetbrains-gradle lease (mem:gotcha-architect-cannot-take-gradle-lease).",
+  "definitionOfDone": [
+    "MoeDaemonSupervisorTest (or MoeProjectForeignDaemonTest) covers a record from another pid namespace with a dead pid, an open port and /health naming this project. The test proves that isReachable is true and that neither the supervisor's start path nor MoeProjectService.connect() deletes daemon.json or spawns a daemon. The new cases fail on 2037e856.",
+    "A record without pidNamespace, or with the plugin's own namespace, keeps today's results: a dead pid is stale and gets deleted. The existing DaemonIdentity, foreign-daemon and supervisor tests pass unchanged.",
+    "`./gradlew test` in moe-jetbrains is green, with fresh results from a run under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Model field and the supervisor rule. The edits are exact; an architect seat cannot dry-run Gradle (mem:gotcha-architect-cannot-take-gradle-lease).\n\n(a) moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt, data class DaemonInfo (:290-297). Change the last parameter `val bindHost: String? = null` to `val bindHost: String? = null,` and append:\n    // A Linux daemon records its pid namespace, `pid:[N]` (packages/moe-daemon/src/index.ts buildDaemonInfo, task-da89f620).\n    val pidNamespace: String? = null\nGson leaves it null when the key is absent, so every positional DaemonInfo(...) in the tests still compiles.\n\n(b) moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt.\n1. Constructor: the last parameter `private val docSync: (File, Boolean) -> Unit = ::syncBundledDocs` gains a trailing comma, followed by:\n    // This IDE's own pid namespace, injected by tests; null when it cannot be read (not Linux).\n    private val ownPidNamespace: () -> String? = { readOwnPidNamespace() }\n2. Companion object, beside isOtherSideOfWsl (:1025), add:\n    // The daemon's pidNamespace format (packages/moe-daemon/src/server/probeHost.ts PID_NAMESPACE, task-da89f620).\n    internal val PID_NAMESPACE = Regex(\"\"\"^pid:\\[[0-9]{1,20}\\]$\"\"\")\n    /** This process's pid namespace, readlink /proc/self/ns/pid on Linux; null when unreadable (not Linux) or malformed. Never throws. */\n    internal fun readOwnPidNamespace(link: () -> String = { Files.readSymbolicLink(File(\"/proc/self/ns/pid\").toPath()).toString() }): String? =\n        try { link().takeIf { PID_NAMESPACE.matches(it) } } catch (_: Exception) { null }\n3. Members beside isReachable (:948), add:\n   - `fun isOtherPidNamespace(info: DaemonInfo): Boolean { val recorded = info.pidNamespace ?: return false; return PID_NAMESPACE.matches(recorded) && recorded != ownPidNamespace() }`\n     KDoc: written in another pid namespace than this IDE's (a container, another WSL distro), so its pid names no process here. As for isOtherSideOfWsl, it is never probed or signalled and the port alone judges it. Only a well-formed pid:[N] counts (daemon.json is repository content). An absent or malformed value, or this IDE's own namespace, keeps the pid rules. With no readable own namespace, any recorded value differs.\n   - `private fun pidUnjudgeable(info: DaemonInfo): Boolean = isOtherSideOfWsl(info.projectPath, isWindows()) || isOtherPidNamespace(info)`\n4. Use it at every pid site:\n   - :161 `if (isOtherSideOfWsl(info.projectPath, isWindows())) return false` becomes `if (pidUnjudgeable(info)) return false`. Never verify or replace such a daemon.\n   - :317 in replacementMetadataCleared, `!isOtherSideOfWsl(info.projectPath, isWindows())` becomes `!pidUnjudgeable(info)`.\n   - :949 in isReachable, `(isOtherSideOfWsl(info.projectPath, isWindows()) || isProcessAlive(info.pid))` becomes `(pidUnjudgeable(info) || isProcessAlive(info.pid))`.\n   - :969 in offLoopbackBindRefusal, `isOtherSideOfWsl(info.projectPath, isWindows())` becomes `pidUnjudgeable(info)`. Its KDoc names a record from another pid namespace beside the WSL one.\n5. stopDaemonForRestart (:349): right after the WSL refusal block and before `if (windowsRestart())`, add\n    if (info != null && isOtherPidNamespace(info)) {\n        return \"Restart Daemon did not stop pid ${info.pid}, which .moe/daemon.json records in another pid namespace (for example a container): \" +\n            \"this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), \" +\n            \"then use Restart Daemon.\"\n    }\n   Today LEGACY destroys whatever host process holds that pid number. That is an unrelated process.\n6. stopWindowsRestart (:386) is reached only after that early return, so it needs no change.\n7. MoeProjectService.kt needs no edit: connect() (:177, :206) and connectWithRetry decide through isReachable.\n\nError handling: readOwnPidNamespace catches every exception. isOtherPidNamespace does a regex match and a string compare and never throws with the default provider. The existing try/catch wrappers around isReachable and offLoopbackBindRefusal stay.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "DaemonInfo.pidNamespace (trailing, nullable). Supervisor: ctor seam ownPidNamespace, companion PID_NAMESPACE (same regex as probeHost.ts:103) + readOwnPidNamespace(link) (catch-all, null), public isOtherPidNamespace, private pidUnjudgeable, used at the start-path early return, replacementMetadataCleared, isReachable and offLoopbackBindRefusal (KDoc updated); stopDaemonForRestart refusal placed before `if (windowsRestart())`. Checked: MoeProjectService.kt:358 registers daemonInfo.pid only as a refcount key (MoeProjectRegistry.registerDaemon); close kills only spawnedDaemonProcess, never by pid, so no other signal path. MoeProjectService.kt unchanged. Compile happens in step 3's gate (Gradle needs the lease).",
+      "startedAt": "2026-11-04T12:46:59.011Z",
+      "completedAt": "2026-11-04T12:49:57.920Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "JUnit 4 tests. Names start with PN, because the gate counts `<testcase name=\"PN`. Records use pidNamespace \"pid:[1]\" as another namespace and \"pid:[7]\" as this IDE's.\n\nmoe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt\n- Helper `supervisor(...)` (:1690): add the parameter `ownPidNamespace: () -> String? = { \"pid:[7]\" }` and pass `ownPidNamespace = ownPidNamespace` to the constructor.\n- Add six tests beside the other-side ones (:281-325, :369-386, :412-438), mirroring them:\n  - PN1 `PN1 isOtherPidNamespace counts only a well-formed namespace that is not this IDE's`:\n    - With supervisor(root), \"pid:[1]\" is true.\n    - null, \"pid:[7]\", \"pid:[x]\", \"pid:[1\", \"net:[1]\", \" pid:[1]\" and \"pid:[\" + \"1\".repeat(21) + \"]\" are false.\n    - MoeDaemonSupervisor(root.canonicalPath, \"Test\", ownPidNamespace = { null }) makes \"pid:[7]\" true.\n    - MoeDaemonSupervisor.readOwnPidNamespace { \"pid:[7]\" } is \"pid:[7]\". It is null for { \"garbage\" } and for { throw java.nio.file.NoSuchFileException(\"/proc/self/ns/pid\") }.\n  - PN2 `PN2 isReachable uses only the port for a record from another pid namespace`: mirror 'isReachable uses only the port for other-side pids'.\n    - local = DaemonInfo(9876, 42, \"now\", root.canonicalPath, pidNamespace = \"pid:[7]\"), and namespaced = local.copy(pid = 43, pidNamespace = \"pid:[1]\").\n    - For alive and open in {false, true}: isReachable(local) == alive && open, and isReachable(namespaced) == open.\n    - The probed pids are exactly [42].\n  - PN3 `PN3 ensureDaemonRunning leaves an open daemon from another pid namespace alone and replaces a closed one`: mirror 'leaves an open other-side daemon of this project alone' with DaemonInfo(9876, 42, \"now\", root.canonicalPath, pidNamespace = \"pid:[1]\").\n    - Open: no start, bytes equal, no pid probed.\n    - Closed: one start and the file deleted.\n    - Call killSpawnedDaemon() as BH3 does.\n  - PN4 `PN4 restart refuses metadata from another pid namespace without touching any process under either profile`: mirror 'restart refuses other-side metadata' with the same proxy handle and loops.\n    - The exact refusal is \"Restart Daemon did not stop pid 42, which .moe/daemon.json records in another pid namespace (for example a container): this IDE can neither see nor signal that process. Stop that daemon where it runs (for example with docker stop), then use Restart Daemon.\"\n    - No probe, lookup or destroy happens.\n    - Under LEGACY and !windows, the same record with pidNamespace \"pid:[7]\" returns null after exactly one probe, one lookup and one destroy (today).\n  - PN5 `PN5 a record from another pid namespace bound off loopback never has its pid probed`: mirror BH3 with root.canonicalPath, bindHost = \"::1\" and pidNamespace = \"pid:[1]\", with probes answering alive.\n    - Open: kept, no start.\n    - Closed: replaced.\n    - The probed list is always empty.\n  - PN6 `PN6 a record without pidNamespace, malformed, or with this IDE's own keeps the pid rules`: for ns in listOf(null, \"pid:[7]\", \"pid:[x]\"), with a dead pid 42 and an open port:\n    - isReachable is false.\n    - ensureDaemonRunning() is true, with one start and the file deleted.\n    - 42 was probed.\n    - Call killSpawnedDaemon().\n\nmoe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt: two tests using the fixture's writeDaemonJson, healthReply, health, injectSupervisor and field helpers.\n  - PN7 `PN7 connect keeps a reachable daemon json from another pid namespace and connects as today`:\n    - f.healthReply(200, f.health(f.basePath)), then write f.writeDaemonJson(\"S1\").copy(pidNamespace = \"pid:[1]\") as Gson JSON and keep its text.\n    - Inject MoeDaemonSupervisor(f.basePath, \"Test\", portProbe = { _, _ -> true }, processAliveProbe = { probed += it; false }, processStarter = { error(\"must not spawn\") }, ownPidNamespace = { \"pid:[7]\" }).\n    - Call f.service.connect(). Then f.awaitWebSocketRequest(); the daemon.json text is unchanged, and probed is empty.\n  - PN8 `PN8 connect removes a daemon json from another pid namespace whose port is closed`:\n    - The same record, with portProbe false and processAliveProbe { probed += it; true } (a host process that happens to hold the pid).\n    - Set windowsRestartInFlight to true, exactly as BH5 does, so connect()'s own branch decides.\n    - After connect(): daemon.json is gone, probed is empty, and f.service.field(\"reconnectFuture\") is not null.\n\nRED: on 2037e856 these tests do not compile (no pidNamespace, no ownPidNamespace). Step 4's mutants give the behavioral red.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "PN1-PN6 added to MoeDaemonSupervisorTest after the other-side restart test; supervisor() helper takes ownPidNamespace = { \"pid:[7]\" }. PN1 also asserts \"pid:[1]\\n\" (trailing newline) is not counted, and an unreadable own namespace still answers false for a record without the field. PN7/PN8 in MoeProjectForeignDaemonTest after BH5; probed lists are CopyOnWriteArrayList because reconnects run on the scheduler thread. Compile and run happen in step 3 (lease), and behavioral RED comes from step 4's mutants.",
+      "startedAt": "2026-11-04T12:49:58.787Z",
+      "completedAt": "2026-11-04T12:50:52.525Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, under the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease): moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and release it on every path.\n\nRun this exact command from the task worktree. Its fresh output is the complete_task evidence.\n- Expected: BUILD SUCCESSFUL, MoeDaemonSupervisorTest tests=\"100\" (6 PN), MoeProjectForeignDaemonTest tests=\"14\" (2 PN), and the Models.kt pidNamespace line.\n- Baseline: 94 (2 skipped) and 12.\n- Never kill a process you did not start.\n\ncd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"PN' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) PN=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 8 ] || r=1; grep -n pidNamespace moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "note": "Gate run under the jetbrains-gradle lease (acquired 12:50:55Z), from the task worktree, verbatim: BUILD SUCCESSFUL in 1m 37s; xml tests=695 skipped=6 failures=0 errors=0; MoeDaemonSupervisorTest tests=100 skipped=2 (94+6 PN, baseline skips unchanged), MoeProjectForeignDaemonTest tests=14 (12+2 PN); Models.kt:298 pidNamespace. No compiler warnings for the touched files. No new edits in this step; it re-lists the test files.",
+      "startedAt": "2026-11-04T12:50:53.558Z",
+      "completedAt": "2026-11-04T12:53:39.075Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, scoped to this task's diff (skill adversarial-self-review). Run the mutants below in a git-archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, worker variant). Hold the lease the whole time. Each mutant must turn the named tests red:\n- M1: drop `|| isOtherPidNamespace(info)` from pidUnjudgeable. PN2, PN3, PN5, PN7 and PN8 fail.\n- M2: delete the namespaced refusal in stopDaemonForRestart. PN4 fails: LEGACY destroys the handle.\n- M3: make PID_NAMESPACE match anything (`Regex(\".*\")`). PN1 and PN6 fail.\n- M4: in isOtherPidNamespace, change `recorded != ownPidNamespace()` to `true`. PN6 (own namespace) and the PN4 own-namespace branch fail.\nRecord each mutant's failing test names in the complete_step note, then confirm the restore with sha256sum -c.\nChecklist:\n- No path signals or probes a namespaced pid: grep every isProcessAlive and processLookup call.\n- The WSL other-side tests pass unchanged.\n- A Windows or macOS IDE has no own namespace, so any well-formed record goes to the port and identity check.\n- A record without the field behaves exactly as before.\n- The field name pidNamespace and the pid:[N] format match task-da89f620. Never rename either.\n- Error handling: no new throw paths.\n- All edits are made with the editing tool, never shell writes (project customRules).\nFix anything found, re-run step 3's command, then complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Mutants ran in a git-archive copy (/mnt/d/moe-scratch/m-6796, HEAD plus the uncommitted diff), under the lease. Each failed its named tests:\n- M1 (pidUnjudgeable drops the namespace branch): PN2, PN3, PN5, PN7, PN8.\n- M2 (restart refusal neutralized with `&& info.pid < 0`): PN4. A first `if (false && ...)` form did not compile (smart cast), so the harness was fixed to show compile errors and use strict XML freshness.\n- M3 (PID_NAMESPACE = `.*`): PN1, PN6.\n- M4 (`recorded != own` replaced by `true`): PN1, PN2, PN4, PN6.\nsha256sum -c confirmed the copy restored (120 src files) and the worktree untouched.\n\nChecklist:\n- Every isProcessAlive/processLookup site is guarded: :266 sits behind the start-path early return, :319/:956/:992 use pidUnjudgeable, and :365/:370/:393/:395 come after the restart early return.\n- WSL tests are unedited and green.\n- An own namespace of null (Windows, macOS) counts any well-formed record as other (PN1).\n- A record without the field keeps the pid rules (PN6 and all existing tests).\n- The field name and regex are identical to probeHost.ts:103.\n- No new throw path: readOwnPidNamespace catches Exception.\n- All edits were made with the Edit tool.\n\nNon-blocking, out of approvedScope: under PROTECTED, doConnect→activationRefusal→verifyProvenance reads host ProcessHandle facts (never a signal) for the recorded pid. WSL other-side records behave the same today. It refuses unless the pid matches this IDE's recorded spawn.\n\nFresh gate rerun: EXIT=0, BUILD SUCCESSFUL, 695 tests, 0 failures. Lease released. No code changes in this step.",
+      "startedAt": "2026-11-04T12:53:39.927Z",
+      "completedAt": "2026-11-04T13:02:19.278Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-da89f620682e41c3892bfa7784b54ee3"
+  ],
+  "priority": "MEDIUM",
+  "order": 525.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:12:17.897Z",
+  "updatedAt": "2026-11-04T19:20:45.623Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T12:25:31.605Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T13:09:39.843Z",
+    "wallClockMs": 2648238
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a408f113",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:32:18.264Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains plugin treats a .moe/daemon.json whose pidNamespace (pid:[N], written by the daemon since task-da89f620) differs from the IDE's own as it treats a record from the other side of the WSL boundary. It never probes or signals that pid, and the port alone decides reachability. An open port means the daemon is live: the start path neither replaces nor spawns, connect() keeps daemon.json and connects through the existing /health identity check, and Restart Daemon refuses with a message naming the other pid namespace. A closed port means the record is stale and is deleted and replaced, as today, so the IDE recovers once a container is gone. Records without the field, malformed ones and ones naming the IDE's own namespace keep today's pid rules.",
+    "invariants": [
+      "No code path probes (isProcessAlive) or signals (processLookup/destroy) the pid of a record from another pid namespace.",
+      "isOtherSideOfWsl semantics and the existing other-side tests are unchanged.",
+      "Only pidNamespace values matching ^pid:\\[[0-9]{1,20}\\]$ count; null, malformed values and the IDE's own namespace keep the pid rules.",
+      "MoeProjectService.kt is unchanged; it decides through isReachable."
+    ],
+    "compatibility": [
+      "DaemonInfo gains a trailing optional pidNamespace: String? = null, so every positional and named construction compiles, and Gson leaves it null for older daemon.json files.",
+      "No wire, settings or UI-contract change apart from the new Restart Daemon refusal text."
+    ],
+    "approvedScope": [
+      "Models.kt DaemonInfo.pidNamespace.",
+      "MoeDaemonSupervisor: constructor seam ownPidNamespace, companion PID_NAMESPACE and readOwnPidNamespace, isOtherPidNamespace, private pidUnjudgeable, and its use at the start-path check, replacementMetadataCleared, isReachable and offLoopbackBindRefusal, plus the stopDaemonForRestart refusal.",
+      "Tests PN1-PN6 in MoeDaemonSupervisorTest (plus the supervisor() helper parameter) and PN7-PN8 in MoeProjectForeignDaemonTest."
+    ],
+    "reuse": [
+      "The isOtherSideOfWsl pattern and its tests (isReachable for other-side pids, leaves an open other-side daemon alone, BH3, restart refuses other-side metadata, BH5's windowsRestartInFlight isolation) as the template for every PN test.",
+      "The MoeProjectForeignDaemonTest Fixture (HttpServer /health and /ws, writeDaemonJson, injectSupervisor)."
+    ],
+    "sourceAssumptions": [
+      "MoeDaemonSupervisor.kt:948-952 isReachable = (isOtherSideOfWsl || isProcessAlive(pid)) && isPortOpen(port).",
+      ":160-162: a reachable record of this project returns early (other-side) or goes to replacedUnverified.",
+      ":172-176: deleteDaemonInfoIfUnchanged, then spawn.",
+      ":317: replacementMetadataCleared. :349-376: stopDaemonForRestart, whose LEGACY branch destroys processLookup(pid). :957-975: offLoopbackBindRefusal. :1025: companion isOtherSideOfWsl. :89: Gson parses DaemonInfo.",
+      "MoeProjectService.kt:177-188: connect() deletes daemon.json when !isReachable. :206: connectWithRetry uses isReachable.",
+      "VS Code (MoeDaemonClient.ts) deletes daemon.json only on a project mismatch (:1653, :1733, :1939), so this row does not cover it."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"PN' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) PN=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 8 ] || r=1; grep -n pidNamespace moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Refuse-when-unconfirmed for namespaced records, like the daemon's WSL rule. Rejected, for parity with task-da89f620's decision. The plugin already treats an other-side WSL record with a closed port as stale (ensureDaemonRunning deletes it and spawns), and the same holds here, so a gone container never wedges the IDE.\n- A /health probe inside isReachable. Rejected: the identity check already runs in doConnect (DaemonIdentityProbe, task-90664db1), and isReachable stays a cheap port check, as it is for WSL.\n- Reading the namespace in MoeProjectService. Rejected: every decision already routes through the supervisor's isReachable, offLoopbackBindRefusal and stopDaemonForRestart.",
+    "codebaseInsights": "- Every pid judgment in the plugin is in MoeDaemonSupervisor, at :161, :317, :358, :386, :949 and :969.\n- :358 and :386 are reached only after stopDaemonForRestart's early returns, so one new early return there covers both.\n- The constructor already injects portProbe, processAliveProbe and processLookup for tests. ownPidNamespace follows that pattern.\n- Gson ignores unknown keys and leaves a missing field null.\n- The current XML counts are MoeDaemonSupervisorTest 94 (2 skipped) and MoeProjectForeignDaemonTest 12.\n- No peer worktree has hunks in the four files (checked 12:50Z).",
+    "risks": "- PN4's exact message must match the code string byte for byte. Copy it from step 1.\n- Do not put the namespaced check after `if (windowsRestart())`: Windows hosts would then reach stopWindowsRestart's pid probe first.\n- Files.readSymbolicLink on /proc/self/ns/pid returns `pid:[N]` on Linux. On Windows the path resolves to \\proc\\self\\ns\\pid, which throws and is caught (null). Never call the default provider in a test; inject it.\n- dependsOn task-da89f620 (WORKING): this row's WORKING claim waits for it. The field name and format must not drift from it.\n- The jetbrains-gradle lease is shared. Queue with report_blocked { resourceId } if it is busy, and never run Gradle unleased.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "4c7d6464b92acac046e5933d546f6b9ade17c3e0",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:32:18.293Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:46:59.011Z",
+  "reviewStartedAt": "2026-11-04T13:02:45.008Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && L=$(mktemp) && echo \"log=$L\" && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; R=moe-jetbrains/build/test-results/test; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $R/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; n=0; for c in MoeDaemonSupervisorTest MoeProjectForeignDaemonTest; do X=$R/TEST-com.moe.services.$c.xml; b=$(grep -c '<testcase name=\"PN' $X); n=$((n+${b:-0})); echo \"$c: $(grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X) PN=$b\"; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; done; [ \"$n\" = 8 ] || r=1; grep -n pidNamespace moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt || r=1; exit $r",
+    "exitCode": 0,
+    "outputTail": "log=/tmp/tmp.JaakEcNmvb\nBUILD SUCCESSFUL in 31s\nxml tests=695 skipped=6 failures=0 errors=0\nMoeDaemonSupervisorTest: tests=\"100\" skipped=\"2\" failures=\"0\" errors=\"0\" PN=6\nMoeProjectForeignDaemonTest: tests=\"14\" skipped=\"0\" failures=\"0\" errors=\"0\" PN=2\n298:    val pidNamespace: String? = null",
+    "reportedAt": "2026-11-04T13:02:45.008Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+  ],
+  "completionSummary": "The JetBrains plugin treats a .moe/daemon.json whose pidNamespace (pid:[N], written since task-da89f620) differs from the IDE's own like a record from the other side of the WSL boundary. It never probes or signals that pid, and the port alone decides reachability.\n- Models.kt: DaemonInfo gets a trailing `pidNamespace: String? = null`.\n- MoeDaemonSupervisor.kt:\n  - ctor seam ownPidNamespace (default readOwnPidNamespace: readlink /proc/self/ns/pid; null off Linux or on any error).\n  - companion PID_NAMESPACE, the same regex as probeHost.ts:103.\n  - isOtherPidNamespace, plus private pidUnjudgeable = isOtherSideOfWsl || isOtherPidNamespace, used at the start-path early return, replacementMetadataCleared, isReachable and offLoopbackBindRefusal.\n  - a Restart Daemon refusal naming the other pid namespace, placed before the Windows branch. LEGACY no longer destroys whatever host process holds the container's pid number.\n- Behavior:\n  - Open port: kept, no spawn, and connect() goes through the /health identity check.\n  - Closed port: stale, deleted and replaced, as today.\n  - No field, malformed, or own namespace: today's pid rules.\n- MoeProjectService.kt is unchanged. Its pid use at :358 is only a refcount key.\n- Tests: PN1-PN6 (MoeDaemonSupervisorTest) and PN7-PN8 (MoeProjectForeignDaemonTest). On 2037e856 they do not compile.\n- Mutants, run in an archive copy:\n  - M1 (namespace branch dropped): PN2, PN3, PN5, PN7, PN8 fail.\n  - M2 (restart refusal off): PN4 fails.\n  - M3 (regex `.*`): PN1, PN6 fail.\n  - M4 (own-namespace compare off): PN1, PN2, PN4, PN6 fail.\n- Gate, run fresh under the jetbrains-gradle lease (released): BUILD SUCCESSFUL, 695 tests, 6 skipped, 0 failures. Supervisor 100 (6 PN), foreign-daemon 14 (2 PN).\n- Diff: +204/-10 across 4 files.\n- Non-blocking: under PROTECTED, doConnect→activationRefusal→verifyProvenance reads host ProcessHandle facts (no signal) for the recorded pid, as WSL other-side records already do.",
+  "commits": [
+    {
+      "sha": "800786516043e13f0b8c6a503642ca4916a79011",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T12:45:35Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectForeignDaemonTest.kt"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T13:03:36.000Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T13:03:51Z",
+    "at": "2026-11-04T13:10:07.843Z"
+  },
+  "completedAt": "2026-11-04T13:09:39.843Z",
+  "reviewCompletedAt": "2026-11-04T13:09:39.843Z",
+  "reviewSummary": "Reviewed completion 80078651 (on moe/work-2026-10-24 + origin). +204/-10 (net 194), 4 declared files, scope = approvedScope, MoeProjectService.kt untouched.\n\nCode: trailing nullable DaemonInfo.pidNamespace. Regex identical to probeHost.ts:103; matches() rejects a trailing \\n. readOwnPidNamespace never throws. pidUnjudgeable is used at all 4 named sites. The restart refusal precedes windowsRestart(), so no namespaced pid is probed or signalled. No forbidden patterns.\n\nDoD1: PN2/PN3/PN7 (+PN4/PN5/PN8). DoD2: PN6; existing WSL/identity/foreign tests unedited, green. DoD3: re-ran task.verification verbatim at 80078651 under the jetbrains-gradle lease (released): EXIT=0, BUILD SUCCESSFUL, 695 tests, 6 skipped, 0 failures; Supervisor 100 (PN=6), Foreign 14 (PN=2); fresh XML 13:06:20Z.\n\nMutants (fresh archive copy, restore sha-verified): M1 fails PN2, PN3, PN5, PN7, PN8. Non-blocking: S1 (start-path guard) and S2 (replacementMetadataCleared) survive, since both matter only under PROTECTED (not the default) and the PN tests use LEGACY. The code there is correct by review. qualityGate: parity PASS, lint OK. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

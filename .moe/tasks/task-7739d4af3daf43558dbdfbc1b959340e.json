@@ -1,0 +1,230 @@
+{
+  "id": "task-7739d4af3daf43558dbdfbc1b959340e",
+  "epicId": "epic-be924fb8",
+  "title": "feat(vscode): the provider picker and agentCommand setting offer Copilot (provider 'copilot')",
+  "description": "Slice 5 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider): VS Code parity with the JetBrains slice. dependsOn task-ab323f85: the wrappers run copilot for -Command copilot / --command copilot.\n\nDELIVERABLE:\n- 'copilot' in AgentProvider (moe-vscode/src/util/AgentLauncher.ts). A copilot launch passes -Command 'copilot' / --command 'copilot' like the other providers.\n- pickProvider in moe-vscode/src/extension.ts lists { label: 'Copilot', provider: 'copilot' } before Custom...\n- The agentCommands datalist in moe-vscode/src/panels/SettingsPanel.ts offers copilot.\n- 'COPILOT' in WorkerType (moe-vscode/src/types/moe.ts).\n- Tests: moe-vscode/tests/verified-local-launch.test.cjs V5 refuses 'copilot' worker and QA VM seats by name before any readiness request (vmSeatsMayLaunch allows only claude and codex), plus a check that the picker and the datalist offer copilot.\n\nNOT IN SCOPE: isAgentAuthor's name heuristics (worker ids are <role>-<hex>, never the CLI name); the VS Code listing text (package.json description, README: the docs slice); JetBrains.\n\nVERIFICATION (global rail: never npm ci/install/test in the live checkout): in a snapshot outside the repo, moe-vscode's npm ci, npm test and npm run compile all pass (the plan names any daemon or proxy build the startup tests need).",
+  "definitionOfDone": [
+    "AgentProvider in moe-vscode/src/util/AgentLauncher.ts includes 'copilot', and a copilot launch line passes -Command 'copilot' (PowerShell) / --command 'copilot' (bash), proven by a test",
+    "The provider picker lists Copilot before Custom... and the Settings agentCommand datalist offers copilot, proven by a test",
+    "verified-local-launch.test.cjs V5 refuses copilot worker and QA VM seats by name before any readiness request",
+    "WorkerType in moe-vscode/src/types/moe.ts includes 'COPILOT'",
+    "In a snapshot outside the live checkout, moe-vscode's npm test and npm run compile exit 0"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add 'copilot' before 'custom' to the exported AgentProvider union and 'COPILOT' to WorkerType; no daemon/wire schema change or worker-name heuristics. The production launcher already uses `command = provider` for every non-custom provider and both command builders quote that string, so do not add a Copilot-only branch or change quoting helpers. Keep VM_AGENT_COMMANDS as ['claude','codex'] and vmSeatsMayLaunch refusal before readiness unchanged.\nUse test-driven-development in verified-local-launch.test.cjs. Extend V5's unsupported-provider table with ['copilot', undefined, 'copilot'] and run each row for BOTH worker and qa. The exact assertion remains `assert.deepEqual([f.errors,f.terminals.length,ask.calls],[[CLI_REFUSAL(shown)],0,0])`; a ready daemon reply must still not be queried. Add host launch cases with legacy/observe for Copilot, all roles; exact decoded terminal command must carry -Command 'copilot' on Windows or --command 'copilot' on POSIX and no provider-specific exec/positive interactive flags. Exercise both builders on every host: minimally parameterize the existing launcher VM harness with optional simulated process.platform, use Object.create(process,{platform:{value:platform}}) as agent-launcher-controls.test.cjs already does, and create both fake bundled wrapper files for those cases; leave default callers/fixtures intact. Compare full decoded command/terminal options, only normalizing the random seat id, not dropping meaningful argv. Add a TypeScript AST assertion on the exported WorkerType union that 'COPILOT' is present exactly once, since runtime transpilation erases the type. Preserve all old union members. Error handling: existing missing custom command, unsafe arg, missing wrapper and VM refusal paths stay unchanged; no real sockets or installed Copilot needed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "note": "Added 'copilot' to AgentProvider and 'COPILOT' to WorkerType. Tests (verified-local-launch.test.cjs): V5 extended to copilot for worker AND qa plus a launchAllAgents copilot refusal; V7 runs the real launcher on simulated linux and win32 (legacy/observe, all 4 roles) and compares full terminal options + decoded command with an independently written expectedCommand (platform-parameterized), plus a no-provider-flag check; V8 reads both unions from the TS AST (COPILOT / copilot exactly once, old members kept). V8 was red before the type edits. 32/32 pass in this file (iterated via NODE_PATH to the shared node_modules, read-only; the real gate runs in a /tmp snapshot at step 3).",
+      "startedAt": "2026-11-06T05:49:06.646Z",
+      "completedAt": "2026-11-06T05:50:30.545Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "In pickProvider's existing providers array add `{ label: 'Copilot', description: lastProvider === 'copilot' ? 'Last used' : '', provider: 'copilot' }` immediately before Custom.... Keep the existing last-used promotion, cancellation and state persistence untouched (base order is before Custom, but a saved provider may move to the top). In SettingsPanel's agentCommands datalist add `<option value=\"copilot\">` after grok; preserve escaping and custom text input. No listing/package/docs edits.\nAdd focused production-derived tests in verified-local-launch.test.cjs, not a new test file. For picker coverage, use the installed TypeScript AST API to locate the ONE nested FunctionDeclaration named pickProvider in extension.ts, assert exactly one match, transpile its actual `export ` + getText source and run with the existing VM loader plus a vscode.window.showQuickPick recorder and workspaceState stub. With default lastProvider assert the captured labels/providers include Copilot exactly once before Custom, selection returns provider:'copilot', updates moe.lastProvider, and never asks for a custom command. With lastProvider:'copilot', assert it moves first and is marked Last used; cancel returns undefined without a state update. This executes the production function body without activating the whole extension or duplicating its provider table.\nFor settings coverage transpile the full SettingsPanel module (its runtime import is only vscode); call the existing getWebviewContent on an object created from its prototype with only panel.webview.asWebviewUri/cspSource and extensionUri supplied, and a vscode.Uri.joinPath stub. Inspect the actual emitted `<datalist id=\"agentCommands\">` body for exactly one option value copilot and retain all four previous options. Do not assert a source substring outside the emitted datalist, and do not hand-copy expected HTML into a fixture. These tests must fail when the real picker row or real option is removed.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "note": "pickProvider: added { label: 'Copilot', description: lastProvider === 'copilot' ? 'Last used' : '', provider: 'copilot' } directly before Custom...; SettingsPanel datalist: <option value=\"copilot\"> after grok. Tests P1/P2 cut the ONE nested pickProvider FunctionDeclaration out of extension.ts by AST (asserts exactly one match), transpile its real text and run it over showQuickPick/showInputBox/workspaceState recorders: default order [claude,codex,gemini,grok,copilot,custom], select saves moe.lastProvider and asks no custom command, saved copilot moves first marked Last used, cancel returns undefined with no update. S1 runs the transpiled SettingsPanel.prototype.getWebviewContent and inspects the emitted agentCommands datalist (one datalist, options only, [claude,codex,gemini,grok,copilot], input still list=agentCommands). P1/P2/S1 were red before the two production edits. 35/35 in verified-local-launch.test.cjs.",
+      "startedAt": "2026-11-06T05:50:32.678Z",
+      "completedAt": "2026-11-06T05:51:25.598Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification — run this one exact command from the task worktree root: timeout 1200s bash -c 'set -euo pipefail; unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; s=$(mktemp -d); trap \"rm -rf \\\"$s\\\"\" EXIT; git archive HEAD | tar -x -C \"$s\"; git diff --binary HEAD -- moe-vscode | (cd \"$s\" && git apply --allow-empty); cd \"$s/moe-vscode\"; npm ci --no-audit --no-fund; npm test; npm run compile'. It archives HEAD into a unique external /tmp snapshot and overlays this task's tracked VS Code diff before npm ci, the FULL VS Code test suite and compile. All five modified files already exist, so no untracked new-source omission; before gating confirm no untracked implementation file was introduced. Full snapshot intentionally includes JetBrains corpus/resources, daemon source and local-runner scripts that VS Code tests read. Current daemon-start.test.cjs mocks child_process, and bundle-assets.test.cjs writes its own fake daemon/proxy dist; no daemon/proxy build is required for this gate. If that prerequisite changes, do any required preparation only in an external snapshot, never live dist. The gate must finish <=20 minutes and uses no real Copilot/auth/network apart from locked npm install. Capture fresh test counts, exit code and output tail for complete_task. Error handling for a red gate: fix the named failure and rerun the same gate; do not weaken tests, accept a skipped new Copilot row, run npm ci/test in the live checkout, or substitute a partial suite. Scratch cleanup removes only the directory created by this invocation.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate ran in a fresh /tmp git-archive snapshot of HEAD with this task's tracked moe-vscode diff overlaid: npm ci, npm test, npm run compile all exit 0. Tests 869, pass 852, fail 0, skipped 17 (pre-existing Windows-only L5 PowerShell rows etc.; none of the new copilot rows V5/V7x4/V8/P1/P2/S1 skipped). DEVIATION: the harness refused the verbatim `bash -c '...; trap \"rm -rf \\\"$s\\\"\" EXIT ...'` (could not check the rm), so I ran the identical command minus the trap and removed my own mktemp snapshot dir afterwards by its literal path; everything else (unset MOE_/CLAUDE/FAKE_ env, git archive HEAD, git diff --binary HEAD -- moe-vscode | git apply, npm ci --no-audit --no-fund, npm test, npm run compile) is unchanged. Nothing was run in the live checkout; iteration used NODE_PATH to the shared node_modules read-only.",
+      "startedAt": "2026-11-06T05:51:28.923Z",
+      "completedAt": "2026-11-06T05:52:19.105Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review — load adversarial-self-review. Confirm the union additions neither widen VM capability nor alter custom-command heuristics, both worker and QA are refused before readiness, both simulated platform builders are genuinely executed, and the expected command has not accidentally been derived from the same production output being asserted. Confirm AST extraction fails loudly if pickProvider changes shape, tests invoke the real picker and rendered datalist, last-used ordering and cancellation are preserved, and the WorkerType test fails on removing COPILOT. Preserve held-identical quoting helpers (AccountsTreeProvider has copies) and all existing providers. No package description/docs edits or unrelated UI refactor; existing Copilot docs/final rows own those. Address defects, rerun the one gate if changed, then complete_task with fresh evidence; no manual Git writes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "note": "Adversarial review of the 5-line production diff + test diff. (1) VM capability not widened: VM_AGENT_COMMANDS untouched (claude/codex); V5 refuses copilot for worker AND qa, and via launchAllAgents, with zero terminals and zero readiness calls. (2) Custom-command heuristics untouched: no new branch; command = provider for non-custom. (3) Both builders genuinely run on every host: V7 simulates linux and win32 via Object.create(process,{platform}) with both fake wrappers; expected text comes from the pre-existing independently written expectedCommand (only platform-parameterized), not from the launcher; full terminal options (incl. shellPath powershell.exe on win32) compared; regex guards against -Interactive/-Exec/-Copilot* flags without false-matching -ExecutionPolicy. (4) Red-before-green seen for V8 (type edits), P1/P2 (picker row) and S1 (datalist option); the AST pickProvider extraction asserts exactly one FunctionDeclaration + a body, so a rename/duplicate fails loudly. (5) Last-used promotion and cancellation preserved (P2). (6) Quote helpers, other providers, docs/listing untouched. Theoretical only: types/moe.ts comment still says the daemon records every worker as CLAUDE (pre-existing, out of scope). Project qualityGate (parity-check.sh && npm run lint) run fresh: exit 0.",
+      "startedAt": "2026-11-06T05:52:19.737Z",
+      "completedAt": "2026-11-06T05:52:44.046Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [],
+  "priority": "MEDIUM",
+  "order": 546.5,
+  "comments": [
+    {
+      "id": "comment-159c370b5ed1412789470b8840a95f90",
+      "author": "governor-913c7930",
+      "content": "Governor, 05:50Z. I removed this row's dependsOn edge to ab323f85 so an idle worker can start now; the board had 4 idle workers and one active row. This row edits only moe-vscode/** and tests against fake bundled wrappers, so it needs no wrapper bytes. Code to the wrapper contract the plans state, as d609eae3 does:\n- `copilot` is accepted under the protected runtime;\n- the headless override for copilot is the generic `-Interactive:$false` / `--no-interactive`;\n- there is no -CopilotExec.\nIf ab323f85 lands a different contract, the landed one wins, and QA checks this row against it. The docs row 1c580985 still waits on this row and on d609eae3.",
+      "timestamp": "2026-11-06T05:47:34.542Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:42.193Z",
+  "updatedAt": "2026-11-06T06:07:53.806Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:10:28.876Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-06T06:07:13.162Z",
+    "wallClockMs": 28604286
+  },
+  "contextFetchedBy": [
+    "architect-a3d9076e",
+    "worker-b3b3db54",
+    "qa-a196fc69"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:12:37.171Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code offers Copilot in provider/settings UI and emits its existing generic wrapper command; Copilot worker/QA VM launches remain refused before readiness.",
+    "acceptanceCriteria": [
+      "AgentProvider in moe-vscode/src/util/AgentLauncher.ts includes 'copilot', and a copilot launch line passes -Command 'copilot' (PowerShell) / --command 'copilot' (bash), proven by a test",
+      "The provider picker lists Copilot before Custom... and the Settings agentCommand datalist offers copilot, proven by a test",
+      "verified-local-launch.test.cjs V5 refuses copilot worker and QA VM seats by name before any readiness request",
+      "WorkerType in moe-vscode/src/types/moe.ts includes 'COPILOT'",
+      "In a snapshot outside the live checkout, moe-vscode's npm test and npm run compile exit 0"
+    ],
+    "invariants": [
+      "VM_AGENT_COMMANDS remains claude/codex; no new runtime API or persisted state format.",
+      "Other providers, quote helpers and custom-command/cancellation behavior stay unchanged.",
+      "AgentProvider and WorkerType additions are additive, and UI offers one Copilot entry.",
+      "All npm operations run only in the gate's external snapshot; full VS Code suite plus compile, <=20 minutes."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/src/panels/SettingsPanel.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/verified-local-launch.test.cjs"
+    ],
+    "reuse": [
+      "Existing generic AgentLauncher command path and VM refusal logic.",
+      "Existing verified-local-launch VM fixture, and platform override pattern in agent-launcher-controls tests.",
+      "TypeScript AST/transpile APIs already installed for tests; existing SettingsPanel rendering method."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash -c 'set -euo pipefail; unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; s=$(mktemp -d); trap \"rm -rf \\\"$s\\\"\" EXIT; git archive HEAD | tar -x -C \"$s\"; git diff --binary HEAD -- moe-vscode | (cd \"$s\" && git apply --allow-empty); cd \"$s/moe-vscode\"; npm ci --no-audit --no-fund; npm test; npm run compile'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Five-file additive slice fits cap: types/labels + one existing regression file. Avoid a new test helper, full extension activation harness, provider abstraction or launcher changes beyond the union.",
+    "codebaseInsights": "pickProvider is nested in extension activation but self-contained (ctx + vscode), so AST extraction can execute it. AgentLauncher passes provider directly and already refuses non-claude/codex VM commands. Existing V5 tests only worker; expand to qa. VS Code startup/bundle tests stub daemon/proxy; source/corpus reads require a full archive, not a moe-vscode-only copy.",
+    "risks": "Cross-realm equality needs plain()/JSON normalization; simulated win32 must have a fake ps1 wrapper even on Linux. No native CLI processes required. Source changes small; test additions table-driven. JetBrains provider plan already submitted as the primary-IDE predecessor in this session.",
+    "keyFiles": [
+      "moe-vscode/src/util/AgentLauncher.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/src/panels/SettingsPanel.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/verified-local-launch.test.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:12:37.207Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T05:49:06.646Z",
+  "reviewStartedAt": "2026-11-06T05:52:51.164Z",
+  "verification": {
+    "command": "timeout 1200s bash -c 'set -euo pipefail; unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; s=$(mktemp -d); git archive HEAD | tar -x -C \"$s\"; git diff --binary HEAD -- moe-vscode | (cd \"$s\" && git apply --allow-empty); cd \"$s/moe-vscode\"; npm ci --no-audit --no-fund; npm test; npm run compile'",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 869\nℹ suites 0\nℹ pass 852\nℹ fail 0\nℹ cancelled 0\nℹ skipped 17\nℹ todo 0\nℹ duration_ms 7509.258226\nnpm notice run moe-vscode@0.8.0 compile\nnpm notice run tsc -p ./\n(exit 0; the new V5/V7/V8/P1/P2/S1 copilot rows all ran and passed, none skipped; the 17 skips are pre-existing Windows-only PowerShell rows)",
+    "reportedAt": "2026-11-06T05:52:51.164Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/src/util/AgentLauncher.ts",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/tests/verified-local-launch.test.cjs",
+    "moe-vscode/src/extension.ts",
+    "moe-vscode/src/panels/SettingsPanel.ts"
+  ],
+  "completionSummary": "VS Code now offers Copilot. 'copilot' is in AgentProvider and 'COPILOT' in WorkerType (additive). pickProvider lists { label: 'Copilot', provider: 'copilot' } directly before Custom... and keeps last-used promotion and cancellation. The Settings agentCommand datalist has <option value=\"copilot\"> after grok. The launcher is untouched beyond the union: a copilot launch is the generic -Command 'copilot' (PowerShell) / --command 'copilot' (bash) line, and VM_AGENT_COMMANDS stays claude/codex. Tests in verified-local-launch.test.cjs: V5 refuses copilot for worker AND qa (and via launchAllAgents) by name with zero terminals and zero readiness calls; V7 runs the real launcher on simulated linux and win32 (legacy/observe, all 4 roles) against an independently written expected command; V8 reads both unions from the TS AST; P1/P2 run the real nested pickProvider cut out of extension.ts by AST; S1 inspects the real emitted datalist. V8/P1/P2/S1 were red before the production edits. NOTE ON THE GATE: the harness refused the verbatim checkRef (it cannot check the `trap \"rm -rf ...\"` inside bash -c), so I ran the identical command without the trap and removed my own mktemp snapshot by its literal path afterwards; every other step is unchanged. Project qualityGate (parity-check.sh && npm run lint) also run fresh: exit 0.",
+  "commits": [
+    {
+      "sha": "25155eacba15eb8f462dc25e9576790fc7031682",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b3b3db54@2026-11-06T05:47:28Z",
+      "paths": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/panels/SettingsPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/util/AgentLauncher.ts",
+        "moe-vscode/tests/verified-local-launch.test.cjs"
+      ],
+      "recordedBy": "worker-b3b3db54",
+      "recordedAt": "2026-11-06T05:54:28.724Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-06T06:05:28Z",
+    "at": "2026-11-06T06:07:53.806Z"
+  },
+  "completedAt": "2026-11-06T06:07:13.162Z",
+  "reviewCompletedAt": "2026-11-06T06:07:13.162Z",
+  "reviewSummary": "Reviewed completion 25155eac (contained in moe/work-2026-10-24, pushed). Net +134 over exactly the 5 approved files; production change is 5 lines (AgentProvider 'copilot', WorkerType 'COPILOT', a pickProvider row directly before Custom..., a datalist option after grok). No launcher branch; VM_AGENT_COMMANDS still claude/codex.\n\nGate re-run by me in a fresh external /tmp git-archive snapshot of 25155eac (MOE_/CLAUDE/FAKE_ env unset): npm ci, npm test = 869 tests / 852 pass / 0 fail / 17 skip (pre-existing Windows-only rows), exit 0; npm run compile exit 0. I omitted the checkRef's inline `trap rm -rf` (harness refuses it, see gotcha-gate-checkref-rm-trap-blocked) and removed my own mktemp dir by literal path. Nothing run in the live checkout. qualityGate (parity-check.sh && npm run lint) exit 0.\n\nDoD: (1) V7 runs the real launcher on simulated linux+win32 (legacy/observe, all 4 roles) against an independent expectedCommand; asserts -Command/--command 'copilot', no provider flag. (2) P1/P2 run the real nested pickProvider cut from extension.ts by AST: Copilot once, directly before Custom..., last-used and cancel preserved; S1 inspects the real emitted datalist [claude,codex,gemini,grok,copilot]. (3) V5 refuses copilot for worker and qa and via launchAllAgents, 0 terminals, 0 readiness calls. (4) V8 reads both unions from the TS AST. (5) Gate green. All new rows ran, none skipped (35/35 in the file).\n\nMutation check in my snapshot: stripping the 4 production edits makes V8, P1, P2, S1 fail (4 of 35), so they are not vacuous. V5/V7 stay green by design (generic untyped launcher path and VM refusal). No tests deleted or weakened; no forbidden patterns.\n\nNot in scope, left: types/moe.ts comment says the daemon records every worker as CLAUDE; listing/README belong to docs row 1c580985; JetBrains is another slice.",
+  "requiredCheckAtDone": null
+}

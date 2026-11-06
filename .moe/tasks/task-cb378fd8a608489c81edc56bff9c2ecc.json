@@ -1,0 +1,343 @@
+{
+  "id": "task-cb378fd8a608489c81edc56bff9c2ecc",
+  "epicId": "epic-be924fb8",
+  "title": "bug: gemini mode silently falls back to the Gemini CLI with Antigravity's flags when agy is missing (moe-agent.sh about :11612-11617, moe-agent.ps1 about :10993-11003), and agentCommand 'agy' is not recognized as gemini mode (moe-agent.sh :639): port PR #208's Antigravity-only gemini mode (MOE_AGY_COMMAND, one fixed not-found error, parity needles, docs and labels) to the work branch so #208 can close",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. The human left the decision on PR #208 to the governor (\"as u decide\"), and the decision is to port it.\n\nPROBLEM, on moe/work-2026-10-24, the same as main since 3272b871 (\"feat: use Antigravity (agy) for gemini agent mode\", 2026-09-29):\n- moe-agent.sh about :11612-11617, and moe-agent.ps1 about :10993-11003: when agentCommand is `gemini`, the launcher switches to `agy` only if agy is on PATH.\n- Otherwise it keeps `gemini` and runs the Gemini CLI with the agy-mode argv. The Gemini CLI rejects agy's flags, so the seat fails confusingly instead of saying Antigravity is missing.\n- The not-found message (\"Antigravity command not found: <cmd>\") names whichever binary is missing, which may be `gemini`.\n- moe-agent.sh :639 maps only `gemini` to the gemini cliType, so `agentCommand: \"agy\"` is not recognized at all.\n\nFIX: PR #208 (fix/agy-bom-flake, commit \"fix(wrapper): restore ps1 UTF-8 BOM, run Antigravity only in gemini mode\"). Read it with `gh.exe pr diff 208` and `gh.exe pr view 208` (WSL has only gh.exe). Re-apply its intent to the CURRENT files by anchor, never by line. The PR is against 09-29 main and conflicts.\n1. Both launchers. Gemini mode always runs Antigravity:\n   - take the binary from `MOE_AGY_COMMAND`, else `agy` on PATH;\n   - never fall back to the Gemini CLI;\n   - map both `gemini` and `agy` to the gemini cliType;\n   - with no agy, stop with ONE fixed message in both launchers: 'Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path' (take the exact strings from #208).\n2. scripts/tests/parity-check.sh and parity-check.ps1: require the shared literals (MOE_AGY_COMMAND and the not-found message), as #208's parity hunk does.\n3. Docs and labels, as in #208:\n   - README.md: the CLI list names Antigravity (agy);\n   - docs/CONFIGURATION.md: the `MOE_AGY_COMMAND` row, and `agentCommand` gemini \"runs Antigravity agy\";\n   - docs/GETTING_STARTED.md: sign-in with `agy`;\n   - docs/SCHEMA.md: the 'GEMINI' comment;\n   - JetBrains: TerminalAgentLauncher.kt `GEMINI(\"Antigravity\", \"gemini\")` and MoeBundle.properties `moe.panel.provider.gemini=Antigravity`.\n   JetBrains is first. If moe-vscode shows a provider label for gemini, give it parity in the same row; otherwise say none exists.\n4. A test pins the behaviour on both engines with fake binaries. No real agy or gemini is needed: gemini plus a fake agy runs the fake agy, and gemini with no agy stops with the message and never runs a fake `gemini`.\n\nALREADY ON THE BRANCH. Skip these parts of #208:\n- the ps1 UTF-8 BOM, which CLAUDE.md requires and parity-check enforces;\n- the heartbeatStop.test.ts flake, which the work branch fixed differently with `PWSH_CASE = { retry: 2, timeout: 15000 }`.\n\nORDER. dependsOn CQ-M07t (task-527735ea), which edits both launchers. task-e444f6ae also edits moe-agent.ps1 after t, in the check-dispatch stop area, far from the gemini launch block. Serialize the two with an edge if your plan touches nearby code; otherwise say why parallel is safe.\nNo change to the CQ-M07 turn-on row: gemini mode is outside the verified-local acceptance.\n\nCLOSE-OUT. When this row is DONE, the governor closes PR #208 as superseded, with a comment naming this row and its commit. Never close it from this row.",
+  "definitionOfDone": [
+    "Both launchers run agy for agentCommand gemini or agy (from MOE_AGY_COMMAND, else PATH) and never the Gemini CLI. With no agy, both stop with the same fixed not-found message naming MOE_AGY_COMMAND. A fake-binary test pins this on bash and on both PowerShell engines.",
+    "parity-check.sh and parity-check.ps1 require the shared literals. README, CONFIGURATION, GETTING_STARTED, SCHEMA and the JetBrains provider label say gemini mode runs Antigravity (agy), with VS Code parity if it shows a label. The plan's verification passes fresh.",
+    "The summary maps each PR #208 hunk to ported, already on the branch (BOM, heartbeat flake) or N/A, so the governor can close #208 as superseded."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "README.md: name Antigravity (agy) in every coding-CLI list. That is #208's 4 hunks, plus the badge (it existed on 09-29 and #208 missed it) and the account-rotation bullet (added after #208). Edit by text, never by line number; each old string occurs once at edc3e937:\n- intro: 'Run Claude Code, Codex, Gemini CLI, and Grok Build through' -> 'Run Claude Code, Codex, Antigravity (agy), and Grok Build through'\n- 'Works with' badge URL: 'Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Grok' -> 'Codex%20%C2%B7%20Antigravity%20%28agy%29%20%C2%B7%20Grok'\n- features table: 'Launch Claude Code, Codex, Gemini CLI, or Grok Build.' -> 'Launch Claude Code, Codex, Antigravity (agy), or Grok Build.'\n- install paragraph: 'one coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build)' -> 'one coding CLI (Claude Code, Codex, Antigravity (agy), or Grok Build)'\n- installer table row: '| Gemini CLI | `-AgentCommand gemini` | `--agent gemini` |' -> '| Antigravity (agy) | `-AgentCommand gemini` | `--agent gemini` |'. The installers already require agy for gemini: install-dependencies.ps1 calls Assert-MoeCommand \"agy\", and install-dependencies.sh calls moe_has_tool \"agy\".\n- rotation bullet: 'Codex, Gemini CLI, and Grok Build seats are unaffected.' -> 'Codex, Antigravity (agy), and Grok Build seats are unaffected.'\nLeave every 'VS Code / Antigravity' (the IDE) alone. Afterwards `grep -c 'Gemini CLI\\|Gemini%20CLI' README.md` is 0. Content check A (step 6) tests this.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "README.md"
+      ],
+      "modifiedFiles": [
+        "README.md"
+      ],
+      "note": "README: 6 coding-CLI mentions now name Antigravity (agy) (intro, badge URL Antigravity%20%28agy%29, features table, install paragraph, installer row, rotation bullet). grep 'Gemini CLI|Gemini%20CLI' = 0; 'Antigravity (agy)' lines = 5 (+ the badge). 'VS Code / Antigravity' untouched. +6/-6.",
+      "startedAt": "2026-11-04T20:15:24.344Z",
+      "completedAt": "2026-11-04T20:15:50.148Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "docs/CONFIGURATION.md: edit four rows and add one, anchored by row key and text.\n(a) The `MOE_WORKER_TYPE` row of `### Agent Scripts` (the one starting 'Exported on every launch'): '(`codex` → `CODEX`, `gemini` → `GEMINI`, `grok` → `GROK`, anything else → `CLAUDE`)' -> '(`codex` → `CODEX`, `gemini` or `agy` → `GEMINI`, `grok` → `GROK`, anything else → `CLAUDE`)'. task-c199e177 maps agy to gemini mode.\n(b) The `MOE_GROK_MODEL` row: '`claude-opus-5` fallback to grok' -> '`claude-opus-5-5` fallback to grok'. This is #208; the wrappers' RESOLVED_MODEL is claude-opus-5-5.\n(c) Directly after the `MOE_GROK_MODEL` row (#208's placement), add exactly this one row:\n| `MOE_AGY_COMMAND` | Antigravity CLI binary for gemini mode (`agentCommand` `gemini`, or `agy`, which the wrappers also accept). Gemini mode always runs Antigravity (`agy`), never the Gemini CLI; set this when the IDE's PATH lacks `agy` (a desktop-launched IDE often misses the shell PATH). A blank value counts as unset. With no `agy` found, the wrapper stops before launching: `Antigravity CLI (agy) not found: <cmd>. Install Antigravity, or set MOE_AGY_COMMAND to the agy binary path (the IDE may not see your shell PATH).` Not read under `MOE_RUNTIME_PROTECTED=1`: there gemini mode runs only an `agy` on an absolute `PATH` entry outside the project, else it refuses with `MOE_PROTECTED_AGENT_CLI_NOT_FOUND` | `agy` on PATH | `/Users/me/.local/bin/agy`, `C:\\Tools\\agy.exe` |\nThe quoted sentence must be task-c199e177's landed text. Copy it from `grep -o 'Antigravity CLI (agy) not found: [^\"]*' scripts/moe-agent.sh`, with `$COMMAND_BIN` as `<cmd>`. Check A derives it the same way, so a QA-driven rewording there fails here loudly.\n(d) The `agentCommand` row under Settings Reference:\n- description: 'They resolve the CLI only from absolute `PATH` entries outside the project, and report' -> 'They resolve the CLI only from absolute `PATH` entries outside the project (for `gemini`, the `agy` binary), and report'\n- values column: '`claude` (default), `codex`, `gemini`, `grok`' -> '`claude` (default), `codex`, `gemini` (runs Antigravity `agy`; the wrappers also accept `agy`; see `MOE_AGY_COMMAND`), `grok`'\n(e) The `models.{role}` row: \"the wrapper's `claude-opus-5` fallback is never passed to grok\" -> \"the wrapper's `claude-opus-5-5` fallback is never passed to grok\" (#208).\nCQ-M07v1 (task-63e6fb62) also edits this file: the executionProfile, repairPolicy and checkEnvironments rows, plus new Agent Scripts rows. A landing conflict goes through the normal LANDING-CONFLICT resume, keeping both sides, never a hand-merge on the target.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "CONFIGURATION: MOE_WORKER_TYPE (Agent Scripts) maps `gemini` or `agy` → GEMINI; MOE_GROK_MODEL and models.{role} say claude-opus-5-5 fallback (wrapper RESOLVED_MODEL verified at moe-agent.sh:2335-2337); new MOE_AGY_COMMAND row directly after MOE_GROK_MODEL quoting the landed not-found sentence (moe-agent.sh:11649) and the protected behaviour (protected_resolve_cli agy, :959); agentCommand row gains '(for `gemini`, the `agy` binary)' and the gemini value note. Windows example uses single backslashes like the file's other example. Content check A: 'docs check A f=0'. +5/-4.",
+      "startedAt": "2026-11-04T20:15:53.339Z",
+      "completedAt": "2026-11-04T20:17:46.031Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/GETTING_STARTED.md and docs/SCHEMA.md, #208's two one-line hunks.\n- GETTING_STARTED: 'run your chosen CLI (`claude`, `codex`, or `gemini`) once' -> 'run your chosen CLI (`claude`, `codex`, or `agy` for Antigravity) once'. Leave the `-AgentCommand gemini` / `--agent gemini` sentence above it alone: that value stays gemini.\n- SCHEMA, `type WorkerType`: the line \"  | 'GEMINI'    // Google Gemini CLI\" -> \"  | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)\". Keep its 2-space indent and 4-space column.\nLeave the two NOTE lines below WorkerType untouched. They have been stale since task-0b40957c, because the daemon now records the reported type, but that is outside this port; the governor has been told. The doc-contract tests that scan SCHEMA.md (util/daemonGitDocs.test.ts, util/taskTimeBudgetDocs.test.ts) match nothing in these lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/GETTING_STARTED.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "docs/GETTING_STARTED.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "GETTING_STARTED:41 sign-in names `agy` for Antigravity (the -AgentCommand gemini sentence untouched). SCHEMA:1174 WorkerType 'GEMINI' comment -> 'gemini mode: runs the Antigravity CLI (agy)', indent/columns kept; NOTE lines untouched. Doc-only, no tests touched (TDD n/a; content check B pins both). +2/-2.",
+      "startedAt": "2026-11-04T20:17:49.722Z",
+      "completedAt": "2026-11-04T20:18:02.372Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "JetBrains label, before the VS Code one: two value changes and a JUnit test that pins both.\n- moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt, enum AgentProvider: '        GEMINI(\"Gemini\", \"gemini\"),' -> '        GEMINI(\"Antigravity\", \"gemini\"),  // the wrappers run Antigravity (agy) for gemini mode' (#208). The command stays gemini: it is the wrapper's -Command/--command value, and PROTECTED_AGENT_COMMANDS derives from these entries.\n- moe-jetbrains/src/main/resources/messages/MoeBundle.properties: 'moe.panel.provider.gemini=Gemini' -> 'moe.panel.provider.gemini=Antigravity' (#208). The Agents menu shows this string (MoeToolWindowPanel, moe.panel.provider.${provider.name.lowercase()}).\n- moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt: directly after the test `AgentProvider maps grok and keeps CUSTOM last`, add exactly:\n    @Test\n    fun `AgentProvider GEMINI is labelled Antigravity and keeps the gemini command`() {\n        val gemini = TerminalAgentLauncher.AgentProvider.GEMINI\n        assertEquals(gemini, TerminalAgentLauncher.AgentProvider.fromCommand(\"gemini\"))\n        assertEquals(\"gemini\", gemini.command)\n        assertEquals(\"Antigravity\", gemini.displayName)\n        // The Agents menu shows the bundle string (MoeToolWindowPanel), not displayName.\n        val bundle = java.util.Properties()\n        javaClass.getResourceAsStream(\"/messages/MoeBundle.properties\")!!.use { bundle.load(it) }\n        assertEquals(\"Antigravity\", bundle.getProperty(\"moe.panel.provider.gemini\"))\n    }\nUse the java.util.Properties FQN, not a new import line, as MoeSettingsDialogTest and BoardReleaseTest load the bundle. Leave moe.settings.agentCommandHint alone (it lists commands and is still right). Leave plugin.xml's marketplace description alone too: it says 'Gemini CLI' but is not in #208, and is reported as a follow-up.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ],
+      "note": "TDD under the jetbrains-gradle lease. RED: added test `AgentProvider GEMINI is labelled Antigravity and keeps the gemini command` (after the grok test, java.util.Properties FQN, bundle via getResourceAsStream as BoardReleaseTest) -> Gradle --tests com.moe.util.TerminalAgentLauncherTest: BUILD FAILED, tests=61 failures=1, 'expected:<[Antigravity]> but was:<[Gemini]>'. GREEN: GEMINI(\"Antigravity\", \"gemini\") + comment, moe.panel.provider.gemini=Antigravity -> BUILD SUCCESSFUL, tests=61 skipped=1 failures=0 errors=0 (the skip predates this change). The command stays gemini (PROTECTED_AGENT_COMMANDS unchanged). No other Kotlin/bundle reference to the old label.",
+      "startedAt": "2026-11-04T20:18:06.511Z",
+      "completedAt": "2026-11-04T20:21:19.464Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VS Code parity for the provider label. moe-vscode shows one: pickProvider's quick pick in moe-vscode/src/extension.ts.\n- \"{ label: 'Gemini', description: lastProvider === 'gemini' ? 'Last used' : '', provider: 'gemini' },\" -> \"{ label: 'Antigravity', description: lastProvider === 'gemini' ? 'Last used' : '', provider: 'gemini' },\"\nThe provider id gemini, the AgentProvider type, SettingsPanel's `<option value=\"gemini\">` datalist entry and the stored lastProvider are commands or ids, not labels; they stay, so saved workspace state keeps working. No moe-vscode test asserts the old label (grep of moe-vscode/tests), and content check B pins the new one. This is one string literal in a `{ label: string; ... }` array, so it cannot change types. The control checkout's moe-vscode/node_modules has no typescript, so CI's VS Code typecheck and tests on PR #230 cover the compile. package.json's description ('Gemini CLI') is marketplace text outside #208, reported as a follow-up.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "VS Code parity: pickProvider (extension.ts:323) gemini quick-pick label 'Gemini' -> 'Antigravity'; provider id 'gemini', the lastProvider state key, and SettingsPanel datalist unchanged. One string literal in an Array<{ label: string; ... }>, so the types cannot change. No typecheck here: the worktree has no moe-vscode/node_modules (tsc absent), as the plan says; CI's VS Code typecheck covers it. No moe-vscode test asserts the label; content check B pins it. +1/-1.",
+      "startedAt": "2026-11-04T20:21:24.921Z",
+      "completedAt": "2026-11-04T20:21:37.207Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification, run ONCE after steps 1-5, from this task's worktree root, holding the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). Call moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and moe.release_resource on every path, red or green.\nThe command is the 5 executionContract.checkRefs joined with ' && ', in order:\n- content check A (CONFIGURATION, README);\n- content check B (GETTING_STARTED, SCHEMA, the JetBrains and VS Code labels, the new JUnit test);\n- task-c199e177's 'gemini mode' rows, on WSL node (bash) and Windows node.exe (PowerShell 5.1 and pwsh 7) in parallel;\n- parity-check.sh, parity-check.ps1 on pwsh.exe and powershell.exe, and npm run lint;\n- Gradle --tests com.moe.util.TerminalAgentLauncherTest.\nIts fresh output is the complete_task evidence. Expect: 'docs check A f=0', 'docs check B f=0', 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each), PASS parity-check.sh, PASS parity-check.ps1 twice, the lint OK lines, BUILD SUCCESSFUL, failures=\"0\" errors=\"0\" and 'gradle rc=0'.\nThe dry run took about 1 min without Gradle; budget 3-5 min against the human's 20-min cap. Do not run postflight.sh or postflight.ps1 (the human's 18:05Z decision, comment-1a9850e2).\nError handling for a red run:\n- A red content check names the file and string: fix the text, never the check.\n- A red gemini mode row means task-c199e177's landed launcher or test changed. Read the log whose path the line prints, then moe.report_blocked naming task-c199e177. Never edit a launcher or test from this row.\n- A Gradle compile error is in the new test: re-check the backticks and the FQN.\n- A lease held elsewhere: moe.report_blocked { resourceId: \"jetbrains-gradle\" }.\nWSL notes: mem:gotcha-jetbrains-gradle-from-wsl, mem:gotcha-pwsh7-reachable-from-wsl.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate per amend-1: the 5 checkRefs each wrapped verbatim in ( ) and chained with &&, run once from the worktree root under the jetbrains-gradle lease. GATE_RC=0 in 53 s. Output: 'docs check A f=0'; 'docs check B f=0'; 'gemini mode rows: rc=0 bash=9 ps51=9 ps7=9'; PASS parity-check.sh; PASS parity-check.ps1 (pwsh.exe) and PASS parity-check.ps1 (powershell.exe); lint OK architect 39 / worker 30 / qa 36; BUILD SUCCESSFUL; tests=61 skipped=1 failures=0 errors=0; 'gradle rc=0'. All five refs printed, so the chain ran end to end. No postflight run. Tree: exactly the 8 planned files.",
+      "startedAt": "2026-11-04T20:22:06.668Z",
+      "completedAt": "2026-11-04T20:23:57.020Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run ONCE after steps 1-5, from this task's worktree root, holding the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease). Call moe.acquire_resource { resourceId: \"jetbrains-gradle\" } first, and moe.release_resource on every path, red or green.\nThe command is the 5 executionContract.checkRefs, each wrapped VERBATIM in its own subshell and chained in order: `( <checkRefs[0]> ) && ( <checkRefs[1]> ) && ( <checkRefs[2]> ) && ( <checkRefs[3]> ) && ( <checkRefs[4]> )`. Never join the bare refs with ' && '. Refs 0, 1 and 4 end in `exit $f`/`exit $r`, so a bare join exits 0 after 'docs check A f=0', and checks B to E never run (comment-0a43e151). Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`. The chain stops at the first red ref and returns its code. Submit that exact command and its output tail as moe.complete_task verification. The refs, in order:\n- content check A (CONFIGURATION, README);\n- content check B (GETTING_STARTED, SCHEMA, the JetBrains and VS Code labels, the new JUnit test);\n- task-c199e177's 'gemini mode' rows, on WSL node (bash) and Windows node.exe (PowerShell 5.1 and pwsh 7) in parallel;\n- parity-check.sh, parity-check.ps1 on pwsh.exe and powershell.exe, and npm run lint;\n- Gradle --tests com.moe.util.TerminalAgentLauncherTest.\nIts fresh output is the complete_task evidence. Expect: 'docs check A f=0', 'docs check B f=0', 'gemini mode rows: rc=0 bash=8 ps51=8 ps7=8' (8 or more each), PASS parity-check.sh, PASS parity-check.ps1 twice, the lint OK lines, BUILD SUCCESSFUL, failures=\"0\" errors=\"0\" and 'gradle rc=0'. All five must appear: if the output ends after check A, the chain is wrong.\nThe dry run took about 1 min without Gradle; budget 3-5 min against the human's 20-min cap. Do not run postflight.sh or postflight.ps1 (the human's 18:05Z decision, comment-1a9850e2).\nError handling for a red run:\n- A red content check names the file and string: fix the text, never the check.\n- A red gemini mode row means task-c199e177's landed launcher or test changed. Read the log whose path the line prints, then moe.report_blocked naming task-c199e177. Never edit a launcher or test from this row.\n- A Gradle compile error is in the new test: re-check the backticks and the FQN.\n- A lease held elsewhere: moe.report_blocked { resourceId: \"jetbrains-gradle\" }.\nWSL notes: mem:gotcha-jetbrains-gradle-from-wsl, mem:gotcha-pwsh7-reachable-from-wsl.",
+          "reason": "Verification trap found by architect-2a219562 (comment-0a43e151 on this row). Refs 0, 1 and 4 end in `exit $f`/`exit $r`, and every ref is a `;`-sequence. Joined with bare ' && ', the run exits 0 right after 'docs check A f=0', and checks B to E never run: a false-green gate. Each ref starts with its own `cd \"$(git rev-parse --show-toplevel)\"`, so subshells change nothing else. No ref byte changes.",
+          "amendedBy": "governor-e6142a94",
+          "amendedAt": "2026-11-04T19:36:52.345Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review (load adversarial-self-review), then the hunk map.\nReview `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the working tree:\n- Exactly the 8 files, with these line counts: README -6/+6, CONFIGURATION -4/+5, GETTING_STARTED -1/+1, SCHEMA -1/+1, TerminalAgentLauncher.kt -1/+1, MoeBundle.properties -1/+1, extension.ts -1/+1, and the test +12/-0 (or so).\n- No .moe/ path, and no scripts/ or packages/ change.\n- Trace every new doc claim to task-c199e177's landed code: MOE_AGY_COMMAND is read only without the marker; a blank value counts as unset; agy is detected as gemini mode; under the marker gemini resolves agy and agy itself is refused; the message text.\n- Run mutants in a git-archive copy, never in W, holding the lease:\n  M1 revert the bundle value -> the new test fails;\n  M2 revert the enum label -> the new test fails;\n  M3 move the MOE_AGY_COMMAND row elsewhere -> content check A fails;\n  M4 change one word of the quoted message -> content check A fails.\nThen write the complete_task summary as the PR #208 hunk map (DoD 3), one line per hunk of `gh.exe pr diff 208` (commit a73af400, 18 hunks in 10 files):\n1-4. README @@ -2 / -28 / -69 / -98: ported (step 1).\n5. CONFIGURATION @@ -54 (claude-opus-5-5 + the MOE_AGY_COMMAND row): ported.\n6. CONFIGURATION @@ -153 (agentCommand): ported.\n7. CONFIGURATION @@ -174 (models.{role}): ported.\n8. GETTING_STARTED @@ -38: ported.\n9. SCHEMA @@ -878: ported.\n10. TerminalAgentLauncher.kt @@ -85: ported.\n11. MoeBundle.properties @@ -21: ported.\n12. heartbeatStop.test.ts @@ -80: already on the branch (PWSH_CASE = { retry: 2, timeout: 15000 }).\n13. moe-agent.ps1 @@ -1 (BOM): already on the branch (the file starts EF BB BF; parity-check enforces it).\n14-15. moe-agent.ps1 @@ -741 / -6114: ported by task-c199e177.\n16-17. moe-agent.sh @@ -421 / -6918: ported by task-c199e177.\n18. parity-check.sh @@ -252: the Antigravity needles were ported by task-c199e177 (plus a parity-check.ps1 twin); its BOM check is already on the branch.\nThen a 'beyond #208' line: the README badge and rotation bullet, CONFIGURATION's MOE_WORKER_TYPE row and protected sentence, the JUnit pin, the VS Code label, and c199e177's protected-runtime resolution and tests. Then 'N/A: none'. Name task-c199e177's landed completion sha (`git log --format=%h -1 --grep=task-c199e177 \"$MOE_LAND_TARGET\"`), so the governor can close #208 as superseded. This row never closes it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of git diff a1e93d27 (merge-base with moe/work-2026-10-24, target not moved): exactly the 8 files, README 6/6, CONFIGURATION +5/-4, GETTING_STARTED 1/1, SCHEMA 1/1, kt 1/1, bundle 1/1, extension.ts 1/1, test +12/-0. No .moe/, scripts/ or packages/ path. Doc claims traced to the landed code: MOE_AGY_COMMAND read only when RUNTIME_PROTECTED!=1 (sh:11641, ps1:11157), blank = unset (sh case *[![:space:]]*, ps1 IsNullOrWhiteSpace), agy detected as gemini (sh:639, ps1:1228), under the marker gemini resolves agy (sh:959, ps1:650), agy refused by the allowlist (sh:624), message text sh:11649 = ps1:11166. The doc-contract tests that read CONFIGURATION/SCHEMA (daemonGitDocs, executionContractDocs, taskTimeBudgetDocs) match none of the touched lines. Mutants in a git-archive copy on D: under the lease: M1 bundle reverted -> gradle rc=1 (expected Antigravity, was Gemini); M2 enum reverted -> gradle rc=1, same message; M3 MOE_AGY_COMMAND row moved after MOE_GROK_EFFORT -> check A f=1; M4 'Install'->'Download' in the quote -> check A f=1; the restored copy is green. Lease released, scratch removed. gh.exe pr diff 208 confirms 18 hunks in 10 files (a73af400); hunks 12/13/18 verified on the branch. Follow-up filed: task-ee7509fb (plugin.xml:8,:16 and moe-vscode/package.json:4 still say 'Gemini CLI'; outside approvedScope).",
+      "startedAt": "2026-11-04T20:24:00.957Z",
+      "completedAt": "2026-11-04T20:30:07.951Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor, 20:36Z: the MOE_CONTROL_CHECKOUT_BEHIND block is cleared. Control is now at d35f2bc3, so `git merge-base --is-ancestor d35f2bc3 HEAD` exits 0. The landing collided with the human's in-progress MoeBundle.properties edit in the control checkout, and the governor's standing surgical follow (20:34:05Z) fast-forwarded control 30 s after QA's check. Back to REVIEW.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-74fe4c99eb7c4b2a94dcb6d9d8e36d23",
+    "task-c199e17764364e59a980ecc9eebccb85"
+  ],
+  "priority": "MEDIUM",
+  "order": 537.7,
+  "comments": [
+    {
+      "id": "comment-8c983720bcb4446d9a2d5f91acf4055c",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 Governor dependency change, 17:56Z: this row now depends on CQ-M07s (task-74fe4c99) instead of CQ-M07t, so it can run IN PARALLEL with t once s lands, rather than after t. Please plan for that.\n- Why: coders are idle and nothing is claimable. epic-be924fb8 has no file-disjoint-only rail.\n- This row and t touch different regions of the launchers. This row edits the gemini launch block (moe-agent.sh about :639 and :11612, ps1 about :10993). t edits the worktree journal and receipt code. merge-tree lands disjoint hunks cleanly.\n- Keep these constraints in the plan:\n  1. Do not touch postflight-vm-route.{sh,ps1}. t and e444f6ae own them. Put the fake-binary gemini test in its own place, for example a new scripts/tests/ file or the existing launcher test that covers agentCommand.\n  2. Anchor by name, never by line. s's bytes land on the target before your claim, and t's may land during your work.\n  3. parity-check.{sh,ps1}: s adds the MOE_CHECK_DISPATCH_ family there. Add the MOE_AGY needles after s's landed lines, so the hunks don't overlap.\nIt must still never land before s: an overlap there would send s, which is on the critical path, through a conflict resume and a second 2-hour verification.",
+      "timestamp": "2026-11-04T17:56:16.693Z"
+    },
+    {
+      "id": "comment-1a9850e24dfd4b22a90e48ec59caccac",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 Gate guidance from the human's decision at about 18:05Z: mid-epic launcher rows run only the suites they touch, not the full postflight.sh or postflight.ps1. PR #230's CI runs the full suites at every landing, and #230 merges only at all-green CI.\nFor this row, checkRefs[0] should be:\n- the new fake-binary gemini/agy test on bash, pwsh.exe and powershell.exe;\n- parity-check.sh, parity-check.ps1 and npm run lint;\n- bash -n and ParseFile on both wrappers;\n- the JetBrains test that covers the provider label, under the jetbrains-gradle lease if a Kotlin test changes.\nDo not run postflight.ps1 or postflight.sh.",
+      "timestamp": "2026-11-04T18:07:21.541Z"
+    },
+    {
+      "id": "comment-547248443e9744dcb8ea8815d848aa9f",
+      "author": "governor-e6142a94",
+      "content": "@architect-cd0ac706 One addition to comment-1a9850e2, from the human at 18:07Z: \"gates should be 20min tops\" (rail proposal prop-440d064f). This row's checkRefs[0] must finish within 20 minutes of wall time, for the worker and again for QA's re-run. Run independent legs in parallel. The scoped gate from my last comment should fit easily.",
+      "timestamp": "2026-11-04T18:08:28.985Z"
+    },
+    {
+      "id": "comment-c89e23e8de5542fdba37f8ff9bf0e3ca",
+      "author": "architect-cd0ac706",
+      "content": "@governor-e6142a94 Re comment-8c983720, comment-1a9850e2 and comment-54724844: I planned this row (rev 1, TURBO, now WORKING but gated) and split the port.\n\n- Split. The whole port needs 13 files, and the plan cap is 10. This DoD can't be edited over MCP, so this row is the last slice. It carries the docs (README, CONFIGURATION, GETTING_STARTED, SCHEMA), the JetBrains label plus a JUnit pin, the VS Code quick-pick label, and the 18-hunk #208 map. New row task-c199e177 (PLANNING; I plan it next) carries both launchers, the parity needles and the fake-binary rows. This row now dependsOn [task-74fe4c99, task-c199e177]. c199e177 dependsOn task-74fe4c99 (CQ-M07s) only, per your 17:56Z change, so it runs in parallel with t.\n- Your constraints. Neither row touches postflight-vm-route. Every edit is anchored by text, checked once each at edc3e937. The AGY parity needles go after s's landed lines (sh: after the grok banner loop; ps1: the last $required group). The gemini mode rows go in scripts/tests/protected-agent-command.test.mjs, the whole-launcher harness that covers agentCommand.\n- Gates follow your scoped list, no postflight. They were dry-run in a scratch clone: c199e177's rows plus the type rows take about 50 s, parity, parse and lint about 6 s. This row adds content checks, the same rows and Gradle on TerminalAgentLauncherTest, about 3-5 min. Both are well under 20 min.\n- A design point beyond #208: under MOE_RUNTIME_PROTECTED=1 a literal port would still require the Gemini CLI to be installed, because protected_resolve_cli resolves the name first, and would then run a bare agy or an unvetted MOE_AGY_COMMAND. c199e177 resolves agy through the trusted lookup and doesn't read MOE_AGY_COMMAND under the marker. The protected allowlist is unchanged, so agy stays refused there.\n- Follow-ups outside #208, not done, for you to file if you want them:\n  (1) SCHEMA's NOTE under WorkerType still says every worker records as CLAUDE. That has been stale since task-0b40957c.\n  (2) plugin.xml's and moe-vscode/package.json's marketplace descriptions still say 'Gemini CLI'.\n  (3) protected-agent-command.test.mjs, along with 6 other scripts/tests files, is not wired into CI. The agy detection is CI-pinned through prompt-cache-launcher's typeCases.",
+      "timestamp": "2026-11-04T18:28:35.356Z"
+    },
+    {
+      "id": "comment-0a43e15151504bc0b74a16cc54ef61e7",
+      "author": "architect-2a219562",
+      "content": "Verification trap, found by architect-2a219562 while planning task-ff0df867 (proof run in bash). Step 6 runs the 5 checkRefs \"joined with ' && '\", but each ref is a `;`-sequence. `&&` therefore links only one ref's last command to the next ref's first command (its `cd`). Refs 0, 1 and 4 also end in `exit $f`/`exit $r`, so a joined run exits 0 right after \"docs check A f=0\" and checks B to E never run. Proof: `bash -c 'echo \"check A f=0\"; f=0; exit $f && echo B1; echo \"check B ran\"; false'` prints only the first line and returns 0.\nFix, with no ref byte changed: wrap each ref in a subshell, `( <ref0> ) && ( <ref1> ) && ( <ref2> ) && ( <ref3> ) && ( <ref4> )`. Each `exit` then ends only its own subshell, and the chain stops at the first red ref with that ref's code. task-c199e177 has the same trap without the exit (see the comment there). @governor-e6142a94 FYI, in case you want to amend the step text.",
+      "timestamp": "2026-11-04T19:27:07.524Z"
+    },
+    {
+      "id": "comment-8784da3514b144ef87c2d0acbc26b707",
+      "author": "worker-5772dacf",
+      "content": "Tail of the completion summary, cut at the 2000-char cap:\n- Follow-up filed: task-ee7509fb (LOW, dependsOn this row). plugin.xml:8 and :16 and moe-vscode/package.json:4 still say 'Gemini CLI'. That is marketplace text outside approvedScope.\n- Not run: the VS Code typecheck. The worktree has no moe-vscode/node_modules, so tsc is absent. The change is one string literal in an Array<{ label: string; ... }>, and CI's VS Code job covers it.\n- QA note: the verification command is the 5 checkRefs, each wrapped verbatim in ( ) (amend-1). Running it needs the jetbrains-gradle lease for ref 4.",
+      "timestamp": "2026-11-04T20:31:21.765Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T17:48:59.958Z",
+  "updatedAt": "2026-11-04T20:55:44.158Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T17:49:00.398Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T20:54:59.848Z",
+    "wallClockMs": 11159450
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-5772dacf",
+    "qa-1cd86a39",
+    "qa-96811257"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T18:28:17.759Z",
+  "executionContract": {
+    "intendedBehavior": "User-facing text names Antigravity (agy) as what gemini mode runs. That covers README's coding-CLI lists; CONFIGURATION's new MOE_AGY_COMMAND row and its agentCommand, MOE_WORKER_TYPE, MOE_GROK_MODEL and models.{role} rows; GETTING_STARTED's sign-in line; SCHEMA's WorkerType comment; the JetBrains Agents-menu label (bundle string and enum displayName, pinned by a JUnit test); and the VS Code quick-pick label. The launcher behavior itself is task-c199e177's (a dependency). This row changes no script, harness or runtime code. Its gate re-runs c199e177's 'gemini mode' rows, so all three DoD items are evidenced at this row's completion, and its summary maps every PR #208 hunk so the governor can close #208 as superseded.",
+    "acceptanceCriteria": [
+      "README has no 'Gemini CLI' or 'Gemini%20CLI'. At least 5 lines name 'Antigravity (agy)', and the badge names Antigravity%20%28agy%29.",
+      "CONFIGURATION has a MOE_AGY_COMMAND row directly after MOE_GROK_MODEL. It quotes the landed not-found sentence and says the variable is not read under MOE_RUNTIME_PROTECTED=1. agentCommand's values say gemini runs Antigravity agy, MOE_WORKER_TYPE maps gemini or agy to GEMINI, and no '`claude-opus-5` fallback' remains.",
+      "GETTING_STARTED names `agy` for Antigravity sign-in. SCHEMA's GEMINI comment says gemini mode runs the Antigravity CLI (agy).",
+      "JetBrains: GEMINI(\"Antigravity\", \"gemini\") and moe.panel.provider.gemini=Antigravity, pinned by TerminalAgentLauncherTest's new test, green under Gradle. VS Code: pickProvider labels the gemini provider 'Antigravity'.",
+      "task-c199e177's gemini mode rows pass on bash, PowerShell 5.1 and pwsh 7. parity-check (sh, pwsh, 5.1) and npm run lint pass.",
+      "The completion summary maps all 18 PR #208 hunks to ported, already on the branch (BOM, heartbeat flake) or N/A."
+    ],
+    "invariants": [
+      "No scripts/, packages/ or .moe/ path changes in this row.",
+      "Every quoted wrapper string matches task-c199e177's landed bytes (check A derives the message from scripts/moe-agent.sh).",
+      "'VS Code / Antigravity' (the IDE name) stays as it is."
+    ],
+    "compatibility": [
+      "The gemini provider id and command stay `gemini` everywhere: JetBrains AgentProvider.command and PROTECTED_AGENT_COMMANDS, the VS Code provider id and stored lastProvider, SettingsPanel's datalist, and the installers' -AgentCommand/--agent value. Existing settings.agentCommand values and saved IDE state keep working.",
+      "Only label and documentation strings change. No MCP tool contract, .moe/ shape or wrapper argv changes."
+    ],
+    "approvedScope": [
+      "README.md: the six coding-CLI mentions (intro, Works-with badge, features table, install paragraph, installer table row, account-rotation bullet)",
+      "docs/CONFIGURATION.md: rows MOE_WORKER_TYPE (Agent Scripts), MOE_GROK_MODEL, MOE_AGY_COMMAND (new), agentCommand, models.{role}",
+      "docs/GETTING_STARTED.md: the sign-in sentence. docs/SCHEMA.md: the WorkerType 'GEMINI' comment line",
+      "moe-jetbrains: TerminalAgentLauncher.AgentProvider.GEMINI displayName; MoeBundle moe.panel.provider.gemini; one new TerminalAgentLauncherTest test",
+      "moe-vscode/src/extension.ts: pickProvider's gemini quick-pick label"
+    ],
+    "reuse": [
+      "Reuses task-c199e177's landed literals (read from scripts/moe-agent.sh at gate time) and its 'gemini mode' rows in protected-agent-command.test.mjs as DoD-1 evidence.",
+      "Uses the JetBrains bundle-loading idiom of MoeSettingsDialogTest and BoardReleaseTest (java.util.Properties plus getResourceAsStream).",
+      "Uses the WSL-to-Windows Gradle route of task-6796a0f9's accepted checkRef."
+    ],
+    "sourceAssumptions": [
+      "README.md (edc3e937) holds 'Gemini CLI' in exactly the 6 places listed in step 1. The badge existed on 09-29 (git show 3272b871:README.md :10).",
+      "docs/CONFIGURATION.md: the MOE_WORKER_TYPE row (Agent Scripts) maps `gemini` → `GEMINI`; MOE_GROK_MODEL and models.{role} say `claude-opus-5` fallback; the agentCommand row ends '`claude` (default), `codex`, `gemini`, `grok` |'. Each anchor occurs once (simulated with count asserts at edc3e937).",
+      "moe-jetbrains MoeToolWindowPanel builds the Agents menu from MoeBundle moe.panel.provider.<name>. AgentProvider.displayName is otherwise read only by TerminalAgentLauncherTest.",
+      "moe-vscode/src/extension.ts pickProvider holds { label: 'Gemini', ..., provider: 'gemini' }, and no moe-vscode test asserts that label.",
+      "PR #208 = one commit a73af400 on fix/agy-bom-flake, base main: 18 hunks in 10 files. The ps1 BOM and the heartbeatStop PWSH_CASE fix are on moe/work-2026-10-24."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\"; f=0; n(){ grep -qF -- \"$2\" \"$1\" || { echo \"MISSING $1: $2\"; f=1; }; }; g(){ ! grep -qF -- \"$2\" \"$1\" || { echo \"STALE $1: $2\"; f=1; }; }; C=docs/CONFIGURATION.md; M=$(grep -o 'Antigravity CLI (agy) not found: [^\"]*' scripts/moe-agent.sh | head -1 | sed 's/\\$COMMAND_BIN/<cmd>/'); R=$(mktemp); grep -A1 '^| `MOE_GROK_MODEL` |' $C | tail -1 > $R; [ -n \"$M\" ] && grep -q '^| `MOE_AGY_COMMAND` |' $R || { echo \"no message in sh, or no MOE_AGY_COMMAND row after MOE_GROK_MODEL\"; f=1; }; n $R \"$M\"; n $R MOE_RUNTIME_PROTECTED=1; n $C '`gemini` or `agy` → `GEMINI`'; n $C '`gemini` (runs Antigravity `agy`'; g $C '`claude-opus-5` fallback'; g README.md 'Gemini CLI'; g README.md 'Gemini%20CLI'; n README.md 'Antigravity%20%28agy%29'; [ \"$(grep -c 'Antigravity (agy)' README.md)\" -ge 5 ] || { echo \"README: under 5 Antigravity (agy) lines\"; f=1; }; echo \"docs check A f=$f\"; exit $f",
+      "cd \"$(git rev-parse --show-toplevel)\"; f=0; n(){ grep -qF -- \"$2\" \"$1\" || { echo \"MISSING $1: $2\"; f=1; }; }; g(){ ! grep -qF -- \"$2\" \"$1\" || { echo \"STALE $1: $2\"; f=1; }; }; n docs/GETTING_STARTED.md '`codex`, or `agy` for Antigravity)'; grep -qxF \"  | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)\" docs/SCHEMA.md || { echo \"SCHEMA: GEMINI line\"; f=1; }; g docs/SCHEMA.md 'Google Gemini CLI'; K=moe-jetbrains/src; n $K/main/kotlin/com/moe/util/TerminalAgentLauncher.kt 'GEMINI(\"Antigravity\", \"gemini\"),'; grep -qx 'moe.panel.provider.gemini=Antigravity' $K/main/resources/messages/MoeBundle.properties || { echo \"bundle: provider.gemini\"; f=1; }; n $K/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt 'fun `AgentProvider GEMINI is labelled Antigravity and keeps the gemini command`()'; V=moe-vscode/src/extension.ts; n $V \"{ label: 'Antigravity', description: lastProvider === 'gemini'\"; g $V \"label: 'Gemini'\"; echo \"docs check B f=$f\"; exit $f",
+      "cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/protected-agent-command.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E \"^ok [0-9]+ - $2: [^#]*gemini mode\" | grep -vc '# SKIP'; }; s=\"bash=$(k $L bash) ps51=$(k $N 'PowerShell 5.1') ps7=$(k $N 'PowerShell 7')\"; echo \"gemini mode rows: rc=$r $s (logs $L $N)\"; [ $r = 0 ] && echo \"$s\" | grep -qE '^bash=([89]|[1-9][0-9]) ps51=([89]|[1-9][0-9]) ps7=([89]|[1-9][0-9])$'",
+      "cd \"$(git rev-parse --show-toplevel)\"; P=$(wslpath -w \"$PWD\"); bash scripts/tests/parity-check.sh && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" && npm run lint --silent",
+      "cd \"$(git rev-parse --show-toplevel)\"; L=$(mktemp); echo \"gradle log $L\"; cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.TerminalAgentLauncherTest --rerun\" > \"$L\" 2>&1; r=$?; grep -aE 'BUILD (SUCCESSFUL|FAILED)' \"$L\"; X=moe-jetbrains/build/test-results/test/TEST-com.moe.util.TerminalAgentLauncherTest.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; grep -qF 'testcase name=\"AgentProvider GEMINI is labelled Antigravity and keeps the gemini command\"' $X || r=1; echo \"gradle rc=$r\"; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- One row would need 13 files (2 launchers, 2 parity scripts, a test, 4 docs, 3 IDE files), over the 10-file hard cap, so I split it. This DoD cannot be edited over MCP, so this row must be the LAST slice. task-c199e177 (new, created 2026-11-04) carries the launchers, the parity needles and the fake-binary rows. This row carries the docs, the IDE labels and the hunk map, and depends on c199e177, because its docs name MOE_AGY_COMMAND and quote c199e177's message.\n- Rejected: putting the labels in c199e177. That row would hit 10 files, at the cap, and its gate would need the Gradle lease. A third row for labels alone would be under the 30-minute floor.\n- Protected runtime: a literal #208 port would have required the Gemini CLI to be installed under MOE_RUNTIME_PROTECTED=1, since protected_resolve_cli resolves the command name first, and would then have run a bare `agy` or an unvetted env path. c199e177 instead resolves agy through the trusted lookup and does not read MOE_AGY_COMMAND under the marker. The new docs row says so.\n- No edge to CQ-M07v1 (task-63e6fb62), which also edits CONFIGURATION.md: in worktree mode a shared file is not a dependency, and a conflict takes the normal landing resume.\n- The governor moved this row from CQ-M07t to CQ-M07s at 17:56Z (comment-8c983720). c199e177 follows that too.",
+    "codebaseInsights": "- The JetBrains Agents menu shows MoeBundle moe.panel.provider.<name> (MoeToolWindowPanel). AgentProvider.displayName is read only by tests: TerminalAgentLauncherTest asserts GROK's.\n- The installers already require agy for gemini mode (install-dependencies.ps1: Assert-MoeCommand \"agy\"; install-dependencies.sh: moe_has_tool \"agy\"), so README's installer row was already Antigravity in fact.\n- #208 missed README's Works-with badge, which existed on 09-29. The rotation bullet and CONFIGURATION's MOE_WORKER_TYPE row postdate #208.\n- SCHEMA's NOTE under WorkerType has been stale since task-0b40957c (the daemon records workerType). That is outside this port; the governor has been told.\n- plugin.xml and moe-vscode/package.json descriptions still say 'Gemini CLI'. They are marketplace text, not in #208, and are follow-ups for the governor.\n- The control checkout's moe-vscode/node_modules has no typescript, so no VS Code typecheck runs here. The change is one string literal, and CI runs the VS Code typecheck and tests on PR #230.\n- Dry runs in an architect scratch clone at edc3e937 with c199e177's sketch: checks A and B are green on the simulated edits and red on the pristine tree. The gemini mode rows passed 8/8 on bash, PowerShell 5.1 and pwsh.exe 7, in 32-36 s with both nodes in parallel.",
+    "risks": "- Ordering: this row's WORKING claim waits for CQ-M07s (task-74fe4c99, landed as edc3e937 but BLOCKED at 18:12Z) and for task-c199e177. Re-read c199e177's landed bytes before quoting anything.\n- If c199e177's QA rewords the message, check A fails until the doc quotes the landed text. That is intended.\n- A CONFIGURATION.md conflict with CQ-M07v1 is possible. Resolve it through LANDING-CONFLICT, keeping both sides.\n- Gradle needs the jetbrains-gradle lease, and the architect could not dry-run it (mem:gotcha-architect-cannot-take-gradle-lease). The test uses only assertEquals, javaClass and java.util.Properties by FQN.\n- QA re-run: every checkRef reads the files in its cwd, so in the control checkout after landing all five run as written (Gradle under the lease).",
+    "keyFiles": [
+      "README.md",
+      "docs/CONFIGURATION.md",
+      "docs/GETTING_STARTED.md",
+      "docs/SCHEMA.md",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-vscode/src/extension.ts",
+      "scripts/tests/protected-agent-command.test.mjs (task-c199e177's gemini mode rows)",
+      "scripts/moe-agent.sh (task-c199e177's not-found sentence)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "da80b2d853f249f455955c374ff765e0ef028523",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T18:28:17.789Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T20:49:04Z",
+    "at": "2026-11-04T20:55:44.158Z"
+  },
+  "workStartedAt": "2026-11-04T20:15:24.344Z",
+  "reviewStartedAt": "2026-11-04T20:31:12.671Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\"; f=0; n(){ grep -qF -- \"$2\" \"$1\" || { echo \"MISSING $1: $2\"; f=1; }; }; g(){ ! grep -qF -- \"$2\" \"$1\" || { echo \"STALE $1: $2\"; f=1; }; }; C=docs/CONFIGURATION.md; M=$(grep -o 'Antigravity CLI (agy) not found: [^\"]*' scripts/moe-agent.sh | head -1 | sed 's/\\$COMMAND_BIN/<cmd>/'); R=$(mktemp); grep -A1 '^| `MOE_GROK_MODEL` |' $C | tail -1 > $R; [ -n \"$M\" ] && grep -q '^| `MOE_AGY_COMMAND` |' $R || { echo \"no message in sh, or no MOE_AGY_COMMAND row after MOE_GROK_MODEL\"; f=1; }; n $R \"$M\"; n $R MOE_RUNTIME_PROTECTED=1; n $C '`gemini` or `agy` → `GEMINI`'; n $C '`gemini` (runs Antigravity `agy`'; g $C '`claude-opus-5` fallback'; g README.md 'Gemini CLI'; g README.md 'Gemini%20CLI'; n README.md 'Antigravity%20%28agy%29'; [ \"$(grep -c 'Antigravity (agy)' README.md)\" -ge 5 ] || { echo \"README: under 5 Antigravity (agy) lines\"; f=1; }; echo \"docs check A f=$f\"; exit $f ) && ( cd \"$(git rev-parse --show-toplevel)\"; f=0; n(){ grep -qF -- \"$2\" \"$1\" || { echo \"MISSING $1: $2\"; f=1; }; }; g(){ ! grep -qF -- \"$2\" \"$1\" || { echo \"STALE $1: $2\"; f=1; }; }; n docs/GETTING_STARTED.md '`codex`, or `agy` for Antigravity)'; grep -qxF \"  | 'GEMINI'    // gemini mode: runs the Antigravity CLI (agy)\" docs/SCHEMA.md || { echo \"SCHEMA: GEMINI line\"; f=1; }; g docs/SCHEMA.md 'Google Gemini CLI'; K=moe-jetbrains/src; n $K/main/kotlin/com/moe/util/TerminalAgentLauncher.kt 'GEMINI(\"Antigravity\", \"gemini\"),'; grep -qx 'moe.panel.provider.gemini=Antigravity' $K/main/resources/messages/MoeBundle.properties || { echo \"bundle: provider.gemini\"; f=1; }; n $K/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt 'fun `AgentProvider GEMINI is labelled Antigravity and keeps the gemini command`()'; V=moe-vscode/src/extension.ts; n $V \"{ label: 'Antigravity', description: lastProvider === 'gemini'\"; g $V \"label: 'Gemini'\"; echo \"docs check B f=$f\"; exit $f ) && ( cd \"$(git rev-parse --show-toplevel)\"; U=$(env | grep -oE '^(MOE_|CLAUDE)[A-Z0-9_]*' | sed 's/^/-u /'); F=scripts/tests/protected-agent-command.test.mjs; L=$(mktemp); N=$(mktemp); (env $U node --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $L 2>&1) & a=$!; (env $U \"/mnt/c/Program Files/nodejs/node.exe\" --test --test-reporter=tap --test-name-pattern 'gemini mode' $F > $N 2>&1) & b=$!; r=0; wait $a || r=1; wait $b || r=1; k(){ tr -d '\\r' < \"$1\" | grep -E \"^ok [0-9]+ - $2: [^#]*gemini mode\" | grep -vc '# SKIP'; }; s=\"bash=$(k $L bash) ps51=$(k $N 'PowerShell 5.1') ps7=$(k $N 'PowerShell 7')\"; echo \"gemini mode rows: rc=$r $s (logs $L $N)\"; [ $r = 0 ] && echo \"$s\" | grep -qE '^bash=([89]|[1-9][0-9]) ps51=([89]|[1-9][0-9]) ps7=([89]|[1-9][0-9])$' ) && ( cd \"$(git rev-parse --show-toplevel)\"; P=$(wslpath -w \"$PWD\"); bash scripts/tests/parity-check.sh && pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" && powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$P\\scripts\\tests\\parity-check.ps1\" && npm run lint --silent ) && ( cd \"$(git rev-parse --show-toplevel)\"; L=$(mktemp); echo \"gradle log $L\"; cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && moe-jetbrains\\gradlew.bat -p moe-jetbrains test --tests com.moe.util.TerminalAgentLauncherTest --rerun\" > \"$L\" 2>&1; r=$?; grep -aE 'BUILD (SUCCESSFUL|FAILED)' \"$L\"; X=moe-jetbrains/build/test-results/test/TEST-com.moe.util.TerminalAgentLauncherTest.xml; grep -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' $X | head -1; grep -q 'failures=\"0\" errors=\"0\"' $X || r=1; grep -qF 'testcase name=\"AgentProvider GEMINI is labelled Antigravity and keeps the gemini command\"' $X || r=1; echo \"gradle rc=$r\"; exit $r )",
+    "exitCode": 0,
+    "outputTail": "docs check A f=0\ndocs check B f=0\ngemini mode rows: rc=0 bash=9 ps51=9 ps7=9 (logs /tmp/tmp.wnNcoFyUZP /tmp/tmp.5PJdtlhDyn)\nPASS parity-check.sh\nPASS parity-check.ps1\nPASS parity-check.ps1\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\ngradle log /tmp/tmp.1umB2jrsBc\nBUILD SUCCESSFUL in 5s\ntests=\"61\" skipped=\"1\" failures=\"0\" errors=\"0\"\ngradle rc=0\n[GATE_RC=0 in 53 s, from the worktree root, under the jetbrains-gradle lease]",
+    "reportedAt": "2026-11-04T20:31:12.671Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "README.md",
+    "docs/CONFIGURATION.md",
+    "docs/GETTING_STARTED.md",
+    "docs/SCHEMA.md",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+    "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+    "moe-vscode/src/extension.ts"
+  ],
+  "completionSummary": "PR #208 port, docs + labels slice: 8 files, +28/-15, no scripts/, packages/ or .moe/ path. README: the 6 coding-CLI mentions name Antigravity (agy), the badge included. CONFIGURATION: MOE_WORKER_TYPE maps gemini or agy to GEMINI; claude-opus-5-5 fallback (MOE_GROK_MODEL, models.{role}); a new MOE_AGY_COMMAND row after MOE_GROK_MODEL quotes a1e93d27's not-found line and the protected behaviour; agentCommand row updated. GETTING_STARTED: sign in with `agy`. SCHEMA: GEMINI comment. JetBrains: GEMINI(\"Antigravity\",\"gemini\") and the bundle string, pinned by a new JUnit test (RED: expected Antigravity, was Gemini). VS Code: pickProvider label 'Antigravity'. The ids stay gemini.\n\nGate: 5 refs, each in ( ) per amend-1. GATE_RC=0 in 53 s: A f=0; B f=0; gemini mode rows bash=9 ps51=9 ps7=9; parity sh, pwsh and 5.1 PASS; lint OK; Gradle 61 tests, 0 failures. Mutants (archive copy): M1 bundle and M2 enum turn the new test red; M3 row moved and M4 one word changed turn check A red.\n\nPR #208 hunk map (a73af400, 18 hunks, 10 files):\n1-4 README -2/-28/-69/-98: ported.\n5 CONFIGURATION -54 (opus-5-5 + MOE_AGY_COMMAND row): ported.\n6 CONFIGURATION -153 agentCommand: ported.\n7 CONFIGURATION -174 models.{role}: ported.\n8 GETTING_STARTED -38: ported.\n9 SCHEMA -878: ported.\n10 TerminalAgentLauncher.kt -85: ported.\n11 MoeBundle.properties -21: ported.\n12 heartbeatStop.test.ts -80: already on the branch (PWSH_CASE retry 2, timeout 15000).\n13 moe-agent.ps1 -1 BOM: already on the branch (EF BB BF; parity-check.sh:335).\n14-15 moe-agent.ps1 -741/-6114: ported by task-c199e177 (a1e93d27).\n16-17 moe-agent.sh -421/-6918: ported by task-c199e177 (a1e93d27).\n18 parity-check.sh -252: needles ported by c199e177 (+ a ps1 twin); BOM check already on the branch.\nBeyond #208: README badge + rotation bullet, MOE_WORKER_TYPE row + protected sentence, JUnit pin, VS Code label, c199e177's protected agy resolution + tests.\nN/A: none. #208 is superseded by a1e93d27 + this row; the governor closes it.\n\nFollow-up",
+  "commits": [
+    {
+      "sha": "d35f2bc3f375c0f1668e97dc379fc846dc19bfd7",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T20:14:17Z",
+      "paths": [
+        "README.md",
+        "docs/CONFIGURATION.md",
+        "docs/GETTING_STARTED.md",
+        "docs/SCHEMA.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+        "moe-vscode/src/extension.ts"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T20:32:48.096Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "blockedReason": null,
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "MOE_CONTROL_CHECKOUT_BEHIND: task task-cb378fd8a608489c81edc56bff9c2ecc: completion d35f2bc3f375c0f1668e97dc379fc846dc19bfd7 is not in the control HEAD e6c06b00421f7192530725b7079fcfb8068567d2 (git merge-base --is-ancestor exited 1); QA reviews landed bytes only",
+  "completedAt": "2026-11-04T20:54:59.848Z",
+  "reviewCompletedAt": "2026-11-04T20:54:59.848Z",
+  "reviewSummary": "Reviewed completion d35f2bc3. Its tree e5a017e9 equals the candidate's, and it is the tip of origin/moe/work-2026-10-24. 8 files, +28/-15 (net 13), exactly approvedScope. No scripts/, packages/ or .moe/ path.\n\nGate: task.verification verbatim (5 refs, each in ( )), run in a clean git-archive snapshot of d35f2bc3 on D:, because control has a dirty MoeBundle and moe-agent.sh. Held the jetbrains-gradle lease. GATE_RC=0 in 92 s:\n- check A f=0, check B f=0;\n- gemini mode rows bash=9 ps51=9 ps7=9, none SKIP;\n- parity sh, pwsh and 5.1 PASS; lint OK;\n- Gradle TerminalAgentLauncherTest 61 tests, 0 failures, 0 errors, new testcase present.\n\nDoD1: a1e93d27's launchers (sh:11660-75, ps1:11179-91) read MOE_AGY_COMMAND only when unprotected and treat blank as unset. They map gemini to agy and print the one fixed not-found line. AG1-AG7 pin this on all 3 engines; AG3 shows no agy means a stop with nothing run.\n\nDoD2:\n- parity-check.sh:221-224 and .ps1:172-174 require MOE_AGY_COMMAND plus both message literals.\n- README has 0 'Gemini CLI' and 5 'Antigravity (agy)' lines plus the badge.\n- CONFIGURATION's MOE_AGY_COMMAND row comes right after MOE_GROK_MODEL, and its quote equals the landed string. The opus-5-5 fallback matches RESOLVED_MODEL.\n- GETTING_STARTED and SCHEMA are as planned.\n- The JetBrains enum and bundle labels are pinned by an assertEquals test; the command stays gemini.\n- The VS Code label is 'Antigravity', and the provider id stays gemini.\n\nDoD3: gh pr diff 208 has 18 hunks in 10 files, matching the summary's map. Hunk 12 (PWSH_CASE retry 2 / 15000) and hunk 13 (BOM EF BB BF) are on the branch. #208's strings equal a1e93d27's.\n\nNot run: the VS Code typecheck (no node_modules; one string literal; CI covers it).\nPonytail: nothing to cut.\nOut of scope: SCHEMA's NOTE lines are stale, and plugin.xml/package.json still say 'Gemini CLI' (task-ee7509fb).",
+  "requiredCheckAtDone": null
+}

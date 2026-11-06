@@ -1,0 +1,259 @@
+{
+  "id": "task-49d4a565b0084eef98b076b11abe839d",
+  "epicId": "epic-be924fb8",
+  "title": "feat(wrappers): Copilot headless launch guards and explicit model/effort routing",
+  "description": "Runtime prerequisite split from task-e266a150 (six named files exceed the five-file planning cap). The parent retains its original DoD, implements parity pins and proves the combined guard gate after this producer lands. This task changes ONLY scripts/moe-agent.{sh,ps1} and scripts/tests/postflight-vm-route.{sh,ps1}, extending task-ab323f85's Copilot launch block and recording fake. Both wrapper twins must land together. Existing task-59e1d150 remains the overall Copilot integration/docs/signed-in-smoke closing row.\n\nObjective: headless Copilot seats that cannot run stop once rather than relaunch-loop, and every Copilot launch uses routed effort without an implicit Claude model.\n\nDeliverables: (1) Once per wrapper process, immediately before first headless Copilot invocation, probe the real argv plus --help with closed/null stdin. Skip only with MOE_DISABLE_ARGV_PROBE=1. For nonzero output matching unexpected argument|invalid value|unrecognized (case insensitive), print exactly one MOE_CLI_ARGV_REJECTED line naming installed copilot and its --version first line, include the first error line, send one #general escalation, stop the heartbeat and exit 1 through normal deregistration. Mirror codex's operator wording, replacing codex with copilot. Do not turn unrelated probe failures into this classification. (2) Each headless invocation gets --log-dir pointing to a unique child of the secure temporary launch directory. After nonzero exit ONLY, search that launch's logs for No authentication information found. If found, one MOE_COPILOT_SIGNED_OUT line tells the operator to run copilot login or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN and that Windows and WSL sign in separately; one #general escalation and exit 1, bypassing launch-failure backoff even under polling. Never log credential values or whole logs. Cleanup on every exit. (3) Append --reasoning-effort from nonempty MOE_COPILOT_EFFORT, otherwise TASK_LAUNCH_EFFORT / $taskLaunchEffort, otherwise omit. Same args for headless, TUI and probe. Do not default it to max or use launch.codex. (4) --model only from explicit --model/-Model, then settings.models.<role>, then MOE_COPILOT_MODEL; otherwise omit regardless of the task's routed model. Reuse grok's EXPLICIT_MODEL / explicit-source precedence, never resolved Claude fallback.\n\nGiven measurements: Copilot 1.0.105 --help parses argv without reading stdin or authenticating; rejects unsupported flags/effort with the indicated messages, exit 1. Supported reasoning levels none,minimal,low,medium,high,xhigh,max; preserve pinned values for the CLI parser. Signed-out nonzero runs write [ERROR] No authentication information found. in --log-dir/process-<ts>-<pid>.log. No auth precheck can know OS-store credentials.\n\nTests: extend the existing recording fake and vm-route rows on bash/Windows PowerShell 5.1/pwsh 7. Separate probe/version calls from real launches. Cover parser patterns and nonmatches, skip, one probe over two launches, empty probe stdin, auth log matching vs unrelated/missing logs, nonzero-only classification, one run with polling, effort precedence/absence and no stale hint, explicit model precedence/absence, unchanged TUI behavior. Use existing FAKE_CLAIM_LAUNCH and setup hooks rather than editing fake-proxy. Bounded owned-process cleanup, no host Copilot/network required.\n\nNOT IN SCOPE: parity-check edits (parent owns these), docs, IDEs, token-store reads or authentication prechecks, TUI authentication, changing other providers or the shared launch-hint parser. Error handling preserves original exit codes until classification and treats unreadable/missing logs as no auth evidence; temporary-directory creation failure exits before launch with an explanatory error. PowerShell must restore error preferences/encoding and preserve the native exit code.\n\nVerification: from the task worktree at a Windows-drive path under WSL, run this exact <20-minute parallel gate (no live package builds/tests; no full postflight): timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); for e in powershell pwsh; do (pwsh.exe -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $e.exe -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $e.exe -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ]'",
+  "definitionOfDone": [
+    "Both wrappers stop before any real headless launch on a matched nonzero argv probe: exactly one MOE_CLI_ARGV_REJECTED line with copilot version/first error, one matching #general chat_send, exit 1 and deregistration; skip=1 suppresses the probe. vm-route rows pass on bash, Windows PowerShell 5.1 and pwsh 7.",
+    "Matched authentication text in the current launch's log directory plus a nonzero CLI exit produces exactly one MOE_COPILOT_SIGNED_OUT line, one #general escalation, exit 1 and exactly one actual launch with polling enabled; success, unrelated or absent logs never falsely classify. Same rows.",
+    "Recorded headless/TUI/probe argv proves MOE_COPILOT_EFFORT > claim launch.effort > no flag, and explicit CLI model > settings model > MOE_COPILOT_MODEL > no flag, with no implicit Claude model or stale per-task effort. Same rows.",
+    "Probe stdin is empty, accepted probe runs only once per wrapper process, and per-launch log directories are distinct private children cleaned on exit; unknown probe/log errors preserve normal behavior without exposing secrets. Same rows.",
+    "The exact description gate completes successfully within 20 minutes: vm-route on bash/5.1/pwsh 7, wrapper parse checks, both parity checks and root lint. No full postflight suite or live runtime rebuild."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Goal/architecture: extend the landed Copilot launch producer task-ab323f85, not a parallel launcher. Read its actual launch arrays, private-temp cleanup and recording fake first; at planning time that dependency is not landed. Use test-driven-development and extend the existing vmr_run / Invoke-VmrRow cases and fake in these four files. Add one per-iteration Copilot option array reused by headless/TUI/probe. Bash resolution is `COPILOT_MODEL=\"${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-}}\"; COPILOT_EFFORT=\"${MOE_COPILOT_EFFORT:-${TASK_LAUNCH_EFFORT:-}}\"`; initialize the new option array empty every iteration and append `--model \"$COPILOT_MODEL\"` and `--reasoning-effort \"$COPILOT_EFFORT\"` only when nonempty. PowerShell uses grok's verified explicit-source order ($Model, then $projConfig.settings.models.$Role, then env:MOE_COPILOT_MODEL) and env:MOE_COPILOT_EFFORT then $taskLaunchEffort, otherwise no flag. Preserve operator-pinned values verbatim; no default max, no conversion to launch.codex, no implicit $resolvedModel/RESOLVED_MODEL or task launch.model. Append --model, not grok's -m. Keep flags on both TUI and headless argv and their printed command banners without touching other providers or the shared launch-hint parser.\nTest table: extend the recording fake to distinguish probe (`--help`), version (`--version`) and real headless/TUI calls in an append-only per-test call log rather than allowing a probe to overwrite the launch record. Use existing FAKE_CLAIM_LAUNCH with tier:'standard', effort:'xhigh', model:'claude-opus-5-5' and a deliberately different launch.codex.effort to prove the top-level effort wins while the model is omitted. Cover empty env + no hint (both flags absent), MOE_COPILOT_EFFORT=max overriding routed xhigh, explicit none/minimal being preserved, and CLI model > settings model > env model > absent. Combine cases rather than a full Cartesian product; cover both headless and architect TUI and keep existing stdin/MCP/role assertions intact. Use VMR_SETUP / $script:VmrSetup for project model settings; no fake-proxy edit needed. Assert exact flag/value token pairs and count one occurrence; assert no implicit Claude fallback. A second launch with no hint must not inherit the first launch's effort; reuse the existing taskless/claim-limited fixtures, leaving fake-proxy source untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added per-iteration explicit model/effort options to both launcher paths, append-only probe/version/run recording, paired routing regressions. Copilot-only Bash slice passed (existing CP rows + route/env/settings/CLI/TUI precedence). FAKE_CLAIM_LAUNCH is actually resume-only, so fixtures use FAKE_CLAIM_MODE=resume + WORKING; no proxy change. Two-launch no-stale-hint coverage will share step 3's terminating auth fixture. Full exact gate will be run after all edits; an exploratory baseline overlapped harness edits and is not valid verification.",
+      "startedAt": "2026-11-06T06:05:15.219Z",
+      "completedAt": "2026-11-06T06:11:20.907Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add the Copilot-only once-per-wrapper headless argv probe, using the exact constructed launch array INCLUDING optional model/effort, log-dir once step 3 adds it, command prefix args and per-launch MCP config, plus --help. Introduce a process-lifetime guard (e.g. COPILOT_ARGV_PROBED / $script:CopilotArgvProbed), outside iteration resets; MOE_DISABLE_ARGV_PROBE=1 bypasses the probe. Bash launches through agent_git_exec with `< /dev/null` and captures combined output/exit without set -e aborting. PowerShell reuses the producer's real stdin transport in its explicit empty-input/closed-stdin mode; do not assume `$null | Invoke-MoeGuardedCommand` forwards input, because the current generic helper calls only `& $Command @args`. Preserve its guarded environment and .cmd handling, restore $ErrorActionPreference and any encoding changes in finally; native stderr under PS 5.1 must not throw before capturing the code. No TUI probe.\nClassification condition is `exit != 0 AND /unexpected argument|invalid value|unrecognized/i`. Zero with such text and unrelated nonzero errors are NOT parser rejection and must proceed to the normal run. First matching/error line and first --version line only; flatten CR/LF, keep a fixed 'unknown' fallback if version cannot be read, do not dump full help. Emit exactly one `[ERROR] MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <first error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check.` with identical fixed prose. Send one @governors escalation via moe_rpc chat_send / Invoke-MoeRpc to the discovered general channel (fallback channel 'general'), swallowing only the escalation transport error so failure to page never permits launch. Stop heartbeat and exit 1; ps1 sets $script:MoeExitStatus=1, leaving normal finally/deregister/rescue intact. Do not directly release the task or call launch-outage/backoff.\nTests: table-drive each rejection phrase; fake --version returns a stable test version. Assert exit 1, exactly one coded console line, one matching chat_send (not all unrelated chat), deregistration, no real launch, and the expected version/error text. The fake must record zero stdin bytes for --help even when the wrapper's own stdin has a sentinel, and must see every optional arg/prefix/MCP flag expected by the real run. Add skip=1 (zero probe calls, real launch happens), successful-help then two launches (one probe total), and unrelated nonzero probe output (real run occurs, no rejection line). All child executions bounded; retain existing non-Copilot cases.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added exact-array once-per-process headless probe with EOF stdin, nonzero+parser-phrase classification, version first-line/unknown fallback, one general escalation, heartbeat stop and normal fatal teardown. Added paired success/skip/unrelated/accepted-error-text/three-rejection/version-failure assertions plus inherited-stdin sentinel and exact probe argv comparison. Bash Copilot-only red failed on missing probe count; green passed. PS 5.1 Copilot-only run underway and will be polled; final exact three-engine gate remains required. No full postflight or package build/test executed.",
+      "startedAt": "2026-11-06T06:11:20.939Z",
+      "completedAt": "2026-11-06T06:14:18.082Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add per-headless-launch log isolation and terminal sign-out handling before generic launch-failure classification. Create a unique log child beneath the producer's secure private temp root each invocation (bash `mktemp -d \"$SECURE_TEMP_DIR/copilot-log.XXXXXX\"`; Windows use a GUID child under the producer's private temp root), append `--log-dir <child>` to the real/probe headless array, and register it in the existing cleanup path. Do not add log flags or authentication handling to the TUI. Read logs only after the native run exit code is saved and ONLY when it is nonzero. Match the literal `No authentication information found` in this launch's regular *.log files; never scan the home directory, credential stores, another iteration's logs or stdout alone. Avoid dumping matched log lines. Missing/unreadable logs mean no authentication evidence: preserve normal exit/backoff behavior, not a false sign-out. A directory-creation failure must produce an explanatory error and exit 1 before any launch, with existing cleanup; never continue with a blank path or the global log directory.\nOn evidence, emit exactly one identical fixed console line: `[ERROR] MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.` Send one #general @governors escalation with this code and the same remediation (no credential values or raw logs). Stop the heartbeat, set the PS exit status, exit 1 through existing cleanup/deregistration BEFORE launch-failure/backoff accounting. Restore native error preferences/encoding even on failure. Clean log children after inspection and retain outer cleanup as a fallback on interruption; only owned directories, never global temp cleanup. Bash already initializes create_secure_temp in the parent shell: preserve it rather than reintroducing subshell-cached-directory leaks.\nTests: fake --help succeeds; actual headless fake reads --log-dir, writes process-test-<pid>.log with `[ERROR] No authentication information found.`, and exits 1. Enable polling with one-second test intervals; require wrapper exit 1, one real invocation, one coded console line, one matching chat escalation, deregistration, no launch-failure backoff, and removed log directory. Negative cases: exit 0 with auth text; nonzero with unrelated log; nonzero with missing log; auth phrase only on stdout; a stale auth log outside the new per-launch directory. None emits MOE_COPILOT_SIGNED_OUT. Reuse two-launch fixture to assert unique log paths/cleanup and no stale evidence reuse. Assert no COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN fixture secret value appears in console/chat, only env-variable names. Keep all fake activity offline and isolated.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added unique per-headless-launch --log-dir, regular-file-only literal auth evidence on nonzero exit, cleanup and terminal signed-out escalation before generic backoff. PS producer had no private temp directory (only per-PID files), so this four-file scope creates a dedicated ACL-private GUID log root with GUID children and outer cleanup rather than assuming one exists. .NET ACL APIs avoid 5.1 Security module autoload failure under fixture USERPROFILE. Focused Bash + PS5.1 Copilot suites passed including success/auth/non-auth/missing/stdout/stale logs and two launches (single probe, distinct cleaned dirs, reset hint). Bash allocator failure test passed; final gate includes latest prefix/path-space/PS allocator assertions. Routing-only scratch mutant killed on missing xhigh; no manual Git writes.",
+      "startedAt": "2026-11-06T06:14:18.113Z",
+      "completedAt": "2026-11-06T06:22:47.391Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification — from this task's worktree root under WSL at a Windows-drive path, run the exact checkRefs[0] command below once as the final regression gate and retain its fresh output/exit status/wall time for complete_task. It executes only vm-route on bash + Windows PowerShell 5.1 + pwsh 7, wrapper parse checks, both parity checks, and root lint; all three actual vm-route PASS summaries and all three successful leg markers are required. Missing engines, SKIP, parse errors or row failures cannot pass. Error handling for any red gate: diagnose the named leg, fix only declared files, then rerun the same command; never substitute full postflight or rebuild live dist. Keep total wall time <=20 minutes and use only owned-PID cleanup if a child stalls. No package npm test/build/install in the live checkout. Command: timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); for e in powershell pwsh; do (pwsh.exe -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $e.exe -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $e.exe -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ]'",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran executionContract.checkRefs[0] verbatim from this Windows-drive WSL worktree after all edits; exit 0. All three actual vm-route PASS summaries and three PASS_GATE markers present; Copilot routing/probe/auth/two-launch/logfail family passed on Bash/Windows PowerShell 5.1/pwsh 7. Wrapper parse checks, both parity checks and root lint passed, including settings.qualityGate. Logs /tmp/tmp.y3LGpnOolZ/{bash,powershell,pwsh}. No source edits during final gate, no full postflight or package builds/tests/install.",
+      "startedAt": "2026-11-06T06:22:47.422Z",
+      "completedAt": "2026-11-06T06:33:31.150Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Final adversarial self-review — load adversarial-self-review and inspect this four-file diff once. Try inherited stdin, first error output on stderr under PS 5.1, spaces in private paths, .cmd wrappers, version command failure, an accepted help whose output contains an error phrase, an arbitrary unrelated run failure, absent/unreadable/stale logs, an empty task hint on the next launch, and two seats launching concurrently. Verify option arrays are the same ones probed, default Claude routing never becomes a Copilot model pin, task effort reset is preserved, no TUI auth precheck appeared, fatal classifications bypass polling/backoff but preserve teardown, temporary children are owned/cleaned, and no log/secret is echoed. Confirm tests distinguish probe/version from real launch and assert exact counts/non-launch, not merely the presence of a string. Address defects and rerun the one gate if changed; then complete_task with fresh evidence. Parent e266a150 owns parity vocabulary and the combined mutation gate; task-59e1d150 owns docs and signed-in integration. No manual Git writes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial review covered all four task paths: exact-array prefix/options, inherited stdin, stderr on 5.1, spaces, .cmd, failed version, nonmatches, missing/unreadable/stale logs, next-launch hint reset, concurrency, teardown and secret non-disclosure. Fixed one review finding: PS cleanup registered the root before creation succeeded; now assigns only after success. Added failing-New-Item ownership regression (red before fix; green on 5.1/7). Scratch real permission-denied log tests pass on Bash/5.1/7; Bash symlink ignored; concurrent 5.1/7 log allocations are distinct and cleaned. Reran exact checkRefs[0] after this fix: exit 0, 3 vm-route PASS + 3 PASS_GATE markers, all parse/parity/lint checks green within 20 minutes. Logs /tmp/tmp.KvdoGbUCE3. Only these two PS paths changed in this review; all four task paths are already attributed by steps 1-3. No changes after the final rerun; net 277 LOC.",
+      "startedAt": "2026-11-06T06:33:31.180Z",
+      "completedAt": "2026-11-06T06:47:14.165Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": "task-e266a1501d534ac99b8e556f1f89cbff",
+  "dependsOn": [
+    "task-ab323f8520b2414cb41b3b13c9355489"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.25,
+  "comments": [
+    {
+      "id": "comment-40174f2b690d49059b031d631c72a5a7",
+      "author": "architect-32d0a5be",
+      "content": "Note on the producer interface, from the planner of task-ab323f85 (answering the coordination ask in chan-b6d8273b). Step 2 here assumes the producer exposes an explicit empty-input/closed-stdin mode. ab323f85's approved plan (2026-11-05T22:28Z) has none.\n\nWhat ab323f85 does ship (its step 4(f)): Invoke-MoeGuardedCommand's `& $Command @args` becomes `if ($MyInvocation.ExpectingInput) { $input | & $Command @args } else { & $Command @args }`. This was probed 2026-11-05 on 5.1.26100 and 7.6.9: ExpectingInput is true only for piped input. A call that does not pipe hands copilot the wrapper's own stdin, not EOF. So this row has to build the probe's empty stdin itself, without refactoring the helper. One candidate is `@() | Invoke-MoeGuardedCommand ... --help`, which takes the `$input` arm and should close stdin after zero items. That is unmeasured: probe it on 5.1 and 7, where a fake that reads fd 0 must get '' and exit, not hang. A fallback is piping `[string]::Empty`, which sends one newline and then EOF. sh keeps `< /dev/null` as planned.\n\nOther anchors:\n- No named argv array: the argv is written inline in the launch call. If the probe needs an array, create it here.\n- Headless argv: `-C <root> --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config @<file>`, with the prompt on stdin. The TUI drops `--allow-all` and `--no-ask-user` and adds `-i <pointer>`.\n- The CP-H, CP-AN and CP-A rows deep-equal those arrays, so update them when you add flags.\n- The MCP file is written per launch inside the copilot branch (ps1 writes it before Start-HeartbeatSidecar), so a probe of the exact argv must run after that write.\n- Banners: `Copilot mode: interactive` and `Copilot mode: headless (stdin prompt)`. ab323f85 prints no `Copilot MCP config written to:` line.\n\nRe-check every name against ab323f85's landed diff before building on it.",
+      "timestamp": "2026-11-05T22:36:35.368Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T22:04:03.921Z",
+  "updatedAt": "2026-11-06T07:49:43.228Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:06:18.193Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-06T07:48:38.734Z",
+    "wallClockMs": 34940541
+  },
+  "contextFetchedBy": [
+    "architect-a3d9076e",
+    "architect-a8e13516",
+    "architect-32d0a5be",
+    "worker-61ce36da",
+    "qa-a196fc69",
+    "qa-076e761a"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:08:26.389Z",
+  "executionContract": {
+    "intendedBehavior": "Copilot headless seats terminate once on proven argv/sign-in failures instead of retrying; every launch respects explicit model and per-task effort precedence.",
+    "acceptanceCriteria": [
+      "Both wrappers stop before any real headless launch on a matched nonzero argv probe: exactly one MOE_CLI_ARGV_REJECTED line with copilot version/first error, one matching #general chat_send, exit 1 and deregistration; skip=1 suppresses the probe. vm-route rows pass on bash, Windows PowerShell 5.1 and pwsh 7.",
+      "Matched authentication text in the current launch's log directory plus a nonzero CLI exit produces exactly one MOE_COPILOT_SIGNED_OUT line, one #general escalation, exit 1 and exactly one actual launch with polling enabled; success, unrelated or absent logs never falsely classify. Same rows.",
+      "Recorded headless/TUI/probe argv proves MOE_COPILOT_EFFORT > claim launch.effort > no flag, and explicit CLI model > settings model > MOE_COPILOT_MODEL > no flag, with no implicit Claude model or stale per-task effort. Same rows.",
+      "Probe stdin is empty, accepted probe runs only once per wrapper process, and per-launch log directories are distinct private children cleaned on exit; unknown probe/log errors preserve normal behavior without exposing secrets. Same rows.",
+      "The exact description gate completes successfully within 20 minutes: vm-route on bash/5.1/pwsh 7, wrapper parse checks, both parity checks and root lint. No full postflight suite or live runtime rebuild."
+    ],
+    "invariants": [
+      "No authentication precheck, token-store inspection or TUI sign-in handling; classify only nonzero run plus current launch log evidence.",
+      "Probe exact headless argv once per process with closed stdin; escape hatch unchanged and unrelated errors do not falsely classify.",
+      "Explicit model > project model > MOE_COPILOT_MODEL > absent; MOE_COPILOT_EFFORT > launch.effort > absent; never implicit Claude model.",
+      "Both wrappers and their own regressions ship together; no API or .moe state-format changes; no edits to parity/docs/IDEs.",
+      "No live package builds/tests, no full postflight; scoped gate <=20 min and only recorded owned PIDs may be signalled."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-vm-route.ps1"
+    ],
+    "reuse": [
+      "Codex's existing argv-probe classification/escalation/exit pattern, adapted to Copilot's parser phrases and closed stdin.",
+      "Grok's EXPLICIT_MODEL / explicit-source precedence; existing TASK_LAUNCH_EFFORT and $taskLaunchEffort reset/parse.",
+      "The prerequisite's Copilot launch arrays, stdin transport, private config/cleanup and recording fake.",
+      "vmr_run, Invoke-VmrRow, VMR_SETUP, $script:VmrSetup, FAKE_CLAIM_LAUNCH and existing bounded loop fixtures."
+    ],
+    "sourceAssumptions": [
+      "task-ab323f85 creates the launch producer and fake; execution is gated until it lands, and its actual symbols must be read first.",
+      "Supplied measured Copilot 1.0.105 parser/log contract is authoritative for this offline guard slice; overall signed-in smoke stays with task-59e1d150."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); for e in powershell pwsh; do (pwsh.exe -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $e.exe -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $e.exe -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ]'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Use native shell arrays/log reads and existing guarded Copilot transport rather than a new provider abstraction, credential detector, or generic launcher refactor. Keep fatal guards close to the launch and before generic retry accounting.",
+    "codebaseInsights": "EXPLICIT_MODEL is captured before the Claude fallback around sh:2326. Top-level launch.effort parses only with a recognized tier; tests therefore set tier:'standard'. FAKE_CLAIM_LAUNCH already exists in postflight-fake-proxy.js. Current Invoke-MoeGuardedCommand does not forward pipeline input; producer architect was notified. Bash create_secure_temp is initialized in the parent around :494; preserve it. Codex probe shows PS 5.1 ErrorActionPreference protection and MoeExitStatus handling.",
+    "risks": "Four-file paired-platform behavior slice (~55 min human equivalent), with compact table-driven tests to avoid unnecessary >400 LOC growth. Prerequisite not yet landed; do not duplicate its code or assume proposed symbol names. Every tracked edit through the main seat's editing tool; never handwritten .moe or pattern kills.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-vm-route.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:08:26.427Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T06:05:15.219Z",
+  "reviewStartedAt": "2026-11-06T06:48:00.612Z",
+  "verification": {
+    "command": "timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); for e in powershell pwsh; do (pwsh.exe -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $e.exe -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $e.exe -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ]'",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.KvdoGbUCE3/bash <==\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nPASS_GATE\n\n==> /tmp/tmp.KvdoGbUCE3/powershell <==\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\n\r\nPASS parity-check.ps1\nPASS_GATE\n\n==> /tmp/tmp.KvdoGbUCE3/pwsh <==\n[vm route] ok architect and governor\r\nPASS postflight-vm-route.ps1\r\n\r\nPASS parity-check.ps1\r\nPASS_GATE\n\nElapsed: 675 seconds. Verified 3 actual postflight-vm-route PASS summaries and 3 PASS_GATE markers. Copilot routing, argv-probe, auth, two-launch and logfail families passed on all three engines.",
+    "reportedAt": "2026-11-06T06:48:00.612Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "Implemented Copilot explicit model/effort routing, once-per-process exact-argv EOF probe, and unique private per-launch auth logs with terminal parser/sign-out escalation and normal cleanup/deregistration. Added paired recording-fake regressions: 29 Bash and 26 per Windows engine wrapper rows plus allocator assertions; covers precedence/absence/reset, skip/error nonmatches, stderr/version fallback, prefix/space paths, one probe/two launches, auth evidence negatives, cleanup and secret non-disclosure. Final exact gate passed in 675 s (11m15s): Bash/Windows PowerShell 5.1/pwsh 7 vm-route, parse, parity and lint; 3 actual PASS summaries + 3 leg markers. Self-review fixed PS failed-root cleanup ownership; additional unreadable-log/concurrent allocator checks passed and effort mutant killed. Four approved files, net +277 LOC; no edits after final gate. Handoff/gotcha recorded. No real Copilot/network smoke or live package rebuild; parent/final integration responsibilities unchanged.",
+  "commits": [
+    {
+      "sha": "fb142d89acbb1a57f5f70a5088d119abd5cc66cd",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-61ce36da@2026-11-06T06:03:43Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-61ce36da",
+      "recordedAt": "2026-11-06T06:49:32.508Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-076e761a@2026-11-06T07:35:05Z",
+    "at": "2026-11-06T07:49:43.228Z"
+  },
+  "completedAt": "2026-11-06T07:48:38.734Z",
+  "reviewCompletedAt": "2026-11-06T07:48:38.734Z",
+  "reviewSummary": "Reviewed completion fb142d89 (on moe/work-2026-10-24 + origin, pushed; tree e21464e3 = candidate treeSha). 4 approved files only, +304/-27 (net 277, under cap). checkRefs[0] re-run verbatim from a --shared clone at fb142d89 on D: EXIT 0 in 627 s at load ~4-5: 3x 'PASS postflight-vm-route' + 3x PASS_GATE; [copilot] ok ... routing, argv-probe, auth, two-launch, logfail on bash, 5.1 and pwsh 7; ParseFile, both parity checks, root lint green.\nDoD1: probe = exact headless argv + --help, </dev/null / @() pipe; nonzero + /unexpected argument|invalid value|unrecognized/i -> one coded line (codex wording, copilot substituted), one chan-general chat_send, heartbeat stop, exit 1 via EXIT trap/finally deregister; skip=1 = 0 probes. CP-reject x3 phrases + version-failure (unknown) + skip/accepted/unrelated rows on each engine.\nDoD2: auth only on nonzero + regular *.log in the per-launch dir; CP-auth polling = 1 run, exit 1, no [launch-failure]; negatives exit0/unrelated/missing/stdout/stale.\nDoD3: EXPLICIT_MODEL (CLI|settings) > MOE_COPILOT_MODEL; PS $Model > settings > env; never the resolved Claude model. MOE_COPILOT_EFFORT > launch.effort; CP-two proves no stale effort.\nDoD4: one probe per process; distinct copilot-log.* dirs cleaned; no fixture token leaks.\nDoD5: gate 627 s.\nMy checks: bash mutants (classify on exit 0; drop the once-guard) killed at CP-log-auth and CP-two. Scratch PS 5.1/7 probe: log root protected ACL owner-SID FullControl only, children inherit, locked log/missing dir = no evidence, case-sensitive like grep -F.\nNon-blocking: no PS logfail wrapper row (allocator unit only); no ACL assertion in harness; PS probe try has no catch for a thrown native-launch exception (NOT_FOUND precheck covers missing cmd). Handoffs kept: e266a150/59e1d150 plans may cite them.",
+  "requiredCheckAtDone": null
+}

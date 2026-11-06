@@ -1,0 +1,239 @@
+{
+  "id": "task-29342b49c7484beb80dfa59fa7815aae",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_who and chat_join compute presence inline instead of isWorkerAlive, skipping its DEAD test, so a seat deregistered moments ago (or a DEAD seat still parked in chat_wait) is listed online; chat_join's copy also drops every live IDLE seat, against its own MCP_SERVER.md note",
+  "description": "Filed by the governor from hunt #14's held items (task-d5d58972, architect-1dd28c7c, msg-1656a684). Re-verified at HEAD d5431577.\n\nPROBLEM\npackages/moe-daemon/src/util/workerLiveness.ts:15-21 defines isWorkerAlive as \"The ONE predicate for 'is this worker alive'\": not DEAD, and lastActivityAt within LIVENESS_TIMEOUT_MS. It says it is \"Shared by listWorkers, chat_who and the sweeps... Do not re-implement this check inline.\" Two chat tools do re-implement it:\n- chat_who (tools/chatWho.ts:6, :51-53) has its own PRESENCE_TIMEOUT_MS and checks lastActivityAt only. A DEAD record with recent activity is listed. Its Pass 2 (:82-108) also lists any worker parked in chat_wait, DEAD included.\n- chat_join (tools/chatJoin.ts:62-69) requires `status !== 'IDLE' && recent`. So it lists a just-deregistered DEAD seat and omits every live IDLE seat. docs/MCP_SERVER.md's `### moe.chat_join` note says \"Online workers are those with activity within the last 120 seconds\", with no IDLE exclusion. Its own code comment says \"active status or recent activity\".\n- list_workers already uses isWorkerAlive, so a seat list_workers reports isAlive:false shows as online in chat_who.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_chatWhoDead.test.ts, run at HEAD 942717bc in a snapshot; output in chatWhoDead.vitest.txt. Right after deregister_worker, list_workers reports isAlive:false, while chat_who returns `worker-closed:DEAD` in online. The code is unchanged at d5431577.\n\nFIX DIRECTION\nMake both tools call isWorkerAlive, with the shared LIVENESS_TIMEOUT_MS, and drop the inline constants.\n- chat_who's Pass 2: keep \"parked in chat_wait counts as present\", since a long wait does not refresh activity, but never for a DEAD record.\n- chat_join: choose between the doc's rule (every live seat) and the IDLE exclusion, and make the code and its `### moe.chat_join` note agree.\nSync both sections, `### moe.chat_join` and `### moe.chat_who` (ruling msg-71db57ac): online means not DEAD and active within 120 s, or (chat_who with a channel) parked in chat_wait.\nError handling is unchanged.\n\nFILES AND PLACEMENT\ntools/chatWho.ts, tools/chatJoin.ts, one vitest file, and docs/MCP_SERVER.md (those two sections only). The sibling row filed alongside this one fixes updateWorkerCursors (workerStore.ts). The two are independent: there is no dependsOn and no shared file. Gate: that vitest file, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "chat_who (with and without a channel, including a DEAD worker parked in chat_wait) and chat_join never list a DEAD worker. A vitest case deregisters a recently active seat and checks both tools.",
+    "A live IDLE seat that list_workers reports isAlive:true is listed by both tools. If chat_join keeps an IDLE exclusion, its `### moe.chat_join` note documents it instead, and the test pins whichever rule ships.",
+    "Both tools take presence from isWorkerAlive (no inline PRESENCE_TIMEOUT_MS left in chatWho.ts or chatJoin.ts), and the two MCP_SERVER.md sections state the same rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Both tools take presence from isWorkerAlive (packages/moe-daemon/src/util/workerLiveness.ts:15-31: not DEAD and lastActivityAt within LIVENESS_TIMEOUT_MS; the predicate list_workers reports as isAlive).\n(a) packages/moe-daemon/src/tools/chatWho.ts:\n- import `isWorkerAlive` from '../util/workerLiveness.js' and delete the module constant PRESENCE_TIMEOUT_MS (:6);\n- Pass 1 (:51-53): replace the inline lastActivity computation and its check with `if (!isWorkerAlive(worker, now)) continue;`;\n- Pass 2 (:96-98): a worker parked in chat_wait counts as present even past the window, because a long wait does not refresh activity, but never a DEAD record. Change `if (worker)` to `if (worker && worker.status !== 'DEAD')`. Never upgrade a DEAD record either: Pass 1 already skipped it, so it cannot be in `seen`.\n(b) packages/moe-daemon/src/tools/chatJoin.ts (:62-71): import isWorkerAlive. Replace the inline loop's condition with `if (isWorkerAlive(worker, now))` and delete the local PRESENCE_TIMEOUT_MS.\n- Chosen rule: the DOC's. Every live seat is online, IDLE included, so the `status !== 'IDLE'` exclusion goes. Its own comment ('active status or recent activity') and `### moe.chat_join` already describe that rule, and no consumer reads onlineWorkers (grep: only chatJoin.ts and the doc).\n- Rewrite the comment to name isWorkerAlive.\nDo not touch mentionRouter.ts: its IDLE/DEAD filter (:244-249) picks notification targets, not presence, and its comment documents that.\nError handling: unchanged. Neither tool gains a new throw, and the channel and worker validation stay first. Edit with the seat's own editor (Serena or Edit on Claude, apply_patch on codex exec), never a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts"
+      ],
+      "note": "chatWho/chatJoin now use isWorkerAlive; Pass 2 skips DEAD; chat_join drops IDLE exclusion (doc rule). Error handling unchanged.",
+      "startedAt": "2026-11-03T23:58:22.847Z",
+      "completedAt": "2026-11-03T23:58:37.760Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Regression test: new packages/moe-daemon/src/tools/chatPresence.test.ts, built from /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_chatWhoDead.test.ts (ToolTestHarness; mock postToRoleChannel).\nSeed, with FRESH = now and STALE = 5 min ago:\n- worker-closed: CODING, FRESH, with a cursor on #general;\n- worker-idle: IDLE, FRESH, with a cursor on #general;\n- worker-busy: CODING, FRESH;\n- worker-stale: CODING, STALE, with a cursor on #general;\n- worker-joiner: READING_CONTEXT, FRESH, the chat_join caller.\nThen deregister_worker worker-closed, so it is DEAD with its recent lastActivityAt kept. Put chat_wait waiters straight into activeChatWaiters (the tools/chatChannelRef.test.ts:238-241 pattern) for worker-closed and for worker-stale, both watching #general. Clear them, and their timers, in afterEach.\nAssert exact id lists, sorted:\n1. DoD 1:\n   - chat_who {} lists [worker-busy, worker-idle, worker-joiner], with no worker-closed;\n   - chat_who {channel:'#general'} lists worker-idle (source 'cursor') and worker-stale (source 'waiting'), and never worker-closed in either pass;\n   - chat_join {channel:'#general', workerId:'worker-joiner'} onlineWorkers ids are [worker-busy, worker-idle, worker-joiner].\n2. DoD 2: worker-idle is in list_workers with isAlive:true, and both tools list it. That pins the shipped rule: chat_join no longer drops IDLE.\n3. Parity: the chat_who {} ids and the chat_join onlineWorkers ids both equal the ids list_workers reports with isAlive:true.\n4. Unchanged behaviour: worker-stale is in neither no-channel list. It is listed with a channel only through its waiter.\nUse toEqual on sorted arrays, never truthiness. Edit with the seat's own editor, never a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatPresence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPresence.test.ts"
+      ],
+      "note": "Added chatPresence.test.ts (5 cases); run in step 4 snapshot.",
+      "startedAt": "2026-11-03T23:58:46.330Z",
+      "completedAt": "2026-11-03T23:59:00.768Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs sync, these two sections only (ruling msg-71db57ac): docs/MCP_SERVER.md `### moe.chat_join` (:2649-2670) and `### moe.chat_who` (:2711-2733).\n- chat_join's Notes: replace 'Online workers are those with activity within the last 120 seconds' with: online workers are those `moe.list_workers` reports `isAlive`, meaning not `DEAD` and active within the last 120 seconds, whatever their status, so an `IDLE` seat between tasks is listed.\n- chat_who's Notes: 'Online' becomes the same rule (not `DEAD`, active within 120 s, as `moe.chat_join` and list_workers' isAlive). The `channel` bullet adds that a worker blocked in `moe.chat_wait` on the channel counts even past the window, because a parked wait does not refresh activity, but never a `DEAD` record.\nKeep the type, source and no-channel bullets. Edit no other section. Edit with the seat's own editor (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) or a shell write.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Synced chat_join and chat_who Notes only.",
+      "startedAt": "2026-11-03T23:59:03.618Z",
+      "completedAt": "2026-11-03T23:59:12.062Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (text also at /mnt/d/moe-scratch/plan-29342b49/checkref-gate.txt, 884 chars).\n- What it does: it overlays chatWho.ts, chatJoin.ts and the new test onto a whole-tree `git archive HEAD` snapshot (mem:gotcha-harness-snapshot-needs-full-archive). It checks that no PRESENCE_TIMEOUT_MS is left in either tool and that both call isWorkerAlive(, printing 'inline presence left (<dir>)' on failure. Then, under env -i with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers}`: the new file plus every existing chat_who, chat_join and list_workers suite.\n- Expected: exit 0; 'Test Files 4 passed'; the last line is 'presence ok (/tmp/m2934.XXXX)'.\n- Architect dry run with a prototype of this plan: exit 0, 4 files and 84 tests. The base chatWho.ts exits 1 at the structural check.\n- Then `rm -rf` the printed literal /tmp/m2934.XXXX path.\n- Never run npm in the shared checkout, and never pattern-kill a process.\n- Error handling: on a non-zero exit, read the printed snapshot path and log tail first, then fix the owning step's file.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef exit 0: Test Files 4 passed, 88 tests; 'presence ok (/tmp/m2934.nSUZ)'. Snapshot removed.",
+      "startedAt": "2026-11-03T23:59:13.151Z",
+      "completedAt": "2026-11-03T23:59:26.043Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, the final step: load the adversarial-self-review skill and read your diff as an attacker.\n- Boundaries: isWorkerAlive's `<=` at exactly 120 s against the old inline `>` skip in chat_who (the same edge) and chat_join's old strict `<` (it now admits the boundary instant).\n- A missing, unparsable or future lastActivityAt: isWorkerAlive returns false for NaN, and a future stamp counts as alive, as before.\n- A DEAD record in activeChatWaiters is never listed. An all-channel waiter (channels null) is still honoured for live records.\n- The chat_join caller itself appears when it is alive. 'human' and 'system' callers are unchanged.\n- RED re-proof: in a scratch snapshot outside the repo, restore `git show $(git merge-base HEAD moe/work-2026-10-24):packages/moe-daemon/src/tools/chatWho.ts` and chatJoin.ts, then run `npx vitest run src/tools/chatPresence.test.ts`. The DEAD and IDLE assertions must fail. Paste the failing names into the completion summary, then rm -rf the literal scratch path.\n- Scope: only the four planned files changed: no mentionRouter.ts, workerLiveness.ts or listWorkers.ts.\nIf this review changes any file, re-run step 4's command before moe.complete_task; its fresh output is the evidence. Error handling or test gaps found here are fixed in the owning step's file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts",
+        "packages/moe-daemon/src/tools/chatPresence.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatWho.ts",
+        "packages/moe-daemon/src/tools/chatJoin.ts",
+        "packages/moe-daemon/src/tools/chatPresence.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: boundary now <= 120s everywhere (chat_join admits the exact instant); NaN/missing lastActivityAt -> not alive; DEAD never listed even via waiter; no files changed by review. RED re-proof on base code: 4 of 5 chatPresence tests fail (chat_who no-channel, chat_who channel, chat_join, list_workers parity); fixture-sanity passes. Scratch removed.",
+      "startedAt": "2026-11-03T23:59:28.045Z",
+      "completedAt": "2026-11-03T23:59:41.888Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 461.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:34:06.481Z",
+  "updatedAt": "2026-11-04T19:20:45.009Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:54:34.552Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T00:04:03.734Z",
+    "wallClockMs": 569182
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:57:08.496Z",
+  "executionContract": {
+    "intendedBehavior": "chat_who and chat_join take presence from isWorkerAlive: not DEAD, and active within LIVENESS_TIMEOUT_MS (120 s). That is the predicate list_workers reports as isAlive. A just-deregistered DEAD seat is never listed, even with recent activity or a lingering chat_wait waiter. chat_join lists live IDLE seats, as its doc says. chat_who with a channel still lists a live worker parked in chat_wait past the window. Both MCP_SERVER.md sections state the same rule.",
+    "acceptanceCriteria": [
+      "chat_who (with and without a channel, including a DEAD waiter) and chat_join never list a DEAD worker.",
+      "A live IDLE seat that list_workers reports isAlive:true is listed by both tools.",
+      "The chat_who {} ids and the chat_join onlineWorkers ids equal list_workers' isAlive:true ids.",
+      "No PRESENCE_TIMEOUT_MS remains in chatWho.ts or chatJoin.ts.",
+      "The checkRef exits 0, ending with 'presence ok'."
+    ],
+    "invariants": [
+      "One presence predicate (isWorkerAlive) for list_workers, chat_who and chat_join.",
+      "A DEAD record is never reported online."
+    ],
+    "compatibility": [
+      "The reply shapes are unchanged ({online:[...]} and {channel, channelName, onlineWorkers}).",
+      "No consumer reads onlineWorkers: only chatJoin.ts and the doc mention it.",
+      "The existing chatChannelRef and workerType suites pass unchanged (dry run)."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/tools/chatWho.ts: the import, Pass 1's check and Pass 2's DEAD guard",
+      "packages/moe-daemon/src/tools/chatJoin.ts: the import and the online loop",
+      "packages/moe-daemon/src/tools/chatPresence.test.ts (new)",
+      "docs/MCP_SERVER.md: the Notes of ### moe.chat_join and ### moe.chat_who only"
+    ],
+    "reuse": [
+      "util/workerLiveness.ts isWorkerAlive and LIVENESS_TIMEOUT_MS.",
+      "The hunt repro /mnt/d/moe-scratch/hunt-d5d58972/A/zzHuntA_chatWhoDead.test.ts.",
+      "chatChannelRef.test.ts's activeChatWaiters seeding."
+    ],
+    "sourceAssumptions": [
+      "chatWho.ts: :6 is PRESENCE_TIMEOUT_MS; :51-53 is Pass 1's inline window check; :82-110 is Pass 2 (activeChatWaiters, with no status check).",
+      "chatJoin.ts:62-71 is the inline loop with `status !== 'IDLE' && recent`.",
+      "workerLiveness.ts:15-31 is isWorkerAlive (DEAD false, NaN false, <= window)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src && L=$(mktemp -d /tmp/m2934.XXXX) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon/src\" && for f in tools/chat{Who,Join,Presence.test}.ts; do cp \"$R/$f\" $f || exit 1; done && { ! grep -q PRESENCE_TIMEOUT_MS tools/chatWho.ts tools/chatJoin.ts && grep -q 'isWorkerAlive(' tools/chatWho.ts && grep -q 'isWorkerAlive(' tools/chatJoin.ts || { echo \"inline presence left ($L)\"; exit 1; }; } && cd .. && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers}' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -E '^ +(Test Files|Tests) ' ../v.log; grep -q '✓ src/tools/chatPresence.test.ts' ../v.log && echo \"presence ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "chat_join: keep the IDLE exclusion and document it, or follow the doc rule. Chose the doc rule, because chat_join's own comment, its MCP_SERVER.md note and chat_who all say 'recent activity'. No consumer depends on the exclusion. mentionRouter's IDLE/DEAD filter is a notification-target rule, deliberately separate, and out of scope.",
+    "codebaseInsights": "- activeChatWaiters is a module-level Map exported from chatWait.ts. Tests seed it directly and must clear it, and the timers, in afterEach.\n- deregister_worker may cancel a live waiter itself. That is why the DEAD-waiter case seeds the map after the deregister.\n- Dry run: 4 files, 84 tests; the existing suites pass with the IDLE inclusion.",
+    "risks": "- A leftover activeChatWaiters entry, or its setTimeout, leaks into other test files in the same worker, so clear both in afterEach.\n- The structural check needs the literal `isWorkerAlive(` in both tools.\n- Rails: no npm in the shared checkout, no pattern kills, and tracked files written only with the seat's own editor.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/workerLiveness.ts",
+      "packages/moe-daemon/src/tools/chatWho.ts",
+      "packages/moe-daemon/src/tools/chatJoin.ts",
+      "packages/moe-daemon/src/tools/chatChannelRef.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "19af5ca6445507f77475bd83f20af7a81269df8d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:57:08.534Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:58:22.847Z",
+  "reviewStartedAt": "2026-11-03T23:59:49.448Z",
+  "verification": {
+    "command": "checkRef from executionContract (git archive snapshot; npm ci && npx vitest run src/tools/{chatPresence,chatChannelRef,workerType,listWorkers})",
+    "exitCode": 0,
+    "outputTail": "Test Files  4 passed (4)\n      Tests  88 passed (88)\npresence ok (/tmp/m2934.nSUZ)",
+    "reportedAt": "2026-11-03T23:59:49.448Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatWho.ts",
+    "packages/moe-daemon/src/tools/chatJoin.ts",
+    "packages/moe-daemon/src/tools/chatPresence.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_who and chat_join now take presence from isWorkerAlive (not DEAD, active within 120 s), with no inline PRESENCE_TIMEOUT_MS left. chat_who's Pass 2 never lists a DEAD waiter, but a live waiter parked past the window still counts. chat_join no longer drops IDLE seats (the doc's rule). The two MCP_SERVER.md Notes sections state the same rule. New tools/chatPresence.test.ts has 5 cases: DEAD and stale exclusion, IDLE inclusion, parity with list_workers isAlive, waiter source. RED re-proof on the base code: 4 of 5 fail (chat_who without a channel, chat_who with a channel, chat_join, list_workers parity). The fixture-sanity case passes.",
+  "commits": [
+    {
+      "sha": "f76c55f34a1aaa21dc4d06edb3397378c7bb1958",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T23:57:25Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/chatJoin.ts",
+        "packages/moe-daemon/src/tools/chatPresence.test.ts",
+        "packages/moe-daemon/src/tools/chatWho.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-04T00:00:44.851Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-04T00:02:41Z",
+    "at": "2026-11-04T00:04:27.221Z"
+  },
+  "completedAt": "2026-11-04T00:04:03.734Z",
+  "reviewCompletedAt": "2026-11-04T00:04:03.734Z",
+  "reviewSummary": "Reviewed completion f76c55f3 (on moe/work-2026-10-24 and the control checkout; 4 files, +111/-13, ~98 net, under the 400 cap; scope exactly the 4 approved files, MCP_SERVER.md only the two Notes sections). Re-ran the task checkRef myself in a fresh git-archive snapshot (env -i, nvm Node v24.21.0, npm ci there, never in the shared checkout): exit 0, Test Files 4 passed, Tests 88 passed (chatPresence, chatChannelRef, workerType, listWorkers), 'presence ok'. Structural gate: no PRESENCE_TIMEOUT_MS left in chatWho.ts/chatJoin.ts, both call isWorkerAlive(. Independent RED proof in the snapshot: base chatWho.ts/chatJoin.ts -> 4 of 5 chatPresence tests fail (chat_who no-channel, chat_who with channel, chat_join, list_workers parity), fixture-sanity passes. Mutation check: removing only the Pass 2 `status !== 'DEAD'` guard fails exactly the 'chat_who with a channel ... never the DEAD one' test, so the DEAD-waiter case is pinned (asserts are exact sorted id lists, not truthiness). DoD1: DEAD seat (deregistered, recent lastActivityAt, plus a lingering waiter) never listed by chat_who with/without channel or chat_join. DoD2: live IDLE seat is isAlive:true in list_workers and listed by both tools; chat_join drops the IDLE exclusion per the doc rule/ruling msg-71db57ac and the test pins it. DoD3: both tools use isWorkerAlive; the two MCP_SERVER.md Notes state the same rule (not DEAD, active within 120 s; chat_who channel adds the parked-waiter-past-window rule, never DEAD). Boundary note: chat_join now admits the exact 120 s instant (<=), consistent with isWorkerAlive. Reply shapes unchanged; no other consumer of onlineWorkers (grep: only chatJoin.ts and the doc). No error-handling change. Non-blocking ponytail note: none, diff is lean. Snapshot /tmp/m2934.3jV0 removed.",
+  "requiredCheckAtDone": null
+}

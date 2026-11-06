@@ -1,0 +1,213 @@
+{
+  "id": "task-68a47060c2064b4b9f2737e97eafc9d5",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_epic silently turns a bad or ARCHIVED status into PLANNED and stores order unchecked, where update_epic refuses both with INVALID_INPUT, and one string order then gives every later default-order epic NaN in memory and null on disk",
+  "description": "Filed by defect hunt #7 (task-44785c82, architect-1dd28c7c). Reproduced on moe/work-2026-10-24 22348856; the files are unchanged at c89e4c59.\n\nPROBLEM (packages/moe-daemon/src/):\n- Sibling update_epic runs StateManager.updateEpic (state/StateManager.ts:1287), which calls validateEpicUpdates (state/validators.ts):\n  - status must be PLANNED, ACTIVE, COMPLETED or ARCHIVED (:586-588);\n  - order must be an integer from 0 to MAX_SAFE_INTEGER (:589-591);\n  - anything else is refused with INVALID_INPUT.\n- Member create_epic (tools/createEpic.ts:38) runs StateManager.createEpic (:1245-1279):\n  - Only epicRails goes through validateEpicUpdates (:1255).\n  - status is `sanitizeEnum(input.status, ['PLANNED','ACTIVE','COMPLETED'], 'PLANNED')` (:1256-1257). Both \"BOGUS\" and \"ARCHIVED\" silently become PLANNED, though createEpic.ts:18's schema advertises \"PLANNED, ACTIVE, COMPLETED or ARCHIVED\".\n  - order is `input.order ?? this.nextEpicOrder()` (:1268) with no check, so \"abc\" and -5 are written to the epic file.\n  - The board's /ws CREATE_EPIC goes through the same state.createEpic.\n- Cascade: nextEpicOrder (:1477-1481) is `Math.max(...epics.map(e => e.order)) + 1`. After one string order, every later create_epic that omits order gets NaN, which JSON writes as null.\n\nEVIDENCE: repros at /mnt/d/moe-scratch/hunt-44785c82/A/createEpic.validation.test.ts and createEpic.orderCascade.test.ts, run in a git-archive snapshot (/tmp/hunt-44785c82-A/packages/moe-daemon):\n`LOG_LEVEL=silent npx vitest run src/tools/createEpic.validation.test.ts src/tools/createEpic.orderCascade.test.ts`\n- The update_epic baseline passes: it refuses BOGUS, \"abc\" and -5.\n- FAIL \"create_epic answers the same inputs the same way\": {\"bogusStatus\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":2},\"stringOrder\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":\"abc\"},\"negativeOrder\":{\"refused\":false,\"status\":\"PLANNED\",\"order\":-5}}\n- FAIL \"create_epic keeps the ARCHIVED status its schema advertises (or refuses it), never PLANNED\": {\"refused\":false,\"status\":\"PLANNED\",\"order\":2}\n- FAIL \"a later default-order epic still gets a finite numeric order on disk\": \"in memory NaN, on disk null\"\n\nFIX DIRECTION:\n- In StateManager.createEpic, validate a supplied status and order through validateEpicUpdates, as epicRails already is: refuse with INVALID_INPUT, never coerce. Keep the defaults when they are omitted (PLANNED, nextEpicOrder()).\n- Decide ARCHIVED explicitly: accept it as update_epic does, or refuse it and fix createEpic.ts:18's description.\n- Epic rail (backward-compatible with existing .moe/ state): make nextEpicOrder ignore a non-finite order already on disk, so an existing bad epic file can't poison it. Do not rewrite such files.\n\nFILES:\n- packages/moe-daemon/src/state/StateManager.ts (createEpic and nextEpicOrder only)\n- packages/moe-daemon/src/tools/createEpic.ts (schema text, only if ARCHIVED is refused)\n- new test files adopted from the two repros",
+  "definitionOfDone": [
+    "In a git-archive snapshot outside the shared checkout, `npx vitest run src/tools/createEpic.validation.test.ts src/tools/createEpic.orderCascade.test.ts` (the hunt repros, adopted) passes. create_epic refuses status \"BOGUS\" and order \"abc\" / -5 with INVALID_INPUT, as update_epic does. \"ARCHIVED\" is either kept or refused, never turned into PLANNED. The next default order is a finite number, and the same number is on disk.",
+    "Omitted status and order still give PLANNED and nextEpicOrder(). A test loads an epic file that already holds a non-numeric order and shows the next default order stays finite, without rewriting that file.",
+    "In that snapshot, `npx vitest run src/tools/createEpic.test.ts src/tools/updateEpic.test.ts src/state/StateManager.test.ts src/state/validators.test.ts` stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1 and 2: tests first, then the fix, then one contract line. Edit only with the Edit/Write tools (TOOL-witness rail).\n\n(a) Tests. Create packages/moe-daemon/src/tools/createEpic.validation.test.ts and packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts with the Write tool. Their content is the dry-run copies at /mnt/d/moe-scratch/plan-68a4/createEpic.validation.test.ts and /mnt/d/moe-scratch/plan-68a4/createEpic.orderCascade.test.ts. Read those, then write them into the tree; never cp them in.\n- validation, 4 cases:\n  1. The update_epic baseline refuses each of status 'BOGUS' and order 'abc' / -5 / 2.5 with { codeName: 'INVALID_INPUT', context: { field } }.\n  2. create_epic refuses the same four values through the tool AND through state.createEpic, which is the /ws CREATE_EPIC path. Afterwards the epic map and the epics/ directory are unchanged.\n  3. create_epic keeps status 'ARCHIVED'.\n  4. An omitted or null status/order gives PLANNED and nextEpicOrder(): orders 2 then 3, after epic-1's 1.\n- orderCascade, 3 cases:\n  1. A refused order 'abc' leaves the next default order at 2, in memory and on disk.\n  2-3. An epic file already holding order 'abc', or no order at all, loads with its bytes untouched. The next default order after epic-1's 4 is then 5.\n\nRED, before touching StateManager.ts: run checkRef 1. It must fail with exactly 5 failing tests: orderCascade's 3, plus validation's 'refuses each bad value' and 'keeps ARCHIVED'. Both typechecks and the other 398 tests must pass. In the dry run this printed `Tests  5 failed | 398 passed (403)`.\n\n(b) packages/moe-daemon/src/state/StateManager.ts.\n- In createEpic (:1254-1257), replace the epicRails-only validateEpicUpdates call and the sanitizeEnum status with:\n```\n    // Same rule as updateEpic: refuse (INVALID_INPUT), never truncate, drop or coerce.\n    // null counts as omitted, as it did before status and order were validated here.\n    const validated = validateEpicUpdates({\n      epicRails: input.epicRails,\n      status: input.status ?? undefined,\n      order: input.order ?? undefined,\n    });\n    const epicRails = validated.epicRails ?? [];\n    const status = validated.status ?? 'PLANNED';\n```\n- :1268 becomes `order: validated.order ?? this.nextEpicOrder(),`.\n- nextEpicOrder (:1477-1481) skips non-finite orders:\n```\n    const orders = Array.from(this.epics.values())\n      .map((e) => e.order)\n      .filter((o) => typeof o === 'number' && Number.isFinite(o));\n    if (orders.length === 0) return 1;\n    return Math.max(...orders) + 1;\n```\n  Keep a short comment on why: a legacy or hand-edited non-numeric order made every later default NaN, which JSON writes as null.\n- Drop `sanitizeEnum,` from the '../util/sanitize.js' import (:82). It has no other use in the file; confirm with grep.\n- ARCHIVED is accepted, as update_epic accepts it and createEpic.ts:18 advertises it, so createEpic.ts is not edited.\n\n(c) docs/MCP_SERVER.md, `### moe.create_epic` section only (:1846-1872).\n- In the Parameters block, `status?: string,` becomes `status?: \"PLANNED\" | \"ACTIVE\" | \"COMPLETED\" | \"ARCHIVED\",  // default \"PLANNED\"`.\n- `order?: number` becomes `order?: number   // an integer >= 0; default: the highest finite epic order + 1`.\n- Before **Returns:**, add: A bad `status` or `order` is refused with `INVALID_INPUT`, the same rule `moe.update_epic` applies, and no epic is written. An omitted or `null` value takes the default.\n\nThe error handling:\n- The refusal is validateEpicUpdates' INVALID_INPUT MoeError, thrown before writeEntity. A refused create therefore writes no epic file, adds nothing to the map and emits no EPIC_CREATED; validation case 2 pins this.\n- The board's /ws CREATE_EPIC already turns a thrown MoeError into an ERROR frame with code/codeName (WebSocketServer.ts:1209-1222).\n- Neither board sends status or order (MoeCommandSender.kt:225-235, MoeDaemonClient.ts:1303), so no client changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/createEpic.validation.test.ts",
+        "packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createEpic.validation.test.ts",
+        "packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts"
+      ],
+      "note": "Tests written (RED: 5 failed/398 passed), fix applied in createEpic/nextEpicOrder, sanitizeEnum import dropped, doc section updated.",
+      "startedAt": "2026-11-03T18:32:54.288Z",
+      "completedAt": "2026-11-03T18:34:00.060Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1-3: verification. Run it ONCE, fresh, from the task worktree root, after every edit is in. Its output is the evidence for complete_task, and QA re-runs the same command.\n\n1. Run checkRef 1 (the gate) exactly as written.\n   - It archives HEAD into a mktemp snapshot outside the checkout, overlays StateManager.ts and the two new tests, and runs `npm ci` there (global rail: never build or test in place).\n   - It typechecks the source and the two new test files (tt.json).\n   - It runs src/tools/createEpic* (createEpic.test.ts plus the 2 new files), updateEpic.test.ts, StateManager.test.ts, validators.test.ts, getActivityLog.test.ts and WebSocketServer.test.ts.\n   - Expected at c99801aa: `Test Files  8 passed (8)` and `Tests  403 passed (403)`. The counts may grow if those files gain tests upstream; failures must stay 0.\n2. Run checkRef 2 and checkRef 3. Both must exit 0.\n   - checkRef 2: the create_epic doc section names INVALID_INPUT, \"ARCHIVED\" and integer >= 0.\n   - checkRef 3 (scope): only StateManager.ts, docs/MCP_SERVER.md and the two new tests differ from the merge base, and there is no other untracked file.\n\ncomplete_task evidence:\n- verification.command = checkRef 1 verbatim\n- exitCode = 0\n- outputTail = its `Test Files` and `Tests` lines plus checkRef 2's DOC-OK\n\nThe error handling for a red run:\n- A tsc error from tt.json is a type slip in a new test. Fix the test.\n- A failing pre-existing suite (WebSocketServer.test.ts, StateManager.test.ts) means the validation reached a caller that sends status or order. Find that caller before you touch the rule.\n- If `npm ci` fails on the network, re-run once. Never run npm in the checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef1 rc=0 (8 files, 403 tests, both tsc ok), DOC-OK, scope rc=0.",
+      "startedAt": "2026-11-03T18:34:01.220Z",
+      "completedAt": "2026-11-03T18:34:41.569Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, once. Load the adversarial-self-review skill, then read this task's diff (`git diff $(git merge-base HEAD moe/work-2026-10-24)`) as an attacker. Check each item:\n(1) Every value update_epic refuses is refused by create_epic, through both the tool and state.createEpic (the /ws path). Nothing is written or emitted on a refusal.\n(2) Defaults: an omitted or null status and order give PLANNED and nextEpicOrder(). WebSocketServer.test.ts:1181 and getActivityLog.test.ts:43 (valid ACTIVE status, integer order) still pass.\n(3) nextEpicOrder returns 1 for an empty map and 1 when every order is non-finite; for a mixed map it returns the highest finite order + 1. It never mutates or rewrites an epic, and load() is untouched (the legacy-bytes test pins this).\n(4) Concurrency: create_epic runs under the daemon's state mutex, which MCP and /ws share, so two creates read nextEpicOrder serially. There is no new race.\n(5) Edge: order Number.MAX_SAFE_INTEGER is accepted (the validator's max), as update_epic accepts it. Note it in the summary; do not widen scope.\n(6) No added line contains a project.json globalRails.forbiddenPatterns string. The epicRails error fields and the title/description/architectureNotes sanitizing are unchanged. createEpic.ts is unchanged, and checkRef 3 exits 0.\nFix anything found within the 4 plan files only. If a file changed, re-run step 2.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createEpic.validation.test.ts",
+        "packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts"
+      ],
+      "note": "Self-review: refusal throws before writeEntity (nothing written/emitted); null/omitted still default; nextEpicOrder returns 1 for empty/all-non-finite and never rewrites; state mutex serializes creates; MAX_SAFE_INTEGER accepted as update_epic does; no forbidden patterns added; scope check exits 0. No changes needed.",
+      "startedAt": "2026-11-03T18:34:42.845Z",
+      "completedAt": "2026-11-03T18:34:55.336Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 399.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:19:40.914Z",
+  "updatedAt": "2026-11-04T19:20:44.451Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:21:02.727Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T18:38:23.027Z",
+    "wallClockMs": 1040300
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-33f67e5b",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:31:39.112Z",
+  "executionContract": {
+    "intendedBehavior": "create_epic (MCP, and the board's /ws CREATE_EPIC, both through StateManager.createEpic) answers a supplied status and order exactly as update_epic does. status must be PLANNED, ACTIVE, COMPLETED or ARCHIVED, and order an integer from 0 to MAX_SAFE_INTEGER. Anything else is refused with INVALID_INPUT and nothing is written. An omitted or null value takes the default: PLANNED and nextEpicOrder(). nextEpicOrder ignores a non-finite order already on disk, so a legacy bad epic file can no longer make later default orders NaN in memory and null on disk.",
+    "acceptanceCriteria": [
+      "createEpic.validation.test.ts and createEpic.orderCascade.test.ts pass in the snapshot. status BOGUS and order abc / -5 / 2.5 are refused with INVALID_INPUT naming the field, through the tool and the state path, persisting nothing. ARCHIVED is kept, and the next default order is finite in memory and on disk.",
+      "Omitted or null status/order give PLANNED and nextEpicOrder(). An epic file holding order 'abc' or no order loads byte-for-byte untouched, and the next default order skips it.",
+      "createEpic.test.ts, updateEpic.test.ts, StateManager.test.ts, validators.test.ts, getActivityLog.test.ts and WebSocketServer.test.ts stay green, and both typechecks pass."
+    ],
+    "invariants": [
+      "epicRails validation and its error field names are unchanged",
+      "title/description/architectureNotes sanitizing is unchanged",
+      "load() and existing epic files are never rewritten",
+      "update_epic, createEpic.ts and both IDE clients are unchanged"
+    ],
+    "compatibility": [
+      "Neither board sends status or order on CREATE_EPIC (MoeCommandSender.kt:225-235, MoeDaemonClient.ts:1303), so board creates behave exactly as before.",
+      "update_epic already refuses fractional, negative and non-number orders under the same `type: 'number'` schema (updateEpic.ts:39); create_epic now matches it. All 36 epic files on this board hold integer orders.",
+      "null status/order still means omitted. ARCHIVED is now kept instead of silently becoming PLANNED, matching createEpic.ts:18's own description."
+    ],
+    "approvedScope": [
+      "StateManager.createEpic: status and order go through validateEpicUpdates with epicRails",
+      "StateManager.nextEpicOrder: finite-order filter",
+      "StateManager.ts: the sanitizeEnum import is dropped once unused",
+      "docs/MCP_SERVER.md create_epic section: parameter types plus one refusal sentence",
+      "Two new test files: createEpic.validation.test.ts and createEpic.orderCascade.test.ts"
+    ],
+    "reuse": [
+      "validateEpicUpdates (state/validators.ts:583-591) becomes the one rule for both tools; no new validator."
+    ],
+    "sourceAssumptions": [
+      "StateManager.ts:1245-1279 createEpic: only epicRails is validated (:1255); status is sanitizeEnum(..., 'PLANNED') at :1256-1257; order is `input.order ?? this.nextEpicOrder()` at :1268.",
+      "StateManager.ts:1477-1481 nextEpicOrder is `Math.max(...epics.map((e) => e.order)) + 1`. Its only caller is createEpic.",
+      "validators.ts:586-591: the status enum includes ARCHIVED; order goes through validateIntegerValue(0, MAX_SAFE_INTEGER). Both throw invalidInput, a MoeError with codeName INVALID_INPUT and context { field, reason }.",
+      "WebSocketServer.ts:655-662 CREATE_EPIC passes its payload to state.createEpic; :1209-1222 turns a thrown MoeError into an ERROR frame with code/codeName.",
+      "persistence.ts:38 loadEntities reads epic JSON as-is, with no normalization of order."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src && cp --parents $P/state/StateManager.ts $P/tools/createEpic.validation.test.ts $P/tools/createEpic.orderCascade.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createEpic.validation.test.ts\",\"src/tools/createEpic.orderCascade.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/createEpic src/tools/updateEpic.test.ts src/state/StateManager.test.ts src/state/validators.test.ts src/tools/getActivityLog.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(sed -n '/^### moe.create_epic/,/^### /p' docs/MCP_SERVER.md) && for w in 'INVALID_INPUT' '\"ARCHIVED\"' 'integer >= 0'; do printf '%s' \"$S\" | grep -qF -- \"$w\" || { echo \"create_epic section lacks $w\"; exit 1; }; done && echo DOC-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && P=packages/moe-daemon/src && X=':(exclude)' && N=\"$X$P/tools/createEpic.validation.test.ts $X$P/tools/createEpic.orderCascade.test.ts\" && D=$(git diff --name-only \"$B\" -- . \"$X.moe\" \"$X$P/state/StateManager.ts\" \"${X}docs/MCP_SERVER.md\" $N; git ls-files --others --exclude-standard -- . \"$X.moe\" $N) && { [ -z \"$D\" ] || { echo \"out of scope: $D\"; false; }; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Validate in tools/createEpic.ts only. Rejected: the board's /ws CREATE_EPIC calls state.createEpic directly and would stay unchecked.\n(b) Refuse ARCHIVED and edit createEpic.ts's schema text. Rejected: update_epic accepts ARCHIVED, and accepting it needs no schema change.\n(c) A looser 'finite number >= 0' order rule. Rejected: two rules for one field is the drift this row fixes, and update_epic already refuses 2.5 under the same `type: 'number'` schema.\n(d) Normalize bad orders at load. Rejected: the epic rail forbids rewriting existing state, and skipping non-finite values in nextEpicOrder is enough.",
+    "codebaseInsights": "Dry run in the scratch shared clone /mnt/d/moe-scratch/plan-68a4/dry (c99801aa), with the plan's edits (fix.diff):\n- RED: checkRef 1 gave 5 failed / 398 passed.\n- GREEN: 8 files and 403 tests passed, and both typechecks passed. Each run took about 30 s including npm ci.\n- Mutants, all killed by one or two tests each:\n  - M1: no finite filter.\n  - M2: null status not treated as omitted.\n  - M3: order unvalidated.\n  - M4: ARCHIVED coerced to PLANNED.\n- Scope and doc checkRefs were tested against a stray file, an out-of-scope edit and the base doc.\n\nArtifacts in /mnt/d/moe-scratch/plan-68a4/: the two test files, fix.diff, MCP_SERVER.planned.md, cr-*.txt, red.out and green.out.",
+    "risks": "- A seat (or a script) that passes a fractional or negative order to create_epic now gets INVALID_INPUT. That is intended parity with update_epic; mention it in the completion summary.\n- MCP_SERVER.md is a busy file. Edit only the create_epic section; task-1064df99 may touch the archive_epic section, which is a different hunk.\n- The hunt repro copies in /mnt/d/moe-scratch/hunt-44785c82/A/ are superseded by the plan-68a4 versions, which are stronger: they check field, codeName, the state path, null defaults and legacy files.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/createEpic.ts",
+      "packages/moe-daemon/src/tools/updateEpic.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c99801aaf8f68b714cf86b459dbf21b53c05627b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:31:39.152Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:32:54.288Z",
+  "reviewStartedAt": "2026-11-03T18:35:02.094Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && P=packages/moe-daemon/src && cp --parents $P/state/StateManager.ts $P/tools/createEpic.validation.test.ts $P/tools/createEpic.orderCascade.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createEpic.validation.test.ts\",\"src/tools/createEpic.orderCascade.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/createEpic src/tools/updateEpic.test.ts src/state/StateManager.test.ts src/state/validators.test.ts src/tools/getActivityLog.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  8 passed (8)\n      Tests  403 passed (403)\nrc=0\nDOC-OK (checkRef 2)\nscope check (checkRef 3) rc=0",
+    "reportedAt": "2026-11-03T18:35:02.094Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "docs/MCP_SERVER.md",
+    "packages/moe-daemon/src/tools/createEpic.validation.test.ts",
+    "packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts"
+  ],
+  "completionSummary": "StateManager.createEpic now validates a supplied status and order through validateEpicUpdates, the same rule update_epic uses. Bad status/order (BOGUS, 'abc', -5, 2.5) are refused with INVALID_INPUT naming the field, before anything is written or emitted. This applies through both the MCP tool and the /ws CREATE_EPIC path. ARCHIVED is kept, not coerced to PLANNED. Omitted or null status/order still give PLANNED and nextEpicOrder(). nextEpicOrder now ignores non-finite orders, so an existing epic file with a bad or missing order can't poison later default orders; the file is not rewritten. The sanitizeEnum import was dropped. docs/MCP_SERVER.md create_epic section updated (parameter types plus a refusal sentence). Two new test files: createEpic.validation.test.ts and createEpic.orderCascade.test.ts. Behavior change: a fractional or negative order passed to create_epic is now refused, matching update_epic. Number.MAX_SAFE_INTEGER is accepted, as in update_epic. Red-then-green: 5 failed/398 passed before the fix; 8 files and 403 tests pass after.",
+  "commits": [
+    {
+      "sha": "9d08bab87575e59619e8a4d59b0e9320c7980a87",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T18:31:38Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/createEpic.orderCascade.test.ts",
+        "packages/moe-daemon/src/tools/createEpic.validation.test.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T18:36:13.255Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T18:36:28Z",
+    "at": "2026-11-03T18:38:55.226Z"
+  },
+  "completedAt": "2026-11-03T18:38:23.027Z",
+  "reviewCompletedAt": "2026-11-03T18:38:23.027Z",
+  "reviewSummary": "Reviewed completion 9d08bab8 (ancestor of moe/work-2026-10-24 head b9119a93). Diff: 4 files, +125/-11 (net 114), exactly the approved scope; task paths clean in the tree.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the checkout: npm ci, both tsc runs pass; vitest over createEpic*, updateEpic, StateManager, validators, getActivityLog, WebSocketServer gives 8 files / 403 tests passed, rc=0.\nMutant check: with the parent StateManager.ts swapped in, the two new files give 5 failed / 2 passed (3 orderCascade cases, 'refuses each bad value', 'keeps ARCHIVED'). The update_epic baseline and the null/omitted-defaults cases pass either way, as expected. So the tests pin the fix.\n\nDoD 1: BOGUS status and 'abc' / -5 / 2.5 orders are refused with INVALID_INPUT naming the field, via the tool and state.createEpic (the /ws path), nothing persisted (map and epics/ dir asserted unchanged). ARCHIVED is kept. Next default order is 2 in memory and on disk.\nDoD 2: omitted/null status and order give PLANNED and nextEpicOrder() (2, 3). Legacy epic files with order 'abc' or no order load byte-for-byte untouched; next default order is 5 after epic-1's 4.\nDoD 3: createEpic, updateEpic, StateManager, validators, getActivityLog, WebSocketServer suites green.\n\nCode: validateEpicUpdates is the single rule; refusal throws before writeEntity; nextEpicOrder filters non-finite orders (1 when none) and never rewrites; sanitizeEnum import dropped, no other use; createEpic.ts untouched; doc section has INVALID_INPUT, \"ARCHIVED\", integer >= 0; no forbidden patterns added.\nNotes, non-blocking: fractional/negative order to create_epic is now refused (parity with update_epic); MAX_SAFE_INTEGER accepted as in update_epic. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,256 @@
+{
+  "id": "task-3962d9a0c7d443549c143468f761d582",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a join_team refused because the team is full still auto-registers the caller (a new IDLE worker record and WORKER_CREATED), breaking addTeamMember's \"refuse a full team BEFORE any write\", and that refusal is an uncoded Error while the handler's other refusals are coded",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: daemon team tool family. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- src/state/teamStore.ts:183-189 says \"Order matters: refuse a full team BEFORE any write\", then runs `throw new Error(\\`Team ${existing.name} is full (max ${existing.maxSize} members)\\`)`.\n- src/tools/joinTeam.ts:71-80 auto-registers an unknown caller (state.createWorker, status IDLE) BEFORE addTeamMember (joinTeam.ts:82) refuses the full team. A refused join therefore writes a worker record and emits WORKER_CREATED.\n- The existing test \"still caps the live members at maxSize, and a refused join writes nothing\" (src/tools/joinTeam.deadMembers.test.ts:66-74) checks only the team record.\n- The refusal is a plain Error (teamStore.ts:189), while the same handler's sibling refusals are coded MoeErrors: missingRequired (joinTeam.ts:64-65) and notFound('Team') (joinTeam.ts:68). McpAdapter turns the plain Error into -32000 with no codeName and logs it at error level with a stack (\"Tool failed\", src/server/McpAdapter.ts:325-329).\n- Impact is low. TOOL_AUDIENCE is [] (src/tools/index.ts:228). The wrappers join at pre-flight and retry before every claim while the team is full, matching on the message text only (scripts/moe-agent.sh:2140-2168). A refused probe, or a seat that never claims, leaves a stray IDLE record on the board and in list_workers until the stale prune, and every retry logs an error stack.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/A/zzHuntA_joinFullWrites.test.ts, with its output in .out.txt beside it. The architect re-ran it in /tmp/hunt-6696-snap (verify-architect.txt). Tests 2 failed (2):\n  - \"a refused join leaves no new worker record and emits no WORKER_CREATED\": received events [\"WORKER_CREATED\"] and record { id: \"w-new\", ... }.\n  - \"the full-team refusal is a coded MoeError like its sibling refusals\": received { coded: false, codeName: null }.\n\nFIX DIRECTION\n- Make the full-team refusal a coded MoeError, e.g. invalidState or a MoeError with a TEAM_FULL codeName.\n- Keep the message text \"Team <name> is full (max N members)\". The wrapper matches on it, and so do joinTeam.deadMembers.test.ts:73/94/149, joinTeam.notification.test.ts, workerType.test.ts and src/util/teamMembershipHeal.test.ts.\n- Refuse before auto-registering. Either create the worker record only after addTeamMember succeeds, giving it the teamId, or run the same live-member check (DEAD members do not count) before createWorker.\n\nFILES\n- src/tools/joinTeam.ts\n- src/state/teamStore.ts\n- src/tools/joinTeam.deadMembers.test.ts",
+  "definitionOfDone": [
+    "In src/tools/joinTeam.deadMembers.test.ts, a join_team by an unregistered workerId into a team whose live members fill it rejects. Afterwards state.getWorker(<id>) is null and no WORKER_CREATED event was emitted for that id.",
+    "The same file asserts that the refusal is a MoeError whose codeName is set and is not INTERNAL_ERROR, and that its message still contains \"is full (max\".",
+    "`cd packages/moe-daemon && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "teamStore: one shared, coded full-team predicate. In packages/moe-daemon/src/state/teamStore.ts add, just above addTeamMember, `export function assertTeamHasSeat(state: StateManager, team: Team, workerId: string): void`. It returns at once when `team.memberIds.includes(workerId)` (a current member always keeps its seat: addTeamMember's idempotent path and every wrapper pre-flight force re-join) or when `team.memberIds.length < team.maxSize`. Otherwise it counts live members as `team.memberIds.filter((id) => state.workers.get(id)?.status !== 'DEAD')`, so a member with no worker record is NOT dead and keeps its seat, exactly as today. When that count is >= maxSize it throws `new MoeError(MoeErrorCode.INVALID_STATE, `Team ${team.name} is full (max ${team.maxSize} members)`, { teamId: team.id, maxSize: team.maxSize }, 'TEAM_FULL')`; import MoeError and MoeErrorCode from '../util/errors.js'. Error handling: this replaces the plain `throw new Error(...)` at :189, so McpAdapter answers -32002 with data.codeName TEAM_FULL and logs at warn (\"Tool rejected request\") instead of -32000 plus an error-level stack. Use -32002 (not NOT_ALLOWED or CONSTRAINT_VIOLATION) because the refusal is retryable once a seat frees, the same reasoning as TASK_NOT_CLAIMED (docs/MCP_SERVER.md:114). Do not use invalidState(): its fixed '<entity> is in <state> state' text would lose the message. The text after the '[TEAM_FULL] ' prefix must stay byte-identical, because the wrappers print it and these assertions match it by substring: joinTeam.deadMembers.test.ts:73/94/149, joinTeam.notification.test.ts:127, workerType.test.ts:137 and teamMembershipHeal.test.ts:186. In addTeamMember, after the existing member early-return, replace the inline block at :186-192 with `assertTeamHasSeat(state, existing, workerId);` and then `if (existing.memberIds.length >= existing.maxSize) await evictDeadMembers(state, existing, <ids of existing.memberIds whose record is DEAD>)`. Keep the 'Order matters: refuse a full team BEFORE any write' comment on that call, so the refusal still precedes evictDeadMembers and clearMembershipTombstone. Behavior is otherwise identical: a team below maxSize never evicts, and DEAD members are evicted only when the live ones leave a seat. Do not add a StateManager delegate: tools already import store helpers directly (acquireResource.ts and waitForResource.ts import from ../state/resourceStore.js). Edit with the Edit tool only (global rail: no shell writes to tracked files).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts"
+      ],
+      "note": "Added exported assertTeamHasSeat (coded TEAM_FULL, INVALID_STATE) and used it in addTeamMember before evictDeadMembers.",
+      "startedAt": "2026-11-03T20:25:23.382Z",
+      "completedAt": "2026-11-03T20:25:44.695Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "join_team: refuse a full team before auto-registering. In packages/moe-daemon/src/tools/joinTeam.ts, import { assertTeamHasSeat } from '../state/teamStore.js'. Call `assertTeamHasSeat(state, team, params.workerId);` immediately after `if (!team) throw notFound('Team', params.teamId);` (:68) and BEFORE the `if (!state.getWorker(params.workerId))` auto-register block (:71-80). Add a one-line comment saying a full team is refused before the caller is registered, so a refused join writes no worker record and emits no WORKER_CREATED (DoD 1). Leave everything after it unchanged: createWorker, then state.addTeamMember (which re-runs the same predicate under the same global mutex, so every successful join behaves as today), then the DEAD revive, then refreshWorkerType last. Do not change the tool's description, inputSchema or result: the only contract change is the full-team refusal's code. Edit with the Edit tool only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.ts"
+      ],
+      "note": "join_team calls assertTeamHasSeat before auto-register.",
+      "startedAt": "2026-11-03T20:25:45.411Z",
+      "completedAt": "2026-11-03T20:25:57.960Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Regression tests in packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts (DoD 1 and 2). Imports to add: fs and path, plus `MoeError, MoeErrorCode` from '../util/errors.js'. Keep the additions to about 40 lines, and leave every existing assertion's text as it is (toThrow(string) matches a substring, so they still pass). (a) Extend 'still caps the live members at maxSize, and a refused join writes nothing'. Just before the refused `join('w-n3')` (w-n3 has no record), add `const events: string[] = []; const off = h.state.subscribe((e) => { events.push(e.type); });`, and call off() in a finally. After the existing `expect(teamNow()).toEqual(before)`, assert three things: `h.state.getWorker('w-n3')` is null; `fs.existsSync(path.join(h.moePath, 'workers', 'w-n3.json'))` is false; and `events` toEqual([]). The last means no event at all and so no WORKER_CREATED; at base it is ['WORKER_CREATED'] (the hunt repro). (b) New case 'refuses a full team with a coded TEAM_FULL MoeError'. Build the same team: fullWithTwoDead(), then join('w-new') and join('w-n2'). Capture the refusal with `const err = await join('w-n3').catch((e: unknown) => e);` and assert: toBeInstanceOf(MoeError); `codeName` toBe('TEAM_FULL') (so it is set and is not INTERNAL_ERROR); `code` toBe(MoeErrorCode.INVALID_STATE); and `message` toContain('is full (max 3 members)'). Also assert `h.state.addTeamMember(team.id, 'w-n3')` rejects toMatchObject({ codeName: 'TEAM_FULL' }), which covers the /ws ADD_TEAM_MEMBER path. (c) New case 'a current member re-joining its full team is never refused'. With the same three live members, `await join('w-c')` resolves and teamNow().memberIds stays ['w-c', 'w-new', 'w-n2']. This pins the member exemption: every wrapper pre-flight force re-joins its own team, so losing the exemption would leave every seat of a full team teamless. This test file is the one place these behaviours are pinned.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "note": "Extended refused-join case; added TEAM_FULL coded and member re-join cases.",
+      "startedAt": "2026-11-03T20:25:58.693Z",
+      "completedAt": "2026-11-03T20:26:07.673Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs: docs/MCP_SERVER.md, inside the `### moe.join_team` section only (about lines 2375-2399). (a) In the 'Reported worker type' paragraph (:2381), replace 'A full team is still refused after a missing record was auto-registered (as before), and an existing record keeps its type.' with text saying that a full team, like an unknown team, is refused before any write. A refused join auto-registers no record (no WORKER_CREATED), and an existing record keeps its type. (b) Replace the '**Errors:**' list (:2397-2399) with the coded form this file uses elsewhere (see :2775): '**Errors.** Every refusal writes nothing. JSON-RPC code, then `MoeError.codeName`:', then three bullets. `-32602 MISSING_REQUIRED`: `teamId` or `workerId` is missing. `-32001 NOT_FOUND`: `Team not found: <teamId>`. `-32002 TEAM_FULL`: `Team <name> is full (max N members)`, when the live (non-`DEAD`) members already fill `maxSize`; a current member's re-join is never refused, and a refused seat can retry once a seat frees. Touch no other section: other open rows edit this file, so keep the hunk local and the worktree merge-tree squash conflict-free. Edit with the Edit tool only.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "join_team doc section updated.",
+      "startedAt": "2026-11-03T20:26:08.531Z",
+      "completedAt": "2026-11-03T20:26:16.389Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification (DoD 3): run this once from the task worktree root after steps 1-4, exactly: cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/tools/joinTeam.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts. It copies HEAD's packages/moe-daemon into a mktemp snapshot and overlays the three edited files (uncommitted in the worktree; for QA after landing they equal HEAD). It runs tsc --noEmit (tsconfig excludes tests, so this type-checks the two sources) and then the DoD 3 vitest test command, never in the shared checkout (global rail). The architect dry-ran it at 677d051a: exit 0, 4 files, 84 tests, about 8 s. Expect 4 files to pass with the new cases included. Its fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "tsc clean; 4 files, 86 tests passed.",
+      "startedAt": "2026-11-03T20:26:17.253Z",
+      "completedAt": "2026-11-03T20:26:30.933Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff (final step; load the adversarial-self-review skill). (1) Negative control. Snapshot `git archive $(git merge-base HEAD moe/work-2026-10-24) packages/moe-daemon` into a fresh mktemp dir, overlay ONLY joinTeam.deadMembers.test.ts, npm ci, and run that one test file. Case (a) and the TEAM_FULL case must fail, and the member re-join case must pass. Pattern: mem:convention-daemon-vitest-mutant-checkref; mutate nothing in the worktree. Quote the Tests line in the completion summary. (2) A refused join of an EXISTING record (IDLE or DEAD) still writes nothing and leaves a DEAD record DEAD (joinTeam.notification.test.ts:121-130). (3) A full team holding DEAD members still evicts them and seats the newcomer (first case), and a team below maxSize never evicts. (4) teamMembershipHeal.ts:84-91 still pre-checks size and swallows any refusal, so a claim never fails on it. (5) Error handling on the /ws ADD_TEAM_MEMBER path: its ERROR frame now also carries code/codeName, which is additive per MCP_SERVER.md 'Plugin WebSocket Messages' (:3337), and no IDE client sends that frame. (6) No scripts/ change. Both wrappers only print error.message: moe-agent.sh :2152-2168 and retry_team_join :2540-2571, and moe-agent.ps1 Invoke-MoeTeamJoinRetry. They branch only on a 'Team not found: ' prefix, never on the full-team text. The postflight and seat-registration fixtures still emit the old uncoded shape, and they stay valid. (7) Running twice or concurrently: the join_team check and addTeamMember's re-check run under McpAdapter's global mutex, so they see the same team. If this review changes any byte, re-run the step-5 command and use that fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/tools/joinTeam.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/tools/joinTeam.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Negative control at merge-base with only the new test file: Tests 2 failed | 7 passed (9); the refused-join and TEAM_FULL cases fail, the member re-join case passes. No bytes changed in review; the step-5 run stands. Existing-record, DEAD eviction, below-maxSize and heal cases are covered by the 86 passing tests. No scripts/ change.",
+      "startedAt": "2026-11-03T20:26:31.697Z",
+      "completedAt": "2026-11-03T20:26:58.345Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 416.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:59:04.924Z",
+  "updatedAt": "2026-11-04T19:20:44.602Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:14:54.413Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T20:33:47.541Z",
+    "wallClockMs": 1133128
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:24:03.820Z",
+  "executionContract": {
+    "intendedBehavior": "moe.join_team refuses a team whose live (non-DEAD) members already fill maxSize BEFORE it auto-registers an unknown caller, so a refused join creates no worker record, writes no .moe/workers/<id>.json and emits no event. The refusal, from join_team and from StateManager.addTeamMember (so also /ws ADD_TEAM_MEMBER), is a MoeError: JSON-RPC -32002, codeName TEAM_FULL, message '[TEAM_FULL] Team <name> is full (max N members)'. Successful joins, the eviction of DEAD members from a full team, and a current member's idempotent re-join are unchanged.",
+    "acceptanceCriteria": [
+      "A join_team by an unregistered workerId into a team whose live members fill it rejects. Afterwards state.getWorker(id) is null, .moe/workers/<id>.json does not exist and no event (so no WORKER_CREATED) was emitted.",
+      "The refusal is a MoeError with codeName 'TEAM_FULL' and code -32002 (INVALID_STATE), and its message contains 'is full (max N members)'. StateManager.addTeamMember refuses with the same codeName.",
+      "A current member re-joining its own full team succeeds, with memberIds unchanged.",
+      "The DoD 3 vitest command passes in a snapshot outside the shared checkout."
+    ],
+    "invariants": [
+      "addTeamMember refuses a full team before any write: before evictDeadMembers and before clearMembershipTombstone.",
+      "DEAD members never hold a seat. A member with no worker record is not DEAD and keeps its seat.",
+      "A refused join leaves an existing record (IDLE or DEAD) unchanged.",
+      "The message text after the '[TEAM_FULL] ' prefix is byte-identical to the old plain Error's."
+    ],
+    "compatibility": [
+      "join_team's params, result and tool description are unchanged. Only the full-team refusal changes: its JSON-RPC code goes from -32000 to -32002 and it gains data.codeName, matching the handler's other coded refusals.",
+      "Both wrappers print error.message and never branch on the full-team code or text, so moe-agent.sh/.ps1 and their test fixtures need no change.",
+      "No .moe/ state shape changes."
+    ],
+    "approvedScope": [
+      "teamStore.ts: the new export assertTeamHasSeat(state, team, workerId) and its use in addTeamMember.",
+      "joinTeam.ts handler: one assertTeamHasSeat call before the auto-register.",
+      "joinTeam.deadMembers.test.ts: the extended refused-join case plus two new cases.",
+      "docs/MCP_SERVER.md: the moe.join_team section only."
+    ],
+    "reuse": [
+      "MoeError and MoeErrorCode from util/errors.ts. invalidState() is not used: its fixed '<entity> is in <state> state' text cannot keep the wrapper-visible message.",
+      "One exported predicate, assertTeamHasSeat, serves both addTeamMember and join_team, so the live-member rule cannot drift between them."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/teamStore.ts:186-192: addTeamMember counts DEAD members out and throws a plain Error('Team <name> is full (max N members)') at :189, the only producer of that text.",
+      "packages/moe-daemon/src/tools/joinTeam.ts:71-82: the handler auto-registers with state.createWorker before it calls state.addTeamMember.",
+      "packages/moe-daemon/src/state/workerStore.ts:133-168: createWorker writes .moe/workers/<id>.json, appends WORKER_CREATED activity and emits WORKER_CREATED.",
+      "packages/moe-daemon/src/util/errors.ts: MoeError(code, message, context?, codeName?) prefixes '[codeName] ' to the message; MoeErrorCode.INVALID_STATE = -32002.",
+      "packages/moe-daemon/src/state/StateManager.ts:516: subscribe(fn) returns an unsubscribe function.",
+      "packages/moe-daemon/src/server/McpAdapter.ts:316-329: a MoeError keeps its code, with data {tool, codeName}, and is logged at warn; a plain Error becomes -32000 with an error-level stack log.",
+      "addTeamMember has three callers: joinTeam.ts:82, teamMembershipHeal.ts:88 (size pre-check plus catch-all) and WebSocketServer.ts:889 (ADD_TEAM_MEMBER)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/tools/joinTeam.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Create the worker record only after addTeamMember succeeds. Rejected: addTeamMember sets worker.teamId only when the record exists, and createWorker takes no teamId. A createWorker that fails after a successful add would also leave a recordless member, which keeps its seat. (2) Delete the auto-registered record on refusal. Rejected: it still writes the file and emits WORKER_CREATED, then WORKER_DELETED. (3) Copy the live-member check into joinTeam. Rejected: two copies drift. One exported predicate in teamStore.ts serves both callers. (4) Error code: TEAM_FULL under -32002, not CONSTRAINT_VIOLATION or NOT_ALLOWED, because a seat freeing makes a retry succeed (the TASK_NOT_CLAIMED reasoning, MCP_SERVER.md:114), and clients key on data.codeName (MCP_SERVER.md:91).",
+    "codebaseInsights": "MoeError prefixes '[codeName] ' to its message, and vitest toThrow(string) matches a substring, so every existing 'is full' assertion keeps passing. The wrappers (moe-agent.sh retry_team_join, moe-agent.ps1 Invoke-MoeTeamJoinRetry and the startup join blocks) print error.message. They branch only on a 'Team not found: ' prefix, never on the full-team text. teamMembershipHeal pre-checks size and swallows errors. McpAdapter runs non-blocking tools under the global reentrant mutex, so join_team's check and addTeamMember's re-check see the same team. Tools already import store helpers directly (resourceStore.js).",
+    "risks": "(1) Dropping the member exemption from the predicate would refuse every pre-flight force re-join of a full team's own member; step 3c pins it. (2) Counting a recordless member as DEAD would break the case where a member without a worker record keeps its seat (deadMembers test :143). (3) In addTeamMember the assert must stay before evictDeadMembers and clearMembershipTombstone. (4) The postflight and seat-registration fixtures still emit the old uncoded refusal. They stay valid because no wrapper branches on its code or text, so do not edit scripts/. (5) Other open rows also edit docs/MCP_SERVER.md, so keep this edit inside the join_team section.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/teamStore.ts",
+      "packages/moe-daemon/src/tools/joinTeam.ts",
+      "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/util/errors.ts",
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/util/teamMembershipHeal.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "31492ac5027f9afbf2cc5ea4f82fc5ed91fe19c1",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:24:03.857Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:30:57Z",
+    "at": "2026-11-03T20:34:30.732Z"
+  },
+  "workStartedAt": "2026-11-03T20:25:23.382Z",
+  "reviewStartedAt": "2026-11-03T20:27:02.791Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/teamStore.ts packages/moe-daemon/src/tools/joinTeam.ts packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/joinTeam.deadMembers.test.ts src/tools/joinTeam.notification.test.ts src/util/teamMembershipHeal.test.ts src/tools/workerType.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  4 passed (4)\n      Tests  86 passed (86)\n   Start at  22:26:26\n   Duration  3.14s",
+    "reportedAt": "2026-11-03T20:27:02.791Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/teamStore.ts",
+    "packages/moe-daemon/src/tools/joinTeam.ts",
+    "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "join_team now refuses a full team before auto-registering the caller, so a refused join creates no worker record, writes no workers/<id>.json and emits no WORKER_CREATED. The refusal is a coded MoeError (INVALID_STATE -32002, codeName TEAM_FULL), and the text after the prefix is unchanged. New exported assertTeamHasSeat in teamStore.ts serves both join_team and addTeamMember (so also /ws ADD_TEAM_MEMBER). A current member's re-join and DEAD eviction behave as before. Tests: the refused-join case is extended, and TEAM_FULL and member re-join cases are added in joinTeam.deadMembers.test.ts. docs/MCP_SERVER.md join_team section updated. Verification: tsc clean, 4 files / 86 tests passed in a snapshot. Negative control at the merge-base with only the new test file: Tests 2 failed | 7 passed (9).",
+  "commits": [
+    {
+      "sha": "ef354ee9ef7b3cc11cb62df05814d870fb5d69dc",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T20:24:11Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/teamStore.ts",
+        "packages/moe-daemon/src/tools/joinTeam.deadMembers.test.ts",
+        "packages/moe-daemon/src/tools/joinTeam.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T20:29:35.284Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T20:33:47.541Z",
+  "reviewCompletedAt": "2026-11-03T20:33:47.541Z",
+  "reviewSummary": "Approved. Reviewed completion ef354ee9 (recorded as completion, pushed; contained in moe/work-2026-10-24 and control HEAD). Diff +72/-8 across 4 files, under the 400 LOC cap.\n\nRE-RAN in a git-archive snapshot of ef354ee9 outside the shared checkout:\n- npm ci + npx tsc --noEmit: rc 0.\n- vitest run joinTeam.deadMembers, joinTeam.notification, teamMembershipHeal, workerType: 4 files, 86 tests passed (matches the worker).\n- Negative control (ef354ee9^ sources + only the new test file): 2 failed | 7 passed (9). The refused-join and TEAM_FULL cases fail; the member re-join case passes both ways, as designed.\n- qualityGate: parity-check.sh PASS, npm run lint OK.\n\nDoD:\n1. Met. The refused-join case asserts getWorker('w-n3') is null, workers/w-n3.json is absent and a state.subscribe capture is [] (no WORKER_CREATED). assertTeamHasSeat runs before createWorker.\n2. Met. Asserts MoeError, codeName TEAM_FULL, code INVALID_STATE (-32002), message contains 'is full (max 3 members)'. addTeamMember also rejects with TEAM_FULL (the /ws path).\n3. Met. The vitest command passes in a snapshot.\n\nSource checks: assertTeamHasSeat runs before evictDeadMembers and clearMembershipTombstone and is equivalent to the old inline block. A recordless member is not DEAD, and a refused join writes nothing. The message text after the '[TEAM_FULL] ' prefix is unchanged, so all existing substring assertions pass. teamMembershipHeal catches everything. The WS ERROR frame stays additive and McpAdapter logs at warn. The wrappers only print error.message, so no scripts/ change. The docs hunk is confined to the join_team section; the routed collision with task-0adea941 is moot since both have landed.\n\nNon-blocking: addTeamMember recomputes the DEAD id list (one line). Not run: the full daemon suite and JetBrains tests (daemon-only change, not epic-final).",
+  "requiredCheckAtDone": null
+}

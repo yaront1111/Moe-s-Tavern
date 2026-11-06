@@ -1,0 +1,216 @@
+{
+  "id": "task-0b3a11855f3b482da730dc1348e6f853",
+  "epicId": "epic-be924fb8",
+  "title": "bug: accountStore caches a failed read of the Claude account list or a usage file under a stat key the cleared error never changes, so one transient non-ENOENT read error (EACCES, EBUSY, EMFILE, EIO) turns rotation off, or counts a spent account as unused, until the file is rewritten or the daemon restarts",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/state/accountStore.ts)\n- The cache key is statKey (:146-153), `ino:mtimeMs:size`. Clearing a read error (a chmod, a released lock, freed fds) changes none of those.\n- Account list: loadRegistry (:155-167) takes the key before reading. For ANY read failure it caches `{ registry: null, error }` under that key.\n  - readRegistry (accounts/registry.ts:146) turns every non-ENOENT read error into `MOE_ACCOUNT_REGISTRY_INVALID ... cannot read it (...)` (:152).\n  - So until the list is rewritten or the daemon restarts:\n    - every lease_account returns rotation:false (:315-318), and claude seats launch on the operator's own login;\n    - recordAccountReport (:379-382) drops every usage report;\n    - accountSwitchFor (:430-435) never switches anyone;\n    - the Accounts tab keeps showing the stale error.\n- Usage file: readUsage (:169-175) turns every error, I/O included, into null, and loadUsage (:177-185) caches that null. The spent account then counts as unused: it is leased, and no switch comes due until its usage file is rewritten.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot. It uses a scratch MOE_ACCOUNTS_FILE and never touches the machine's list.\n- Each case makes the file unreadable (chmod 000), leases, restores it (chmod 600, no write), and leases again.\n- Command: `npx vitest run src/__hunt__/accountCache.hunt.test.ts`. Result: `Tests 2 failed | 1 passed (3)`. Verbatim, paths shortened:\n```\nduring : {\"rotation\":false,\"reason\":\"the Claude account list cannot be used (MOE_ACCOUNT_REGISTRY_INVALID: .../claude-accounts.json: cannot read it (EACCES: permission denied, ...))\"}\nafter  : {\"rotation\":false,\"reason\":\"... cannot read it (EACCES: permission denied, ...)\"}\n× registry: once the list is readable again, the next lease rotates (no file write in between)\n× usage: once acct-1's usage file is readable again, its 95% keeps it out of rotation   (- \"accountId\": \"acct-2\"  + \"accountId\": \"acct-1\")\n```\n- The third case passes. It documents the by-design reset behaviour, so don't file that part.\n- Exposure: a guard gap, not a live incident. It needs a non-ENOENT error on an unchanged file: EACCES later fixed by chmod, EMFILE, EIO on a /mnt path, or an antivirus or backup lock on Windows. The list and the usage files are machine-level and shared by every daemon on the host. When it hits the list, rotation goes off silently on that daemon.\n\nFIX DIRECTION\n- Cache only a successful read or a content error (bad JSON, failed validation). An I/O error is never cached, so the next call reads the file again.\n- readRegistry may need to tell an I/O failure from a content failure, so loadRegistry can decide.\n- For a usage file that cannot be read, keep the last good value rather than counting the account unused.\n- A content error must still report MOE_ACCOUNT_REGISTRY_INVALID as it does today.\n- docs/MCP_SERVER.md and docs/CONFIGURATION.md are held at filing time: sync them only if lanes show them free at planning time.\n\nFILES: packages/moe-daemon/src/state/accountStore.ts (loadRegistry, readUsage, loadUsage), maybe src/accounts/registry.ts (readRegistry), plus a new vitest file.",
+  "definitionOfDone": [
+    "After a non-ENOENT read error on the account list clears with no write in between (chmod 000, lease, chmod 600), the next lease_account rotates normally, and accountRotationView's error is cleared.",
+    "An account whose usage file is briefly unreadable is not leased as unused when its last readable sample was at or above the switch percent, and the file is read again on the next call.",
+    "A malformed or invalid account list still reports MOE_ACCOUNT_REGISTRY_INVALID as today; one new vitest file covers all three cases and passes in a snapshot outside the shared checkout, with existing accountStore tests unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1-3; load test-driven-development). Create packages/moe-daemon/src/state/accountStore.readRetry.test.ts with your Write tool.\n\nSetup\n- Reuse the setup of /mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts (read-only reference): newState(), the MOE_ACCOUNTS_FILE save/restore, twoSignedIn().\n- Make the scratch dir with fs.mkdtempSync(path.join(os.tmpdir(), ...)), as accountStore.test.ts does, never inside src/.\n- Inject read failures with vi.spyOn(fs, 'readFileSync'). This works because accountStore.ts and accounts/registry.ts both `import fs from 'fs'`, as StateManager.test.ts already spies on unlinkSync. The spy throws `Object.assign(new Error('<CODE>: injected, open <path>'), { code: '<CODE>' })` only for the target path, and passes every other path to the original captured before spying.\n- Count the spy's calls per path to prove what is cached.\n\nCases\n(a) Account list, it.each EACCES / EBUSY / EMFILE.\n- While failing: leaseAccount gives rotation:false, with a reason containing MOE_ACCOUNT_REGISTRY_INVALID and 'cannot read it', and accountRotationView(state).error is set.\n- After mockRestore, with no write in between: leaseAccount rotates (rotation:true, acct-1), and the view's error is null.\n\n(b) The DoD's literal chmod scenario: chmod 000, lease, chmod 600, lease rotates. Use it.skipIf(process.platform === 'win32' || process.getuid?.() === 0), because chmod blocks nothing there.\n\n(c) Content errors are reported AND still cached.\n- An invalid-JSON list, and a list failing validation (e.g. switchAtPercent 150 or an unknown key).\n- Two leases both give rotation:false with MOE_ACCOUNT_REGISTRY_INVALID ('not valid JSON' / the validation detail).\n- readFileSync is called once for the list across both leases. Under (a), each lease re-reads.\n\n(d) Usage last-good value.\n- acct-1's usage file at 95% is read once: lease gives acct-2, and the view shows acct-1 at peak 95.\n- Another daemon then rewrites it (new bytes, e.g. 10%, a new window), and reads of it fail. Lease still avoids acct-1, and the view keeps 95.\n- After restore, the view shows 10: it was read again.\n- Also the repro's case: the first-ever read fails, so there is no last good value and it fails open as today. After restore, the 95% file is read and the next lease moves to acct-2.\n\n(e) Report path.\n- With a stored acct-1 usage file (a window plus a future refusedUntil), recordAccountReport while the file is unreadable leaves its bytes unchanged: no overwrite from an empty base.\n- After restore, the next report merges and writes as today.\n\nRED at HEAD: (a), (b), the (d) last-good and after-restore assertions, and (e). Error handling in the test: restore every spy and chmod in afterEach, so one failed case cannot leak into the next.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/accountStore.readRetry.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/accountStore.readRetry.test.ts"
+      ],
+      "note": "New accountStore.readRetry.test.ts (13 cases, ~300 lines). Ran against HEAD's unchanged sources in a git-archive snapshot (/tmp, env -i): 10 fail (list EACCES/EBUSY/EMFILE + chmod, report-after-restore, 3 usage last-good/fail-open cases, 2 report-merge cases), 3 guards pass (ENOENT = no list, invalid JSON and failed validation each read once across two leases). Read errors are injected with vi.spyOn(fs,'readFileSync') and counted per path; chmod case skipped on win32/root.",
+      "startedAt": "2026-11-03T22:53:35.596Z",
+      "completedAt": "2026-11-03T22:55:36.747Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix (DoD 1-3). Line numbers are at HEAD f159784e.\n\npackages/moe-daemon/src/accounts/registry.ts:\n- RegistryError (:58) gains a third constructor param, `readonly readFailed = false`.\n- invalid() (:94) gains `readFailed = false` and passes it through.\n- readRegistry's non-ENOENT read catch (:149-153) calls `invalid(file, ..., true)`. The message is byte-identical.\n- The other `new RegistryError(` sites are unchanged.\n\npackages/moe-daemon/src/state/accountStore.ts:\n- Import RegistryError as a value.\n- loadRegistry (:155-167): when the caught error is `instanceof RegistryError && error.readFailed`, return `{ registry: null, error: message }` WITHOUT assigning fleet.registry. Comment why: clearing an I/O error changes no stat key, so a cached failure would keep rotation off until the file is rewritten. Content errors are cached exactly as today.\n- readUsage (:169-175): split the read from the parse. A non-ENOENT readFileSync failure returns a module-private UNREADABLE sentinel. ENOENT and parse or validateUsage failures still return null.\n- loadUsage (:177-185): on UNREADABLE, return `cached?.value ?? null` (the last good sample) and cache nothing, so the next call reads again.\n- recordAccountReport (~:399-410): on UNREADABLE, skip mergeSample and writeJsonAtomic. Never overwrite stored windows or a refusal from an empty base; the next report re-reads. logger.warn the account id and the errno code only, never file contents. Build the reply's blockedUntil/peakPercent from the last good cached value, null-guarded (null when there is none). `recorded` stays true only if the sign-in part recorded.\n\nError handling: no new throw path. Every refusal message and the lease reply shapes in docs/MCP_SERVER.md (:3249-3250) are unchanged, so no doc sync is owed. Edit with your TOOL-witnessed editor.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/state/accountStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/state/accountStore.ts"
+      ],
+      "note": "registry.ts: RegistryError gains optional readonly readFailed (default false); invalid() passes it; readRegistry's non-ENOENT read catch sets it (message byte-identical). accountStore.ts: loadRegistry returns an I/O-failed read without caching it (content errors still cached); readUsage returns an UnreadableUsage {unreadable: code} for non-ENOENT read errors; loadUsage returns the last good cached sample and caches nothing on it; recordAccountReport's fresh read moved into mergeReportUsage, which skips merge+write on an unreadable file (logs account id + errno code only) and the reply is null-guarded. Snapshot run (whole-tree archive, env -i): tsc OK; src/state/accountStore + src/accounts = 8 files, 100 passed, 5 skipped (pre-existing), new file 13/13.",
+      "startedAt": "2026-11-03T22:55:37.668Z",
+      "completedAt": "2026-11-03T22:56:46.923Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once (DoD 3), from your worktree, after the last edit. Daemon gates never run in the shared checkout; this command builds a snapshot:\n`env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/state/accountStore.ts $P/accounts/registry.ts $P/state/accountStore.readRetry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/state/accountStore src/accounts'`\n\n- Its fresh output is the complete_task evidence.\n- `env -i` keeps a seat's MOE_ACCOUNT_* and CLAUDE* vars out of the run (mem:gotcha-qa-session-env-and-signals-leak-into-harness).\n- The path filter runs the new file, accountStore.test.ts, accountStore.presence.test.ts and every src/accounts test (registry, cli, claudeAuth, usageWindows, vmTokens), all unchanged.\n- Kill only PIDs your session recorded.\n\nError handling for a red run: fix the cause in step 1's or step 2's file and re-run the whole command. Never weaken an assertion or edit an existing test.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh run after the last edit, env -i, in a new snapshot: tsc --noEmit clean; vitest run src/state/accountStore src/accounts = 8 files, 100 passed, 5 skipped (pre-existing), pipeline exit 0. Deviation from the plan's command: the snapshot is a whole-tree `git archive HEAD` instead of `git archive HEAD packages/moe-daemon`, because src/accounts/vmTokens.test.ts imports ../../../../scripts/moe-account-lease.mjs and fails ENOENT without scripts/ (known gotcha; the package-only archive fails that one unrelated file at HEAD too).",
+      "startedAt": "2026-11-03T22:56:48.055Z",
+      "completedAt": "2026-11-03T22:57:27.143Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Last: an adversarial self-review of the 3-file diff.\n- A content error (bad JSON, validation) is still cached, and every error message is byte-identical.\n- Only a non-ENOENT read failure skips the cache. ENOENT still means no list (rotation:false, reason null).\n- A stat failure still maps to 'missing' as before.\n- recordAccountReport never writes usage built from an empty base after a failed read.\n- No new throw path, and no file contents are logged.\n- The cache stays bounded: an uncached I/O error re-reads on every call only while it lasts.\n- RegistryError's other constructors and the accounts CLI output are unchanged.\n- Run the new cases against HEAD's two source files and confirm they fail.\n\nIf the review changes any byte, re-run step 3 and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/state/accountStore.ts",
+        "packages/moe-daemon/src/state/accountStore.readRetry.test.ts"
+      ],
+      "note": "Self-review, no byte changed after step 3's run. Content errors (bad JSON, validation) still cached: mutant 'skip the cache for every RegistryError' fails both content-cache tests (read-once assertion). ENOENT on the list -> null (rotation:false, reason null), ENOENT on a usage file -> null, stat failure still 'missing': all unchanged. recordAccountReport writes nothing from an empty base after a failed read (bytes-unchanged test); reply null-guarded. No new throw path; the only log is logger.warn with account id + errno code, never contents. Uncached I/O errors re-read on each call only while they last (watch tick every 2 s, view unchanged so no broadcast). Other RegistryError constructors and cli.ts untouched (readFailed is an optional 3rd param). Same 13 cases fail 10/13 against HEAD's sources. Theoretical, noted: stat-then-read TOCTOU (file deleted between) maps to null/cached as before. The test file is type-checked via a scratch tsconfig (tsc excludes *.test.ts).",
+      "startedAt": "2026-11-03T22:57:28.207Z",
+      "completedAt": "2026-11-03T22:57:38.459Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 449.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:35.853Z",
+  "updatedAt": "2026-11-04T19:20:44.906Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:48:01.332Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:00:52.246Z",
+    "wallClockMs": 770914
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:52:15.586Z",
+  "executionContract": {
+    "intendedBehavior": "A transient non-ENOENT read failure (EACCES, EBUSY, EMFILE, EIO) of the machine's Claude account list or a usage file is never cached.\n- The account list: the call that hits it reports the error as today (rotation:false, MOE_ACCOUNT_REGISTRY_INVALID ... cannot read it). The next call reads the file again, so rotation resumes as soon as the error clears, with no file write and no restart.\n- A usage file: lease and switch decisions keep the account's last good sample while the file can't be read, and report merges never overwrite stored usage from an empty base.\nContent errors (bad JSON, failed validation) are reported and cached exactly as today.",
+    "acceptanceCriteria": [
+      "An injected EACCES, EBUSY or EMFILE on the list, then a restore, gives rotation:true on the next lease and accountRotationView.error null.",
+      "A usage file at 95% read once, then unreadable, still blocks the account; after restore its new contents are read.",
+      "A recordAccountReport during an unreadable usage file leaves the file's bytes unchanged.",
+      "Invalid JSON or a validation failure is read once across two leases and reports MOE_ACCOUNT_REGISTRY_INVALID."
+    ],
+    "invariants": [
+      "Every error message and every lease or report reply shape is unchanged.",
+      "ENOENT still means no list or no usage.",
+      "No file contents in logs.",
+      "A content error is still cached."
+    ],
+    "compatibility": [
+      "The new RegistryError param is optional, so the other constructor call sites are unchanged.",
+      "docs/MCP_SERVER.md :3249-3250 already describe rotation:false with a reason for an unusable list, so no doc change."
+    ],
+    "approvedScope": [
+      "RegistryError.readFailed and invalid()'s readFailed param",
+      "readRegistry's read-failure path",
+      "accountStore loadRegistry, readUsage (UNREADABLE sentinel), loadUsage and recordAccountReport's fresh-read path"
+    ],
+    "reuse": [
+      "The hunt repro's setup (/mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts) and accountStore.test.ts's tmpdir pattern.",
+      "The existing statKey cache, mergeSample, writeJsonAtomic and logger."
+    ],
+    "sourceAssumptions": [
+      "state/accountStore.ts:146-153 statKey is ino:mtimeMs:size.",
+      "state/accountStore.ts:155-167 loadRegistry caches every result.",
+      "state/accountStore.ts:169-185 readUsage/loadUsage cache null for any error.",
+      "state/accountStore.ts:399-410 recordAccountReport merges from readUsage and writes.",
+      "accounts/registry.ts:58-63 RegistryError(token, detail); :94 invalid(); :146-153 readRegistry.",
+      "Both modules `import fs from 'fs'`, so vi.spyOn(fs, 'readFileSync') reaches them."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/state/accountStore.ts $P/accounts/registry.ts $P/state/accountStore.readRetry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/state/accountStore src/accounts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Keep the last good REGISTRY during an I/O error. Rejected: a persistent chmod or lock would then hide its error from the Accounts tab forever. The row's fix direction reports the error per call and re-reads instead.\n2. Detect I/O vs content errors by message text. Rejected as brittle; a readFailed flag on RegistryError is additive and keeps messages byte-identical.\n3. Fail closed when the first usage read fails (no last good value). Not required by the DoD, and it changes today's fail-open behavior. Kept fail-open; the re-read fixes it on the next call.\n4. Use chmod only for the tests. Rejected as primary, because root and Windows ignore chmod 000. The fs.readFileSync spy is portable, and the chmod case runs where it works.",
+    "codebaseInsights": "- The usage files and the account list are machine-level and shared by every daemon on the host.\n- writeTextAtomic (registry.ts) documents Windows EPERM/EBUSY/EACCES around a rename. A rename race self-heals, because the stat key changes; an unchanged file does not.\n- recordAccountReport (:399) deliberately reads fresh (\"another project's daemon may have written it a moment ago\"), so its I/O-failure path must not merge from null.\n- invalidateAccountRegistry (:269) clears fleet.registry after writes and is unaffected.",
+    "risks": "- The spy must pass through every other path (the project's .moe reads, the other usage file), or unrelated reads fail.\n- Restore spies and chmod in afterEach.\n- A seat's MOE_ACCOUNT_* or CLAUDE* env leaking into vitest; the gate runs under env -i.\n- The reply of recordAccountReport must stay null-safe when no last good value exists.\n- Don't touch docs: MCP_SERVER.md is shared with other open rows, and no contract changes.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/accountStore.ts",
+      "packages/moe-daemon/src/accounts/registry.ts",
+      "packages/moe-daemon/src/state/accountStore.test.ts",
+      "/mnt/d/moe-scratch/hunt-cc441586/A/accountCache.hunt.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "15728974fe2f13ebd6e01ceef1613b3c9a3566fb",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:52:15.615Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:53:35.596Z",
+  "reviewStartedAt": "2026-11-03T22:58:14.096Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$PATH\" bash -c 'cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD | tar -x -C \"$S\" && cp --parents $P/state/accountStore.ts $P/accounts/registry.ts $P/state/accountStore.readRetry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --prefer-offline --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/state/accountStore src/accounts'",
+    "exitCode": 0,
+    "outputTail": " ✓ src/state/accountStore.test.ts (19 tests) 854ms\n\n Test Files  8 passed (8)\n      Tests  100 passed | 5 skipped (105)\n   Start at  00:57:20\n   Duration  1.48s (tests 55%, transform 38%, import 6%, worker 1%)\n\nvitest-pipeline-exit=0 (tsc --noEmit clean before it; new file accountStore.readRetry.test.ts 13/13)",
+    "reportedAt": "2026-11-03T22:58:14.096Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/accountStore.readRetry.test.ts",
+    "packages/moe-daemon/src/accounts/registry.ts",
+    "packages/moe-daemon/src/state/accountStore.ts"
+  ],
+  "completionSummary": "A non-ENOENT read error (EACCES/EBUSY/EMFILE/EIO) of the Claude account list or a usage file is no longer cached under the stat key it never changes.\n- registry.ts: RegistryError gets an optional readFailed flag (3rd ctor param, default false), set by readRegistry's non-ENOENT read catch. Messages are byte-identical; other constructors unchanged.\n- accountStore.ts: loadRegistry returns an I/O-failed read without caching it, so rotation resumes on the next lease with no write or restart and accountRotationView.error clears. Content errors (bad JSON, failed validation) are still cached and report MOE_ACCOUNT_REGISTRY_INVALID. readUsage returns an UnreadableUsage for non-ENOENT errors; loadUsage then keeps the last good sample (null if none, so still fail-open) and caches nothing, so the file is read again next call. recordAccountReport's fresh read moved into mergeReportUsage, which skips merge and write on an unreadable file (no overwrite from an empty base); the reply is null-guarded; the warn log has account id + errno code only.\n- New accountStore.readRetry.test.ts: 13 cases (list EACCES/EBUSY/EMFILE, real chmod 000 case skipped on win32/root, ENOENT guard, two content-error read-once guards, usage last-good via single-account lease and accountSwitchFor, first-read-fails fail-open, two report-merge cases). 10/13 fail against HEAD's sources, 13/13 pass with the fix. Mutant 'skip the cache for every RegistryError' fails the 2 content-cache tests.\nVerification: whole-tree git-archive snapshot under env -i, tsc --noEmit clean, vitest run src/state/accountStore src/accounts = 8 files, 100 passed, 5 skipped (pre-existing), existing tests unchanged. The plan's package-only archive fails vmTokens.test.ts (needs scripts/), so the snapshot is the whole tree. No doc change: MCP_SERVER.md :3249-3250 already cover rotation:false with a reason.",
+  "commits": [
+    {
+      "sha": "2ee4bada2e2fff57edaa2b2e7215a1ec98fff07a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T22:52:14Z",
+      "paths": [
+        "packages/moe-daemon/src/accounts/registry.ts",
+        "packages/moe-daemon/src/state/accountStore.readRetry.test.ts",
+        "packages/moe-daemon/src/state/accountStore.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T22:59:16.812Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:59:26Z",
+    "at": "2026-11-03T23:01:12.255Z"
+  },
+  "completedAt": "2026-11-03T23:00:52.246Z",
+  "reviewCompletedAt": "2026-11-03T23:00:52.246Z",
+  "reviewSummary": "Reviewed completion 2ee4bada (on moe/work-2026-10-24, pushed) via git show. 3 files, +378/-32 (net 346, under the 400 cap), all in approvedScope; no doc change owed (MCP_SERVER.md :3249-3250 cover rotation:false with a reason).\n\nRe-ran task.verification (env -i, whole-tree git archive snapshot in /tmp, npm ci): tsc --noEmit clean; vitest run src/state/accountStore src/accounts = 8 files, 100 passed, 5 skipped (pre-existing), exit 0. Existing tests untouched. Mutation check: pre-fix registry.ts + accountStore.ts under the new test file → 10 failed / 3 passed (the 3 are the intended guards: ENOENT, invalid JSON and failed validation each read once across two leases); with the fix 13/13.\n\nDoD 1: RegistryError.readFailed (optional 3rd param, message byte-identical) set only in readRegistry's non-ENOENT read catch; loadRegistry returns it without caching. Tests: EACCES/EBUSY/EMFILE injected, re-read on the next call, after restore rotation:true acct-1 and view.error null; real chmod 000→600 case (skipIf win32/root).\nDoD 2: readUsage returns UnreadableUsage for non-ENOENT; loadUsage keeps the last good sample (null if none, fail-open as before) and caches nothing. Tests: 95% account stays blocked while its rewritten file is unreadable, re-read, new 5% read after restore; accountSwitchFor still switches. recordAccountReport's merge is in mergeReportUsage and skips merge+write on an unreadable file (bytes-unchanged test), reply null-guarded, warn log has account id + errno code only.\nDoD 3: content errors still cached and still MOE_ACCOUNT_REGISTRY_INVALID (read-once assertions plus message detail). ENOENT unchanged.\n\nAdversarial and complexity passes: no new throw path, stat failure still maps to 'missing', uncached re-read only while the error lasts, other RegistryError call sites and the accounts CLI unchanged, reply shapes unchanged. Nothing to cut. No blocking findings.",
+  "requiredCheckAtDone": null
+}

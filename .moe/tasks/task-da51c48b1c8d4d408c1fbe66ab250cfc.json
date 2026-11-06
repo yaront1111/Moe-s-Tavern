@@ -1,0 +1,41 @@
+{
+  "id": "task-da51c48b1c8d4d408c1fbe66ab250cfc",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #23): file 2-4 evidence-backed bug rows from a dry run of the two workflows no hunt has exercised, .github/workflows/docker.yml (build the daemon image and run its Test Docker image step against real docker) and release.yml's build, pack and version-guard steps (npm pack daemon and proxy, vsix package, version sync), at the tip, publishing nothing",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04. It runs in parallel with hunt #22 (task-7a3640da: the Windows legs of ci.yml), whose lane it must not touch.\n\nWHY\n- Hunts #20 and #22 dry-run ci.yml.\n- docker.yml runs on every daemon change, and release.yml runs on every v* tag, which publishes to npm, a GitHub Release and the JetBrains Marketplace. Neither has been exercised.\n- Today 291a34e3 changed docker.yml's Test Docker image step (see 7e862808). A release-time break shows up only after a tag is pushed, so it is the most expensive kind of CI failure.\n- At 11:41Z, 4 coders and 3 architects are idle while the next wave waits on CQ-M07n's QA.\n\nLANE, in order of preference\n1. docker.yml at HEAD 500e3f29 or later.\n   - In a git-archive snapshot outside the shared checkout, build packages/moe-daemon/Dockerfile exactly as the workflow does. docker is available in WSL: hunt #20 ran ubuntu:24.04 there.\n   - Run the Test Docker image step's commands against the real image and the real docker, not the test stub: the version match, `docker run -d`, `docker port`, the /health poll and the HEALTHCHECK.\n   - Any step that fails, or that passes only by accident (for example a /health that answers for the wrong project), is a finding.\n2. release.yml's non-publishing steps.\n   - Run the version-sync guard (all package versions equal, as CLAUDE.md requires), `npm pack` for daemon and proxy with a `npm pack --dry-run` listing, and the vsix package step.\n   - Check what each tarball ships against its package.json files and bin fields, and against what the installers and README promise.\n   - task-d63e3dba (DONE, bee3c37e) fixed the npm bin symlink entry guard, so `npm install -g ./moe-daemon-*.tgz` into a temp prefix, then `moe-daemon --version` and `moe-daemon doctor --project <tmp>`, is a fair end-to-end check.\n   - NEVER run npm publish, gh release, a marketplace upload, or `git tag` / `git push` of anything.\n\nALREADY KNOWN (do not refile)\n- 7e862808: the docker test stub in runtime-requirements.test.mjs (DONE).\n- d63e3dba: the bin entry guard (DONE).\n- 19869d86: the Node floor docs (DONE).\n- c0adee44: DEVELOPMENT.md bundling (DONE).\n- Hunt #20's and #22's ci.yml findings.\n\nSKIP\n- The lanes of hunts #1-#22 (read the archived hunt-row titles), and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Files open rows hold. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` at start. At filing time those are scripts/moe-agent.ps1, moe-agent.sh and scripts/tests/postflight-vm-route.ps1 (the four CQ-M07n follow-ups: 1dfec7a4, bbd7ad2d, cd3887fe and 6b3ab9d8).\n- Never build, install or test in the shared checkout: its packages/moe-daemon/dist is the live runtime. Run every docker container on a non-9876 port with a throwaway .moe, and remove the containers afterwards.\n\nEVIDENCE BAR. Same as hunts #2-#22. One of:\n- a failing command and its error lines at HEAD 500e3f29 or later, run outside the shared checkout;\n- a failure line from today's logs;\n- a doc/code file:line pair with a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING, with a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\" with the steps run and their exit codes, in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted with every docker.yml and release.yml step run and its exit code. Either way, the outcome is posted in #governors with a mention of governor-e6142a94.",
+    "Every filed row cites a failing command and its error lines from a run at HEAD 500e3f29 or later outside the shared checkout, or another hunt-standard piece of evidence. Nothing was published, tagged or pushed, and no test container was left running.",
+    "No filed row duplicates the known items above, a row filed on 11-03 or 11-04, or a file an open row holds without a dependsOn and a placement note. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 523.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:42:22.277Z",
+  "updatedAt": "2026-11-04T12:55:32.353Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T11:42:26.985Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-cd0ac706@2026-11-04T11:42:25Z",
+    "at": "2026-11-04T12:55:32.353Z"
+  }
+}

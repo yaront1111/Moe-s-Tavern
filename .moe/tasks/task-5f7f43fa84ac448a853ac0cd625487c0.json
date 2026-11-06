@@ -1,0 +1,212 @@
+{
+  "id": "task-5f7f43fa84ac448a853ac0cd625487c0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: postflight-safe.mjs kills the wrapper harness at 60 min (:51), but at f38a17d4 the full postflight.ps1 takes 3200 s (5.1) and 3400 s (pwsh 7) on an idle Ryzen 9 9950X3D desktop, and windows-latest runs this work about 1.5x slower, so CI's \"Test Windows PowerShell wrapper postflight\" will end in failureClass TIMEOUT now that task-02af8654 lets the job reach it (the 30-min cap did the same on 10-31, a95f7199)",
+  "description": "Filed by hunt #25 (task-9ca91400, architect-67c762f6) on 2026-11-04. Lane: the windows-latest steps after step 15, which no completed PR #230 run had reached since 2037e856 (governor comment-f95ba6c8).\n\nPROBLEM\n- scripts/tests/postflight-safe.mjs runs postflight.sh or postflight.ps1 with execFile `timeout: 60 * 60 * 1000` and `killSignal: 'SIGKILL'` (:51-52).\n  - A kill becomes failureClass TIMEOUT and exit 1 (:55, :8).\n  - The comment at :45-48 sizes that bound on \"about 20 minutes on a desktop and past 30 on windows-latest\".\n- The harness has grown since then. Between main (3ed7a299, the dependabot PR base) and f38a17d4:\n  - postflight.ps1 went from 5013 to 6165 lines;\n  - postflight-vm-route.ps1 went from 0 to 1008 lines;\n  - the shared postflight-worktree.cjs gained 1340 lines;\n  - postflight.sh went from 5645 to 6725 lines, and postflight-vm-route.sh from 0 to 777. 9e9e7345 (CQ-M07r) then added another 255 to postflight-vm-route.sh.\n  - CQ-M07s and CQ-M07t (74fe4c99, 527735ea, open) add more VM-route scenarios to both suites.\n\nEVIDENCE\n1. Desktop run of the full harness at f38a17d4, using hunt #22's CI emulation (scripts in /mnt/d/moe-scratch/hunt-9ca91400/mine/: ci-lib.ps1, leg-p5.ps1, leg-p7.ps1, postflight-tee.mjs).\n   - Emulation: env stripped, CI=true, a fresh HOME, an 8.3 TEMP, and the CI chain pwsh step -> node -> engine. postflight-tee.mjs repeats postflight-safe's exact execFile but keeps the output.\n   - Deviation: GITHUB_ACTIONS was removed for that sub-step only. postflight.ps1:4317 is its only reader, the scenario AE symlink check this host cannot pass.\n   - The host is an AMD Ryzen 9 9950X3D with 32 threads, at 13% CPU load sampled mid-run. The 5.1 and pwsh 7 runs overlapped.\n   - Windows PowerShell 5.1: PASS in 3200 s, 89% of the cap. Verdict {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\"}. Log: /mnt/d/moe-scratch/hunt-9ca91400/logs/p5-postflight-ps1-full.log, last line \"rawExit=0 failure=null secs=3200\".\n   - pwsh 7: PASS in 3400 s, 94% of the cap. Log: logs/p7-postflight-pwsh-full.log, \"secs=3400\".\n2. Runner against desktop, for the same kind of work (sequential PowerShell and git process spawns):\n   - Live CI run 41848822541 at 9e9e7345 on windows-latest:\n     - \"Test Windows PowerShell landing guard\" took 47 s, against 30 s on this desktop (1.57x).\n     - \"Test PowerShell 7 landing guard\" took 45 s, against 28 s (1.61x).\n   - a95f7199 (10-31): run 41198897512's \"Test Windows PowerShell wrapper postflight\" was \"killed at exactly 30:01\", {\"engine\":\"powershell\",\"exit\":1,\"lastScenario\":\"Z\",\"failureClass\":\"TIMEOUT\"}, while the suite took about 20 min locally (1.5x or more).\n   - Linux: postflight-safe bash took 1841 s in hunt #25's WSL run. ubuntu-latest's \"Test Bash wrapper postflight and parity\" took 2750 s at 80078651 (run 41834653023), 2692 s at 2037e856 and 2688 s at 060d7b8c. That is about 1.46x.\n   - At 1.5x, 5.1 needs about 4800 s and pwsh 7 about 5100 s, against the 3600 s cap. To pass, the runner would have to be at most 12.5% slower than this desktop for 5.1, and 6% for pwsh 7.\n3. Why CI has not shown it yet:\n   - Since 2037e856 the windows-latest job stopped at step 15 (task-02af8654, DONE 9463e77d). Before that it stopped at the worktree suite (task-e45da220).\n   - main-based runs (the dependabot PRs at 00:23Z) show main's smaller suite on windows-latest: 1846-2092 s for 5.1 and 1689-1948 s for pwsh 7.\n4. Live: run 41848822541 (9e9e7345, which includes 02af8654's fix) passed windows-latest steps 15-20.\n   - Step 22, \"Test Windows PowerShell wrapper postflight\", began at 15:14:00Z.\n   - Predicted: it fails at about 16:18Z, after worktree-landing.ps1 and then the 60-min kill. Hunt #25 adds its outcome as a comment on this row.\n5. ubuntu-latest already uses about 2690 s of the same cap (76%), before CQ-M07r's 255 new vm-route.sh lines.\n\nFIX DIRECTION\n- Raise the bound in postflight-safe.mjs so that the predicted runner time fits with headroom: at least 120 min.\n  - ci.yml sets no timeout-minutes, so GitHub's 360-min job default still applies.\n  - Keep SIGKILL and the TIMEOUT class.\n  - Replace the :45-48 comment with the measured numbers above.\n- Optional: an env override for the bound. It is not needed for the fix.\n- Out of scope unless the governor asks: splitting the 5.1 and pwsh 7 postflights into separate jobs to cut wall time.\n  - Two steps of about 80 min each make the Windows job about 3 h.\n  - The concurrency group lets the run in progress finish, so PR #230 results would lag by that much.\n\nFILES\n- scripts/tests/postflight-safe.mjs\n- scripts/tests/postflight-safe.test.mjs\n- No open row holds either (lanes.js at 15:26Z).\n\nNOTES FOR THE PLANNER\n- epic-be924fb8 has no finalTaskId, so this newest row reads isEpicFinal:true through the max-order fallback. Keep the gate narrow: `node --test scripts/tests/postflight-safe.test.mjs`.\n- Do not plan a full postflight run as the gate. It takes 55-60 min per engine on this desktop.",
+  "definitionOfDone": [
+    "scripts/tests/postflight-safe.mjs bounds the harness at no less than 120 min (7,200,000 ms), still with killSignal SIGKILL and failureClass TIMEOUT on a kill. The comment at :45-48 cites measured durations (this row's 3200 s / 3400 s desktop runs and the runner ratio) instead of \"about 20 minutes on a desktop and past 30 on windows-latest\".",
+    "scripts/tests/postflight-safe.test.mjs has a case that fails if the bound drops below 120 min. The test reads the bound from the module (exported, not copied). `node --test scripts/tests/postflight-safe.test.mjs` passes.",
+    "The completion summary names the first PR #230 CI run that contains the change, and reports its windows-latest \"Test Windows PowerShell wrapper postflight\" and \"Test PowerShell 7 wrapper postflight and parity\" outcomes, or says the run is still in progress."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first, then the fix, in scripts/tests/postflight-safe.test.mjs and scripts/tests/postflight-safe.mjs only. Load test-driven-development. Read mem:task-task-5f7f43fa84ac448a853ac0cd625487c0-handoff. Write both files with your own editing tool (Claude Edit/Write, or apply_patch in a codex exec seat). Never use a shell write or `git apply`: a path written that way has no TOOL witness and is HELD at landing. The exact intended change (+36/-7, verified in planning) is at /mnt/d/moe-scratch/plan-5f7f43fa/intended.diff. Read it; do not apply it.\n\n(1) TEST, RED first. In postflight-safe.test.mjs, change the import to `import { POSTFLIGHT_TIMEOUT_MS, runPostflight, summarizePostflight } from './postflight-safe.mjs';`. Append one top-level async test, 'the harness bound is at least 120 minutes and a kill at the bound is a nonzero TIMEOUT':\n(a) Three asserts on POSTFLIGHT_TIMEOUT_MS: Number.isSafeInteger; `>= 120 * 60 * 1000` with the message `bound ${POSTFLIGHT_TIMEOUT_MS} ms is under 120 min` (the gate greps 'is under 120 min'); and `< 360 * 60 * 1000` with the message `... reaches GitHub's 360-min job default` (a bound at or past the job default could never report TIMEOUT).\n(b) For each engine of bash, powershell, pwsh: `const pass = `PASS postflight.${engine === 'bash' ? 'sh' : 'ps1'}``. Call `await runPostflight(engine, fake)`, where fake(file, args, options, callback) pushes {file, options} to a calls array, then calls `callback(Object.assign(new Error('Command failed'), { killed: true, code: null, signal: 'SIGKILL' }), `[scenario Q] ok\\n${pass}\\n`, '')`. That error is the shape Node's execFile gives a timeout kill. Assert calls.length 1, calls[0].file === engine, calls[0].options.timeout === POSTFLIGHT_TIMEOUT_MS and calls[0].options.killSignal === 'SIGKILL'. deepEqual the result to { engine, exit: 1, lastScenario: 'Q', failureClass: 'TIMEOUT', failureLine: null }, so the PASS line cannot mask a kill.\n(c) Then `await runPostflight(engine, (file, args, options, callback) => callback(null, `${pass}\\n`, ''))` must deepEqual { engine, exit: 0, lastScenario: null, failureClass: 'NONE', failureLine: null }.\nRun `node --test scripts/tests/postflight-safe.test.mjs` now. It must fail with `SyntaxError: The requested module './postflight-safe.mjs' does not provide an export named 'POSTFLIGHT_TIMEOUT_MS'`. Quote that line in complete_step.\n\n(2) FIX in postflight-safe.mjs.\n(a) Right after the SKIP_LINE constant, add three lines: `// A harness run that outlives this bound is killed (SIGKILL) and reported as TIMEOUT.`, `// runPostflight's execFile comment gives the measured runs it is sized from.` and `export const POSTFLIGHT_TIMEOUT_MS = 180 * 60 * 1000;`.\n(b) `function runPostflight(engine) {` becomes `export function runPostflight(engine, run = execFile) {`, and `execFile(engine, args, {` becomes `run(engine, args, {`. The default keeps the CLI entry (:63-69, `runPostflight(process.argv[2])`) on the real execFile. A default parameter is the test seam because node:test cannot mock an ESM named import without an experimental flag that CI does not pass.\n(c) `timeout: 60 * 60 * 1000,` becomes `timeout: POSTFLIGHT_TIMEOUT_MS,`. Keep cwd, windowsHide, encoding, maxBuffer and killSignal 'SIGKILL' byte-identical.\n(d) Keep the comment's first sentence and 'execFile keeps bounded buffers in memory and kills a timed-out/overlong child.'. Replace the rest (:46-48, from 'Windows PowerShell 5.1 runs every scenario' to 'so the bound is an hour.') so the block reads, in ASCII only (no x-sign, tilde-dash or em dash; the file is ASCII with LF):\n`// Never inherit stdout/stderr or write them to artifacts. execFile keeps` / `// bounded buffers in memory and kills a timed-out/overlong child. Sizing,` / `// measured at f38a17d4 (task-5f7f43fa): the full postflight.ps1 took 3200 s` / `// under Windows PowerShell 5.1 and 3400 s under pwsh 7 on an idle desktop,` / `// and windows-latest runs this work about 1.5-1.6x slower (landing guards` / `// 47 s vs 30 s, 45 s vs 28 s), so 80-90 min there; ubuntu-latest's bash run` / `// took 2690-2750 s. 180 min keeps the slowest at about half the bound and` / `// well inside GitHub's 360-min job default.`\nThe bound is 180 min, not the DoD floor of 120: at 120 the predicted 85-91 min pwsh 7 runner step would sit at 71-76% of the cap, which is the ratio the governor (comment-7ed4d663) called too close on ubuntu-latest.\n\nError handling: the error mapping at :54-57 stays byte-identical, and so do summarizePostflight, ci.yml and every other file. The mapping order is: an ERR_CHILD_PROCESS_STDIO_MAXBUFFER code gives OUTPUT_LIMIT (checked before killed, because Node also kills on overflow); killed gives TIMEOUT; any other string code gives SPAWN_FAILED; a numeric code is the exit. The entry's catch still turns a thrown readFileSync or spawn error into SPAWN_FAILED. Re-run `node --test scripts/tests/postflight-safe.test.mjs`: 15 tests pass (the 14 existing plus 1 new).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-safe.test.mjs",
+        "scripts/tests/postflight-safe.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "note": "RED: \"SyntaxError: The requested module './postflight-safe.mjs' does not provide an export named 'POSTFLIGHT_TIMEOUT_MS'\". After fix: 15 tests pass.",
+      "startedAt": "2026-11-04T15:40:37.064Z",
+      "completedAt": "2026-11-04T15:41:05.194Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify. Run this ONE command from the task worktree root. It is the complete_task verification command (checkRefs[0]), and QA re-runs it from the root of any checkout that holds this change:\nnode --test scripts/tests/postflight-safe.test.mjs && node.exe --test scripts/tests/postflight-safe.test.mjs && D=$(mktemp -d) && trap 'rm -rf \"$D\"' EXIT && cp scripts/tests/postflight-safe.mjs scripts/tests/postflight-safe.test.mjs scripts/tests/postflight.sh scripts/tests/postflight.ps1 \"$D\" && sed -i 's/^export const POSTFLIGHT_TIMEOUT_MS = .*/export const POSTFLIGHT_TIMEOUT_MS = 119 * 60 * 1000;/' \"$D/postflight-safe.mjs\" && grep -q '^export const POSTFLIGHT_TIMEOUT_MS = 119 \\* 60 \\* 1000;$' \"$D/postflight-safe.mjs\" && ! node --test \"$D/postflight-safe.test.mjs\" >\"$D/m.log\" 2>&1 && grep -q 'is under 120 min' \"$D/m.log\" && echo GATE_OK\n(A copy of the text is at /mnt/d/moe-scratch/plan-5f7f43fa/gate.txt.)\nWhat it does:\n(i) It runs the test file under WSL node.\n(ii) It runs the same file under Windows node.exe. CI's step 'Test Bash landing and postflight runner' (ci.yml:290) runs this file on windows-latest and macos-latest too, and the fake-exec test reads postflight.sh and postflight.ps1 through Windows paths there.\n(iii) It copies the module, the test and both harness files to a mktemp dir outside the checkout, lowers the bound there to 119 min, and requires that copy's test to FAIL on the 'is under 120 min' assertion. That is DoD 2's 'fails if the bound drops below 120 min', shown as a real RED.\nPlanning dry runs: on the reference change, 15 pass under both nodes, then GATE_OK. On the unfixed tree it stops without GATE_OK.\nNever run a real postflight harness: it takes 55-60 min per engine on this desktop, and the task's notes forbid it as the gate.\nError handling for a red run: no GATE_OK means a failing test, a missing export or a mutant that stayed green. Fix the files and re-run the same command. Never edit the gate text.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate: 15/15 under WSL node and node.exe, 119-min mutant fails on 'is under 120 min', GATE_OK.",
+      "startedAt": "2026-11-04T15:41:06.044Z",
+      "completedAt": "2026-11-04T15:41:14.983Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review), then the complete_task summary. If anything in this step changes a byte, re-run step 2's command and submit that fresh output.\n\n(1) SCOPE. `git diff --stat` against the target lists only the two files. `git status --porcelain` shows no stray file: logs and mutant copies live in mktemp. `grep -c 'about 20 minutes' scripts/tests/postflight-safe.mjs` prints 0. The comment names 3200 s, 3400 s and 1.5-1.6x. `LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/tests/postflight-safe.mjs scripts/tests/postflight-safe.test.mjs` prints nothing. Neither ci.yml nor any harness changed.\n\n(2) MUTANTS, in mktemp copies only, never in the worktree. From the worktree root run `bash /mnt/d/moe-scratch/plan-5f7f43fa/mutants.sh` (683 chars; read it first). It applies six sed mutants to a copy of postflight-safe.mjs: the execFile timeout back to a literal 60 min while the export stays 180; killSignal SIGTERM; the killed-to-TIMEOUT branch dropped; a bound of 0, which disables execFile's timeout; a bound of 24 h; and runPostflight no longer exported. Each must print rc=1, and none may print NOOP. In planning all six were red and the unmutated copy was green.\n\n(3) EDGES. 180 min is 10,800,000 ms, which is at least 7,200,000. `timeout: 0` would mean no bound, and the test refuses it. The under-360-min assert keeps the kill reachable inside GitHub's job default. A failed step skips the rest of the job, so a real hang costs at most about 14 + 180 min on windows-latest. An invalid engine still returns before any file read or spawn. `run` is the real execFile everywhere except the test.\n\n(4) SUMMARY. Include:\n- the RED line from step 1 and the gate's GREEN tail;\n- the six mutant results;\n- the bound, and why 180 rather than 120 (step 1 (2)(d));\n- DoD 3, written as follows.\nThis completion lands on moe/work-2026-10-24, PR #230's head branch, only when this session exits: the wrapper makes the worktree squash commit and pushes it. So at complete_task no PR #230 run contains the change yet. List the runs with `gh.exe run list -R yaront1111/Moe-s-Tavern --workflow ci.yml --branch moe/work-2026-10-24 --limit 5 --json databaseId,headSha,status,conclusion,createdAt`. Always pass -R, because gh.exe's Windows git cannot read a /mnt cwd or a worktree's .git.\n(a) Name the run by rule: the first ci.yml pull_request run on PR #230 that is not cancelled and whose headSha is this task's completion commit or a descendant of it. The rule needs both parts because ci.yml's concurrency group cancels a queued run when a newer push arrives, so the first run that contains the change may carry a later head. Say that this run has not started yet (the DoD's 'still in progress' case), and that the governor or QA can resolve it with the list command plus `git merge-base --is-ancestor <completion sha> <headSha>`.\n(b) Name every run in flight at summary time as pre-fix, starting with 41848822541 (head 9e9e7345). From `gh.exe run view 41848822541 -R yaront1111/Moe-s-Tavern --json jobs`, report status, conclusion, startedAt and completedAt for three steps: Build (windows-latest) step 22 'Test Windows PowerShell wrapper postflight' (started 15:14:00Z under the 60-min bound), step 23 'Test PowerShell 7 wrapper postflight and parity', and Build (ubuntu-latest) step 21 'Test Bash wrapper postflight and parity' (started 15:07:05Z). Hunt #25 predicts that step 22 fails at about 16:18Z by the 60-min kill (failureClass TIMEOUT) and that step 23 is then skipped. Report what actually happened, or that a step is still in progress.\n(c) Expected in the watched run: both Windows postflight steps finish inside the 180-min bound, at about 80-90 min each.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "note": "Scope: 2 files, +36/-7, ASCII, 'about 20 minutes' count 0. All six mutants rc=1, no NOOP.",
+      "startedAt": "2026-11-04T15:41:15.853Z",
+      "completedAt": "2026-11-04T15:41:34.196Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 535.7,
+  "comments": [
+    {
+      "id": "comment-7ed4d663a4534b41a504f695b2a738e5",
+      "author": "governor-e6142a94",
+      "content": "Evidence from real CI for the planner, from the governor. The same 60-min cap is close on Linux too, so size the fix for both platforms.\n- On PR #230's ubuntu-latest, \"Test Bash wrapper postflight and parity\" (postflight-safe.mjs bash) took:\n  - 44:48 (run 41830422144 at 060d7b8c, 12:39:47 to 13:24:35Z);\n  - 44:52 (run 41823611051 at 2037e856);\n  - 45:50 (run 41834653023 at 80078651, 13:29:43 to 14:15:33Z).\n  That is 75-76% of the 60-min execFile cap (postflight-safe.mjs:51), and it grows with every wrapper row. CQ-M07r/s/t are adding postflight scenarios right now.\n- The job has no timeout-minutes in ci.yml, so the cap at :51 is the only bound.\n- The fix should leave real headroom on all three postflight steps, not just the two Windows ones. That could be a per-step budget, an env-overridable cap, or splitting the suite across steps/jobs.\n- Get the runner timings with `gh.exe run view <id> --json jobs`.",
+      "timestamp": "2026-11-04T15:27:21.462Z"
+    },
+    {
+      "id": "comment-dcd1da0c5c144e5aa76b6b4ba4ed7199",
+      "author": "architect-67c762f6",
+      "content": "CONFIRMED by real CI (hunt #25, 16:26Z). Run 41848822541 at 9e9e7345, windows-latest job 126656658211, step 22 \"Test Windows PowerShell wrapper postflight\":\n- 15:17:53Z: `worktree-landing: 18 passed, 0 failed, 0 errors`\n- 16:17:54Z, 60:01 later: `{\"engine\":\"powershell\",\"exit\":1,\"lastScenario\":\"P\",\"failureClass\":\"TIMEOUT\",\"failureLine\":null}`, then `##[error]Process completed with exit code 1.`\n- Step 23 (the pwsh 7 postflight and parity) and steps 24-25 were skipped. PR #230 is red again on windows-latest only. ubuntu-latest step 21 in the same run passed in 2611 s (15:07:05-15:50:36Z).\n- The job log is saved at /mnt/d/moe-scratch/hunt-9ca91400/ci/real-ci-41848822541-windows.log.\n\nSIZING. Read this before planning DoD 1.\n- lastScenario P means the runner got only as far as scenario P (around postflight.ps1:3350 of 6165) in 60 min. This desktop runs the whole file in 53 min.\n- That is about 1.6-1.9x, more than the 1.5x the description assumed. So a full 5.1 run needs roughly 85-100 min on windows-latest, and pwsh 7 (3400 s on the desktop) more than that.\n- Treat DoD 1's 120 min as a floor only, and size the bound at 180 min or more, because CQ-M07s/t (74fe4c99, 527735ea) still add VM-route scenarios.\n- With that bound the Windows job runs about 3.5-4 h, because the two PowerShell postflights run one after the other. That is still under GitHub's 360-min job default.\n- Splitting the two postflights into their own jobs, to cut wall time, is the governor's call. It is not part of this row.",
+      "timestamp": "2026-11-04T16:27:13.481Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:27:08.909Z",
+  "updatedAt": "2026-11-04T19:20:45.708Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:27:15.313Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T15:44:11.886Z",
+    "wallClockMs": 1016573
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-593560ee",
+    "qa-1cd86a39"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T15:39:07.973Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/postflight-safe.mjs kills a postflight harness run only after POSTFLIGHT_TIMEOUT_MS = 180 min. The bound is exported (it was a private 60-min literal), and the kill still uses killSignal SIGKILL and still reports failureClass TIMEOUT with a nonzero exit. runPostflight is exported with an optional second parameter (default: node:child_process execFile), so a test can capture the real execFile options and drive the real error mapping without spawning a harness. The sizing comment at the execFile call cites measured runs instead of the old 20/30-minute estimate: 3200 s and 3400 s on the desktop at f38a17d4, windows-latest about 1.5-1.6x slower, and ubuntu-latest bash at 2690-2750 s.",
+    "acceptanceCriteria": [
+      "`node --test scripts/tests/postflight-safe.test.mjs` passes 15 tests (the 14 existing plus 1 new) under WSL node and under Windows node.exe.",
+      "The new test fails if POSTFLIGHT_TIMEOUT_MS is under 120 min, 0, not a safe integer, or 360 min or more. It also fails if the execFile call stops passing POSTFLIGHT_TIMEOUT_MS or SIGKILL, or if a killed child stops mapping to failureClass TIMEOUT with exit 1. The step-3 mutants show each of these.",
+      "The gate's 119-min mutant fails on the 'is under 120 min' assertion, not on a syntax or import error.",
+      "The sentence 'about 20 minutes on a desktop and past 30 on windows-latest' is gone. The comment names 3200 s, 3400 s and the 1.5-1.6x runner ratio, and both files stay ASCII.",
+      "DoD 3: the completion lands at the worker session's exit, so the summary names the first PR #230 run that contains it by rule and says that run has not started yet (the DoD's in-progress case). The summary also reports the pre-fix run 41848822541's windows-latest steps 22-23 and ubuntu-latest step 21 as observed. QA reviews after the landing and may resolve the rule to a run id with the gh.exe list command given in step 3."
+    ],
+    "invariants": [
+      "killSignal stays 'SIGKILL'. cwd (repo root), windowsHide true, encoding utf8 and maxBuffer 16 MiB are unchanged.",
+      "The error mapping order is unchanged: ERR_CHILD_PROCESS_STDIO_MAXBUFFER gives OUTPUT_LIMIT, then killed gives TIMEOUT, then a string code gives SPAWN_FAILED.",
+      "summarizePostflight and its closed output shape {engine, exit, lastScenario, failureClass, failureLine} are unchanged.",
+      "Child output is still never inherited or written to disk."
+    ],
+    "compatibility": [
+      "The CLI is unchanged: `node scripts/tests/postflight-safe.mjs bash|powershell|pwsh` (ci.yml:314, :322, :329) prints the same single JSON line with the same exit code. Only the wait before the kill changes.",
+      "ci.yml is not edited: no timeout-minutes and no step or job split, which the task puts out of scope. GitHub's 360-min job default still applies.",
+      "The 14 existing tests and summarizePostflight's behavior are untouched."
+    ],
+    "approvedScope": [
+      "scripts/tests/postflight-safe.mjs: the new export POSTFLIGHT_TIMEOUT_MS; runPostflight exported with a second parameter `run = execFile` and calling run(...); the timeout option and the sizing comment at that call.",
+      "scripts/tests/postflight-safe.test.mjs: the import line, plus one new top-level test 'the harness bound is at least 120 minutes and a kill at the bound is a nonzero TIMEOUT'."
+    ],
+    "reuse": [
+      "node:child_process execFile's own timeout and killSignal handling stays the mechanism. No new timer, wrapper module or dependency.",
+      "A default parameter is the test seam: node:test cannot mock an ESM named import without --experimental-test-module-mocks, which CI does not pass."
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/postflight-safe.mjs: :38 `function runPostflight(engine)` is module-private; :45-48 is the old sizing comment; :51 is `timeout: 60 * 60 * 1000` and :52 `killSignal: 'SIGKILL'`; :54-57 map the execFile error; :63-69 are the CLI entry.",
+      "On a timeout kill, Node's execFile calls back with an Error whose killed is true, code is null and signal is the killSignal. `timeout: 0` would mean no bound at all.",
+      "ci.yml:290 runs postflight-safe.test.mjs on ubuntu, windows and macos (step 'Test Bash landing and postflight runner'). ci.yml:314, :322 and :329 run the CLI for bash, powershell and pwsh. ci.yml sets no timeout-minutes, and a failed step skips the job's later steps.",
+      "CI run 41848822541 (head 9e9e7345): windows-latest step 22 started at 15:14:00Z under the 60-min bound. Its landing guards took 47 s and 45 s, against 30 s and 28 s on the desktop.",
+      ".gitattributes sets `* text=auto eol=lf`. Both files are ASCII, mode 100755."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/postflight-safe.test.mjs && node.exe --test scripts/tests/postflight-safe.test.mjs && D=$(mktemp -d) && trap 'rm -rf \"$D\"' EXIT && cp scripts/tests/postflight-safe.mjs scripts/tests/postflight-safe.test.mjs scripts/tests/postflight.sh scripts/tests/postflight.ps1 \"$D\" && sed -i 's/^export const POSTFLIGHT_TIMEOUT_MS = .*/export const POSTFLIGHT_TIMEOUT_MS = 119 * 60 * 1000;/' \"$D/postflight-safe.mjs\" && grep -q '^export const POSTFLIGHT_TIMEOUT_MS = 119 \\* 60 \\* 1000;$' \"$D/postflight-safe.mjs\" && ! node --test \"$D/postflight-safe.test.mjs\" >\"$D/m.log\" 2>&1 && grep -q 'is under 120 min' \"$D/m.log\" && echo GATE_OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- A bound of exactly 120 min (the DoD floor). The predicted pwsh 7 runner step (85-91 min) would sit at 71-76% of the cap, the same ratio the governor already called too close on ubuntu-latest (comment-7ed4d663), and CQ-M07s and CQ-M07t are adding scenarios now. At 180 min the slowest step sits near 50%. A failed step skips the rest of the job, so a real hang costs about 14 + 180 min on windows-latest, roughly the length of a normal passing Windows job (two postflight steps of about 85 min each).\n- An env override, optional in the task: skipped. Changing a constant is the same one-line review as changing ci.yml.\n- Per-engine budgets: more code for no gain. One bound sized for the slowest engine leaves bash at about 26%.\n- Splitting the Windows postflights into separate jobs: out of scope unless the governor asks.\n- Grepping the source text for the bound: brittle, and it would not prove the execFile call uses the bound. The default-parameter seam on runPostflight proves the real options and the real kill mapping instead.",
+    "codebaseInsights": "- postflight-safe.mjs is the only bound on the three CI postflight steps: ci.yml has no timeout-minutes, and GitHub's job default is 360 min.\n- summarizePostflight maps failure 'TIMEOUT' to exit 1 even when a PASS line is present.\n- runPostflight reads the harness file (postflight.sh, or postflight.ps1 for powershell and pwsh) to count source lines before it spawns anything. So the fake-exec test needs both harness files beside the module, which holds in the repo and in the gate's mutant copy.\n- Both files are ASCII, LF (.gitattributes `* text=auto eol=lf`), mode 100755.\n- Under WSL, `node.exe --test` from a /mnt/d checkout or worktree runs fine with a D:\\ cwd. Measured in planning: 14/14 on the current file, 15/15 on the fix.\n- isEpicFinal is true only through the max-order fallback (epic-be924fb8 has no finalTaskId), so the gate stays narrow, as the task's notes require.",
+    "risks": "- Never run a real postflight harness: 55-60 min per engine here.\n- Never `git apply` the reference diff or shell-write a tracked file; use the editing tool.\n- DoD 3 cannot name a run id that holds the fix at complete_task, because the worktree completion lands at session exit. The plan answers it by rule plus the observed pre-fix run, as task-02af8654's QA-approved summary did.\n- Mutant copies go to mktemp, never the worktree.\n- Never pattern-kill processes.\n- Keep the comment ASCII; a stray x-sign or em dash breaks the files' ASCII property.",
+    "keyFiles": [
+      "scripts/tests/postflight-safe.mjs",
+      "scripts/tests/postflight-safe.test.mjs",
+      ".github/workflows/ci.yml (read-only: :290, :308-330)",
+      "/mnt/d/moe-scratch/plan-5f7f43fa/intended.diff (reference change, +36/-7)",
+      "/mnt/d/moe-scratch/plan-5f7f43fa/gate.txt and mutants.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "342423a3066a4cfea068cc555a7c784610a32eeb",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T15:39:08.006Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T15:42:44Z",
+    "at": "2026-11-04T15:44:39.878Z"
+  },
+  "workStartedAt": "2026-11-04T15:40:37.064Z",
+  "reviewStartedAt": "2026-11-04T15:41:42.470Z",
+  "verification": {
+    "command": "node --test scripts/tests/postflight-safe.test.mjs && node.exe --test scripts/tests/postflight-safe.test.mjs && D=$(mktemp -d) && trap 'rm -rf \"$D\"' EXIT && cp scripts/tests/postflight-safe.mjs scripts/tests/postflight-safe.test.mjs scripts/tests/postflight.sh scripts/tests/postflight.ps1 \"$D\" && sed -i 's/^export const POSTFLIGHT_TIMEOUT_MS = .*/export const POSTFLIGHT_TIMEOUT_MS = 119 * 60 * 1000;/' \"$D/postflight-safe.mjs\" && grep -q '^export const POSTFLIGHT_TIMEOUT_MS = 119 \\* 60 \\* 1000;$' \"$D/postflight-safe.mjs\" && ! node --test \"$D/postflight-safe.test.mjs\" >\"$D/m.log\" 2>&1 && grep -q 'is under 120 min' \"$D/m.log\" && echo GATE_OK",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 15\nℹ pass 15\nℹ fail 0 (WSL node)\nℹ tests 15\nℹ pass 15\nℹ fail 0 (node.exe)\nGATE_OK",
+    "reportedAt": "2026-11-04T15:41:42.470Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-safe.mjs",
+    "scripts/tests/postflight-safe.test.mjs"
+  ],
+  "completionSummary": "postflight-safe.mjs now kills a harness run only after POSTFLIGHT_TIMEOUT_MS = 180 min (exported; was a private 60-min literal). killSignal stays SIGKILL, a kill still maps to failureClass TIMEOUT with exit 1, and the error mapping order is unchanged. runPostflight is exported with a `run = execFile` second parameter as the test seam. The sizing comment cites 3200 s (5.1) and 3400 s (pwsh 7) on the desktop at f38a17d4, windows-latest 1.5-1.6x slower (47 vs 30 s, 45 vs 28 s), and ubuntu bash 2690-2750 s. Chose 180 over the 120 floor because 120 would leave the predicted 85-91 min pwsh 7 step at 71-76% of the cap. Test: new case asserts the bound is a safe integer, >= 120 min ('is under 120 min'), < 360 min, and that the real execFile options carry the bound and SIGKILL, and that a killed child maps to TIMEOUT exit 1 for bash, powershell and pwsh. RED before the fix: \"SyntaxError: ... does not provide an export named 'POSTFLIGHT_TIMEOUT_MS'\". Gate: 15/15 under WSL node and node.exe, 119-min mutant fails on 'is under 120 min', GATE_OK. Six mutants (60-min literal, SIGTERM, dropped TIMEOUT branch, bound 0, bound 24 h, runPostflight unexported) all rc=1, none NOOP. DoD 3: this lands on moe/work-2026-10-24 only at session exit, so no PR #230 run contains it yet. The first run that will is the first non-cancelled ci.yml pull_request run on PR #230 whose headSha is the completion commit or a descendant; not started yet (in-progress case). QA can resolve it with `gh.exe run list -R yaront1111/Moe-s-Tavern --workflow ci.yml --branch moe/work-2026-10-24 --limit 5 --json databaseId,headSha,status,conclusion,createdAt` plus `git merge-base --is-ancestor <completion sha> <headSha>`. Pre-fix runs: 41848822541 (9e9e7345) is still in_progress. Windows step 22 'Test Windows PowerShell wrapper postflight' is in_progress since 15:14:00Z (no conclusion), step 23 pending; ubuntu step 21 'Test Bash wrapper postflight and parity' is in_progress since 15:07:05Z. Run 41858661673 (342423a3) i",
+  "commits": [
+    {
+      "sha": "d36d5bb78c7de5e11ef43510beb4e5281b82b857",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T15:39:44Z",
+      "paths": [
+        "scripts/tests/postflight-safe.mjs",
+        "scripts/tests/postflight-safe.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T15:42:41.371Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T15:44:11.886Z",
+  "reviewCompletedAt": "2026-11-04T15:44:11.886Z",
+  "reviewSummary": "Reviewed completion d36d5bb7 (on moe/work-2026-10-24; checkout bytes equal the commit). 2 files, +36/-7. Re-ran task.verification from repo root: postflight-safe.test.mjs 15/15 under WSL node and 15/15 under node.exe; 119-min mutant fails on 'is under 120 min' -> GATE_OK. Ran mutants.sh: all six mutants (60-min literal, SIGTERM, TIMEOUT branch dropped, bound 0, bound 24h, runPostflight unexported) rc=1, none NOOP.\nDoD1: POSTFLIGHT_TIMEOUT_MS = 180 min exported (>=120), used as the execFile timeout; SIGKILL kept; error mapping/cwd/maxBuffer unchanged; comment cites 3200 s, 3400 s, 1.5-1.6x, ubuntu 2690-2750 s; 'about 20 minutes' gone; both files ASCII.\nDoD2: new test reads the bound from the module (safe int, >=120 min, <360 min), asserts real execFile options carry the bound + SIGKILL, and a killed child maps to exit 1 TIMEOUT for bash/powershell/pwsh; 14 existing tests untouched; ci.yml not edited.\nDoD3: first PR #230 run containing the change is 41860566794 (headSha d36d5bb7), created 15:42:42Z, status pending behind the in-progress pre-fix run; its Windows postflight steps have no outcome yet (still-in-progress case). Pre-fix run 41848822541 at 15:43Z: in_progress; windows step 22 in_progress since 15:14:00Z (60-min kill predicted ~16:18Z), step 23 pending; ubuntu step 21 in_progress since 15:07:05Z.\nComplexity: run = execFile default param is the minimal seam; nothing to cut. Governor: confirm 41860566794's Windows postflight steps finish inside the bound (expected ~80-90 min each).",
+  "requiredCheckAtDone": null
+}

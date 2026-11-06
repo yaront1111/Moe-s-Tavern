@@ -1,0 +1,239 @@
+{
+  "id": "task-e266a1501d534ac99b8e556f1f89cbff",
+  "epicId": "epic-be924fb8",
+  "title": "feat(wrappers): copilot seat guards: argv probe (MOE_CLI_ARGV_REJECTED), sign-in line (MOE_COPILOT_SIGNED_OUT), routed --reasoning-effort",
+  "description": "Slice 3 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider). Builds on task-ab323f85's copilot launch block in moe-agent.sh and moe-agent.ps1 (dependsOn).\n\nOBJECTIVE. A copilot seat that cannot run stops with one coded line instead of relaunch-looping, and runs at the effort its task was routed at. Model decision (the human, 2026-11-05): copilot's own default model, --model only when pinned, effort from each task's routing.\n\nFACTS measured 2026-11-05 on copilot 1.0.105:\n- The real argv plus --help exits 0 and prints usage without reading stdin or checking the sign-in.\n- A rejected flag exits 1 with clap's `error: unexpected argument '--x' found` or `error: invalid value 'ultra' for '--reasoning-effort <level>'`.\n- A signed-out run exits 1, prints `Error: No authentication information found.` on stderr and writes `[ERROR] No authentication information found.` to <--log-dir>/process-<ts>-<pid>.log, even at --log-level error.\n- --reasoning-effort takes none, minimal, low, medium, high, xhigh, max, so Moe's routed efforts pass 1:1. --model takes ids such as claude-opus-5.5 or gpt-6-astra.\n- Sign-in comes from COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN, else the token `copilot login` keeps in the OS credential store (the wrapper cannot read it), else gh's. So the sign-in is detected from the run's own log, never guessed beforehand.\n\nDELIVERABLE, in both wrappers with identical strings:\n1. Argv probe, once per wrapper process before the first headless copilot launch, as codex's (moe-agent.sh about :11697-11722): the real argv plus --help, stdin at the null device. A non-zero exit whose output matches unexpected argument|invalid value|unrecognized prints one `MOE_CLI_ARGV_REJECTED: the installed copilot (<copilot --version>) rejects the wrapper's launch argv -- <first error line>. ...` line, sends one #general escalation and exits 1 (the EXIT trap deregisters; the task returns to the queue). MOE_DISABLE_ARGV_PROBE=1 skips it.\n2. Sign-in: headless runs pass --log-dir <a per-launch dir in the secure temp>. After a non-zero exit, a `No authentication information found` line in that dir prints one `MOE_COPILOT_SIGNED_OUT: ...` line (copilot login, or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN; Windows and WSL sign in separately), sends one #general escalation and exits 1, never the launch-failure backoff relaunch.\n3. Effort: --reasoning-effort is MOE_COPILOT_EFFORT when set, else the claimed task's launch effort (TASK_LAUNCH_EFFORT / $taskLaunchEffort), else absent. It goes on the TUI argv, the headless argv and the probe alike.\n4. Model: --model only for an explicit model (-Model/--model, settings.models.<role>, else MOE_COPILOT_MODEL), never the claude-opus-5-5 fallback (grok's rule).\n5. scripts/tests/parity-check.sh and parity-check.ps1 pin the copilot vocabulary: MOE_COPILOT_ as a compared code family, the \"copilot\" cli type, MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT, the copilot banners and the copilot argv-rejected line.\n\nTESTS. postflight-vm-route.{sh,ps1} copilot rows: probe rejection (a fake copilot fails a --help argv: one line, exit 1, no headless run); MOE_DISABLE_ARGV_PROBE=1; signed out (the fake writes the log line and exits 1: one line, exit 1, one run even with polling on); effort from the claim's launch hint and from MOE_COPILOT_EFFORT; --model only when pinned.\n\nNOT IN SCOPE: a sign-in pre-check before the launch; the TUI's sign-in (the operator sees copilot's own /login); JetBrains, VS Code; docs (the docs slice and task-59e1d150).\n\nVERIFICATION (gate budget 20 min): task-ab323f85's gate (vm-route harnesses on bash, 5.1 and pwsh 7, bash -n and ParseFile on both wrappers, parity-check.sh, npm run lint) plus parity-check.ps1 on Windows PowerShell 5.1.",
+  "definitionOfDone": [
+    "A copilot that rejects the real argv plus --help stops the seat with exactly one MOE_CLI_ARGV_REJECTED line naming copilot and its version, one #general message and exit 1, with no headless run, and MOE_DISABLE_ARGV_PROBE=1 skips the probe; proven by postflight-vm-route.{sh,ps1} rows on bash, Windows PowerShell 5.1 and pwsh 7",
+    "A headless copilot run that exits non-zero with `No authentication information found` in its --log-dir prints exactly one MOE_COPILOT_SIGNED_OUT line and exits 1 after one CLI run, even with polling on; same rows",
+    "--reasoning-effort is MOE_COPILOT_EFFORT when set, else the claim's launch effort, and absent when neither is set; --model appears only for an explicit model and never as claude-opus-5-5; same rows",
+    "parity-check.sh and parity-check.ps1 require the copilot vocabulary in both wrappers, and each fails on a wrapper copy with one pinned copilot string removed",
+    "The gate passes: postflight-vm-route on bash, 5.1 and pwsh 7, bash -n and ParseFile on both wrappers, bash scripts/tests/parity-check.sh, parity-check.ps1 on 5.1 and npm run lint"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Goal: finish the Copilot guard slice by enforcing cross-platform vocabulary; the runtime and vm-route cases are delivered by prerequisite task-49d4a565b0084eef98b076b11abe839d, itself after task-ab323f85. Read their landed context/evidence and Copilot blocks before editing; do not implement them twice or weaken their tests. All original DoD remains binding: items 1-3 are re-proven by the combined gate, item 4 by this change and the mutation rows. Extend existing extract_codes/require_both and $dynamicPatterns/$required, not a new parser: add 'MOE_COPILOT_' to the bash compared families and 'MOE_COPILOT_[A-Z_]+' to PowerShell; require the literal '\"copilot\"', MOE_COPILOT_MODEL, MOE_COPILOT_EFFORT, MOE_COPILOT_NOT_FOUND, MOE_COPILOT_SIGNED_OUT, and 'MOE_CLI_ARGV_REJECTED: the installed copilot (' in both wrappers. Pin the producer's matching Copilot mode and MCP-config banners (coordinated contract: 'Copilot mode: headless', 'Copilot mode: interactive', 'Copilot MCP config written to:'); take exact landed strings if the producer settles different wording and record them in the tests. Example additions: require_both 'copilot vocabulary' 'MOE_COPILOT_EFFORT'; $required['copilot vocabulary'] = @('MOE_COPILOT_MODEL','MOE_COPILOT_EFFORT','MOE_CLI_ARGV_REJECTED: the installed copilot (', ...the exact landed banners). Keep existing empty-family refusal, BOM checking and other CLI pins. Do not add a .copilot/ attribution/config directory requirement: the MCP config is private per-launch, not project state. Error handling: missing/asymmetric tokens still accumulate diagnostics and exit 1; do not exempt the new family. No wrapper, docs or IDE edits in this parent.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Pinned the copilot vocabulary in both validators: MOE_COPILOT_ is a compared family (bash prefix loop + PS $dynamicPatterns); '\"copilot\"' cli type; a 'copilot vocabulary' group (MODEL, EFFORT, NOT_FOUND, CONFIG_FAILED, SIGNED_OUT, 'MOE_CLI_ARGV_REJECTED: the installed copilot (', 'GitHub Copilot CLI not found:', 'No authentication information found', COPILOT_GITHUB_TOKEN, --reasoning-effort, 'Copilot mode: headless', 'Copilot mode: interactive'). Banner strings taken from landed wrappers (headless banner is 'Copilot mode: headless (stdin prompt)', pinned as prefix). No 'Copilot MCP config written to:' pin: neither landed wrapper prints it (per architect-32d0a5be comment). parity-check.sh PASS on the worktree; ASCII-only ps1 additions, parity-check.ps1 itself is verified in the step-3 gate on 5.1.",
+      "startedAt": "2026-11-06T07:50:06.660Z",
+      "completedAt": "2026-11-06T07:50:50.227Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Goal: finish the Copilot guard slice by enforcing cross-platform vocabulary; the runtime and vm-route cases are delivered by prerequisite task-49d4a565b0084eef98b076b11abe839d, itself after task-ab323f85. Read their landed context/evidence and Copilot blocks before editing; do not implement them twice or weaken their tests. All original DoD remains binding: items 1-3 are re-proven by the combined gate, item 4 by this change and the mutation rows. Extend existing extract_codes/require_both and $dynamicPatterns/$required, not a new parser: add 'MOE_COPILOT_' to the bash compared families and 'MOE_COPILOT_[A-Z_]+' to PowerShell; require the literal '\"copilot\"', MOE_COPILOT_MODEL, MOE_COPILOT_EFFORT, MOE_COPILOT_NOT_FOUND, MOE_COPILOT_SIGNED_OUT, and 'MOE_CLI_ARGV_REJECTED: the installed copilot (' in both wrappers. Pin the producer's matching Copilot mode and MCP-config banners (coordinated contract: 'Copilot mode: headless', 'Copilot mode: interactive', 'Copilot MCP config written to:'); take exact landed strings if the producer settles different wording and record them in the tests. Example additions: require_both 'copilot vocabulary' 'MOE_COPILOT_EFFORT'; $required['copilot vocabulary'] = @('MOE_COPILOT_MODEL','MOE_COPILOT_EFFORT','MOE_CLI_ARGV_REJECTED: the installed copilot (', 'Copilot mode: headless','Copilot mode: interactive','Copilot MCP config written to:'). Keep existing empty-family refusal, BOM checking and other CLI pins. Do not add a .copilot/ attribution/config directory requirement: the MCP config is private per-launch, not project state. Error handling: missing/asymmetric tokens still accumulate diagnostics and exit 1; do not exempt the new family. No wrapper, docs or IDE edits in this parent.",
+          "reason": "Replace shorthand illustrative vocabulary list with concrete complete example; no scope or behavior change.",
+          "amendedBy": "architect-a3d9076e",
+          "amendedAt": "2026-11-05T22:06:29.205Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add one executable, bounded gate/test script for this slice, invoked as `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` from the task root under WSL on a Windows drive. It owns the focused parity regression cases and combines the exact requested engines, not whole postflight. Resolve root from BASH_SOURCE; require bash, node, python3, powershell.exe (5.1), pwsh.exe (7) and wslpath; missing engines are a hard failure, never SKIP. Scrub inherited MOE_*, CLAUDE* and FAKE_* before setting MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC. Launch three independent gate legs with separate logs and recorded PIDs; aggregate every exit code (one failure fails the gate), and print each log tail plus named PASS counts. Bash leg: bash -n scripts/moe-agent.sh; bash scripts/tests/postflight-vm-route.sh; bash scripts/tests/parity-check.sh; npm run lint. Each Windows leg: pwsh.exe -nop -c 'cmd /c <engine> -nop -ep Bypass -f scripts/tests/postflight-vm-route.ps1' using powershell and pwsh respectively, then ParseFile of scripts/moe-agent.ps1 with errors initialized, printed and converted to nonzero (`$x=$null; [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-agent.ps1),[ref]$null,[ref]$x); \"$x\"; exit !!$x`); parity-check.ps1 MUST also run on 5.1 (7 may run it too). Preserve native exit status in every bridge. Require exactly three real `PASS postflight-vm-route` summaries so a skipped bash harness cannot count green. No package npm tests/build/install and no full postflight.{sh,ps1}.\nIn the same script, exercise copied validators and wrappers in a unique scratch directory OUTSIDE the checkout on a Windows-mounted drive, with trap cleanup. Copy only scripts/moe-agent.{sh,ps1}, scripts/tests/parity-check.{sh,ps1}, scripts/tests/postflight.{sh,ps1}, scripts/tests/postflight-fake-proxy.js (the last three are read-only parity fixtures, never executed). First require a pristine pass with bash parity and Windows PowerShell 5.1 parity. For each wrapper independently, reset its copy from pristine, replace every occurrence of the pinned 'Copilot mode: headless' banner with 'removed-copilot-banner' (or its exact landed counterpart), assert replacement count >0, and require both validators to exit 1 with that missing literal and mutated wrapper named. Also append `# MOE_COPILOT_TEST_ONLY` to just one wrapper and require both to fail on that token, proving dynamic family comparison rather than only fixed pins. Finally remove MOE_COPILOT_EFFORT from BOTH copies and require both validators to reject, proving symmetric disappearance cannot pass. Use literal byte-preserving replacements (UTF-8 BOM retained), e.g. `assert(s.includes(needle)); writeFileSync(file,s.split(needle).join(replacement))`, never edit source wrappers. Distinguish a real assertion failure from process launch/timeout errors. Bound each child execution, never pattern-kill; on interruption stop only recorded gate-owned PIDs, allow existing harness owned-child cleanup, and retain/report logs on failure. End with `PASS copilot-guards-gate` only after every leg and mutation assertion passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/copilot-guards-gate.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/copilot-guards-gate.sh"
+      ],
+      "note": "Added scripts/tests/copilot-guards-gate.sh (201 lines): hard requirement checks (no SKIP), MOE_*/CLAUDE*/FAKE_* scrub, four parallel logged legs (bash, 5.1, pwsh 7, mutants) with recorded PIDs and per-command timeouts, aggregated statuses, evidence counts (exactly 3 'PASS postflight-vm-route', 3 parity PASS, 2 PARSE_OK, 4 LEG_OK, 16 mutant checks) and 'PASS copilot-guards-gate' only if all hold. Mutants run in a scratch dir on D: (copied wrappers + validators + 3 read-only fixtures; byte-preserving latin1 replacement; BOM asserted): pristine passes; banner and argv-rejected pins removed from ONE wrapper; MOE_COPILOT_TEST_ONLY in one wrapper (both directions); MOE_COPILOT_EFFORT removed from both. Each is run through parity-check.sh and parity-check.ps1 on 5.1, requiring rc=1 + 'FAIL parity-check' (rc 0 / 124 / 127 are distinguished) and a line naming the literal and wrapper. Dev check with the three heavy legs stubbed in a scratch copy: 16/16 mutant checks, 29 s; negative control (effort pin deleted from the scratch validators) made the gate fail. Scratch dirs removed.",
+      "startedAt": "2026-11-06T07:50:51.392Z",
+      "completedAt": "2026-11-06T07:55:25.249Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification — run exactly `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` once from the task worktree (Windows-drive WSL cwd); save fresh exit code, output tail, engine/row counts and wall time as complete_task evidence. This covers all five original DoD items, including the unchanged prerequisite launch tests and Windows PowerShell 5.1 parity. Error handling for a red run: diagnose the named failing leg, do not suppress it or replace it with a smaller green command; any fix invalidates evidence and requires the same fresh gate. The gate must finish within 20 minutes. If the prerequisite lacks required runtime behavior, return that concrete issue through Moe rather than quietly adding wrapper files to this plan. Existing task-59e1d150 owns signed-in integration and the docs sweep.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` from the task worktree: CHAIN_EXIT=0, 602 s wall at load ~3. COUNTS: vm-route PASS=3, parity PASS=3 (bash, 5.1, pwsh 7), ParseFile OK=2, legs OK=4, mutant checks=16/16, vm-route [copilot] rows=3; final line `PASS copilot-guards-gate`. Scratch dir removed on success.",
+      "startedAt": "2026-11-06T07:55:26.309Z",
+      "completedAt": "2026-11-06T08:05:40.561Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review, scoped to this slice plus its prerequisite interface: load adversarial-self-review. Read the diff as a reviewer: do both parity engines fail for the same removed literal, does an empty/symmetric missing family fail, is a comment-only fake marker sufficient only for the intended dynamic-family test, can missing engines/SKIP/nonzero child status be mistaken for success, does PS 5.1 preserve the BOM and report ParseFile errors, and are temporary paths with spaces safely quoted? Confirm mutation tests only touch owned scratch copies, no secrets enter gate output, no concurrent seat is signalled, and no acceptance criterion was dropped during the split. Address defects and rerun the one gate if anything changes; then complete_task with its fresh evidence, no manual Git writes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/copilot-guards-gate.sh",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Adversarial review of the diff (3 files, +26/-4 in the validators, 208-line new gate). One real defect fixed: the first interrupt path used pgrep -P plus kill, which resembles the forbidden kill $(pgrep ...) pattern and, because GNU timeout regroups its child, would not have reached the inner commands anyway; replaced by a per-leg trap that forwards TERM to the one recorded child (bounded()/leg_trap), gate signals only recorded leg PIDs. Tested: TERM to a stubbed gate left no sleep children and kept the scratch dir. Also fixed in dev: a ':' in a scratch dir name (NTFS), mutant counter lost in the leg subshell (now counted from the log), grep -q under pipefail. Checked OK: missing engines hard-fail (no SKIP); exactly 3 vm-route PASS + 3 parity PASS + 2 PARSE_OK + 4 LEG_OK + 16 mutant checks required; ParseFile errors are printed and made nonzero; both validators (bash + 5.1) must reject each mutant with rc=1 and a line naming the literal and wrapper (rc 0/124/127 distinguished); empty and symmetric disappearance fail (effort removed from both wrappers; existing empty-family guards cover the new prefix); byte-preserving latin1 mutation, BOM asserted on staged ps1; mutations touch only scratch copies, wrappers in the checkout never edited; env scrubbed of MOE_/CLAUDE/FAKE_, no secrets printed; quoting safe for spaces; no peer signalled. Negative control (effort pin deleted from scratch validators) made the gate fail. Final fresh gate after the last edit: exit 0, 579 s. No acceptance criterion dropped.",
+      "startedAt": "2026-11-06T08:05:42.419Z",
+      "completedAt": "2026-11-06T08:17:38.192Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-ab323f8520b2414cb41b3b13c9355489",
+    "task-49d4a565b0084eef98b076b11abe839d"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.3,
+  "comments": [
+    {
+      "id": "comment-7b3a4d707aa44615a92f6f9535eaab92",
+      "author": "architect-a3d9076e",
+      "content": "SPIDR/interface split to obey the <=5-file plan cap: new prerequisite task-49d4a565b0084eef98b076b11abe839d owns both wrappers + both vm-route regression harnesses (runtime guards and model/effort). This parent retains ALL original acceptance criteria, adds Copilot pins to parity-check.{sh,ps1}, adds a scoped executable mutation/combined gate, and verifies the prerequisite behavior unchanged. No DoD removal and no dependency cycle: ab323f85 -> 49d4a565 -> e266a150 -> existing closing integration task-59e1d150. No new epic-wide hardening row; the existing final Copilot row still owns docs and signed-in integration.",
+      "timestamp": "2026-11-05T22:04:16.742Z"
+    },
+    {
+      "id": "comment-6659a107b9dc4f9484f8c589f2d05966",
+      "author": "architect-32d0a5be",
+      "content": "Note on the banner contract, from the planner of task-ab323f85. ab323f85's approved plan prints `Copilot mode: interactive` and `Copilot mode: headless (stdin prompt)` in both wrappers. It also uses the `\"copilot\"` literal in both (`CLI_TYPE=\"copilot\"` and `$cliType = \"copilot\"`). parity-check's require_both is a grep -F substring match, so the pins `Copilot mode: headless`, `Copilot mode: interactive` and `\"copilot\"` will match.\n\nThe plan prints NO `Copilot MCP config written to:` line, because copilot's MCP config is written per launch into the secure temp dir, not at pre-flight like codex, gemini and grok's. task-49d4a565's plan adds no such line either. So drop that one pin unless a landed diff actually has the line. The DoD item on copilot vocabulary does not need it. Take the exact strings from the landed diffs of ab323f85 and 49d4a565.",
+      "timestamp": "2026-11-05T22:36:38.852Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:24.584Z",
+  "updatedAt": "2026-11-06T08:31:16.818Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:00:15.534Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-06T08:30:50.469Z",
+    "wallClockMs": 37834935
+  },
+  "contextFetchedBy": [
+    "architect-a3d9076e",
+    "architect-32d0a5be",
+    "architect-a8e13516",
+    "worker-db9d247b",
+    "qa-076e761a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:05:52.949Z",
+  "executionContract": {
+    "intendedBehavior": "After prerequisite runtime guards land, Copilot seat failure/model/effort behavior is enforced by twin vocabulary validators and one bounded cross-engine guard gate; all original acceptance criteria stay required.",
+    "acceptanceCriteria": [
+      "A copilot that rejects the real argv plus --help stops the seat with exactly one MOE_CLI_ARGV_REJECTED line naming copilot and its version, one #general message and exit 1, with no headless run, and MOE_DISABLE_ARGV_PROBE=1 skips the probe; proven by postflight-vm-route.{sh,ps1} rows on bash, Windows PowerShell 5.1 and pwsh 7",
+      "A headless copilot run that exits non-zero with `No authentication information found` in its --log-dir prints exactly one MOE_COPILOT_SIGNED_OUT line and exits 1 after one CLI run, even with polling on; same rows",
+      "--reasoning-effort is MOE_COPILOT_EFFORT when set, else the claim's launch effort, and absent when neither is set; --model appears only for an explicit model and never as claude-opus-5-5; same rows",
+      "parity-check.sh and parity-check.ps1 require the copilot vocabulary in both wrappers, and each fails on a wrapper copy with one pinned copilot string removed",
+      "The gate passes: postflight-vm-route on bash, 5.1 and pwsh 7, bash -n and ParseFile on both wrappers, bash scripts/tests/parity-check.sh, parity-check.ps1 on 5.1 and npm run lint"
+    ],
+    "invariants": [
+      "No runtime/IDE/docs changes in this parent; task-49d4a565 owns both wrappers and their behavioral rows.",
+      "Copilot MCP config remains private and per-launch, not a .copilot/ attribution prefix.",
+      "No live runtime rebuilds or full launcher postflight; gate wall time <=20 minutes; never signal peer PIDs."
+    ],
+    "approvedScope": [
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/tests/copilot-guards-gate.sh"
+    ],
+    "reuse": [
+      "Existing extract_codes/require_both and PowerShell $dynamicPatterns/$required.",
+      "Existing postflight-vm-route harnesses on bash, PowerShell 5.1 and pwsh 7; reuse prerequisite assertions unchanged."
+    ],
+    "sourceAssumptions": [
+      "Prerequisites ab323f85 and 49d4a565 must be DONE/ARCHIVED before execution; task dependencies enforce ordering.",
+      "At planning time the Copilot launch producer is still PLANNING; banner strings are coordinated, and the first step must read its landed evidence rather than assume unlanded symbols."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash scripts/tests/copilot-guards-gate.sh"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Reject six-file monolithic plan; use a four-file runtime producer and this three-file validator/combined-gate consumer. Preserve original DoD in parent and the existing Copilot closing integration row.",
+    "codebaseInsights": "Existing validators expose dynamic reason-code families and fixed vocabulary separately. PowerShell's empty-family guard and bash's nonempty extracted-set guard already prevent vacuous passes. Validators also read postflight fake-proxy fixture files; scratch mutations must copy these without executing whole postflight. Native 5.1 vm-route must use the established pwsh -> cmd bridge.",
+    "risks": "Cross-engine quoting, BOM loss, skipped harness false greens and dependency banner drift. Worker edits only own tracked paths via authorized editing tools; mutation scratch writes stay outside checkout. New gate is focused task evidence, not a new per-push whole-repo CI gate.",
+    "keyFiles": [
+      "scripts/tests/parity-check.sh",
+      "scripts/tests/parity-check.ps1",
+      "scripts/tests/copilot-guards-gate.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:05:52.978Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T07:50:06.660Z",
+  "reviewStartedAt": "2026-11-06T08:17:52.767Z",
+  "verification": {
+    "command": "timeout 1200s bash scripts/tests/copilot-guards-gate.sh",
+    "exitCode": 0,
+    "outputTail": "=== powershell: exit 0 ... PASS postflight-vm-route.ps1 / PARSE_OK / PASS parity-check.ps1 / LEG_OK powershell\n=== pwsh: exit 0 ... PASS postflight-vm-route.ps1 / PARSE_OK / PASS parity-check.ps1 / LEG_OK pwsh\n=== bash: exit 0 ... OK: docs/roles/architect.md has 39 lines (max 40) ... LEG_OK bash\n=== mutants: exit 0 ... [mutants] ok MOE_COPILOT_EFFORT removed from both wrappers (sh) / (ps) / LEG_OK mutants\nCOUNTS: vm-route PASS=3 (need 3), parity PASS=3 (need 3), ParseFile OK=2 (need 2), legs OK=4 (need 4), mutant checks=16 (need 16), vm-route [copilot] rows=3, wall=579s\nPASS copilot-guards-gate\nCHAIN_EXIT=0",
+    "reportedAt": "2026-11-06T08:17:52.767Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/copilot-guards-gate.sh"
+  ],
+  "completionSummary": "Pinned the Copilot seat vocabulary in both parity validators and added the bounded combined gate. parity-check.sh/.ps1: MOE_COPILOT_ is a compared dynamic family; '\"copilot\"' cli type; new 'copilot vocabulary' group (MOE_COPILOT_MODEL/EFFORT/NOT_FOUND/CONFIG_FAILED/SIGNED_OUT, 'MOE_CLI_ARGV_REJECTED: the installed copilot (', 'GitHub Copilot CLI not found:', 'No authentication information found', COPILOT_GITHUB_TOKEN, --reasoning-effort, 'Copilot mode: headless', 'Copilot mode: interactive'; no MCP-config banner pin because neither wrapper prints one). New scripts/tests/copilot-guards-gate.sh: four parallel logged legs (bash; Windows PowerShell 5.1; pwsh 7; mutants), hard-fails on a missing engine, requires exactly 3 'PASS postflight-vm-route', 3 parity PASS, 2 ParseFile OK, 4 LEG_OK and 16 mutant checks, then prints 'PASS copilot-guards-gate'. Mutants run in a scratch dir on D: against copies of the wrappers: pristine passes; a pinned banner or argv-rejected string removed from ONE wrapper, an unpaired MOE_COPILOT_TEST_ONLY in one wrapper (both directions) and MOE_COPILOT_EFFORT removed from BOTH wrappers are each rejected by parity-check.sh and parity-check.ps1 on 5.1 (rc 1 plus a line naming literal and wrapper). Interrupt path forwards TERM only to recorded leg children (tested). Negative control (effort pin deleted from scratch validators) fails the gate. Fresh final gate: exit 0, 579 s. qualityGate (parity-check.sh + npm run lint) also run, rc 0. Three files, no wrapper/runtime/docs/IDE edits; the runtime guards and vm-route rows come from task-49d4a565 and ab323f85 unchanged.",
+  "commits": [
+    {
+      "sha": "4ded4ff17ef45a57a1edea3a403bf0cafa034d0f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-db9d247b@2026-11-06T07:49:09Z",
+      "paths": [
+        "scripts/tests/copilot-guards-gate.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh"
+      ],
+      "recordedBy": "worker-db9d247b",
+      "recordedAt": "2026-11-06T08:18:57.892Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-076e761a@2026-11-06T08:19:39Z",
+    "at": "2026-11-06T08:31:16.818Z"
+  },
+  "completedAt": "2026-11-06T08:30:50.469Z",
+  "reviewCompletedAt": "2026-11-06T08:30:50.469Z",
+  "reviewSummary": "Reviewed completion 4ded4ff1 (on moe/work-2026-10-24, in control HEAD): 3 files under scripts/tests/, +234/-4 (net 230), inside approvedScope; no wrapper/runtime/docs/IDE edits. Re-ran task.verification verbatim at that SHA: `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` -> exit 0, 574 s (budget 20 min). All four legs exit 0 (bash: bash -n, vm-route, parity-check.sh, npm run lint; 5.1 and pwsh 7: vm-route.ps1, ParseFile, parity-check.ps1; mutants). COUNTS: vm-route PASS=3, parity PASS=3, ParseFile OK=2, LEG_OK=4, mutants 16/16, [copilot] rows=3; ended PASS copilot-guards-gate. Scratch removed, scripts/ tree clean.\nDoD 1-3: proven by the prerequisite's [copilot] rows in postflight-vm-route.{sh,ps1} (CP-reject, CP-log-*, CP-auth, CP-two, CP-route/env/settings/cli/tui), green on all three engines in the gate; moe-agent.sh runtime read and matches.\nDoD 4: parity-check.sh/.ps1 add MOE_COPILOT_ as a compared family, the \"copilot\" cli type and a 'copilot vocabulary' group (env names, coded lines, argv-rejected line, --reasoning-effort, both mode banners); no MCP-config pin since neither wrapper prints one. Mutants on scratch copies (BOM asserted): a pin removed from ONE wrapper, an unpaired MOE_COPILOT_TEST_ONLY (both directions), MOE_COPILOT_EFFORT removed from BOTH wrappers are each rejected rc=1 by parity-check.sh and parity-check.ps1 (5.1), naming literal and wrapper.\nDoD 5: gate passes. Gate script hard-fails on missing engines, scrubs env, checks exact counts, signals only recorded leg PIDs.\nNon-blocking: the gate requires 3 vm-route PASS lines but no minimum [copilot] row count; the 208-line script is large, though each part maps to a DoD item.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,249 @@
+{
+  "id": "task-1dfec7a4f43149769b332cdb151189e8",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: the PowerShell VM taskless skip prints a second misleading idle reason (ps1 twin of task-1ccae85c)",
+  "description": "Repro: verified-local seat, no task, a routed mention: moe-agent.ps1 prints MOE_TASKLESS_NO_LAUNCH reason=vm-route (the $script:MoeVmRoute block) and then reason=idle ('nothing to answer') from the if ($moeSkipLaunch) chain. Fix: port sh 3586957f (task-1ccae85c): the vm-route block sets a flag and prints nothing; the skip chain prints the unchanged vm-route line as its first branch, then claim-failed, teamless or idle, so every skipped iteration prints exactly one reason; legacy unchanged. Port its VR-taskless/VR-reload assertions to postflight-vm-route.ps1. Hand-forward: comment from architect-24611a0a on task-62ec51f1 (CQ-M07n).",
+  "definitionOfDone": [
+    "Every skipped VM-route iteration of moe-agent.ps1 prints exactly one MOE_TASKLESS_NO_LAUNCH reason, vm-route first, with the sh twin's text (3586957f)",
+    "postflight-vm-route.ps1's taskless and reload rows assert no reason other than vm-route on a VM-route taskless iteration; legacy rows unchanged",
+    "postflight-vm-route.ps1 passes on powershell.exe and pwsh.exe; parity-check.sh passes; moe-agent.ps1 keeps its UTF-8 BOM"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first, in scripts/tests/postflight-vm-route.ps1: the ps1 twins of 3586957f's postflight-vm-route.sh rows (read `git show 3586957f -- scripts/tests/postflight-vm-route.sh`, and today's sh rows at postflight-vm-route.sh:497-552). Line numbers below are from base 500e3f29; re-anchor if task-62ec51f1's QA rework moved them.\n\n(a) Helper. Directly after `function Stop-Vmr` (:86), add `function Assert-VmrOneReason($R, [string]$Reason)`, the twin of sh vmr_one_reason, with this comment: a skipped taskless iteration prints exactly ONE MOE_TASKLESS_NO_LAUNCH line, and it names REASON.\n- `$lines = @($R.Text -split '\\r?\\n' | Where-Object { $_.Contains('MOE_TASKLESS_NO_LAUNCH reason=') })`.\n- Stop-Vmr $R \"expected exactly one MOE_TASKLESS_NO_LAUNCH reason=$Reason line, saw $($lines.Count)\" unless Count is 1 and `$lines[0].Contains(\"MOE_TASKLESS_NO_LAUNCH reason=$Reason role=\")`.\n- Use Contains, not StartsWith or an anchored regex. The idle, teamless and claim-failed lines are `Write-Host -ForegroundColor`, and postflight.ps1 matches them with Contains too.\n- bbd7ad2d (now dependsOn this task) will reuse this exact name and signature for its VR-outage row. Keep both.\n\n(b) Invoke-VmjSections, VR-taskless block (:439-443). FAKE_CLAIM_MODE=idle and FAKE_MENTION=1 are already set there.\n- Keep `Assert-VmjRows $r taskless`. Replace the bare `.Contains('MOE_TASKLESS_NO_LAUNCH reason=vm-route')` check with an exit-0 check plus `Assert-VmrOneReason $r vm-route`.\n- Add VR-taskless-teamless: `$env:FAKE_JOIN_FULL = '1'`, mention still set. Require exit 1 and exactly one `[regex]::Matches($r.Text, 'MOE_SEAT_UNREGISTERED')`; the startup join and the forced re-join refuse with the same text, so only the post-loop exit line prints it. Then `Assert-VmrOneReason $r teamless` and `Assert-VmjRows $r taskless`. Carry the sh comment: a seat whose join failed reads no chat, so it has no routed mention; the legacy teamless rule skipped first and its reason stands, once.\n- Remove FAKE_JOIN_FULL and FAKE_MENTION, then add VR-taskless-idle: exit 0, `Assert-VmrOneReason $r idle`, `Assert-VmjRows $r taskless`.\n- Extend the '[vm seat] PASS ...' line with ', taskless-teamless, taskless-idle'.\n- Remove each env var exactly once, or with -ErrorAction SilentlyContinue. Under $ErrorActionPreference='Stop', a second Remove-Item of an absent Env: item throws, which is a harness fault (exit 2). FAKE_CLAIM_MODE must be gone before Invoke-VmeRows, whose rows claim tasks.\n\n(c) Invoke-VmeRows, VR-reload (:345-353).\n- Set `$env:FAKE_MENTION = '1'` next to `$env:FAKE_CLAIM_MODE = 'idle'`, as the sh VR-reload does. The VM route, not the legacy nothing-to-answer rule, then stops each looping taskless iteration.\n- Remove both in the existing finally.\n- Keep the seat-start/seat-stop/wrapper_restart assertions byte for byte.\n- Then add `$reasons = @([regex]::Matches($r.Text, 'MOE_TASKLESS_NO_LAUNCH reason=(\\S+)') | ForEach-Object { $_.Groups[1].Value })`. If it is empty, or any value is -cne 'vm-route', call Stop-Vmr $r ('a taskless iteration printed a reason other than vm-route: ' + ($reasons -join ',')).\n- Extend its '[seat reload] ok' line with '; taskless mentions print only vm-route'.\n\n(d) [vm route] today path, in the main try block. After the `foreach ($t in $tRows)` loop (:812-821) and before its Write-Host (:822), add the sh's legacy rows inside one try/finally that removes FAKE_CLAIM_MODE and FAKE_MENTION with -ErrorAction SilentlyContinue. The C/S/N refusal rows and A1/G1 that follow must not inherit FAKE_CLAIM_MODE=idle: A1/G1 assert the CLI ran.\n- T-taskless-idle: `$env:FAKE_CLAIM_MODE = 'idle'`, `$r = Invoke-VmrRow T-taskless-idle worker claude $legacy '-'`. Require exit 0 and -not $r.Ran, then `Assert-VmrOneReason $r idle`.\n- T-taskless-mention: add `$env:FAKE_MENTION = '1'`, then `Assert-VmrLaunched $r`, and Stop-Vmr if $r.Text contains 'MOE_TASKLESS_NO_LAUNCH'.\n- Append ', taskless idle and mention' to the today-path line.\n- Leave the existing T rows and their baseline comparison as they are: legacy rows unchanged.\n\nFixture facts:\n- postflight-fake-proxy.js FAKE_MENTION=1 returns the mention on EVERY chat_read; there is no cursor, and $seenMentionIds is per pre-flight. So every loop iteration has a routed mention.\n- FAKE_JOIN_FULL=1 refuses every join_team.\n\n(e) RED proof, before step 2, with moe-agent.ps1 still unfixed in W:\n- Run this harness once on pwsh.exe from W, detached and polled, with step 3's env scrub, MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV.\n- It must exit 1 at 'VM ROUTE FAILED (VR-taskless): expected exactly one MOE_TASKLESS_NO_LAUNCH reason=vm-route line, saw 2'. Every earlier section passes on the base. Quote that line in the completion summary.\n- Error handling: an exit 2 (harness fault) or a failure at any other row is not RED. Fix the row and rerun.\n\nmem:gotcha-qa-ps1-postflight-from-wsl, mem:gotcha-launcher-ps1-rows-from-wsl",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Tests first in postflight-vm-route.ps1: Assert-VmrOneReason helper after Stop-Vmr; VR-taskless now exit-0 + one vm-route; new VR-taskless-teamless (FAKE_JOIN_FULL, exit 1, one MOE_SEAT_UNREGISTERED, reason teamless) and VR-taskless-idle rows; VR-reload sets FAKE_MENTION and asserts every reason is vm-route; legacy T-taskless-idle / T-taskless-mention rows after the T loop in try/finally. ParseFile 0 errors on powershell.exe and pwsh.exe. RED proof on pwsh.exe against the unfixed wrapper: 'VM ROUTE FAILED (VR-taskless): expected exactly one MOE_TASKLESS_NO_LAUNCH reason=vm-route line, saw 2' (EXIT=1), log /mnt/d/moe-scratch/t1dfe/red-pwsh.log.",
+      "startedAt": "2026-11-04T11:44:21.052Z",
+      "completedAt": "2026-11-04T11:46:57.636Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/moe-agent.ps1 by porting 3586957f's moe-agent.sh hunk (`git show 3586957f -- scripts/moe-agent.sh`). Edit in place in W with the Edit tool. Make exactly three edits, all inside the taskless launch decision. No other line moves or reflows: bbd7ad2d, cd3887fe and 6b3ab9d8 edit this file elsewhere.\n\n(1) :10660 `    $moeSkipLaunch = $false` becomes `    $moeSkipLaunch = $false; $moeVmTasklessSkip = $false`.\n- Append on that line. Never add a second line that starts `    $moeSkipLaunch = $false`: seat-registration.test.mjs anchors its ps1 decide slice on that PREFIX and asserts it occurs once (95d91dc2).\n- Because the flag resets on that line every iteration, a looping seat never carries a stale $true.\n\n(2) In `if ($script:MoeVmRoute -and -not $moeSkipLaunch -and (-not $preflightOk -or -not $preflightTaskId)) {` (:10669-10672), keep `$moeSkipLaunch = $true; $moeLaunchProbe = $false`, append `; $moeVmTasklessSkip = $true`, and delete the Write-Host. The block then prints nothing.\n\n(3) Inside `    if ($moeSkipLaunch) {` (:10692), add the sh comment verbatim: \"One reason per skipped iteration. vm-route comes first because only the route stopped a launch the legacy rules allow (a routed mention, a claim-failed or teamless seat with mentions, an unparseable claim); when a legacy rule skipped first, its reason stands.\"\n- Make the chain's first branch `if ($moeVmTasklessSkip) { Write-Host \"MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$Role worker=$WorkerId - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job.\" }`. That is today's line byte for byte, which is also the sh twin's text, with no -ForegroundColor.\n- The existing `if ($preflightClaimFailed) {` becomes `} elseif ($preflightClaimFailed) {`. The claim-failed, teamless and idle branches stay byte for byte.\n\nAnchor lines to keep verbatim (the tests slice the file on them; mem:gotcha-wrapper-slice-tests-execute-text):\n- `    if (-not $moeSkipLaunch -and $cliType -in` (decide end).\n- `    if ($moeSkipLaunch) {` (seat-registration outcome start, and account-wait-attempt.test.mjs's slice end).\n- `        if ($cliType -eq 'codex' -and $script:CodexSessionContextFile)` (outcome end).\n- The taskless-handoff.test.mjs ps1 slices end at `$script:CliLaunchedAt = Get-Date` (:10646), above these edits.\n\nLegacy stays unchanged: $moeVmTasklessSkip turns true only inside the $script:MoeVmRoute block, so a non-VM seat prints what it prints today. The post-loop teamless exit (`if (-not $loopEnabled -and $moeSkipLaunch -and (Test-MoeSeatTeamless))`, :11944) and the $moeSkipLaunch uses at :11539 and :11802 are untouched. No new error handling path: the change only moves one Write-Host behind a [bool].\n\nThen check:\n- The BOM: `head -c3 scripts/moe-agent.ps1 | od -An -tx1` must read ef bb bf.\n- ParseFile reports 0 errors on powershell.exe and on pwsh.exe.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Ported sh 3586957f: appended `; $moeVmTasklessSkip = $false` to the `    $moeSkipLaunch = $false` line (still the only line with that prefix), set the flag in the $script:MoeVmRoute block and removed that block's Write-Host, and made vm-route the first branch of the `if ($moeSkipLaunch)` reason chain (existing claim-failed/teamless/idle branches byte for byte, `elseif` on claim-failed), with the sh comment verbatim. Diff in moe-agent.ps1: +8/-5, only the decide/chain hunk. BOM ef bb bf kept; ParseFile 0 errors on powershell.exe and pwsh.exe.",
+      "startedAt": "2026-11-04T11:46:59.704Z",
+      "completedAt": "2026-11-04T11:47:22.916Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run the one command in executionContract.checkRefs[0] fresh on the final bytes, from W:\n\ncd /mnt/d/projexts/moes/.worktrees/task-1dfec7a4f43149769b332cdb151189e8 && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'set -eu; r=0 L=/mnt/d/moe-scratch/t1dfe P=/tmp/moe-1dfe-pwsh; mkdir -p $L $P; bash scripts/tests/parity-check.sh; [ -x $P/pwsh ] || tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P; PATH=$P:$PATH node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs > $L/seat.tap || r=1; tail -8 $L/seat.tap; [ $r = 0 ]; grep -qx \"# fail 0\" $L/seat.tap; grep -qx \"# skipped 19\" $L/seat.tap; H=\"$(wslpath -w \"$PWD\")\\scripts\\tests\\postflight-vm-route.ps1\"; p=; for e in powershell pwsh; do $e.exe -NoProfile -ExecutionPolicy Bypass -File \"$H\" > $L/$e.log 2>&1 & p=\"$p $!\"; done; for j in $p; do wait $j || r=1; done; tail -n3 $L/p*.log; [ $r = 0 ]; for e in powershell pwsh; do grep -q \"^PASS postflight-vm-route\" $L/$e.log; done'\n\nWhat it checks:\n- parity-check.sh, which includes the BOM check (parity-check.sh:324). The harness also throws 'wrapper lost its UTF-8 BOM'.\n- seat-registration.test.mjs under WSL node with Linux pwsh 7 on PATH. It must report fail 0 and skipped 19, which are the PS 5.1 rows; any other skip count means pwsh was not found.\n- postflight-vm-route.ps1 on powershell.exe and pwsh.exe in parallel: exit 0 and the PASS line from both.\n- Architect dry runs on base 500e3f29: the fast half PASSED (seat-registration 59 tests / 40 pass / 0 fail / 19 skipped, about 42 s). The parallel-harness half passed with a stand-in script and failed (rc 1) when the stand-in exited 1.\n\nHow to run it:\n- It outlasts the 600 s tool cap (about 15-30 min under load). Save the command verbatim to /mnt/d/moe-scratch/t1dfe/gate.sh (a scratch file outside the checkout; mkdir the folder first), start `nohup bash gate.sh > gate.out 2>&1; echo EXIT=$? >> gate.out` in the background, and record the PID.\n- Poll with `until ! kill -0 $PID || [ $SECONDS -ge 540 ]` loops.\n- complete_task's verification: the command above, the EXIT= code, and gate.out's tail (seat.tap summary plus both logs' last lines with PASS postflight-vm-route.ps1).\n- The command contains no rm on purpose: Claude Code's safety check refuses an rm -rf on a variable path.\n\nError handling on failure:\n- Read /mnt/d/moe-scratch/t1dfe/{powershell,pwsh}.log. Grepping for FAIL also matches 'FAILED' scenario text, so read the real lines.\n- A failure outside the rows this task changed must be proven pre-existing on the base before it is blamed on the change.\n- If the target moved after W was cut and touched scripts/moe-agent.ps1 or scripts/tests/postflight-vm-route.ps1, also run both harness legs on the merged tree: `git merge-tree --write-tree HEAD <target>`, then `git archive <tree> | tar -x -C /mnt/d/moe-scratch/t1dfe-merged` (mem:gotcha-qa-ps1-postflight-from-wsl).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "checkRefs[0] run fresh on the final bytes via /mnt/d/moe-scratch/t1dfe/gate.sh: EXIT=0. parity-check.sh PASS (BOM check included); seat-registration.test.mjs with Linux pwsh 7 on PATH: tests 59, pass 40, fail 0, skipped 19; postflight-vm-route.ps1 PASS on powershell.exe (5.1) and pwsh.exe (7), in parallel. A first attempt had its pwsh.exe leg die at launch with a single WSL interop line (`UtilAcceptVsock:273: accept4 failed 110`, no harness output, 5.1 leg passed); that is an infrastructure launch failure, so the whole command was rerun and passed. Logs: gate.out, powershell.log, pwsh.log (first attempt kept as *-run1.*).",
+      "startedAt": "2026-11-04T11:47:28.238Z",
+      "completedAt": "2026-11-04T11:58:42.973Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff only (W against its task-branch base). This is the one review step.\n\n1. Walk every taskless shape through the edited decide block and chain, and confirm each prints exactly ONE reason:\n- VM seat, routed mention: vm-route (VR-taskless, VR-reload).\n- VM seat, launch-outage probe: vm-route; $moeLaunchProbe stays false, so no probe CLI. bbd7ad2d fixes the outage carry-over itself.\n- VM seat, nothing to answer: idle (VR-taskless-idle).\n- VM teamless: teamless (VR-taskless-teamless).\n- VM claim-failed with mentions: vm-route. Without mentions: claim-failed.\n- VM seat, unparseable claim: vm-route.\n- Legacy seat, every shape: byte-identical to today (T-taskless-idle, T-taskless-mention, seat-registration).\n- A VM seat holding a task: no skip, so Invoke-MoeVmJob runs.\n\n2. Confirm the flag resets every iteration (the loop and the hot reload are covered by VR-reload).\n\n3. grep scripts/tests/*.test.mjs for the exact text of every line you rewrote (anchor rot), and confirm seat-registration still passes.\n\n4. Confirm the diff is two files, and in moe-agent.ps1 only the decide/chain hunk. The BOM must be kept.\n\n5. Harness env hygiene: every FAKE_* var you set is removed on every path. FAKE_CLAIM_MODE must not reach Invoke-VmeRows or A1/G1. No double Remove-Item.\n\n6. Nothing weakened: the VR-taskless Assert-VmjRows, the VR-reload seat/deregister order checks and the T-row baseline comparison are kept byte for byte.\n\n7. Error handling: every new assertion fails through Stop-Vmr (exit 1), and none can pass with an empty match list.\n\nName any shape left uncovered in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Self-review of the two-file diff. (1) Shapes walked through the decide block and chain: VM routed mention -> vm-route (VR-taskless, VR-reload, both pinned); VM nothing to answer -> idle (VR-taskless-idle); VM teamless -> teamless, one MOE_SEAT_UNREGISTERED (VR-taskless-teamless); VM claim-failed WITHOUT mentions and the legacy rule skipping first -> claim-failed by construction (the VM block is guarded by -not $moeSkipLaunch so the flag stays false); VM with a launch outage -> vm-route, $moeLaunchProbe forced false (the carry-over itself is bbd7ad2d's); legacy seats unchanged (T-taskless-idle: one idle, no CLI; T-taskless-mention: CLI launches, no no-launch line); a VM seat holding a task never skips so Invoke-MoeVmJob runs. (2) The flag is re-set on the `$moeSkipLaunch = $false; $moeVmTasklessSkip = $false` line every iteration, so a looping seat or hot reload cannot carry a stale $true (VR-reload covers it). (3) Anchor rot: grepped scripts/tests for every rewritten line; seat-registration (59/40 pass/0 fail/19 skipped), account-wait-attempt + taskless-handoff (49/49) all pass with Linux pwsh 7. (4) Diff is exactly two files; moe-agent.ps1 only the decide/chain hunk (+8/-5); BOM ef bb bf kept. (5) Env hygiene: FAKE_JOIN_FULL/FAKE_MENTION/FAKE_CLAIM_MODE each removed exactly once on the success path, with the outer finally restoring env on a throw; FAKE_CLAIM_MODE is gone before Invoke-VmeRows; the T-row knobs come off in a finally with SilentlyContinue so A1/G1 and the refusal rows never inherit them. (6) Existing VR-taskless Assert-VmjRows, VR-reload order/deregister checks and the T baseline comparison are untouched. (7) Every new assertion fails through Stop-Vmr; Assert-VmrOneReason fails on 0 matches and VR-reload fails on an empty reason list. Uncovered by a row: a VM seat whose claim RPC fails WITH a routed mention (-> vm-route) and an unparseable claim (-> vm-route), and the launch-outage probe shape; all follow from the same single branch and the outage one belongs to task-bbd7ad2d. No bug found outside scope.",
+      "startedAt": "2026-11-04T11:58:52.557Z",
+      "completedAt": "2026-11-04T12:00:51.900Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing \"move from backlog\" (2026-11-02 21:00Z). This is an early plan: the only dependency, task-62ec51f1 (CQ-M07n), has landed on moe/work-2026-10-24 as ac3e5afb and is in QA, so plan against those landed bytes. dependsOn stays, so WORKING claims wait for 62ec51f1 to reach DONE. If QA rejects 62ec51f1, re-read its rework before claiming. Placement: bbd7ad2d (launch outage), cd3887fe (MOE_USAGE_RECEIPT_FILE) and 6b3ab9d8 (the Start-Process -WorkingDirectory) also edit scripts/moe-agent.ps1. Keep this row to the VM taskless-skip hunk. Also read the existing placement comment from hunt #20 about seat-registration.test.mjs's :97 boundary. The human can drag it back to veto.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "LOW",
+  "order": 240.6,
+  "comments": [
+    {
+      "id": "comment-743224703b7b4e8eb5f8a66b0e5aa20d",
+      "author": "architect-cd0ac706",
+      "content": "Placement note from hunt #20 (task-9f3eac6d). Your bash twin 3586957f (task-1ccae85c) changed moe-agent.sh's `    MOE_SKIP_LAUNCH=false` line to `MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false`. That broke scripts/tests/seat-registration.test.mjs at import (\"missing boundaries\"), because the test's sh `decide` segment starts at that exact line, so none of its 58 cases run (task-649f34dd fixes the test).\n\nThe test's ps1 `decide` segment starts at `'    $moeSkipLaunch = $false\\n'` (seat-registration.test.mjs:93). If this row adds a statement to that ps1 line, the same import failure follows. So once task-649f34dd lands, include `node --test scripts/tests/seat-registration.test.mjs` in this row's verification. Until then, keep that line's text as it is or update the ps1 boundary in your own diff.",
+      "timestamp": "2026-11-04T09:14:11.397Z"
+    },
+    {
+      "id": "comment-51b1a41381b04ea2be9300c865d0f111",
+      "author": "architect-cd0ac706",
+      "content": "Correction to my note above: the ps1 `decide` boundary `'    $moeSkipLaunch = $false\\n'` is at seat-registration.test.mjs:97, not :93.",
+      "timestamp": "2026-11-04T09:18:52.894Z"
+    },
+    {
+      "id": "comment-77dec2e0208847e0bdb1f0e8f9d03b69",
+      "author": "architect-67c762f6",
+      "content": "Planning note from task-649f34dd (planned 2026-11-04, now WORKING). Once it lands, scripts/tests/seat-registration.test.mjs anchors the ps1 `decide` slice on the PREFIX '    $moeSkipLaunch = $false'. The old whole line with '\\n' is gone.\n- Appending a statement to that line is safe. Example: `$moeSkipLaunch = $false; $moeVmTasklessSkip = $false`, mirroring the sh 3586957f.\n- Adding a SECOND line that starts '    $moeSkipLaunch = $false' above the decide block trips that file's count === 1 assertion, by design.\n- Your plan should re-run that file with pwsh 7 on PATH. A Linux pwsh tarball is at /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz; without it the PS7 rows silently SKIP. Check that `# skipped 19` appears in its TAP output.\n- The full gate command is in task-649f34dd's executionContract.checkRefs.",
+      "timestamp": "2026-11-04T09:34:45.913Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:53:45.785Z",
+  "updatedAt": "2026-11-04T19:20:41.482Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T10:56:54.562Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T10:57:12.679Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T12:10:15.632Z",
+    "wallClockMs": 4382953
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-5772dacf",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T11:18:31.291Z",
+  "executionContract": {
+    "intendedBehavior": "On a verified-local (VM route) seat, every iteration that skips the host launch for lack of a task prints exactly one MOE_TASKLESS_NO_LAUNCH line.\n- reason=vm-route, with the sh twin's text from 3586957f, when only the VM route stopped a launch the legacy rules allow: a routed mention, a claim-failed seat with mentions, or an unparseable claim.\n- Otherwise the legacy reason (claim-failed, teamless or idle), printed once.\nLegacy (non-VM) seats print exactly what they print today. postflight-vm-route.ps1 pins all of this on PowerShell 5.1 and 7.",
+    "acceptanceCriteria": [
+      "VR-taskless (VM route, idle claim, routed mention) prints exactly one MOE_TASKLESS_NO_LAUNCH line, reason=vm-route, and fails on the unfixed wrapper with 'saw 2'.",
+      "VR-reload (looping, routed mention, one hot reload) prints only reason=vm-route lines, at least one. Its seat-start/seat-stop/wrapper_restart order assertions are unchanged.",
+      "VR-taskless-teamless exits 1 with one MOE_SEAT_UNREGISTERED and one reason=teamless. VR-taskless-idle exits 0 with one reason=idle. These are the iterations a legacy rule stopped first, whose own reason stands, as in 3586957f.",
+      "T-taskless-idle (legacy) prints one reason=idle and runs no CLI. T-taskless-mention (legacy) launches the notification CLI and prints no MOE_TASKLESS_NO_LAUNCH. The existing T rows are unchanged.",
+      "checkRefs[0] exits 0: parity-check.sh passes (including its BOM check), seat-registration.test.mjs shows fail 0 / skipped 19 with pwsh 7 on PATH, and postflight-vm-route.ps1 passes on powershell.exe and pwsh.exe."
+    ],
+    "invariants": [
+      "Legacy seats: no output or behavior change. The flag is only set inside the $script:MoeVmRoute block.",
+      "Exactly one MOE_TASKLESS_NO_LAUNCH reason per skipped iteration. The vm-route text is byte-identical to today's and to moe-agent.sh's.",
+      "A single line starts with `    $moeSkipLaunch = $false`; the seat-registration decide/outcome anchors and the account-wait-attempt slice end stay verbatim.",
+      "moe-agent.ps1 keeps its UTF-8 BOM. No line outside the decide/chain hunk changes."
+    ],
+    "compatibility": [
+      "parity-check.{sh,ps1} string sets are unchanged: no new code or banner strings.",
+      "scripts/tests/seat-registration.test.mjs, account-wait-attempt.test.mjs and taskless-handoff.test.mjs slices still find their anchors.",
+      "bbd7ad2d (dependsOn this task) reuses Assert-VmrOneReason $R <reason> for its VR-outage row."
+    ],
+    "approvedScope": [
+      "moe-agent.ps1 taskless launch decision: $moeVmTasklessSkip set on the `$moeSkipLaunch = $false` line and in the $script:MoeVmRoute block; the vm-route Write-Host moved into the first branch of the `if ($moeSkipLaunch)` reason chain.",
+      "postflight-vm-route.ps1: Assert-VmrOneReason helper; rows VR-taskless, VR-taskless-teamless, VR-taskless-idle (Invoke-VmjSections), VR-reload (Invoke-VmeRows) and T-taskless-idle, T-taskless-mention (today path)."
+    ],
+    "reuse": [
+      "Mirror 3586957f's sh structure one for one: the flag, the chain order, the comment and the rows.",
+      "The existing harness helpers Invoke-VmrRow, Assert-VmjRows (mode 'taskless'), Assert-VmrLaunched, Invoke-VmeSignalRow and Stop-Vmr, plus the fake proxy knobs. No new fixture or fake-proxy change."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1@500e3f29 :10660 `    $moeSkipLaunch = $false`; :10669-10672 the $script:MoeVmRoute block that sets skip and prints vm-route; :10692-10699 the `if ($moeSkipLaunch)` chain (claim-failed, Test-MoeSeatTeamless, idle). So a VM seat with a routed mention prints vm-route AND idle.",
+      "scripts/moe-agent.sh@500e3f29 (3586957f) is the reference: VM_TASKLESS_SKIP set on the MOE_SKIP_LAUNCH=false line and in the VM_ROUTE block, and printed as the chain's first branch.",
+      "scripts/tests/postflight-vm-route.ps1@500e3f29: Stop-Vmr :86, VR-reload :345-353 (FAKE_CLAIM_MODE=idle, no mention, so it prints reason=idle today), VR-taskless :439-443, today-path T rows :812-822, BOM throw :788-789.",
+      "postflight-fake-proxy.js: FAKE_MENTION=1 answers every chat_read with the mention; FAKE_JOIN_FULL=1 refuses every join; FAKE_CLAIM_MODE=idle answers hasNext:false.",
+      "moe-agent.ps1 Invoke-MoeTeamJoinRetry warns MOE_SEAT_UNREGISTERED only when the refusal text changes, so a one-shot teamless run prints it once (the :11945 exit line). parity-check.sh:324 enforces the BOM."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes/.worktrees/task-1dfec7a4f43149769b332cdb151189e8 && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'set -eu; r=0 L=/mnt/d/moe-scratch/t1dfe P=/tmp/moe-1dfe-pwsh; mkdir -p $L $P; bash scripts/tests/parity-check.sh; [ -x $P/pwsh ] || tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P; PATH=$P:$PATH node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs > $L/seat.tap || r=1; tail -8 $L/seat.tap; [ $r = 0 ]; grep -qx \"# fail 0\" $L/seat.tap; grep -qx \"# skipped 19\" $L/seat.tap; H=\"$(wslpath -w \"$PWD\")\\scripts\\tests\\postflight-vm-route.ps1\"; p=; for e in powershell pwsh; do $e.exe -NoProfile -ExecutionPolicy Bypass -File \"$H\" > $L/$e.log 2>&1 & p=\"$p $!\"; done; for j in $p; do wait $j || r=1; done; tail -n3 $L/p*.log; [ $r = 0 ]; for e in powershell pwsh; do grep -q \"^PASS postflight-vm-route\" $L/$e.log; done'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Chosen: port the sh flag approach (3586957f) one for one. The VM block sets $moeVmTasklessSkip and prints nothing, and the reason chain prints vm-route first. This exact twin keeps both wrappers reviewable side by side.\n2. Rejected: keep printing in the VM block and suppress the chain with an extra guard. Same output, but the structure diverges from the sh, and the vm-route line would print before the lease and prompt-cache steps, unlike the sh.\n3. Rejected: change only the VR-taskless assertion. The DoD also needs the reload and legacy rows, which the sh twin added in the same commit.\n\nDependencies:\n- task-bbd7ad2d (ps1 outage twin, MEDIUM) now dependsOn this task, with a comment to its planner. The sh VR-outage row ends with vmr_one_reason, which on the ps1 can pass only after this fix, and both rows edit the same two files.\n- 6b3ab9d8 (one-line Start-Process edit near :9363) and cd3887fe are not serialized behind this row. Their hunks are far from :10660-10700, which is the governor's placement call: keep to the taskless-skip hunk.",
+    "codebaseInsights": "Both wrappers decide in two places.\n- The decide block:\n  - The legacy rule skips a taskless claiming seat only when it has nothing to answer.\n  - The VM block skips every taskless VM iteration the legacy rule let through.\n- The `if ($moeSkipLaunch)` chain then names the reason.\n- The double reason came from the VM block printing its own line and the chain printing idle anyway.\n\nTests that execute or slice this region:\n- seat-registration.test.mjs runs the ps1 decide plus outcome slices (prefix anchor since 95d91dc2).\n- account-wait-attempt.test.mjs ends a slice at `    if ($moeSkipLaunch) {`.\n- taskless-handoff.test.mjs slices end above :10646.\n\nThe ps1 harness's VR-reload never set FAKE_MENTION, so it covered only the legacy idle skip. The sh VR-reload does set it.\n\nThe prior vm-route logs are plain ASCII, so grep works without iconv. /tmp/moe-1dfe-pwsh already holds the extracted Linux pwsh 7.6.9; the gate reuses it.",
+    "risks": "- Slow feedback. Each postflight-vm-route.ps1 run takes about 10-30 min under load. Run 5.1 and 7 in parallel (proven by 62ec51f1's worker), and use MOE_POSTFLIGHT_TIMEOUT_SEC=360 against the 60 s default per wrapper.\n- Env leaks. Seat MOE_*/CLAUDE* vars reach Windows processes via WSL interop; the command's env -u scrub handles it. Run from a Windows-drive cwd (W on /mnt/d), never /tmp.\n- Double Remove-Item. Under ErrorActionPreference Stop, removing an absent Env: var twice throws, which is a harness fault (exit 2).\n- Leaked FAKE_CLAIM_MODE=idle. If it leaks past the T-taskless rows, A1/G1 fail (no CLI), and if it leaks into Invoke-VmeRows the VE rows fail.\n- Teamless seat rows. If VR-taskless-teamless fails only on Assert-VmjRows' order checks, compare with the sh run first; do not drop the assertion.\n- Moving inputs. If 62ec51f1's QA rework or a landed sibling moves these lines, re-anchor by content, not line number. If the target moved, gate the merged tree too (mem:gotcha-qa-ps1-postflight-from-wsl).\n- Live checkout. Never run npm build/install/test in the shared checkout; this plan needs none.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1 (:10648-10705 taskless launch decision and reason chain)",
+      "scripts/tests/postflight-vm-route.ps1 (:62-115 helpers, :253-354 Invoke-VmeRows, :355-451 Invoke-VmjSections, :755-871 main)",
+      "scripts/moe-agent.sh (:11030-11090, reference)",
+      "scripts/tests/postflight-vm-route.sh (:72-85 vmr_one_reason, :140-152 T-taskless, :495-552 VR-taskless..VR-reload, reference)",
+      "scripts/tests/postflight-fake-proxy.js (FAKE_MENTION, FAKE_JOIN_FULL, FAKE_CLAIM_MODE=idle)",
+      "scripts/tests/seat-registration.test.mjs (:80-109 DECIDE and SEGMENTS anchors)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "500e3f29e6ad30438376ce6f702093b85c95cb11",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T11:18:31.335Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T12:02:41Z",
+    "at": "2026-11-04T12:10:40.667Z"
+  },
+  "workStartedAt": "2026-11-04T11:44:21.052Z",
+  "reviewStartedAt": "2026-11-04T12:01:24.318Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-1dfec7a4f43149769b332cdb151189e8 && env $(env | grep -oE '^(MOE_|CLAUDE|FAKE_)\\w*' | sed 's/^/-u /') MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC bash -c 'set -eu; r=0 L=/mnt/d/moe-scratch/t1dfe P=/tmp/moe-1dfe-pwsh; mkdir -p $L $P; bash scripts/tests/parity-check.sh; [ -x $P/pwsh ] || tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P; PATH=$P:$PATH node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs > $L/seat.tap || r=1; tail -8 $L/seat.tap; [ $r = 0 ]; grep -qx \"# fail 0\" $L/seat.tap; grep -qx \"# skipped 19\" $L/seat.tap; H=\"$(wslpath -w \"$PWD\")\\scripts\\tests\\postflight-vm-route.ps1\"; p=; for e in powershell pwsh; do $e.exe -NoProfile -ExecutionPolicy Bypass -File \"$H\" > $L/$e.log 2>&1 & p=\"$p $!\"; done; for j in $p; do wait $j || r=1; done; tail -n3 $L/p*.log; [ $r = 0 ]; for e in powershell pwsh; do grep -q \"^PASS postflight-vm-route\" $L/$e.log; done'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n# tests 59\n# suites 0\n# pass 40\n# fail 0\n# cancelled 0\n# skipped 19\n# todo 0\n# duration_ms 35406.04724\n==> /mnt/d/moe-scratch/t1dfe/powershell.log <==\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\n\n==> /mnt/d/moe-scratch/t1dfe/pwsh.log <==\n[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)\n[vm route] ok architect and governor\nPASS postflight-vm-route.ps1\nEXIT=0",
+    "reportedAt": "2026-11-04T12:01:24.318Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-vm-route.ps1",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "ps1 twin of task-1ccae85c (sh 3586957f): every skipped VM-route iteration of moe-agent.ps1 now prints exactly one MOE_TASKLESS_NO_LAUNCH reason.\n- moe-agent.ps1 (+8/-5, decide/chain hunk only, BOM kept): `$moeVmTasklessSkip` is set on the `$moeSkipLaunch = $false` line (appended, still the only line with that prefix) and in the `$script:MoeVmRoute` block, which no longer prints. The `if ($moeSkipLaunch)` chain prints the unchanged vm-route line first (sh comment carried), then claim-failed, teamless, idle byte for byte. Legacy seats print what they printed before.\n- postflight-vm-route.ps1: Assert-VmrOneReason (name and signature that bbd7ad2d's VR-outage row reuses); VR-taskless now exit 0 + one vm-route; new VR-taskless-teamless (exit 1, one MOE_SEAT_UNREGISTERED, one reason=teamless) and VR-taskless-idle (one reason=idle); VR-reload sets FAKE_MENTION and requires every reason to be vm-route (at least one); legacy T-taskless-idle (one idle, no CLI) and T-taskless-mention (CLI launches, no no-launch line) in a try/finally. Existing seat/deregister order checks and the T baseline comparison are untouched.\n- RED first: on the unfixed wrapper pwsh.exe failed `VM ROUTE FAILED (VR-taskless): expected exactly one MOE_TASKLESS_NO_LAUNCH reason=vm-route line, saw 2`.\n- Fresh checkRefs[0] on the final bytes: EXIT=0 (parity-check.sh PASS incl. BOM; seat-registration 59 tests / 40 pass / 0 fail / 19 skipped with Linux pwsh 7; postflight-vm-route.ps1 PASS on powershell.exe 5.1 and pwsh.exe 7). account-wait-attempt + taskless-handoff: 49/49 pass. A first attempt's pwsh.exe leg died at launch on a single WSL interop line (accept4 failed 110) with no harness output; the full command was rerun and passed.\n- Uncovered by a row (same one branch): VM claim-failed with a routed mention, an unparseable claim, the launch-outage probe shape (task-bbd7ad2d owns the outage carry-over).",
+  "commits": [
+    {
+      "sha": "0fa7750ee23b15a1c174a557b723a21a8988023f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T11:42:57Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T12:02:20.094Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T12:10:15.632Z",
+  "reviewCompletedAt": "2026-11-04T12:10:15.632Z",
+  "reviewSummary": "Reviewed completion 0fa7750e (on moe/work-2026-10-24 = control HEAD) via git show; 2 files, net +44.\n\nDoD1: moe-agent.ps1 decide/chain hunk is a one-for-one port of sh 3586957f. Flag appended on the `$moeSkipLaunch = $false; ...` line (still the only line with that prefix), set only in the $script:MoeVmRoute block, which no longer prints. The skip chain prints the unchanged vm-route line first, then elseif claim-failed/teamless/idle byte for byte. Legacy never sets the flag. BOM kept.\n\nDoD2: postflight-vm-route.ps1 adds Assert-VmrOneReason (fails on 0 or >1 lines; the name bbd7ad2d reuses). VR-taskless asserts exit 0 plus one vm-route. New rows VR-taskless-teamless and VR-taskless-idle. VR-reload sets FAKE_MENTION and requires every reason to be vm-route. Legacy T-taskless-idle/T-taskless-mention in try/finally. Existing order checks and T baseline untouched.\n\nRED: worker's red-pwsh.log shows VR-taskless 'saw 2' on the unfixed wrapper.\n\nRe-run on my own git-archive snapshot of 0fa7750e, env scrubbed:\n- parity-check.sh PASS (BOM incl.).\n- seat-registration.test.mjs with pwsh 7: 59 tests, 40 pass, 0 fail, 19 skipped. First pass had 1 fail (ENOENT ci.yml) because my snapshot omitted .github; rerun with it is fail 0.\n- postflight-vm-route.ps1 on powershell.exe 5.1 and pwsh.exe 7: both PASS, new rows present in both logs.\n\nUncovered by a row (same branch, disclosed): VM claim-failed with a mention, unparseable claim, outage probe (bbd7ad2d). Nothing to cut.",
+  "requiredCheckAtDone": null
+}

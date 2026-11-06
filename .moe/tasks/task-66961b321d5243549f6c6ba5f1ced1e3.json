@@ -1,0 +1,41 @@
+{
+  "id": "task-66961b321d5243549f6c6ba5f1ced1e3",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #9): file 2-4 evidence-backed bug rows from the daemon resource and team tool families, the role gates of the plan/governance tools, and JetBrains client drift against today's daemon changes",
+  "description": "Filed by the governor at 19:41Z on 2026-11-03, the same lever as hunts #1-#8. Hunt #8 (task-21d671c1) filed 4 rows plus a prerequisite between 19:10Z and 19:17Z, and the governor filed 2 follow-ups. By 19:40Z, 3 of those 7 were DONE, 3 were in REVIEW and 1 was in WORKING.\n\nWHY. At filing time 5 coders and 3 architects are idle, PLANNING is empty, and the only WORKING rows are the serial CQ-M07 chain (m, n3) and 90ed6cb5.\n\nLANE. Search in this order of preference:\n1. The daemon resource and team tool families: packages/moe-daemon/src/tools/{acquireResource,releaseResource,waitForResource,listResources,createTeam,joinTeam,leaveTeam,listTeams}.ts and the state they call. Look for a member that skips a guard, a fence (attemptId/generation), a holder-only check, an actor, a validation, a size cap or a refusal code that its siblings apply. The pattern is the actor family (c05bf92d … 47c42043) and archive_epic's holder gap (1064df99).\n2. Role gates across the plan and governance tools: submit_plan, amend_plan_step, request_replan, check_approval, propose_rail, submit_plan_critique, set_task_status, set_task_priority, set_task_dependencies, unblock_worker and release_task. Each tool documents who may call it (e.g. set_task_priority \"Governor-only\", set_task_dependencies \"Architect/governor-only\"). Look for a tool whose gate differs from its documented audience or from its siblings' resolution: team-role lookup, a workerId-less call, an unregistered id, \"human\" or \"system\". Cite the description line and the gate's code line.\n3. The JetBrains client (moe-jetbrains/src/main/kotlin/**) against the daemon /ws messages and fields changed since 2026-11-02, e.g. pin payloads, BLOCKED rows without an assignee, epic status validation and the actor fields. Look for a message type, field or refusal the client mishandles, drops or renders wrong. JetBrains rows gate with `cmd.exe /c gradlew.bat test --rerun` under the jetbrains-gradle lease, labelled Windows, because WSL has no JDK.\n\nSkip:\n- Every file an open row holds. At filing time that is scripts/moe-agent.{sh,ps1}, scripts/tests/postflight-vm-route.{sh,ps1}, scripts/tests/postflight-fake-proxy.js, scripts/tests/postflight-fake-agent-seat.js, scripts/tests/parity-check.{sh,ps1}, scripts/moe-account-lease.mjs and its test (CQ-M07m's scope expansion), packages/moe-daemon/Dockerfile, docker-compose.yml, .github/workflows/docker.yml, docs/MCP_SERVER.md, docs/CONFIGURATION.md, docs/DEVELOPMENT.md, packages/moe-daemon/src/util/chatBacklog.ts, and the chat tools chatWait.ts, chatJoin.ts, chatResync.ts and chatWho.ts with their tests.\n- Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n\nAlready known, so don't re-file:\n- The git-land lease waiter that isn't woken when the lease frees, so newer completions jump the queue: fixed by ceb494d9, which is not yet live (the daemon swap is pending with the human).\n- Everything filed today: the actor family through 47c42043; chat_wait's drain (66108835); the chat_read cursor (b2f95099); chat_pin's guard (3064fd45); chat_who, chat_join and chat_resync (4877ef36); Docker (90ed6cb5); the role-doc instructions (1528e899).\n- TURBO auto-approve's \"WORKING by unknown\" line; the JetBrains board fingerprint omitting needsHumanReview; isEpicFinal's max-order fallback (msg-bbf4f109); a7d02ec3.\n- Held items: hunt #7 (b), the wrapper's UNKNOWN-status message; hunt #8, the using-git-worktrees skill text and chat_send's whitespace-only content.\n- This checkout's local .serena/project.yml ignoring docs/.\n\nEVIDENCE BAR. Same as hunts #2-#8. Work only from real evidence:\n- A repro on HEAD 39bec237 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a family or gate gap: the sibling file:line that applies the check, the member file:line that skips it, and a test or call that shows the difference.\n- For client drift: the daemon file:line that emits the message and the Kotlin file:line that mishandles it.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file, one JUnit class or one grep gate.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 39bec237 or later run outside the shared checkout, a failure line from today's logs, or a sibling/member (or daemon/client, or doc/code) file:line pair.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time). The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 412.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:41:07.243Z",
+  "updatedAt": "2026-11-03T20:14:14.663Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:41:12.502Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T19:41:11Z",
+    "at": "2026-11-03T20:14:14.663Z"
+  }
+}

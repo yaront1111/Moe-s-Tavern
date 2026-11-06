@@ -1,0 +1,251 @@
+{
+  "id": "task-edf2162b54e24d95a253d7415dba197b",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: the CQ-V08 finalize deferral keys on the pinned profile while strong landings key on strong_landing_task, so a strong journal under a non-verified-local pin finalizes before its receipt",
+  "description": "finalize_postflight (moe-agent.sh) and Complete-MoePostflight (moe-agent.ps1) defer only when PINNED_ATTEMPT_PROFILE / $script:PinnedAttemptProfile is verified-local, and their CQ-V08b journal removal has the same condition. strong_landing_task / Test-MoeStrongLandingTask, which decide the check-VM route and the strong journal, also return true from the newest attempt record or a leftover strong receipt journal of the task. With a leftover strong journal and an observe pin, a worktree landing writes a strong journal, and an unacknowledged receipt then finalizes landed anyway; the receipt only lands at the next replay. A narrow mixed-profile case found by task-527735ea's self-review. A fix would key both conditions on the journal's own profile (or strong_landing_task).",
+  "definitionOfDone": [
+    "Task completed as described"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "moe-agent.sh and its harness rows, rows first.\nBefore editing, re-read the landed bytes of both dependencies, CQ-M07t (task-527735ea) and task-a1f3723f:\n- in scripts/moe-agent.sh: finalize_postflight, wt_land_published, strong_landing_task, receipt_send, and the two lines that reset RECEIPT_ACKED (run_landing's landing-state line and the per-iteration pre-flight reset);\n- the [strong receipt] section of scripts/tests/postflight-vm-route.sh.\nNames here are from CQ-M07t's checkpoint eb09f869; line numbers will drift. If task-a1f3723f rewrote either finalize condition, apply (b) to its version and keep all of its changes. If the bug is already fixed there, write only the rows.\n\n(a) Rows (TDD). In [strong receipt], after SR-T4 and before the closing echo, add the mixed-profile block.\n- sr_mixed runs sg_fixture, then writes $PROJECT/.moe/attempts/attempt-tie.json (mkdir -p first) as one line: {\"id\":\"attempt-tie\",\"taskId\":\"task-postflight\",\"generation\":7,\"workerId\":\"worker-old\",\"phase\":\"closed\",\"executionPolicySnapshot\":{\"version\":2,\"profile\":\"verified-local\",\"planRevision\":1}}\n  - It ties the fake's attempt-postflight at generation 7, and strong_landing_task counts a tie as strong (fail closed).\n  - Being closed, it is skipped by moe_attempt_read, wt_open_attempts and moe_seat_finalizing_attempts.\n- SR_MIXED=(FAKE_ATTEMPT_PROFILE=observe MOE_CHECK_DISPATCH_PATH=\"$SG_FAKE\") is the observe pin.\n- The rows run with VMR_SETUP=sr_mixed:\n  - SR-M1: \"${SR_MIXED[@]}\" FAKE_CHECK_DISPATCH=pass FAKE_EVIDENCE_MODE=receipt-refused, then sr_check SR-M1 deferred.\n  - Copy $PROJECT to $TMP_DIR/sr-keep, as T2 does. With VMR_SETUP=sr_restore, run SR-M1-replay: \"${SR_MIXED[@]}\" FAKE_CLAIM_MODE=finalizing. Then set VMR_SETUP=sr_mixed and run sr_check SR-M1-replay replay.\n  - SR-M2: \"${SR_MIXED[@]}\" FAKE_CHECK_DISPATCH=pass, then sr_check SR-M2 pass.\n  - Finish with VMR_SETUP=sg_fixture.\n- One echo line names the block. The closing line becomes '[strong receipt] ok T1, T2, T2-replay, T3, T4, M1, M1-replay, M2'.\n- sr_check is reused unchanged: its deferred, replay and pass kinds already assert every effect of this bug.\n\nRecord the red on the UNFIXED wrapper:\n- SR-M1 fails at 'finalized before the receipt was recorded'.\n- In a scratch copy without the M1 rows, SR-M2 fails at 'the receipt journal stayed'.\n- Any other failure means the fixture is wrong.\nA full postflight-vm-route.sh takes about 6 min. A slice built like sg-only.sh in mem:gotcha-sliced-driver-exit-trap-masks-wiring (the preamble, the [strong gate] fixture lines, then this section) iterates faster.\n\n(b) Fix, in finalize_postflight.\n- Beside 'local outcome=failed', add 'local strong=\"\"'. Set strong=1 when PINNED_ATTEMPT_PROFILE is verified-local or RECEIPT_STRONG is true.\n- Replace the [ \"${PINNED_ATTEMPT_PROFILE:-}\" = verified-local ] test with [ -n \"$strong\" ] in exactly two places, the CQ-V08 deferral if and the CQ-V08b removal if. Change nothing else in those conditions.\n- In wt_land_published's strong branch: RECEIPT_JOURNAL=\"$3\"; RECEIPT_ACKED=\"\"; RECEIPT_STRONG=true.\n- Append RECEIPT_STRONG=\"\" to both lines that reset RECEIPT_ACKED.\n- Update one comment line each in CQ-V08, CQ-V08b and wt_land_published's header. The strong landing is the pin or, under any pin, a worktree landing whose own journal is strong, because strong_landing_task also journals strong from an attempt record or a leftover journal.\n- Add no new printed string, code or exported variable.\nError handling stays as it is:\n- A journal that is missing or cannot be parsed never sets the flag: wt_land_published's read already falls back to the legacy branch.\n- A lost finalize_attempt keeps today's path: MOE_FINALIZE_RC=1, and the journal is kept for the replay.\nThe rows then pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Rows first: SR-M1 / SR-M1-replay / SR-M2 (sr_mixed writes a closed attempt-tie.json at generation 7, profile verified-local; SR_MIXED = observe pin) placed after SR-T5-replay; closing line now '... T5, T5-replay, M1, M1-replay, M2'. sr_check reused unchanged. Red on the unfixed wrapper (sliced [strong receipt]-only harness, scratch /mnt/d/moe-scratch/tedf-w): SR-M1 'finalized before the receipt was recorded'; SR-M2 alone (M1 rows cut) 'the receipt journal stayed'. Fix: finalize_postflight local strong = pin verified-local OR RECEIPT_STRONG=true, used in exactly the CQ-V08 deferral and CQ-V08b removal ifs; wt_land_published strong branch sets RECEIPT_STRONG=true; RECEIPT_STRONG=\"\" appended to run_landing's reset line and the per-iteration pre-flight reset (receipt_send untouched). Green: slice T1-T5-replay + M1-M2 pass (rc 0); frozen intent-strong,receipt-refused,reconcile-strong-receipt-lost 'PASS frozen candidate scenarios: 3' on sh.",
+      "startedAt": "2026-11-04T22:36:10.998Z",
+      "completedAt": "2026-11-04T22:43:35.740Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The moe-agent.ps1 twin, rows first. Re-read the landed bytes first:\n- Complete-MoePostflight, Complete-MoeWorktreeLanding, Test-MoeStrongLandingTask and Send-MoeReceipt;\n- Invoke-SrRows and Assert-SrRow in postflight-vm-route.ps1.\nApply step 1's rule to task-a1f3723f's changes.\n\n(a) Rows. In Invoke-SrRows, after SR-T4 and before its closing Write-Host:\n- $mixed = @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CHECK_DISPATCH = 'pass' }.\n- A setup scriptblock runs Initialize-SgFixture, then writes $project\\.moe\\attempts\\attempt-tie.json (New-Item -ItemType Directory -Force first) with [IO.File]::WriteAllText and step 1's exact JSON line.\n- Run the rows inside try/finally, so $script:VmrSetup always returns to { Initialize-SgFixture }:\n  - SR-M1: $mixed + @{ FAKE_EVIDENCE_MODE = 'receipt-refused' }, then Assert-SrRow deferred.\n  - Copy $project to its own keep dir, as T2 does. Run SR-M1-replay from it with @{ FAKE_ATTEMPT_PROFILE = 'observe'; MOE_CHECK_DISPATCH_PATH = $sgFake; FAKE_CLAIM_MODE = 'finalizing' }, then Assert-SrRow replay.\n  - SR-M2: $mixed, then Assert-SrRow pass.\n- The closing line becomes '[strong receipt] ok T1, T2, T2-replay, T3, T4, M1, M1-replay, M2'.\n- Mind mem:gotcha-ps1-harness-syntax-traps. Names are case-insensitive, so give each scriptblock and keep path its own name.\n\nRed on the unfixed wrapper:\n- SR-M1 fails with 'receipts 1, finalizes 1, phase closed, ...'.\n- SR-M2 fails with 'phase closed, the journal stayed, or a deferral or kept line'.\nRun it on both engines from a /mnt/d cwd, with MOE_*, CLAUDE* and FAKE_* scrubbed (mem:gotcha-qa-ps1-postflight-from-wsl). Run 5.1 as pwsh.exe -nop -c \"cmd /c powershell -nop -ep Bypass -f postflight-vm-route.ps1\" (mem:decision-mid-epic-launcher-gate-narrow).\n\n(b) Fix.\n- In Complete-MoePostflight, right after $r=$script:MoeLandingResult, add:\n  $strong = $script:PinnedAttemptProfile -ceq 'verified-local' -or ($null -ne $r -and $r.ReceiptStrong -eq $true)\n- Then replace $script:PinnedAttemptProfile -ceq 'verified-local' with $strong in exactly the CQ-V08 deferral if and the CQ-V08b removal if.\n- In Complete-MoeWorktreeLanding's strong branch, add $Res.ReceiptStrong = $true beside $Res.ReceiptJournal = $Journal; $Res.ReceiptAcked = $false.\n  - $Res is the landing result, a fresh hashtable per landing.\n  - $script:MoeLandingResult is reset to $null every iteration, so no reset is needed.\n- Make the comments and Twin notes match sh.\nError handling: if the journal read or ConvertFrom-Json throws, the existing catch sets $ok=$false and leaves $strong false, so the flag stays unset. Add no new printed string.\nThe rows then pass on 5.1 and 7.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Rows first in Invoke-SrRows after SR-T5-replay: $mixed (observe pin + dispatch pass), $mixedSetup (Initialize-SgFixture + closed attempt-tie.json, step 1's exact JSON), own keep dir $mKeep (sr-mkeep), all inside try/finally restoring { Initialize-SgFixture }; closing line '... T5, T5-replay, M1, M1-replay, M2'. Assert-SrRow unchanged. Red on unfixed wrapper (SR-only slice of the harness, scratch /mnt/d/moe-scratch/tedf-w), 5.1 (pwsh->cmd->powershell) and 7: SR-M1 'receipts 1, finalizes 1, phase closed, deferral lines 0, kept lines 1'; SR-M2 alone 'phase closed, the journal stayed, or a deferral or kept line'. T1-T5-replay passed first. Fix: Complete-MoePostflight $strong = pin -ceq verified-local -or ($null -ne $r -and $r.ReceiptStrong -eq $true), replacing the pin test in exactly the CQ-V08 deferral and CQ-V08b removal ifs; Complete-MoeWorktreeLanding strong branch sets $Res.ReceiptStrong = $true ($Res is $script:MoeLandingResult, fresh per landing, reset to $null per iteration). Header comment/Twin note updated. BOM kept; ParseFile clean on 5.1 and 7. Green: slice EXIT=0 on both engines with '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2'.",
+      "startedAt": "2026-11-04T22:43:36.438Z",
+      "completedAt": "2026-11-04T22:49:19.960Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run checkRefs[0] exactly, once, after steps 1 and 2.\n- Save it byte-for-byte to a scratch file outside the checkout, e.g. /mnt/d/moe-scratch/<dir>/gate.sh.\n- Start it detached: nohup bash -c 'bash gate.sh > out.txt 2>&1; echo CHAIN_EXIT=$? >> out.txt' &\n- Record $! and poll with timeout 540 bash -c 'until grep -q ^CHAIN_EXIT= out.txt; do sleep 15; done'.\n- Never run it in a shell you reuse: it unsets MOE_*.\nThe architect's dry run of this exact command on eb09f869 (no new rows yet) gave CHAIN_EXIT=0 in 643 s (10.7 min) at load 4-10, with every leg's suites green (logs: /mnt/d/moe-scratch/tedf2/logs). Expect 1-2 min more.\n\nWhat the gate covers:\n- postflight-vm-route.{sh,ps1} on bash, 5.1 and 7;\n- worktree-landing.{sh,ps1};\n- postflight.{sh,ps1}, limited by MOE_FROZEN_TEST_ONLY to three shared-mode modes: intent-strong, receipt-refused and reconcile-strong-receipt-lost. They pin the unchanged pinned-profile deferral and removal, and a legacy journal that never defers.\n- postflight-worktree.cjs wt-completion and wt-replay (sh);\n- parity-check.{sh,ps1}, npm run lint, bash -n and ParseFile.\nThe gate exits 0 only with an '@' from every leg and 'PASS frozen candidate scenarios: 3' in each log, so a renamed frozen mode fails it.\n\nError handling for a red run:\n- A leg whose log holds only a WSL 'UtilAcceptVsock' error never ran: rerun the whole gate.\n- For a red row, first rerun the parent revision's scripts (mem:gotcha-qa-ps1-postflight-from-wsl). Then fix and rerun the whole command, never just one leg.\nSubmit this command, its exit code and the tail as complete_task's verification. Not run here: the full postflight.sh and .ps1 suites. They belong to the nightly (the 20-min rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] run verbatim (read byte-for-byte from the task record into /mnt/d/moe-scratch/tedf-w/gate/gate.sh, 998 chars), detached, 22:50:09Z-23:01:01Z (10m52s, load ~3.5): CHAIN_EXIT=0. Logs /tmp/tmp.WJTaduONuF/{powershell,pwsh,sh}. Each leg: '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2', PASS postflight-vm-route, 'worktree-landing: 18 passed, 0 failed, 0 errors', 'PASS frozen candidate scenarios: 3', @. ps1 legs: PASS parity-check.ps1 (5.1 and 7). sh leg: '[worktree] 2 ok, 0 failed' (wt-completion, wt-replay), PASS parity-check.sh, lint OK. Not run: the full postflight suites (nightly, 20-min rail).",
+      "startedAt": "2026-11-04T22:49:21.075Z",
+      "completedAt": "2026-11-04T23:01:57.337Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the task diff, before complete_task. Use git diff against the task base.\n(1) Scope. Only these change: the two conditions in each finalize, the flag in each strong branch, the two sh resets, comments, and the new rows. Every other PINNED_ATTEMPT_PROFILE / PinnedAttemptProfile test stays pin-keyed:\n- land_plumbing's strong path and its stale-journal refusal;\n- the Record block's proof check;\n- the pull --rebase refusal;\n- receipt_report;\n- their ps1 twins.\nThe shared mode writes a strong journal only under the pin.\n(2) The flag.\n- It is set only where the journal's own profile is verified-local, and reset with RECEIPT_ACKED. It is never exported.\n- It only ever adds a hold, or drops the landing's own journal after its attempt is closed. It never grants anything.\n(3) Mutants. Run each on a scratch copy, never in W. Each must turn red:\n- M-a: drop the RECEIPT_STRONG / ReceiptStrong arm. SR-M1 and SR-M2 go red.\n- M-b: drop the pin arm. Frozen reconcile-strong-receipt-lost (the deferral) and intent-strong (the journal removal) go red.\n- M-c: key on a set RECEIPT_JOURNAL / ReceiptJournal instead of the flag. Frozen receipt-refused goes red (its finalize count must be 1).\nOn sh, MOE_FROZEN_TEST_ONLY runs in about 15 s. On ps1 it takes about 25 s per engine.\n(4) Edges.\n- Twice or concurrently: finalize is memoized, and the land lease and owner guard serialize one task.\n- Empty or unset flag: not strong.\n- Residual, and pre-existing under the pin: wt_land_rounds' recovered path (LAND_WT_RECOVERED) hands wt_land_published a leftover journal whose attemptId may name an earlier attempt, and the replay finalizes only the journal's attempt. Check whether a non-strong pin can reach it. If it can, file a bug row instead of widening this task.\nPut the red/green evidence, the mutant results and a DoD map in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Self-review of git diff (+64/-13, the 4 approved files). (1) Scope: only the two finalize conditions per twin, the flag in each strong branch, the 2 sh resets, comments and rows. The other pin tests are unchanged: strong_landing_task, land_plumbing's strong path and stale-journal refusal, the Record proof check, pull --rebase, receipt_report, and the ps1 twins. (2) Flag: set only where the journal's own profile is verified-local, never exported (grep 0), blanked with RECEIPT_ACKED; ps1 $Res is fresh per landing and MoeLandingResult is reset per iteration. It only adds a hold or drops the landing's own journal once its attempt is closed. Under the pin, behaviour is identical. A legacy/observe landing with no strong journal, including a legacy-gate shared journal, never sets it. (3) Mutants (scratch only): M-a red at SR-M1 (sh, 7); M-b red at intent-strong (sh, 5.1, 7) and reconcile-strong-receipt-lost alone (sh); M-c red at receipt-refused, finalize count 0 vs 1 (sh, 5.1, 7). (4) Edges: finalize is memoized; signals are deferred in wt_land_published; an unset or empty flag is not strong; a hot reload cannot inherit it (not exported). Residual: the recovered path's leftover strong journal can name an earlier attempt, so a deferred finalize strands this attempt. With this fix a non-strong pin can now reach it, so I filed task-eafb62c4 (LOW, dependsOn this task) rather than widening this task. Extra (architect comment): reconcile-strong-finalize-lost and reconcile-strong-conflict-finalize-lost print 'PASS frozen candidate scenarios: 2' on sh, 5.1 and 7.",
+      "startedAt": "2026-11-04T23:01:58.448Z",
+      "completedAt": "2026-11-04T23:04:25.877Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion, 20:32Z. A narrow mixed-profile defect in the CQ-V08 finalize deferral, found by CQ-M07t's self-review. It is in the same receipt/finalize code as task-a1f3723f, so it goes in before the verified-local turn-on row too.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 533.7,
+  "comments": [
+    {
+      "id": "comment-88bb0acb46f7478980a08979d6055620",
+      "author": "governor-e6142a94",
+      "content": "Governor planning input, 20:34Z. This row's DoD is only the placeholder \"Task completed as described\", so plan to these points and QA reviews against them:\n1. In both twins (finalize_postflight in moe-agent.sh, Complete-MoePostflight in moe-agent.ps1), the CQ-V08 finalize deferral and the CQ-V08b journal removal key on the journal's own strong/profile marker, or on strong_landing_task / Test-MoeStrongLandingTask, not on the pinned attempt profile alone.\n2. A regression row reproduces the mixed-profile case (a leftover strong journal plus an observe pin, then an unacknowledged receipt) on bash and on PS 5.1 + 7. Before the fix it finalizes landed. After the fix it defers until the receipt is acknowledged. Show a mutant kill.\n3. Non-strong landings are unchanged: the existing rows stay green.\n4. parity-check stays green, and the gate fits the 20-min rail (scoped, subshell-wrapped refs).\nIt depends on CQ-M07t (527735ea) and task-a1f3723f, both in the same finalize/receipt code.",
+      "timestamp": "2026-11-04T20:30:37.241Z"
+    },
+    {
+      "id": "comment-5bb1498430c74159b6dac1b3301eedac",
+      "author": "architect-67c762f6",
+      "content": "Architect note for the worker. It comes from task-a1f3723f's architect (chan-b6d8273b, msg-6fecb076, 21:04Z), which arrived after this plan was approved. It clarifies the plan and doesn't change it. Line numbers are bcedcb26's and drift once task-a1f3723f lands, so go by function name.\n\n1. Step 1(b), the sh reset. `RECEIPT_ACKED=\"\"` appears four times: receipt_send's first line (:6484), run_landing's landing-state line (:6752), wt_land_published's strong branch (:7918) and the per-iteration pre-flight reset (:10250).\n- Set RECEIPT_STRONG=true only on :7918.\n- Append RECEIPT_STRONG=\"\" only on :6752 and :10250.\n- Never touch receipt_send. :7918 runs receipt_send (:7919), then finalize_postflight (:7920), so a reset inside receipt_send clears the flag before finalize reads it. receipt_send is also task-a1f3723f's hunk.\n- The ps1 needs no reset: Send-MoeReceipt only returns a bool, and Complete-MoeWorktreeLanding sets $Res itself (:7577-7578).\n\n2. Steps 1(a) and 2(a), rows on task-a1f3723f's landed harness. That task adds:\n- rows SR-T5 and SR-T5-replay after SR-T4;\n- sr_check / Assert-SrRow kinds lost and lost-replay;\n- one shared helper for T2's asserts;\n- section lines that say T1-T5.\nKeep all of it and put the M block after SR-T5-replay. The closing line becomes exactly `[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2` in both .sh and .ps1. Before relying on the deferred, replay and pass kinds, confirm the refactor left them unchanged.\n\n3. task-a1f3723f leaves both finalize conditions alone. Its only wrapper hunks are receipt_send's DELIVERY_RECEIPT_CONFLICT line (`|| [ \"$strong\" = 1 ]`) and the `$ok -and` dropped from Send-MoeReceipt's `$keep`. So (b) applies to today's text as planned.\n\n4. Extra evidence, outside the gate. checkRefs[0] stays exactly as approved: three frozen modes, 'rios: 3'.\n- After the green gate, run MOE_FROZEN_TEST_ONLY=reconcile-strong-finalize-lost,reconcile-strong-conflict-finalize-lost on postflight.sh, and on postflight.ps1 under both 5.1 and 7, with the gate's env scrub. It takes about 1 min per engine. Use the mode names as landed.\n- Each must print 'PASS frozen candidate scenarios: 2'. Those two modes pin the finalize-lost arm of the CQ-V08b removal you edit.\n- Put the commands and their tails in the completion summary.",
+      "timestamp": "2026-11-04T21:10:47.111Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T20:29:30.429Z",
+  "updatedAt": "2026-11-04T23:20:25.715Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T20:30:18.817Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T20:30:21.371Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T23:19:51.843Z",
+    "wallClockMs": 10170472
+  },
+  "dependsOn": [
+    "task-527735eafb9147cf8663ccee9a9e1b4c",
+    "task-a1f3723f87f84866b16dd107c21f0d74"
+  ],
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "architect-2a219562",
+    "worker-5772dacf",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T21:00:58.386Z",
+  "executionContract": {
+    "intendedBehavior": "Both wrappers treat a worktree landing whose own receipt journal is strong (profile verified-local) as a strong landing at finalize, whatever this session's pinned profile.\n- An unacknowledged delivery receipt then defers finalize_attempt (MOE_FINALIZE_DEFERRED_RECEIPT). The attempt stays finalizing, and the journal is kept for the pre-flight replay, which records the receipt and then finalizes.\n- Once the attempt is closed, the journal is dropped (CQ-V08b).\nThe key is the landing's own flag: RECEIPT_STRONG in sh, ReceiptStrong in ps1. wt_land_published and Complete-MoeWorktreeLanding set it exactly where they already read the journal's profile to send the receipt.\nUnchanged:\n- sessions pinned verified-local;\n- legacy and observe landings with no strong journal, legacy-gate shared journals included.",
+    "acceptanceCriteria": [
+      "finalize_postflight (sh) and Complete-MoePostflight (ps1) test strong = pinned verified-local OR the landing's strong-journal flag, in both the CQ-V08 deferral and the CQ-V08b journal removal. The rest of each condition is unchanged.",
+      "wt_land_published and Complete-MoeWorktreeLanding set the flag only in their strong branch, where the journal's own profile is verified-local. sh resets RECEIPT_STRONG at both sites that reset RECEIPT_ACKED. ps1 needs no reset: its landing result is a fresh hashtable.",
+      "New [strong receipt] rows SR-M1 (deferred), SR-M1-replay (replay) and SR-M2 (pass) in postflight-vm-route.sh and .ps1 run under an observe pin with a tied verified-local attempt record, and reuse sr_check / Assert-SrRow unchanged. On the unfixed wrapper they fail at the bug: 'finalized before the receipt was recorded', 'the receipt journal stayed' and the ps1 equivalents. On the fix they pass on bash, 5.1 and 7.",
+      "Every existing row stays green unedited: [strong receipt] T1-T4 and T2-replay, [strong gate], the other vm-route sections, worktree-landing.{sh,ps1}, and the frozen modes intent-strong, receipt-refused and reconcile-strong-receipt-lost.",
+      "checkRefs[0] exits 0, with an @ marker from all three legs and 'PASS frozen candidate scenarios: 3' in each log.",
+      "Mutants M-a (no flag arm), M-b (no pin arm) and M-c (keyed on a set journal path) each turn a gate row red, as reported in the completion summary."
+    ],
+    "invariants": [
+      "A session pinned verified-local sends the same RPCs, in the same order, as before, in shared and worktree mode.",
+      "A legacy or observe landing with no strong journal sends the same RPCs as before. A legacy-gate shared journal never defers.",
+      "The flag comes only from the profile field of the journal the wrapper itself wrote or reuses, never from the environment. It is not exported, and it is blanked before every iteration's landing.",
+      "The flag only adds a finalize hold, or drops the landing's own journal once its attempt is closed. It never grants readiness, skips a check or sends an RPC.",
+      "No new printed string, reason code, setting or env name. parity-check.{sh,ps1} are unchanged and green.",
+      "The journal format, receipt_send / Send-MoeReceipt, the pre-flight replay and the daemon are unchanged."
+    ],
+    "compatibility": [
+      "Journals written before this change replay as before: the replay keys on the journal's own profile, and this task does not touch it.",
+      "MOE_FINALIZE_DEFERRED_RECEIPT and the kept-journal warning lines keep their exact text."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: finalize_postflight's two strong tests plus one local; wt_land_published's strong-branch assignment line and its header comment; RECEIPT_STRONG=\"\" appended to run_landing's landing-state reset line and to the per-iteration pre-flight reset line.",
+      "scripts/moe-agent.ps1: Complete-MoePostflight's $strong and its two conditions; Complete-MoeWorktreeLanding's strong-branch assignment line.",
+      "scripts/tests/postflight-vm-route.sh: sr_mixed, SR_MIXED, rows SR-M1, SR-M1-replay and SR-M2, one echo line, and the closing echo of [strong receipt].",
+      "scripts/tests/postflight-vm-route.ps1: the twin rows inside Invoke-SrRows, and its closing Write-Host."
+    ],
+    "reuse": [
+      "sr_check / Assert-SrRow kinds deferred, replay and pass, unchanged; sr_restore and T2's keep-copy pattern for the replay row.",
+      "Fake proxy modes FAKE_ATTEMPT_PROFILE, FAKE_EVIDENCE_MODE=receipt-refused and FAKE_CLAIM_MODE=finalizing. The trigger is strong_landing_task's documented tie rule, so no new fake mode is needed.",
+      "The CQ-M07t gate shape (mem:decision-mid-epic-launcher-gate-narrow), plus the existing MOE_FROZEN_TEST_ONLY selector of postflight.{sh,ps1}."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh finalize_postflight: the CQ-V08 deferral if and the CQ-V08b removal if both test [ \"${PINNED_ATTEMPT_PROFILE:-}\" = verified-local ] (eb09f869:6022, 6033).",
+      "scripts/moe-agent.sh wt_land_published: its strong branch keys on the journal's own profile and sets RECEIPT_JOURNAL=\"$3\"; RECEIPT_ACKED=\"\" before receipt_send and finalize_postflight (eb09f869:7913-7922).",
+      "scripts/moe-agent.sh strong_landing_task returns true for any of: the pin of its own task, the newest attempt record (a generation tie counts as strong), or the profile of the task's receipt journal (eb09f869:4424-4454). When it holds, wt_journal_write writes a strong journal with attemptId = MOE_ATTEMPT_ID (eb09f869:7597-7621).",
+      "scripts/moe-agent.sh wt_land_rounds deletes a leftover journal whose C never reached the target before any round ([ -n \"$jc\" ] || rm -f \"$journal\"). So a leftover journal reaches wt_land_published only through the recovered path (LAND_WT_RECOVERED), and the rows use the attempt-record tie instead.",
+      "scripts/moe-agent.ps1: Complete-MoePostflight tests $script:PinnedAttemptProfile -ceq 'verified-local' in both conditions (eb09f869:8747, 8757). Complete-MoeWorktreeLanding sets ReceiptJournal and ReceiptAcked on $Res, the landing result, only when $j.profile -ceq 'verified-local' (eb09f869:7571-7577). Test-MoeStrongLandingTask has the same tie rule (eb09f869:4431-4450).",
+      "The shared landing writes a strong journal only under the pin (land_plumbing and the ps1 shared CAS block). A legacy-gate journal with no profile key sits at the same path and is set as RECEIPT_JOURNAL / ReceiptJournal. So the key must be the landing's flag, not the path or a re-read of the file.",
+      "postflight-fake-proxy.js: attemptFixture writes attempt-postflight (generation 7) with FAKE_ATTEMPT_PROFILE's snapshot. receiptReply has no profile or attempt gate, matching recordDeliveryReceipt.ts (\"No ownership, status or attempt gate\").",
+      "postflight.{sh,ps1} honour MOE_FROZEN_TEST_ONLY. On eb09f869 the three selected modes printed 'PASS frozen candidate scenarios: 3' in 13 s on bash and 22-23 s on each PowerShell engine."
+    ],
+    "checkRefs": [
+      "cd /mnt/d/projexts/moes/.worktrees/task-edf2162b*/scripts/tests||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_WORKTREE_ONLY=wt-completion,wt-replay MOE_FROZEN_TEST_ONLY=intent-strong,receipt-refused,reconcile-strong-receipt-lost;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B worktree-landing.ps1&&$e $B postflight.ps1&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash worktree-landing.sh&&bash postflight.sh&&node postflight-worktree.cjs sh $PWD/../moe-agent.sh $PWD/postflight-fake-proxy.js /tmp $BASH&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|rios: 3') = 6 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Re-read RECEIPT_JOURNAL's profile in finalize. Rejected:\n  - shared mode keeps a legacy-gate journal at the same path. After a failed best-effort write, a leftover strong journal could sit there and make a legacy landing defer, stranding the attempt, because the replay finalizes only the journal's own attempt;\n  - it also adds a JSON parse per finalize.\n(2) Key on strong_landing_task. Rejected: it reads every attempt record and the path, so a legacy-gate shared landing could defer. That is a legacy behaviour change, and a glob per finalize.\n(3) Replace the pin with the flag. Rejected: the shared strong path never sets the flag, so the pinned shared deferral and removal would break. Frozen modes reconcile-strong-receipt-lost and intent-strong pin this.\nChosen: the pin OR a flag set where wt_land_published / Complete-MoeWorktreeLanding already decide strong from the journal's own profile. It is the description's \"journal's own profile\", computed once, strictly additive, with no extra IO.\nTrigger: the description's literal route, a leftover journal, is deleted before the round when its C never landed, and otherwise goes through the recovered path. The rows use the fail-closed attempt-record tie, which writes a fresh strong journal naming this attempt. SR-M1-replay then proves the deferral is settled by the replay.",
+    "codebaseInsights": "- finalize_postflight / Complete-MoePostflight are memoized, and the worktree landing calls them from inside wt_land_published / Complete-MoeWorktreeLanding with signals deferred.\n- ps1 $Res is $script:MoeLandingResult, which is set before Complete-MoeWorktreeLanding runs.\n- The sh landing-state resets are the run_landing init line and the per-iteration pre-flight line. Both also blank RECEIPT_JOURNAL and RECEIPT_ACKED.\n- record_delivery_receipt has no attempt or profile gate. So the next pre-flight replay settles a deferred observe-pinned attempt: it re-sends the receipt, finalizes the journal's attempt while it is finalizing, then drops the strong journal.\n- parity-check compares only MOE_* code families and fixed literals; RECEIPT_STRONG is neither.\n- docs/ARCHITECTURE.md \"Strong local delivery\" already describes the journal-keyed behaviour, so no docs edit is needed. The epic-final row owns the docs sweep.",
+    "risks": "- task-a1f3723f is being planned now by architect-cd0ac706, who was told via comment-106d6564. It edits receipt_send / Send-MoeReceipt and may touch finalize. Re-read before editing and keep its changes.\n- CQ-M07t is still in REVIEW and may change under QA.\n- The ps1 harness traps: case-insensitive names, one-element unroll.\n- WSL interop flakes (UtilAcceptVsock).\n- Residual, and pre-existing under the pin: the recovered path's leftover journal may name an earlier attempt, which the replay alone does not finalize for this attempt. Out of scope; file a row if a non-strong pin can reach it.\n- The gate leaves out the full postflight suites (nightly) and the ps1 legs of postflight-worktree.cjs. The ps1 finalize path is still covered by vm-route.ps1, worktree-landing.ps1 and the ps1 frozen modes.",
+    "keyFiles": [
+      "scripts/moe-agent.sh: finalize_postflight, wt_land_published, strong_landing_task, wt_land_rounds, receipt_send, receipt_replay",
+      "scripts/moe-agent.ps1: Complete-MoePostflight, Complete-MoeWorktreeLanding, Test-MoeStrongLandingTask, Send-MoeReceipt, Invoke-MoeReceiptReplay",
+      "scripts/tests/postflight-vm-route.sh: the [strong gate] fixture (sg_fixture, SG_*), [strong receipt] (sr_check, sr_restore)",
+      "scripts/tests/postflight-vm-route.ps1: Initialize-SgFixture, Invoke-SgRow, Assert-SrRow, Invoke-SrRows",
+      "scripts/tests/postflight-fake-proxy.js: attemptFixture, receiptReply",
+      "scripts/tests/postflight.sh / postflight.ps1: the frozen suite and its MOE_FROZEN_TEST_ONLY selector"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "bcedcb268e237da0c58627e42a372f41a9b4838b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T21:00:58.413Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T23:06:06Z",
+    "at": "2026-11-04T23:20:25.714Z"
+  },
+  "workStartedAt": "2026-11-04T22:36:10.998Z",
+  "reviewStartedAt": "2026-11-04T23:04:57.555Z",
+  "verification": {
+    "command": "cd /mnt/d/projexts/moes/.worktrees/task-edf2162b*/scripts/tests||exit;unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC:MOE_FROZEN_TEST_ONLY MOE_WORKTREE_ONLY=wt-completion,wt-replay MOE_FROZEN_TEST_ONLY=intent-strong,receipt-refused,reconcile-strong-receipt-lost;L=$(mktemp -d);B='-nop -ep Bypass -f';for e in powershell pwsh;do($e.exe -c \"\\$x=\\$null;\\$y=[Management.Automation.Language.Parser]::ParseFile('../moe-agent.ps1',[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\"&&pwsh.exe -nop -c \"cmd /c $e $B postflight-vm-route.ps1&&$e $B worktree-landing.ps1&&$e $B postflight.ps1&&$e $B parity-check.ps1\"&&echo @)>$L/$e 2>&1 &done;(bash -n ../moe-agent.sh&&bash postflight-vm-route.sh&&bash worktree-landing.sh&&bash postflight.sh&&node postflight-worktree.cjs sh $PWD/../moe-agent.sh $PWD/postflight-fake-proxy.js /tmp $BASH&&bash parity-check.sh&&npm run lint&&echo @)>$L/sh 2>&1;wait;tail -n3 $L/*;[ $(cat $L/*|grep -c '^@$\\|rios: 3') = 6 ]",
+    "exitCode": 0,
+    "outputTail": "==> /tmp/tmp.WJTaduONuF/powershell <==\nPASS frozen candidate scenarios: 3\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.WJTaduONuF/pwsh <==\nPASS frozen candidate scenarios: 3\nPASS parity-check.ps1\n@\n\n==> /tmp/tmp.WJTaduONuF/sh <==\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n@\nCHAIN_EXIT=0\n(22:50:09Z-23:01:01Z, 10m52s. Every leg: '[strong receipt] ok T1, T2, T2-replay, T3, T4, T5, T5-replay, M1, M1-replay, M2', PASS postflight-vm-route, 'worktree-landing: 18 passed, 0 failed, 0 errors'; sh also '[worktree] 2 ok, 0 failed' and PASS parity-check.sh)",
+    "reportedAt": "2026-11-04T23:04:57.555Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "A worktree landing whose own receipt journal is strong (profile verified-local) is now a strong landing at finalize, whatever the pin. Both the CQ-V08 deferral and the CQ-V08b journal removal see it. Diff: +64/-13 over 4 files.\n- sh: finalize_postflight's `strong` is the pin OR RECEIPT_STRONG=true, used in exactly those two ifs. wt_land_published's strong branch sets the flag. It is blanked on run_landing's and the per-iteration reset lines, never in receipt_send, and never exported.\n- ps1: Complete-MoePostflight's $strong is the pin -or $r.ReceiptStrong -eq $true. Complete-MoeWorktreeLanding's strong branch sets $Res.ReceiptStrong ($Res is MoeLandingResult, fresh per landing).\n- Unchanged: the pinned path, legacy/observe landings without a strong journal, a legacy-gate shared journal, other pin tests, printed strings, parity.\n\nRows SR-M1 (deferred), SR-M1-replay and SR-M2 (pass), after SR-T5-replay in vm-route.sh/.ps1: an observe pin plus a closed attempt-tie.json (gen 7, verified-local; the tie rule). sr_check / Assert-SrRow are unchanged.\n- Red on the unfixed wrapper (sh, 5.1, 7): SR-M1 'finalized before the receipt was recorded' (ps1: 'receipts 1, finalizes 1, phase closed...'). SR-M2 alone: 'the receipt journal stayed' (ps1 twin).\n\nGate: checkRefs[0] gave CHAIN_EXIT=0 in 10m52s. Every leg printed '[strong receipt] ok T1..T5-replay, M1, M1-replay, M2', PASS vm-route, worktree-landing 18/0, frozen 3 and @. The sh leg adds wt 2 ok, parity and lint.\n\nMutants (scratch):\n- M-a (no flag): SR-M1 red, sh and 7.\n- M-b (no pin): intent-strong red on sh, 5.1, 7; reconcile-strong-receipt-lost alone red on sh.\n- M-c (pin or journal path): receipt-refused finalize count 0 vs 1, all engines.\nExtra: reconcile-strong-finalize-lost and reconcile-strong-conflict-finalize-lost give 'PASS frozen candidate scenarios: 2' on sh, 5.1, 7.\n\nFiled task-eafb62c4 (LOW): in the recovered path (LAND_WT_RECOVERED), a leftover strong journal can name an earlier attempt, so a deferred finalize st",
+  "commits": [
+    {
+      "sha": "b71a4bbec2a85df645464a9faeefc7ddb9497334",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T22:34:47Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T23:05:56.543Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T23:19:51.843Z",
+  "reviewCompletedAt": "2026-11-04T23:19:51.843Z",
+  "reviewSummary": "Reviewed completion b71a4bbe (on moe/work-2026-10-24 and origin; tree e5cd5443 = candidate treeSha; task worktree HEAD f5ce6bd3 has no diff to it). +64/-13 over the 4 approved files, within scope.\n- sh: finalize_postflight's local strong = pin verified-local OR RECEIPT_STRONG=true, used in exactly the CQ-V08 deferral and CQ-V08b removal ifs. RECEIPT_STRONG=true is set only in wt_land_published's strong branch (journal profile verified-local). It is blanked on run_landing's reset line and the per-iteration reset, not in receipt_send, never exported. Other finalize callers (cleanup trap, take_unlanded_route) are memoized or unlanded, so unaffected.\n- ps1: $strong = pin -or $r.ReceiptStrong -eq $true, same two ifs. $Res.ReceiptStrong is set only in Complete-MoeWorktreeLanding's strong branch, and $Res is $script:MoeLandingResult (:7740/:7767), reset to $null each iteration.\n- Pinned, legacy/observe-without-strong-journal and legacy-gate shared journal paths are unchanged. No new strings, codes or env names.\n- Rows SR-M1/M1-replay/M2 in both harnesses reuse sr_check/Assert-SrRow unchanged; sr_check asserts the strong journal fields, finalize count 0, phase finalizing and the deferral line.\nRe-ran checkRefs[0] verbatim (= task.verification), 23:08:47Z-23:19Z: CHAIN_EXIT=0. Every leg (5.1, 7, sh) printed '[strong receipt] ok T1..T5-replay, M1, M1-replay, M2', PASS postflight-vm-route, worktree-landing 18/0/0, 'PASS frozen candidate scenarios: 3' and @. ps1 legs also printed PASS parity-check.ps1. The sh leg also printed wt-completion and wt-replay ok, PASS parity-check.sh and lint OK.\nMy own mutant M-a (flag arm dropped) on a sh [strong receipt] slice: SR-M1 red, 'finalized before the receipt was recorded'. The unmutated control slice passed (rc 0). Worker's M-b/M-c evidence noted.\nGovernor points 1-4 and every acceptance criterion are met. Residual recovered-path stranding is filed as task-eafb62c4 (LOW), per plan step 4(4). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

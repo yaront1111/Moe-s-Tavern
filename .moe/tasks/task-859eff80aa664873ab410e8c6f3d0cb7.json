@@ -1,0 +1,41 @@
+{
+  "id": "task-859eff80aa664873ab410e8c6f3d0cb7",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #3): file 2-4 evidence-backed bug rows from the daemon, proxy, claude-plugin and MCP_SERVER.md contracts (vitest-gated rows only)",
+  "description": "Filed by the governor at 16:09Z on 2026-11-03. This follows hunt #2 (task-2597ac6f). In about 45 minutes its six rows went from filed to planned, and three are already DONE (e44a8daf, 2e3012b9, e977c32b). A notification-only architect session can't run a hunt, so this hunt is a claimable row.\n\nWHY. The PLANNING queue is empty again, and about 5 coders are idle. Hunt #2's JetBrains rows (37e03b91, 40813cc1, ac587df5) and the CQ-M07m1 launcher row now queue for QA, the jetbrains-gradle lease and long launcher postflights. So this hunt targets rows that QA can check quickly with vitest alone. Quota: acct-1 and acct-3 reset at 16:30Z.\n\nLANE. Search, in this order of preference:\n1. packages/moe-daemon/src. Look for systematic gaps across tool families, the way hunt #2 found the missing actor across 7 tools. Cases: a family member that skips a guard, a fence or validation its siblings apply, or a refusal code that differs from the one docs/MCP_SERVER.md names. Also look for integration gaps among today's landings: ceb494d9, cc998cad, aa228daf, 61bb5952, 13ff6bb4, d981e0b0, 2e3012b9 and e977c32b.\n2. packages/moe-proxy/src.\n3. packages/moe-claude-plugin/src. Hunt #2 dropped one item as minor: daemonClient.ts:149 and :237 read daemon.json `host`, but the daemon writes `bindHost`. File it only with evidence that it matters, e.g. that a seat whose daemon.json says bindHost \"wsl\" never reaches /ws from WSL.\n4. docs/MCP_SERVER.md contract drift: a documented parameter, refusal or default the tool does not implement, or the reverse.\n\nSkip moe-jetbrains/**, moe-vscode/**, scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.*, plus every file an open row's plan holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves. Already known, so don't re-file: the TURBO auto-approve \"WORKING by unknown\" line (a design call), and the JetBrains board fingerprint omitting needsHumanReview.\n\nEVIDENCE BAR. Same as hunt #2:\n- A repro on HEAD 8be13403 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a doc-contract mismatch: the MCP_SERVER.md line and the tool's file:line.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items, with a vitest gate (or the docs lint) as its verification.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence (a repro on HEAD 8be13403 or later run outside the shared checkout, a failure line from today's logs, or an MCP_SERVER.md line paired with the tool's file:line), and names a vitest or docs-lint verification, not Gradle or a launcher postflight.",
+    "No filed row targets moe-jetbrains/**, moe-vscode/**, scripts/moe-agent.* or a file an open row's plan holds, per lanes.js at hunt time. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 371.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:10:08.015Z",
+  "updatedAt": "2026-11-03T16:45:52.061Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:10:13.265Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-74d9e1c7@2026-11-03T16:10:12Z",
+    "at": "2026-11-03T16:45:52.061Z"
+  }
+}

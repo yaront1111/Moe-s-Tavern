@@ -1,0 +1,290 @@
+{
+  "id": "task-da89f620682e41c3892bfa7784b54ee3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a daemon run in the documented Docker container writes its container-namespace pid (15) to the mounted .moe/daemon.json, and the host daemon CLI judges that pid: `moe-daemon status` and `stop` delete the live daemon's daemon.json (\"stale daemon.json removed: pid dead\"), doctor warns it stale, and `start` brings up a second daemon on the same .moe/",
+  "description": "Filed by hunt #23 (task-da51c48b). It comes from a real-docker dry run of .github/workflows/docker.yml at moe/work-2026-10-24 2037e856. The image was built from a git-archive snapshot ($SNAP) outside the shared checkout. The host CLI is the packed tarball, installed with `npm install -g --prefix <tmp> moe-daemon-0.8.0.tgz moe-proxy-0.8.0.tgz`.\n\nPROBLEM\n- Inside the container, the daemon's `_run` process is pid 15 (pid 1 is the `start` supervisor). It writes that pid to the mounted project's .moe/daemon.json, for example {\"port\":19877,\"pid\":15,...,\"bindHost\":\"0.0.0.0\"}.\n- On the host, pid 15 is nothing, or an unrelated process. The host daemon CLI decides liveness with process.kill(pid, 0):\n  - packages/moe-daemon/src/index.ts:1094-1098: statusDaemon deletes a local record whose pid is dead.\n  - index.ts:341: validateDaemonInfoForProject returns 'pid not alive' before any /health probe. So existingDaemonBlocksStart (:577-598) cleans the record and the start proceeds, and stopDaemon (:1041-1084) removes it (\"Daemon not running or daemon.json is stale\").\n  - commands/doctor.ts:112-122 warns \"pid N not running (stale)\".\n- server/probeHost.ts:87-100 isForeignDaemonInfo already states the rule: \"the writer's pid lives in another pid namespace, so process.kill(pid, 0) proves nothing either way and only /health may judge it\". It keys only on the WSL/Windows path form, though. A container record has a native path, so it reads as local.\n- What the docs promise:\n  - docs/DEVELOPMENT.md:460: \"host clients take the port from the .moe/daemon.json the container writes\".\n  - docker-compose.yml:9-18 serves the project the same way.\n- docker.yml's Test Docker image step passes because it checks only /health and HEALTHCHECK. It never uses daemon.json the way host clients do.\n- If the host pid happens to be alive and /health answers for the project (the container does), stopDaemon :1082 sends SIGTERM to that unrelated host process.\n\nEVIDENCE (2037e856, WSL2 Ubuntu 24.04, docker 29.8.1)\n1. `docker run -d --user 1000:1000 -e MOE_DEFAULT_PORT=19877 -p 127.0.0.1:19877:19877 -v $SNAP:$SNAP -e MOE_PROJECT_PATH=$SNAP moe-daemon-hunt23:2037e856`\n   - /health reports healthy, pid 15, $SNAP.\n   - A host moe-proxy MCP handshake through that daemon.json works: serverInfo moe-daemon 0.8.0, 73 tools.\n   - Host `kill -0 15`: \"No such process\" (exit 1).\n2. `moe-daemon doctor --project $SNAP` prints \"[WARN] daemon.json: daemon.json present but pid 15 not running (stale)\" (exit 0), while /health is healthy.\n3. `moe-daemon status --project $SNAP` exits 0 and prints:\n   \"INFO: Daemon not running (stale daemon.json removed: pid dead)\"\n   \"WARN: Cleaning up stale daemon lifecycle files reason: \"pid not alive\"\"\n   - daemon.json is gone, and the container still answers /health healthy.\n   - The host proxy now loops \"[moe-proxy] Daemon not running, retrying in 1258ms (attempt 1)\".\n4. `moe-daemon start --project $SNAP --port 19878` starts a second daemon (pid 1678354, port 19878), which writes daemon.json. /health on 19877 (pid 15) and on 19878 both answer healthy for $SNAP: two writers on one .moe/.\nEvery container was removed and the host daemon stopped afterwards.\n\nFIX DIRECTION\n- The writer records its pid namespace in daemon.json. On Linux that is `readlink /proc/self/ns/pid`, for example \"pid:[4026531836]\"; the field is absent elsewhere.\n- isForeignDaemonInfo also treats as foreign a record whose pidNamespace differs from the reader's own, or one the reader cannot compare. validate, status, stop, start and doctor then all take the existing foreign path: /health with the project-identity check decides, no pid is signalled, and nothing is deleted while /health answers.\n- Pass the field at the call sites that build { projectPath } today: index.ts:93, :158 and :326, and doctor.ts:112.\n- A record without the field (an older daemon) keeps today's behavior.\n- Document the field in docs/SCHEMA.md (daemon.json).\n- Client parity is filed as separate rows: JetBrains (MoeDaemonSupervisor/MoeProjectService) and moe-agent.sh's pre-flight. moe-agent.ps1 (:986-1004) and VS Code delete nothing themselves; they run the daemon's own `start`, so this row covers them.\n\nPLACEMENT: no open row holds index.ts, probeHost.ts or doctor.ts (lanes.js -v at 12:10Z).",
+  "definitionOfDone": [
+    "Daemon unit tests use a record from another pid namespace, a pid that is dead in the reader's namespace, and a /health stub answering for the project. They prove four results: status keeps daemon.json and does not report 'not running'; stop sends no signal and removes nothing; start/init starts no second daemon; doctor does not warn 'stale'. The same tests fail against 2037e856's index.ts, probeHost.ts and doctor.ts.",
+    "A record with no pidNamespace, or with the reader's own namespace, keeps today's pid-based results, and the existing index.* and doctor tests pass unchanged.",
+    "daemon.json written by a daemon on Linux carries pidNamespace, and docs/SCHEMA.md documents the field and the foreign rule."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Add the record field and the namespace predicate.\n- packages/moe-daemon/src/types/schema.ts, DaemonInfo (:1865): add optional `pidNamespace?: string`. Doc comment: Linux only, the writer's `readlink /proc/self/ns/pid` (for example pid:[4026531836]), absent elsewhere. A reader in another pid namespace (a container, another WSL distro) cannot judge `pid`, so /health alone decides; see isOtherPidNamespace.\n- packages/moe-daemon/src/server/probeHost.ts, beside isForeignDaemonInfo (:87-100). Use the module's default `fs` import: its header says tests stub that object, and they will stub fs.readlinkSync.\n  - Export `ownPidNamespace(): string | undefined`. It does `fs.readlinkSync('/proc/self/ns/pid')` in try/catch, with no platform check (Windows and macOS throw ENOENT). It returns the value only when it matches `PID_NAMESPACE = /^pid:\\[[0-9]{1,20}\\]$/`, else undefined. Read it fresh on every call, with no cache.\n  - Export `isOtherPidNamespace(recorded: unknown, own: string | undefined = ownPidNamespace()): boolean`. It is true only when `recorded` is a string matching PID_NAMESPACE and differs from `own`; an undefined `own` counts as different. Any other value is false: absent, non-string, malformed, over 20 digits, or `net:[..]`. So legacy and hand-written records keep today's pid rules.\n- Error handling: neither function throws.\n- Doc comment: a container's pid means nothing on the host. isForeignDaemonInfo (WSL, path form) is checked first and wins.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/server/probeHost.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/server/probeHost.ts"
+      ],
+      "note": "DaemonInfo.pidNamespace?: string documented. probeHost.ts: PID_NAMESPACE regex, ownPidNamespace() (fs.readlinkSync via default fs import, try/catch, no cache), isOtherPidNamespace(recorded, own = ownPidNamespace()). Typecheck runs in the step-6 snapshot.",
+      "startedAt": "2026-11-04T12:26:53.145Z",
+      "completedAt": "2026-11-04T12:27:18.240Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Record the field, and let /health alone judge a namespaced record in the daemon CLI (packages/moe-daemon/src/index.ts).\n- Extract the DaemonInfo literal in startDaemon (:804-810) into an exported `buildDaemonInfo(port: number, projectPath: string, host: string): DaemonInfo`.\n  - It adds `pidNamespace` when ownPidNamespace() is defined, and omits the key otherwise.\n  - It keeps the bindHost rule (present only when host !== DEFAULT_BIND_HOST).\n  - startDaemon calls writeDaemonInfo(projectPath, buildDaemonInfo(...)). Add buildDaemonInfo to the export block (:1272-1297).\n- DaemonValidationResult (:115-121): add `namespaced?: boolean`, documented as 'the record's pidNamespace is not this reader's; /health alone judged it'. Add `const PID_NAMESPACE_UNREACHABLE = 'pid namespace daemon unreachable'`.\n- validateDaemonInfoForProject (:320-347): after the WSL-foreign branch and before `if (!isProcessAlive(info.pid))` (:341), add a branch for `isOtherPidNamespace(info.pidNamespace)`.\n  - Skip the pid entirely.\n  - Run the same local probe the native path runs: `healthProbeAddress(recordedProbeHost(info), SOCKET_TIMEOUT_MS)`, then `isLocalAddress`, then `probeDaemonHealth(info, own, SOCKET_TIMEOUT_MS, address)`. That probe already checks status 'healthy', the projectPath, and that /health's pid equals the record's.\n  - Return `{ valid: true, info, namespaced: true }` on a confirmed answer.\n  - Return `{ valid: false, reason: BIND_HOST_NOT_LOCAL, namespaced: true }` when the address is null or not local (nothing dialed).\n  - Otherwise return `{ valid: false, reason: PID_NAMESPACE_UNREACHABLE, namespaced: true }`.\n- statusDaemon (:1086-1110), for a namespaced record:\n  - Delete it only when reason === PID_NAMESPACE_UNREACHABLE (the daemon is gone, for example a removed container). Log 'Daemon not running (stale daemon.json removed: no /health answer from its pid namespace)'.\n  - A valid record logs status 'running' with owner 'another pid namespace'.\n  - BIND_HOST_NOT_LOCAL keeps the file.\n  - Non-namespaced records keep the existing `!isProcessAlive(info.pid)` rule byte for byte.\n- stopDaemon (:1041-1084): after the foreign branch, handle a valid namespaced record before writeStopSentinel and process.kill.\n  - logger.error with pid and port: 'daemon.json belongs to a live daemon in another pid namespace (for example a container): stop it there, for example with docker stop (no signal sent, nothing removed)'.\n  - Set `process.exitCode = 1` and return.\n  - Invalid namespaced records take the existing branches. BIND_HOST_NOT_LOCAL exits 1 and removes nothing. An unreachable record gets the sentinel and cleanup, as a dead pid's does.\n- existingDaemonBlocksStart (:577-598) needs no new branch. A valid namespaced record already blocks ('Moe daemon already running'), and an unreachable one is cleaned, so a restarted container (a new pid namespace reading its predecessor's record) still starts. Only keep its log truthful: for a namespaced record, log validation.reason, not 'pid not running'.\n- Never signal a namespaced record's pid anywhere. Error handling: no new throw paths; the probe failures above already resolve to false or null.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.ts"
+      ],
+      "note": "index.ts: buildDaemonInfo (exported) adds pidNamespace when ownPidNamespace() is defined; PID_NAMESPACE_UNREACHABLE; DaemonValidationResult.namespaced; validate branch after WSL-foreign, before isProcessAlive (null/non-local address -> BIND_HOST_NOT_LOCAL, nothing dialed); statusDaemon deletes namespaced only on unreachable, owner 'another pid namespace'; stopDaemon valid namespaced -> logger.error, exitCode 1, no signal; namespaced invalid paths never call isProcessAlive on the record pid (stop log, start-gate log). tsc --noEmit clean in /tmp snapshot.",
+      "startedAt": "2026-11-04T12:27:24.560Z",
+      "completedAt": "2026-11-04T12:29:50.284Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make doctor judge a namespaced record by /health (packages/moe-daemon/src/commands/doctor.ts).\n- probeDaemonJson (:81-136): add `pidNamespace?: unknown` to the parsed type and read it.\n- After the isForeignDaemonInfo branch (:112-114) and before isProcessAlive (:115), when `isOtherPidNamespace(parsed.pidNamespace)`, judge the record by /health at the local probe address. That is the dial rule probeDaemonReachability uses (:239-280): `healthProbeAddress(recordedProbeHost({ bindHost }), HEALTH_PROBE_TIMEOUT_MS)` plus `isLocalAddress`, with its refusal texts when the address is null or not local (nothing dialed).\n- Reuse probeForeignDaemonJson (:216-237) by generalizing it to take the host list and the side label:\n  - WSL: foreignProbeHosts(...) and 'written on the other side of the WSL boundary (pid N, port P)', unchanged.\n  - Namespaced: the one local address and 'written in another pid namespace (pid N, port P)'.\n- The outcomes for a namespaced record:\n  - A confirmed answer is [OK] 'daemon.json valid: written in another pid namespace (pid N, port P); /health answered on <host:port>'.\n  - A non-confirming HTTP answer is [WARN] and never says 'stale'.\n  - No answer is [WARN] '... no /health answered on <host:port> (stale)'.\n- foreignReachability carries the verdict, so probeDaemonReachability never re-dials.\n- Error handling: unchanged. probeHealth never throws, and a bad address returns the existing fail texts.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "note": "doctor.ts: probeDaemonJson reads pidNamespace; namespaced branch after the WSL branch, before isProcessAlive. probeForeignDaemonJson now takes (port, pid, hosts, side, expected); the WSL caller passes foreignProbeHosts + the unchanged side text. The local dial rule (with its two 'not dialed' refusal texts) is extracted to localProbeAddress(), shared by probeDaemonReachability and the namespaced branch; a refused address gives a daemon.json [WARN] plus the refusal as foreignReachability (never re-dialed). tsc clean; existing index+doctor tests 173 passed / 1 skipped in /tmp snapshot.",
+      "startedAt": "2026-11-04T12:29:52.636Z",
+      "completedAt": "2026-11-04T12:30:52.557Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Add the vitest tests. Their names are fixed, because the gate counts them.\n\npackages/moe-daemon/src/index.test.ts: add a new describe 'daemon.json from another pid namespace (task-da89f620)' inside 'daemon lifecycle validation', beside the WSL block.\n- Hoist DEAD_PID, writeDaemonFiles and killSpyWithoutSignals from the WSL describe (:230-260) to the enclosing describe, unchanged, so both blocks share them.\n- Records use pidNamespace 'pid:[1]'. No real namespace inode is 1, so it differs from every reader's on every CI OS.\n- Stub `vi.spyOn(fs, 'readlinkSync')` when a case needs a known own namespace; probeHost.ts reads through the same default fs object.\n- Import ownPidNamespace, isOtherPidNamespace and buildDaemonInfo dynamically inside N1/N2 (`await import(...)`), so the rest of the file still runs against 2037e856 for the RED check.\n- Cases:\n  - N1: truth table for isOtherPidNamespace and ownPidNamespace.\n    - isOtherPidNamespace is true for a different value and for an undefined own.\n    - It is false for an equal value, absent, 7, 'pid:[x]', 'pid:[1', 21 digits and 'net:[1]'.\n    - ownPidNamespace returns 'pid:[7]' when readlink is stubbed to 'pid:[7]', and undefined when the stub throws or returns 'garbage'.\n  - N2: buildDaemonInfo adds the stubbed pidNamespace and omits the key when readlink throws; its bindHost rule is unchanged.\n  - N3: validateDaemonInfoForProject.\n    - A healthy namespaced record (healthServer(testDir, DEAD_PID)) gives {valid:true, info, namespaced:true}.\n    - An unreachable one (unusedPort()) gives {valid:false, reason:'pid namespace daemon unreachable', namespaced:true}.\n    - The same record without the field gives reason 'pid not alive'.\n  - N4: statusDaemon keeps a healthy namespaced daemon.json byte-identical, exits 0 and never logs 'not running'.\n  - N5: statusDaemon removes an unreachable namespaced daemon.json.\n  - N6: stopDaemon on a healthy namespaced record sends no non-zero signal, keeps daemon.json byte-identical, writes no daemon.stop and sets exitCode 1.\n  - N7: stopDaemon on an unreachable namespaced record sends no signal and removes daemon.json.\n  - N8: existingDaemonBlocksStart returns true and keeps the file for a healthy namespaced record. It returns false and removes the file for an unreachable one (a restarted container starts).\n  - N9: a record carrying the reader's own namespace (readlink stubbed to 'pid:[7]', record 'pid:[7]') with a dead pid keeps today's results: validate gives 'pid not alive', and statusDaemon removes it.\n\npackages/moe-daemon/src/commands/doctor.test.ts: add a new describe 'runDoctor — daemon.json from another pid namespace (task-da89f620)'. Import only runDoctor, as the F block does. Copy or hoist the F-series' healthServer, unusedPort and DEAD_PID. Cases:\n  - D1: a namespaced record with a dead pid whose /health answers for this project on 127.0.0.1. The daemon.json line is [OK], naming 'another pid namespace' and 127.0.0.1:<port>, with no 'not running' or 'stale'. The reachability line is [OK], and exitCode is 0.\n  - D2: a namespaced record whose port answers nothing. The daemon.json line is [WARN], naming 'another pid namespace' and ending '(stale)'.\n  - D3: a record without the field and with a dead pid keeps '[WARN] daemon.json: daemon.json present but pid <DEAD_PID> not running (stale)'.\n\nRED check (DoD 1), in the same snapshot:\n- Restore `git show 2037e856:<path>` for types/schema.ts, server/probeHost.ts, index.ts and commands/doctor.ts.\n- Run `npx vitest run src/index.test.ts src/commands/doctor.test.ts -t 'pid namespace'`.\n- Expect N1-N8 and D1-D2 to fail and N9 and D3 to pass. Put the counts in complete_step's note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "index.test.ts: hoisted DEAD_PID, jsonPath/lockPath/stopPath (writeDaemonFiles needs them), writeDaemonFiles, killSpyWithoutSignals to 'daemon lifecycle validation'; new describe 'daemon.json from another pid namespace (task-da89f620)' N1-N9 (one it per id, so the gate count is exact). Deviation to make DoD1's RED hold for the stale cases: N5 uses a live host pid (process.pid) with no /health (old code kept the file), N7 writes no lock and asserts the record pid is never probed even with signal 0 (old code probed it). doctor.test.ts: new describe D1-D3 (records with bindHost 0.0.0.0 as the Docker image writes). GREEN in /tmp snapshot: index+doctor 185 passed / 1 skipped, tsc on src + both tests clean. RED (2037e856's schema.ts, probeHost.ts, index.ts, doctor.ts restored, -t 'pid namespace'): 10 failed (N1-N8, D1, D2), 2 passed (N9, D3) — exactly as planned.",
+      "startedAt": "2026-11-04T12:30:55.865Z",
+      "completedAt": "2026-11-04T12:34:01.176Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Docs.\n- docs/SCHEMA.md: add a '## daemon.json (runtime)' section before '## Activity Event'.\n  - The shape: port, pid, startedAt, projectPath, bindHost? and pidNamespace?, with when each is present.\n  - The liveness rule. A record from the other side of the WSL boundary (path form) is judged by /health at foreignProbeHosts' addresses. A record whose pidNamespace is not the reader's own (a container, another WSL distro) is judged by /health at the local probe address. Its pid is never signalled; an answer for this project means running, and no answer means stale (removed, so a restarted container starts). Any other record keeps the pid rules.\n- docs/ARCHITECTURE.md: in the 'The daemon CLI's `stop` and `status`' bullet (:621-635), add one sentence with the same namespaced rule. It covers status running versus removed, stop exiting 1 with no signal, start refusing, and doctor [OK] versus stale.\n- Mention no other doc. The client rows that read the field are task-6796a0f9 (JetBrains) and task-a7f8d8d6 (moe-agent.sh); they depend on this exact name and format.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "SCHEMA.md: new '## daemon.json (runtime)' before '## Activity Event' with the DaemonInfo shape (bindHost?, pidNamespace? and when each is present) and the three-rule liveness order (WSL path form first, other pid namespace by /health at the local probe address, else pid rules). ARCHITECTURE.md: one sentence appended to the daemon CLI stop/status bullet covering status/stop/start/doctor for live vs unreachable namespaced records. No other docs touched.",
+      "startedAt": "2026-11-04T12:34:04.120Z",
+      "completedAt": "2026-11-04T12:34:33.967Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Verification. Run this exact command, unchanged, from the task worktree. Its fresh output (exit 0, 'N: 9/9 D: 3/3', and the Test Files/Tests lines) is the complete_task evidence.\n- It snapshots HEAD to a mktemp dir outside the checkout, copies the 8 edited files over, runs npm ci, runs tsc on src and on both test files, and runs the FULL daemon vitest suite. The full suite is required because DaemonInfo is a shared on-disk type.\n- Baseline before this task: 293 files, 7594 passed, 24 skipped. Expect +12 passed.\n- Never run npm ci, build or test in the shared checkout (project customRules), and never kill a process you did not start.\n- If a known timing test (waitForTask.test.ts) flakes under fleet load, re-run the whole command and report both runs; do not edit the command.\n\n( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P docs scripts CLAUDE.md .gitignore | tar -x -C \"$S\" && cp docs/SCHEMA.md docs/ARCHITECTURE.md \"$S/docs/\" && (cd $P/src && cp --parents types/schema.ts server/probeHost.ts index.ts commands/doctor.ts index.test.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.test.ts\",\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; N=$(grep -acE '✓ .*pid namespace.*> N[1-9] ' ../v.log); D=$(grep -acE '✓ .*pid namespace.*> D[1-3] ' ../v.log); echo \"N: $N/9 D: $D/3\"; [ $E = 0 ] && [ $N = 9 ] && [ $D = 3 ] )",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts"
+      ],
+      "note": "Plan's exact gate command, fresh, from the task worktree: exit 0. Test Files 293 passed (293); Tests 7606 passed | 24 skipped (7630) = baseline 7594 + 12; N: 9/9 D: 3/3. No flakes.",
+      "startedAt": "2026-11-04T12:34:34.376Z",
+      "completedAt": "2026-11-04T12:35:34.644Z"
+    },
+    {
+      "stepId": "step-7",
+      "description": "Adversarial self-review of this task's own diff (skill adversarial-self-review), before complete_task.\n- A restarted container reads its predecessor's record from a new pid namespace. It must start (unreachable means stale, N8), never crash-loop.\n- A hostile repository record (pidNamespace 'pid:[1]', a live host pid, /health answering) must never get a signal from stop (N6). Only the exact format counts, and the probe dials only local addresses (the existing rule).\n- WSL-foreign records keep their refuse-when-unconfirmed semantics, and that branch runs first. The X-series tests pass unchanged.\n- Windows and macOS readers have no own namespace, so any well-formed recorded value goes to /health.\n- Native same-namespace and legacy records behave exactly as before (N9, D3, and the existing suite unchanged).\n- Two starters at once: the daemon.lock rule is unchanged and out of scope (see risks).\n- No shell writes into the tree. Use only the editing tool (project customRules), or the paths are held at landing.\n- Error handling: no new throw paths.\n- The field name and format are a contract for task-6796a0f9 and task-a7f8d8d6; never rename it.\nFix anything found, re-run step 6's command, then complete_task with its output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/probeHost.ts",
+        "packages/moe-daemon/src/commands/doctor.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/probeHost.ts",
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "docs/SCHEMA.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Self-review done; one fix: the doctor namespaced branch moved into probeNamespacedDaemonJson() (beside the WSL helper), so probeDaemonJson grows by 3 lines, not 9. Checked: (1) restarted container: unreachable -> stale -> start proceeds (N8). (2) A hostile 'pid:[1]' record with a live host pid and /health answering is never signalled (N6); only the exact form counts (N1); the dial stays local-only. (3) The WSL branch runs first and is unchanged (X-series green). (4) Windows/macOS readers have no own namespace -> /health. (5) Same-namespace and legacy records keep the pid rules (N9, D3). Theoretical, not fixed: (a) a namespaced record whose /health answers this project with a DIFFERENT pid, or a transient 503, counts as stale and status removes it. A live daemon answers 503 only while it shuts down (WS closed), and then it removes its own record anyway. A pid mismatch means two daemons on one .moe/. (b) A namespaced record with a non-local bindHost: the start gate cleans it and proceeds, as native BIND_HOST_NOT_LOCAL does today; status and stop keep it (stop exits 1). (c) daemon.lock is still judged by its pid (out of scope, a plan risk). (d) stopDaemon is now 53 lines (was 44), because the plan prescribed the added branches. No new throw paths. No shell writes into the tree. Gate re-run after the fix: exit 0, 293 files, 7606 passed | 24 skipped, N 9/9 D 3/3.",
+      "startedAt": "2026-11-04T12:35:35.473Z",
+      "completedAt": "2026-11-04T12:37:59.123Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 524.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T12:12:00.640Z",
+  "updatedAt": "2026-11-04T19:20:45.615Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T12:14:58.170Z",
+    "plannedStepCount": 7,
+    "plannedDistinctFileCount": 8,
+    "executedStepCount": 7,
+    "doneAt": "2026-11-04T12:45:15.909Z",
+    "wallClockMs": 1817739
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a408f113",
+    "qa-96811257"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 8 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6",
+    "step-7"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:25:10.917Z",
+  "executionContract": {
+    "intendedBehavior": "The daemon records its Linux pid namespace in .moe/daemon.json (pidNamespace, from readlink /proc/self/ns/pid). The daemon CLI (status, stop, start/init/_run) and doctor judge a record whose pidNamespace is not the reader's own by /health alone, at the local probe address. An answer confirming this project and the recorded pid means running: status keeps the file and reports running, stop sends no signal, removes nothing and exits 1, start/init start no second daemon, and doctor reports [OK]. No answer means stale: the record is removed as a dead pid's is, so a restarted container starts. Records without the field, or from the reader's own namespace, keep today's pid rules, and WSL-foreign records keep theirs.",
+    "invariants": [
+      "A namespaced record's pid is never signalled by any daemon CLI path.",
+      "isForeignDaemonInfo (the WSL path-form rule) is evaluated before the namespace rule, and its semantics are unchanged.",
+      "Only a pidNamespace matching ^pid:\\[[0-9]{1,20}\\]$ counts; any other value is treated as absent.",
+      "The /health probe of a namespaced record dials only an address isLocalAddress accepts (healthProbeAddress(recordedProbeHost(info))).",
+      "The existing index.test.ts X-series and the doctor F/P-series pass unchanged."
+    ],
+    "compatibility": [
+      "daemon.json gains only the optional key pidNamespace. JetBrains (Gson DaemonInfo), VS Code, moe-proxy (isDaemonInfoShape) and moe-agent.sh (daemon_json_field) all ignore unknown keys.",
+      "There is no MCP tool, /health or WebSocket contract change.",
+      "Legacy daemon.json files without the key behave exactly as before."
+    ],
+    "approvedScope": [
+      "server/probeHost.ts: new exports ownPidNamespace() and isOtherPidNamespace(recorded, own?).",
+      "index.ts: new export buildDaemonInfo(port, projectPath, host); DaemonValidationResult.namespaced; PID_NAMESPACE_UNREACHABLE; namespaced branches in validateDaemonInfoForProject, statusDaemon and stopDaemon; existingDaemonBlocksStart log text only.",
+      "commands/doctor.ts: probeDaemonJson reads pidNamespace; probeForeignDaemonJson generalized over the host list and the side label.",
+      "types/schema.ts: DaemonInfo.pidNamespace?: string."
+    ],
+    "reuse": [
+      "The existing local /health probe chain (healthProbeAddress, recordedProbeHost, isLocalAddress, probeDaemonHealth) instead of a new probe.",
+      "doctor's probeForeignDaemonJson, generalized, instead of a second /health-judging function.",
+      "The index.test.ts WSL helpers (healthServer, unusedPort, daemonInfo, DEAD_PID, writeDaemonFiles, killSpyWithoutSignals) and the doctor F-series helpers."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/probeHost.ts:96 isForeignDaemonInfo(info: Pick<DaemonInfo,'projectPath'>, platform) keys on the path form only; its docblock (:87-95) already states that a pid from another namespace proves nothing.",
+      "index.ts:341 validateDaemonInfoForProject returns 'pid not alive' before any probe; :261-317 probeDaemonHealth(info, expected, timeout, host) checks status healthy, the projectPath and parsed.pid === info.pid.",
+      "index.ts:1094-1098 statusDaemon deletes a local record with a dead pid; :1041-1084 stopDaemon; :577-598 existingDaemonBlocksStart; :804-811 the only daemon.json writer.",
+      "commands/doctor.ts:112-122: the foreign branch, then the pid 'not running (stale)' warn; :216-237 probeForeignDaemonJson; :239-280 probeDaemonReachability's local dial rule.",
+      "probeHost.ts:24 recordedProbeHost maps bindHost 0.0.0.0 to 127.0.0.1; the Docker image records bindHost 0.0.0.0."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P docs scripts CLAUDE.md .gitignore | tar -x -C \"$S\" && cp docs/SCHEMA.md docs/ARCHITECTURE.md \"$S/docs/\" && (cd $P/src && cp --parents types/schema.ts server/probeHost.ts index.ts commands/doctor.ts index.test.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.test.ts\",\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; N=$(grep -acE '✓ .*pid namespace.*> N[1-9] ' ../v.log); D=$(grep -acE '✓ .*pid namespace.*> D[1-3] ' ../v.log); echo \"N: $N/9 D: $D/3\"; [ $E = 0 ] && [ $N = 9 ] && [ $D = 3 ] )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Extend isForeignDaemonInfo so a pidNamespace mismatch counts as WSL-foreign (the filed fix direction). Rejected: foreign means refuse-when-unconfirmed (existingDaemonBlocksStart exits 1 and never removes the record). A container restarted by compose's `restart: unless-stopped`, or a second docker run after a SIGKILL or `docker rm -f`, reads its predecessor's record from a NEW pid namespace with nothing answering yet, so it would refuse to start forever (a crash loop). Today that case cleans up and starts. So a namespaced record uses /health as its liveness proof: an answer means live, no answer means stale.\n2) A Dockerfile ENV marker (for example MOE_IN_CONTAINER). Rejected: it covers only the official image, not other containers or another WSL distro, and it cannot tell the container itself from the host.\n3) Probe /health for every dead-pid record. Rejected: it changes every native stale cleanup and adds a probe to each, which the WSL and X-series semantics do not want.\n4) The hostname as the identity. Rejected: --hostname or network_mode: host makes it equal the host's.\nThe pid-namespace inode (readlink /proc/self/ns/pid) is exact on Linux and costs a microsecond. Without it a reader treats any well-formed recorded value as other.",
+    "codebaseInsights": "- One writer: index.ts:804-811.\n- Daemon CLI readers: validateDaemonInfoForProject (:320) feeds status, stop, existingDaemonBlocksStart (start/init/_run gate) and the lock-wait path. Doctor has its own parser (doctor.ts:81).\n- probeHost.ts is the module shared by the lifecycle and doctor ('so the dial rule cannot drift'), and its header asks to keep the default fs, os, dns and net imports because tests stub them.\n- Field tolerance verified: JetBrains parses with Gson (MoeDaemonSupervisor.kt:89, which ignores unknown keys), moe-proxy's utils.ts isDaemonInfoShape checks only the required fields, and moe-agent.sh's daemon_json_field uses python json .get.\n- Hunt evidence: the image records pid 15 and bindHost 0.0.0.0. A host `status` removed it, and a host `start --port 19878` ran a second daemon (see the task's EVIDENCE and mem:task-task-da51c48b1c8d4d408c1fbe66ab250cfc-handoff for the docker repro recipe, if you want an optional live check on a non-9876 port).\n- Full suite baseline at 2037e856: 293 files, 7594 passed, 24 skipped, about 49 s including npm ci.",
+    "risks": "- Unreachable namespaced means stale. A live container published on a different host port than daemon.json records (not the documented same-port mapping) is treated as gone, as it is today. The docs require the same port on both sides.\n- daemon.lock (staleLockReason :151-164) still judges a container's lock by pid. A host start racing a container's start window of about 1 s can still remove that lock. That is out of scope and unchanged; do not extend it here.\n- stop on a live namespaced daemon now exits 1, so the JetBrains Restart and Stop-and-Replace flows report that the stop failed instead of starting a duplicate. That is the intent, and task-6796a0f9 handles the plugin side.\n- Keep the WSL branch first: a Windows reader of a WSL record must stay foreign (path form) even though that record now also carries pidNamespace.\n- In N1/N2, use dynamic imports for the new symbols, or the RED run cannot import index.test.ts at all.\n- Full-suite timing flakes (waitForTask.test.ts) under fleet load: re-run the whole command, never edit it.\n- Never rename pidNamespace: two dependent rows read it.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/probeHost.ts",
+      "packages/moe-daemon/src/index.ts",
+      "packages/moe-daemon/src/commands/doctor.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/index.test.ts",
+      "packages/moe-daemon/src/commands/doctor.test.ts",
+      "docs/SCHEMA.md",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "54dd64fb4fffd59906c221bdeec934f095d86c0b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:25:10.950Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:26:53.145Z",
+  "reviewStartedAt": "2026-11-04T12:38:47.588Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon && git archive HEAD $P docs scripts CLAUDE.md .gitignore | tar -x -C \"$S\" && cp docs/SCHEMA.md docs/ARCHITECTURE.md \"$S/docs/\" && (cd $P/src && cp --parents types/schema.ts server/probeHost.ts index.ts commands/doctor.ts index.test.ts commands/doctor.test.ts \"$S/$P/src\") && cd \"$S/$P\" && echo '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/index.test.ts\",\"src/commands/doctor.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run --reporter=verbose > ../v.log 2>&1'; E=$?; grep -aE '^ +(Test Files|Tests) ' ../v.log; N=$(grep -acE '✓ .*pid namespace.*> N[1-9] ' ../v.log); D=$(grep -acE '✓ .*pid namespace.*> D[1-3] ' ../v.log); echo \"N: $N/9 D: $D/3\"; [ $E = 0 ] && [ $N = 9 ] && [ $D = 3 ] )",
+    "exitCode": 0,
+    "outputTail": "npm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' --noEmit\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p tt.json\n Test Files  293 passed (293)\n      Tests  7606 passed | 24 skipped (7630)\nN: 9/9 D: 3/3\nexit=0",
+    "reportedAt": "2026-11-04T12:38:47.588Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/server/probeHost.ts",
+    "packages/moe-daemon/src/index.ts",
+    "packages/moe-daemon/src/commands/doctor.ts",
+    "packages/moe-daemon/src/index.test.ts",
+    "packages/moe-daemon/src/commands/doctor.test.ts",
+    "docs/SCHEMA.md",
+    "docs/ARCHITECTURE.md"
+  ],
+  "completionSummary": "A daemon now records its Linux pid namespace in .moe/daemon.json as `pidNamespace` (readlink /proc/self/ns/pid; on this host pid:[4026532219]); the key is absent elsewhere. The daemon CLI and doctor judge a record from another pid namespace (a container) by /health alone, at the local probe address. Its pid is never signalled or probed.\n- probeHost.ts: ownPidNamespace() and isOtherPidNamespace(). Only `^pid:\\[[0-9]{1,20}\\]$` counts; the WSL path-form rule runs first and is unchanged.\n- index.ts: exported buildDaemonInfo; DaemonValidationResult.namespaced; PID_NAMESPACE_UNREACHABLE.\n  - status keeps a confirmed record and reports it running (owner 'another pid namespace'). It removes an unreachable one.\n  - stop on a live namespaced record sends no signal, removes nothing and exits 1. An unreachable one is cleaned as stale.\n  - The start/init/_run gate refuses a second daemon over a live one. It cleans an unreachable one, so a restarted container starts.\n- doctor.ts: [OK] 'written in another pid namespace … /health answered on 127.0.0.1:P', or [WARN] '… (stale)'. localProbeAddress() is shared with probeDaemonReachability; probeForeignDaemonJson takes hosts and a side label.\n- Legacy and same-namespace records keep the pid rules (N9, D3).\n- Docs: a SCHEMA.md 'daemon.json (runtime)' section and one ARCHITECTURE.md sentence.\n- Tests: index.test.ts N1-N9 and doctor.test.ts D1-D3. RED against 2037e856's 4 sources: N1-N8, D1 and D2 fail; N9 and D3 pass. N5 and N7 assert a live host pid and no pid probe, so they discriminate.\n- Gate: 293 files, 7606 passed | 24 skipped (+12), N 9/9, D 3/3.\n- Known edges, out of scope: daemon.lock is still judged by pid. A namespaced /health that answers with another pid, or a 503, counts as stale.",
+  "commits": [
+    {
+      "sha": "6d1472171c4ed2006c861a43dd436f9edae67963",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T12:25:47Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/commands/doctor.test.ts",
+        "packages/moe-daemon/src/commands/doctor.ts",
+        "packages/moe-daemon/src/index.test.ts",
+        "packages/moe-daemon/src/index.ts",
+        "packages/moe-daemon/src/server/probeHost.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T12:39:44.879Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T12:40:05Z",
+    "at": "2026-11-04T12:45:51.338Z"
+  },
+  "completedAt": "2026-11-04T12:45:15.909Z",
+  "reviewCompletedAt": "2026-11-04T12:45:15.909Z",
+  "reviewSummary": "Reviewed completion 6d147217, on moe/work-2026-10-24 and origin after a fresh fetch. 8 files, +429/-54, net 375 LOC; scope matches approvedScope.\n\nRe-run:\n- task.verification verbatim (HEAD=6d147217, paths clean): exit 0, 293 files, 7622 passed | 24 skipped, N 9/9, D 3/3.\n- RED with 2037e856's 4 sources: N1-N8, D1, D2 fail; N9, D3 pass.\n- Gate (parity-check.sh && npm run lint): exit 0.\n- Real boot of a /tmp snapshot build (HOME redirected, scratch project, port 19977), stopped by its own stop.\n\nDoD:\n1. With the live record rewritten to pidNamespace pid:[1], bindHost 0.0.0.0:\n   - status kept it byte-identical, owner 'another pid namespace'.\n   - doctor gave [OK] daemon.json and reachability.\n   - stop exited 1, sent no signal, wrote no sentinel; the live daemon survived, which covers the SIGTERM risk.\n   - start refused ('already running', nothing on 19978).\n   - Once stopped: doctor WARN '(stale)', and status removed it.\n2. N9 and D3 pass on old and new code. In index.test.ts the helpers are only hoisted. Full suite green.\n3. The real daemon wrote pidNamespace pid:[4026532219], matching readlink. SCHEMA.md and ARCHITECTURE.md are updated.\n\nInvariants hold: WSL branch first and unchanged; exact-form regex; local-only dial; no namespaced path probes the record pid.\n\nNon-blocking:\n- A namespaced record with a projectPath mismatch (a non-documented mount path) keeps the native pid rules, as today.\n- daemon.lock is still pid-judged (declared out of scope).\n- Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

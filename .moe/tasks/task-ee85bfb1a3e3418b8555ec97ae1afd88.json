@@ -1,0 +1,216 @@
+{
+  "id": "task-ee85bfb1a3e3418b8555ec97ae1afd88",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "docs: the worker.reference.md LANDING rule still says \"use no git command\"; align it with task-b5c8fd34's resume prompt (read-only git allowlist, merged-tree verification)",
+  "description": "Follow-up to task-b5c8fd341d4f48f89f5056b176622428. That task rewrites the LANDING-CONFLICT/LANDING-RETRY resume prompt in scripts/moe-agent.{sh,ps1}. It drops \"no git commands\" and appends one identical rule (sh `resume_rule`, ps1 `$resumeRule`) to both lines:\n- HEAD can lack the merged target.\n- A verification snapshot built from HEAD (`git archive HEAD`, or a clone checked out at HEAD) is built from the worktree's tracked files instead.\n- Git stays read-only: only git status, git diff, git log, git show, git ls-files and git rev-parse may run. Every git write stays forbidden.\n\ndocs/roles/worker.reference.md :97 (the LANDING rule) still says \"Edit files only: use no git command (commit, merge, reset, checkout, abort) ... Then re-run the plan's verification command\". That now contradicts the prompt. A worker who reads the reference gets the same mixed signal that stalled WT-14's resume (msg-c9029b23).\n\nThis row only aligns the docs with the landed wrapper text: read the landed `resume_rule` line, never a planned copy. The doc is vendored, so packages/moe-daemon/src/generated/initFiles.ts must be regenerated in a clone with history and applied with the Edit tool (Serena convention-role-doc-edits-regenerate-initfiles). worker.md's pointer \"(edit files only; leave git to the wrapper)\" still holds for git writes and may stay unchanged. The dated design record docs/plans/2026-10-30-per-task-worktrees.md stays out of scope.",
+  "definitionOfDone": [
+    "docs/roles/worker.reference.md's LANDING rule no longer says \"use no git command\"; it names the same read-only allowlist as the landed resume rule (git status, git diff, git log, git show, git ls-files, git rev-parse), keeps every git write forbidden, and tells the worker to build a HEAD-based verification snapshot from the worktree's tracked files.",
+    "packages/moe-daemon/src/generated/initFiles.ts is regenerated from the edited doc in a clone with history (marker sha and SHIPPED_ROLE_BODY_SHAS), and its diff touches only the worker.reference.md entry.",
+    "npm run lint passes, and packages/moe-daemon src/util/initFiles.test.ts, src/util/targetedContextGuidance.test.ts and src/util/qaCommitPolicy.test.ts pass in a Linux snapshot, with the exact commands and counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first, then the doc edit (Edit tool only, GLOBAL rail 3).\n\nPrecondition: task-b5c8fd341d4f48f89f5056b176622428 is DONE, so its rule is on your HEAD. Quote the LANDED rule, never a planned copy. Print it with the sed in checkRefs[0]. It must print exactly one line (654 chars at planning time), and the same string must also sit in scripts/moe-agent.ps1 as $resumeRule. If sed prints nothing, or the ps1 copy differs, report_blocked with blockedOnTaskIds [\"task-b5c8fd341d4f48f89f5056b176622428\"] and stop.\n\nRED: run checkRefs[0] on the unedited doc. It must FAIL with 'the LANDING bullet is not one line quoting the landed resume_rule ...', which proves the check bites on your HEAD.\n\nEdit docs/roles/worker.reference.md, only the bullet that starts '- LANDING rule (worktree mode):' (line 97 at planning), with two Edit calls:\n(a) Replace 'Edit files only: use no git command (commit, merge, reset, checkout, abort), no new plan, and do not reopen completed steps.' with 'Edit files only, with no new plan, and do not reopen completed steps.'\n(b) Right after 'Then re-run the plan's verification command and call `moe.complete_task`.' insert ' Both prompts end with this rule, verbatim: ' followed by the landed rule exactly as sed printed it. The rule ends 'or MERGE_HEAD).', and the existing 'Markers left behind print ...' sentence follows after one space.\n\nKeep the bullet on ONE line. Keep every other clause byte-identical:\n- the conflict-marker sentence;\n- the gate/contention/remote sentence;\n- `MOE_WORKTREE_UNRESOLVED_CONFLICT`;\n- 'a checkpoint in the meantime keeps the pending merge';\n- 'Nothing is auto-resolved or forced.'\nThe expected line for the planning-time rule is in /mnt/d/moe-scratch/ee85bfb1-plan/proto-bullet.md (sha256 in SHA256SUMS there). If the landed rule differs, quote the landed one.\n\nWhy verbatim:\n- The rule already covers all of DoD 1: it names the read-only allowlist (git status, git diff, git log, git show, git ls-files, git rev-parse), keeps every git write forbidden, and says to build a HEAD-based snapshot from the worktree's tracked files.\n- The doc and both prompts then cannot drift apart.\n- checkRefs[0] can test the quote mechanically.\n\nDo NOT edit docs/roles/worker.md. Its pointer '(edit files only; leave git to the wrapper)' stays true for git writes, and editing it would add a second initFiles.ts entry, which DoD 2 forbids. Also leave docs/plans/2026-10-30-per-task-worktrees.md and .moe/roles/ (daemon-synced) alone.\n\nKeep these sentinels in the file: 'memory-name inventory', 'once per session', 'isolated-clone delivery', 'moe.record_commit', 'fresh remote fetch', 'sessionId'. Add no phrase matching /never (?:runs|executes|touches) git|runs no git|does not run git/i (daemonGitDocs.test.ts). The rule's 'never a git write' does not match it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/roles/worker.reference.md"
+      ],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md"
+      ],
+      "note": "RED confirmed (r0 failed on unedited doc); after two Edit calls r0 OK: 654-char landed resume_rule quoted verbatim, bullet still one line.",
+      "startedAt": "2026-11-03T03:29:44.093Z",
+      "completedAt": "2026-11-03T03:30:33.304Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Regenerate the daemon's vendored copy, and apply it with the Edit tool. Read mem:convention-role-doc-edits-regenerate-initfiles and mem:gotcha-daemon-linux-snapshot-gate.\n\n1. Build a generator snapshot at the SAME base that checkRefs[2] and [3] use.\n   - From the worktree root, compute B with their B=... expression. It is MERGE_HEAD under a pending merge. Otherwise it is the newest commit whose subject does not start with wip(task- or sync(task-.\n   - Run S=$(mktemp -d), then git clone -q --shared --no-checkout . \"$S/repo\", then git -C \"$S/repo\" checkout -q --detach \"$B\".\n   - Copy ONLY the edited docs/roles/worker.reference.md into $S/repo/docs/roles/.\n   - In $S/repo/packages/moe-daemon, run the npm ci and generate-init-files part of checkRefs[3], under the same env -i and PATH.\n   - Expect 'Generated ... (8 role docs + 3 subagents, sha-stamped)'.\n   Why B and not HEAD: a worktree completion lands as ONE squashed commit, so a wip checkpoint holding a draft of the doc never reaches the target. A clone at HEAD would list that draft's body sha, and QA's re-run on the landed target would then fail the cmp. The prototype confirmed it: a HEAD base differs, while the B base matches.\n\n2. diff -U0 the worktree's packages/moe-daemon/src/generated/initFiles.ts against the clone's. Expect exactly 3 hunks, all in the worker.reference.md entry:\n   - the 'worker.reference.md' ROLE_DOCS marker line (line 594), where sha=27bec85d5275 becomes the new sha;\n   - the LANDING bullet line (692);\n   - one new sha, inserted in sorted position, in the 'worker.reference.md' SHIPPED_ROLE_BODY_SHAS line (750).\n   Reference: /mnt/d/moe-scratch/ee85bfb1-plan/proto-initFiles.diff. The sha values follow the rule's bytes.\n\n3. Apply the hunks with the Edit tool. Unique anchors in the template literal:\n   - the step-1 (a) sentence, which contains no backtick;\n   - 'Markers left behind': insert the same ' Both prompts end with this rule, verbatim: <rule>' text right after the escaped moe.complete_task sentence before it. The rule has no backtick, backslash or '${', so it is carried unescaped;\n   - the marker sha;\n   - the new sha, between its sorted neighbours.\n   The Edit tool trims a trailing space in new_string, so end each one on a non-space character. Never cp, mv or redirect the generated file into the tree (GLOBAL rail 3).\n\n4. cmp the worktree's file against the clone's output. They must be equal.\n\nError handling:\n- A hunk outside the worker.reference.md entry means the base copy was stale. Stop and report_blocked, naming that doc and the commit that changed it. DoD 2 allows only this entry.\n- If npm ci or the generator fails, rerun once. If it fails again, report_blocked with the error tail and blockedOnTaskIds [].\n- Never run npm in the worktree's packages or in the shared checkout (GLOBAL rail 1).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Generator run in a shared clone at base b1e68978 with the edited doc; 3 hunks, all in the worker.reference.md entry. Applied with 4 Edit calls (marker sha, two bullet edits, one new sha); cmp equal to generator output.",
+      "startedAt": "2026-11-03T03:30:33.917Z",
+      "completedAt": "2026-11-03T03:30:56.965Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it ONCE, fresh, from the task worktree root, as ONE command: <checkRefs[0]> && <checkRefs[1]> && <checkRefs[2]> && <checkRefs[3]>, each exactly as in the executionContract. Byte-identical copies are in /mnt/d/moe-scratch/ee85bfb1-plan/r0.sh to r3.sh (sha256 in SHA256SUMS). Submit the joined command, its exit code and the tail to complete_task. DoD 3 wants the command and the counts in the evidence.\n\nWhat each checkRef proves:\n- [0]: the landed resume_rule is one line of 300+ chars, the same string is in moe-agent.ps1, and ONE LANDING bullet quotes it verbatim and keeps nine named phrases (DoD 1).\n- [1]: parity-check.sh passes (epic rail 2), npm run lint passes (DoD 3), 'no git command' is gone from the reference, and worker.md's pointer is intact.\n- [2]: nothing under docs/ or packages/moe-daemon/ differs from the generator base except the two files.\n- [3]: in a git clone --shared snapshot at the base, on Linux with nvm node v24.21.0:\n  - npm ci runs;\n  - the generator reproduces the base's own initFiles.ts, so the base is fresh;\n  - with the edited doc it reproduces the candidate byte for byte (cmp, DoD 2);\n  - then 5 vitest files pass: initFiles, targetedContextGuidance and qaCommitPolicy (DoD 3), plus blockedSeatGuidance and daemonGitDocs.\n\nPrototype baseline (/mnt/d/moe-scratch/ee85bfb1-plan/proto-run.log): exit 0, 'Test Files 5 passed (5)', 'Tests 44 passed (44)', about 30 s including npm ci.\n\nA FAIL line names the broken check. Fix the doc or initFiles.ts, never a checkRef. If parity fails on wrapper bytes this task never touched, that is a peer's problem: comment on that task and report_blocked with its id. Run in the foreground.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Joined r0..r3 exit 0: R0/R1/R2/R3 OK, Test Files 5 passed (5), Tests 44 passed (44).",
+      "startedAt": "2026-11-03T03:30:57.648Z",
+      "completedAt": "2026-11-03T03:32:00.744Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the whole diff, then complete_task. B is step 2's base.\n(a) git diff -U0 \"$B\" -- docs/roles/worker.reference.md changes exactly one line, the LANDING bullet. The quoted rule is byte-identical to the landed sh and ps1 rule, and nothing else in the bullet moved.\n(b) The doc now allows read-only git while every git write stays forbidden. No wording weakens the write ban, no stray 'no git command' remains, and 'Edit files only' still frames the session.\n(c) worker.md, docs/plans and .moe/roles are untouched.\n(d) git diff -U0 \"$B\" -- packages/moe-daemon/src/generated/initFiles.ts shows 3 hunks, all in the worker.reference.md entry and its sha list.\n(e) Both paths were written with the Edit tool, and both are listed in complete_step.modifiedFiles.\nIf anything changes, rerun step 3's command fresh and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "note": "Self-review: doc diff is one line (the LANDING bullet); rule byte-identical to the landed sh/ps1 rule; no 'no git command' left; write ban intact; worker.md/docs/plans/.moe untouched; initFiles.ts has exactly 3 hunks in the worker.reference.md entry; both written with Edit.",
+      "startedAt": "2026-11-03T03:32:01.384Z",
+      "completedAt": "2026-11-03T03:32:04.244Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-b5c8fd341d4f48f89f5056b176622428"
+  ],
+  "priority": "MEDIUM",
+  "order": 48,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T01:10:19.060Z",
+  "updatedAt": "2026-11-04T19:20:39.914Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T01:27:33.216Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T03:35:24.889Z",
+    "wallClockMs": 7671673
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T02:04:40.862Z",
+  "executionContract": {
+    "intendedBehavior": "A worker resumed with a LANDING-CONFLICT: or LANDING-RETRY: prompt reads, in docs/roles/worker.reference.md, the same rule that the wrapper's prompt now carries (task-b5c8fd34):\n- edit files only, with no new plan;\n- git stays read-only: only git status, git diff, git log, git show, git ls-files and git rev-parse may run;\n- every git write stays forbidden;\n- HEAD can lack the merged target, so a verification snapshot built from HEAD is built from the worktree's tracked files instead.\nThe doc quotes the landed rule verbatim, so the doc and both prompts cannot disagree. The daemon's vendored copy (initFiles.ts ROLE_DOCS and SHIPPED_ROLE_BODY_SHAS) matches the edited doc.",
+    "acceptanceCriteria": [
+      "DoD 1: the worker.reference.md LANDING bullet no longer says 'use no git command (commit, merge, reset, checkout, abort)', and it quotes the landed resume_rule verbatim (checkRefs[0]). That rule carries the read-only allowlist (git status/diff/log/show/ls-files/rev-parse), forbids every git write, and says to build a HEAD-based snapshot from the worktree's tracked files. No 'no git command' remains in the file (checkRefs[1]).",
+      "DoD 2: initFiles.ts equals the generator output of a git clone --shared snapshot (with history) at the generator base, with the edited doc copied in. The base's own copy regenerates unchanged, so the base is fresh. Nothing else under docs/ or packages/moe-daemon/ changed. The diff is the worker.reference.md marker sha, the bullet line, and one new SHIPPED_ROLE_BODY_SHAS entry (checkRefs[2] and [3]).",
+      "DoD 3: npm run lint passes (checkRefs[1]). initFiles, targetedContextGuidance and qaCommitPolicy, plus blockedSeatGuidance and daemonGitDocs, pass in the Linux snapshot (checkRefs[3]). The completion evidence gives the joined command, exit 0, and the counts 'Test Files 5 passed (5)' and 'Tests 44 passed (44)'."
+    ],
+    "invariants": [
+      "The rest of the LANDING bullet stays byte-identical: the conflict-marker sentence, the gate/contention/remote sentence, MOE_WORKTREE_UNRESOLVED_CONFLICT, 'a checkpoint in the meantime keeps the pending merge', and 'Nothing is auto-resolved or forced'.",
+      "docs/roles/worker.md is unchanged; its pointer '(edit files only; leave git to the wrapper)' stays.",
+      "Only docs/roles/worker.reference.md and packages/moe-daemon/src/generated/initFiles.ts change (board records aside), and both are written with the Edit tool.",
+      "No npm command runs in the shared checkout or in the worktree's packages. npm ci and vitest run only in the mktemp clone.",
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 are read, never edited, and parity-check.sh passes."
+    ],
+    "compatibility": [
+      "The ROLE_DOCS keys and the sha-marker scheme are unchanged. The .moe/roles copies are daemon-synced and are not edited. JetBrains and VS Code pick up docs/roles at their next bundle build; no plugin source changes.",
+      "docs/plans/2026-10-30-per-task-worktrees.md, a dated design record, stays as written. The shared-mode text in worker.reference.md is untouched."
+    ],
+    "approvedScope": [
+      "docs/roles/worker.reference.md: only the bullet starting '- LANDING rule (worktree mode):' (line 97 at planning).",
+      "packages/moe-daemon/src/generated/initFiles.ts: only the 'worker.reference.md' ROLE_DOCS value (its marker sha and that bullet line) and its SHIPPED_ROLE_BODY_SHAS entry, generator output only."
+    ],
+    "reuse": [
+      "WT-18c (task-cfa12925) supplies the snapshot, generator and Edit-hunk recipe and the checkRef shape. For worktree mode, the clone base changes from HEAD to the newest non-wip/sync commit, or MERGE_HEAD.",
+      "The landed resume_rule text itself (scripts/moe-agent.sh resume_rule, scripts/moe-agent.ps1 $resumeRule) is quoted instead of paraphrased."
+    ],
+    "sourceAssumptions": [
+      "At planning (2026-11-03), target moe/work-2026-10-24 is 7379c2bc. There, docs/roles/worker.reference.md:97 is the LANDING bullet with 'Edit files only: use no git command (commit, merge, reset, checkout, abort), no new plan, and do not reopen completed steps.' It is the file's only 'no git command'.",
+      "task-b5c8fd34 is WORKING; its step-1 checkpoint is 11588b32. It adds a 654-char rule, identical in both wrappers: a 4-space-indented resume_rule=\"...\" in moe-agent.sh worktree_resume, and $resumeRule = \"...\" in moe-agent.ps1. The prompts keep 'Edit files only (no new plan)'. Its landed text wins over this description.",
+      "initFiles.ts at 7379c2bc: the 'worker.reference.md' marker sha 27bec85d5275 is at line 594, the bullet at 692, and its SHIPPED_ROLE_BODY_SHAS list at 750 (worker.md's list is at 749). The base regenerates byte-identical; this was checked in a scratch clone in about 23 s with npm ci.",
+      "scripts/generate-init-files.ts builds each doc's shipped-sha list from git log -- docs/roles/<f> at the clone's HEAD, plus the working copy. Worktree completions land on the target as single-parent commits. Task-branch-only commits are wip(task-...) checkpoints and sync(task-...) merges.",
+      "Prototype results (/mnt/d/moe-scratch/ee85bfb1-plan):\n- The four checkRefs pass on the correct edit (5 files, 44 tests) and on a landed squash commit.\n- They are RED on the unedited doc.\n- They FAIL for a missing quote, a kept 'no git command', a stale initFiles.ts, a changed worker.md, and a lost phrase.\n- A wip draft passes only with the non-wip base."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && R=$(sed -n 's/^    resume_rule=\"\\(.*\\)\"$/\\1/p' scripts/moe-agent.sh) && { [ \"$(printf '%s\\n' \"$R\" | wc -l)\" -eq 1 ] && [ \"${#R}\" -ge 300 ] && grep -qF -- \"$R\" scripts/moe-agent.ps1 && L=$(grep -F -- '- LANDING rule (worktree mode):' docs/roles/worker.reference.md) && [ \"$(printf '%s\\n' \"$L\" | wc -l)\" -eq 1 ] && printf '%s\\n' \"$L\" | grep -qF -- \"$R\" || { echo \"FAIL: the LANDING bullet is not one line quoting the landed resume_rule (one line, in both wrappers) verbatim\"; exit 1; }; } && for s in 'LANDING-CONFLICT: <paths>' 'LANDING-RETRY: <reason>' 'no new plan' 'do not reopen completed steps' 'settings.qualityGate' 'moe.complete_task' 'MOE_WORKTREE_UNRESOLVED_CONFLICT' 'keeps the pending merge' 'Nothing is auto-resolved or forced'; do printf '%s\\n' \"$L\" | grep -qF -- \"$s\" || { echo \"FAIL: the LANDING bullet lost: $s\"; exit 1; }; done && echo \"R0 OK: the ${#R}-char resume_rule is quoted verbatim\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && { ! grep -qiF 'no git command' docs/roles/worker.reference.md || { echo \"FAIL: worker.reference.md still says no git command\"; exit 1; }; } && { grep -qF '(edit files only; leave git to the wrapper)' docs/roles/worker.md || { echo \"FAIL: worker.md's LANDING pointer changed\"; exit 1; }; } && echo \"R1 OK\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git rev-parse -q --verify \"$B^{commit}\" >/dev/null && X=$(git diff --name-only \"$B\" -- docs packages/moe-daemon | grep -vxF -e docs/roles/worker.reference.md -e packages/moe-daemon/src/generated/initFiles.ts || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change vs $B: $X\"; exit 1; }; } && echo \"R2 OK: scope vs generator base $B\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$B\" && cp docs/roles/worker.reference.md \"$S/w.md\" && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/c.ts\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund -q && npm run generate-init-files && { git diff --quiet -- src/generated/initFiles.ts || { echo \"FAIL: base initFiles.ts is stale\"; exit 1; }; } && cp \"$S/w.md\" ../../docs/roles/worker.reference.md && npm run generate-init-files && cmp src/generated/initFiles.ts \"$S/c.ts\" && echo \"R3 OK: initFiles.ts = generator output\" && npx vitest run src/util/{initFiles,targetedContextGuidance,qaCommitPolicy,blockedSeatGuidance,daemonGitDocs}.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Four alternatives were rejected.\n- Paraphrasing the rule with backticks: the paraphrase can drift from the prompt, and the check degrades into a phrase list. Quoting the landed rule keeps the doc and both prompts identical, and grep -F tests it.\n- Also editing worker.md's pointer: the pointer is still true for git writes, the task allows leaving it, and editing it would add a second initFiles.ts entry, which DoD 2 forbids.\n- WT-18c's clone at HEAD: in worktree mode, a wip checkpoint's draft would add a body sha that the squashed landing never ships, so QA's re-run on the target would fail the cmp.\n- A test pinning doc and wrapper rule together permanently: out of scope, since this row only aligns the docs. It is worth a follow-up if the rule changes again.",
+    "codebaseInsights": "- The generator lists every historical body sha of each role doc. It reads git log -- docs/roles/<f> at the clone's HEAD and adds the working copy. A docs row therefore needs a clone with history, plus a base whose history matches what the target will hold.\n- Worktree completions land as single-parent squash commits. The task branch additionally holds wip(task-...) checkpoints and sync(task-...) merges of its own landed commits. So the newest commit not matching ^(wip|sync)\\(task- is the right generator base, or MERGE_HEAD during a pending merge. QA's re-run on the landed target resolves it to HEAD.\n- The four checkRefs each stay at or under the contract's 1000-char limit and run standalone. Joined with &&, they are the evidence command.",
+    "risks": "1. b5c8fd34 may land a different rule after QA. Quote the landed one: checkRefs[0] reads it from HEAD, so a planned copy fails.\n2. WT-18 (task-1b2e6fe3, WORKING) may regenerate initFiles.ts for worker.md. The worker.md and worker.reference.md SHIPPED lines are adjacent (749 and 750), so whichever row lands second may take the LANDING-CONFLICT route. Resolve it by keeping both entries; checkRefs[2] and [3] then base on MERGE_HEAD, which is the merged target.\n3. Under a LANDING resume, the prompt's rule allows only six read-only git commands. checkRefs[3] needs a scratch git clone and checkout under mktemp; these never touch this worktree's index, HEAD, refs or MERGE_HEAD. If you read the allowlist as forbidding that clone, ask the governor once in chat before running it (precedent msg-c9029b23). Do not improvise another snapshot: the generator needs history.\n4. If the base's initFiles.ts is stale, checkRefs[3] says so. Then report_blocked; do not fold in foreign hunks.\n5. The Edit tool trims a trailing space in new_string.\n6. No npm in the shared checkout or the worktree's packages.",
+    "keyFiles": [
+      "docs/roles/worker.reference.md",
+      "packages/moe-daemon/src/generated/initFiles.ts",
+      "packages/moe-daemon/scripts/generate-init-files.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "docs/roles/worker.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78cfa1c16fdbf7bf46be97960388868e852dcbf4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T02:04:40.887Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T03:29:44.093Z",
+  "reviewStartedAt": "2026-11-03T03:32:17.733Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && R=$(sed -n 's/^    resume_rule=\"\\(.*\\)\"$/\\1/p' scripts/moe-agent.sh) && { [ \"$(printf '%s\\n' \"$R\" | wc -l)\" -eq 1 ] && [ \"${#R}\" -ge 300 ] && grep -qF -- \"$R\" scripts/moe-agent.ps1 && L=$(grep -F -- '- LANDING rule (worktree mode):' docs/roles/worker.reference.md) && [ \"$(printf '%s\\n' \"$L\" | wc -l)\" -eq 1 ] && printf '%s\\n' \"$L\" | grep -qF -- \"$R\" || { echo \"FAIL: the LANDING bullet is not one line quoting the landed resume_rule (one line, in both wrappers) verbatim\"; exit 1; }; } && for s in 'LANDING-CONFLICT: <paths>' 'LANDING-RETRY: <reason>' 'no new plan' 'do not reopen completed steps' 'settings.qualityGate' 'moe.complete_task' 'MOE_WORKTREE_UNRESOLVED_CONFLICT' 'keeps the pending merge' 'Nothing is auto-resolved or forced'; do printf '%s\\n' \"$L\" | grep -qF -- \"$s\" || { echo \"FAIL: the LANDING bullet lost: $s\"; exit 1; }; done && echo \"R0 OK: the ${#R}-char resume_rule is quoted verbatim\" && cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && { ! grep -qiF 'no git command' docs/roles/worker.reference.md || { echo \"FAIL: worker.reference.md still says no git command\"; exit 1; }; } && { grep -qF '(edit files only; leave git to the wrapper)' docs/roles/worker.md || { echo \"FAIL: worker.md's LANDING pointer changed\"; exit 1; }; } && echo \"R1 OK\" && cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && git rev-parse -q --verify \"$B^{commit}\" >/dev/null && X=$(git diff --name-only \"$B\" -- docs packages/moe-daemon | grep -vxF -e docs/roles/worker.reference.md -e packages/moe-daemon/src/generated/initFiles.ts || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change vs $B: $X\"; exit 1; }; } && echo \"R2 OK: scope vs generator base $B\" && cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && S=$(mktemp -d) && git clone -q --shared --no-checkout . \"$S/repo\" && git -C \"$S/repo\" checkout -q --detach \"$B\" && cp docs/roles/worker.reference.md \"$S/w.md\" && cp packages/moe-daemon/src/generated/initFiles.ts \"$S/c.ts\" && cd \"$S/repo/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 S=\"$S\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund -q && npm run generate-init-files && { git diff --quiet -- src/generated/initFiles.ts || { echo \"FAIL: base initFiles.ts is stale\"; exit 1; }; } && cp \"$S/w.md\" ../../docs/roles/worker.reference.md && npm run generate-init-files && cmp src/generated/initFiles.ts \"$S/c.ts\" && echo \"R3 OK: initFiles.ts = generator output\" && npx vitest run src/util/{initFiles,targetedContextGuidance,qaCommitPolicy,blockedSeatGuidance,daemonGitDocs}.test.ts'",
+    "exitCode": 0,
+    "outputTail": "R0 OK: the 654-char resume_rule is quoted verbatim; PASS parity-check.sh; npm run lint OK (architect.md 39, worker.md 30, qa.md 36 lines); R1 OK; R2 OK: scope vs generator base b1e689781fb8243e0318a6721ea12aff079787b6; R3 OK: initFiles.ts = generator output; ✓ blockedSeatGuidance (1) ✓ targetedContextGuidance (6) ✓ qaCommitPolicy (10) ✓ initFiles (23) ✓ daemonGitDocs (4); Test Files 5 passed (5); Tests 44 passed (44)",
+    "reportedAt": "2026-11-03T03:32:17.733Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/roles/worker.reference.md",
+    "packages/moe-daemon/src/generated/initFiles.ts"
+  ],
+  "completionSummary": "Aligned docs/roles/worker.reference.md's LANDING bullet with task-b5c8fd34's landed resume rule. Two Edit hunks on that one line: 'use no git command (commit, merge, reset, checkout, abort)' is now 'Edit files only, with no new plan, ...', and the landed 654-char resume_rule is quoted verbatim after the complete_task sentence. It names the read-only allowlist (git status, diff, log, show, ls-files, rev-parse), forbids every git write, and says to build a HEAD-based snapshot from the worktree's tracked files. Every other clause is unchanged; worker.md, docs/plans and .moe/roles are untouched. packages/moe-daemon/src/generated/initFiles.ts was regenerated in a git clone --shared snapshot at base b1e68978 (history kept) and applied with 4 Edit calls: marker sha 27bec85d5275 to 9a727a066966, the bullet line, and one new sha in the worker.reference.md SHIPPED_ROLE_BODY_SHAS entry. It is cmp-equal to generator output; diff is 3 hunks, all in that entry. Joined checkRefs r0..r3 exit 0: R0 resume_rule quoted verbatim, parity PASS, npm run lint OK, R1/R2/R3 OK, 'Test Files 5 passed (5)', 'Tests 44 passed (44)'.",
+  "commits": [
+    {
+      "sha": "0eaf069b15a5a8c680de33c0333f859a9249c6fd",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T03:28:53Z",
+      "paths": [
+        "docs/roles/worker.reference.md",
+        "packages/moe-daemon/src/generated/initFiles.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T03:33:06.698Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T01:27:31Z",
+    "at": "2026-11-03T03:39:05.719Z"
+  },
+  "completedAt": "2026-11-03T03:35:24.889Z",
+  "reviewCompletedAt": "2026-11-03T03:35:24.889Z",
+  "reviewSummary": "Reviewed landed completion 0eaf069b (contained in moe/control HEAD and moe/work-2026-10-24; task.commits has the completion entry). Diff is +4/-4 over 2 files: docs/roles/worker.reference.md (the LANDING bullet only, one line) and packages/moe-daemon/src/generated/initFiles.ts (3 hunks, all in the worker.reference.md entry: marker sha 27bec85d5275 -> 9a727a066966, the bullet line, one new sha 9a727a066966 in SHIPPED_ROLE_BODY_SHAS). Re-ran the full task.verification (r0..r3 joined) myself from a /tmp script, exit 0: R0 OK (654-char resume_rule from moe-agent.sh is on one line, present in moe-agent.ps1, and quoted verbatim in the single LANDING bullet with all nine kept phrases); parity-check PASS; npm run lint OK (architect 39, worker 30, qa 36); 'no git command' gone and worker.md pointer intact (R1); scope check clean (R2: only the two files differ from base 0eaf069b); R3 in a mktemp git clone --shared snapshot, Linux node v24.21.0: base initFiles.ts regenerates unchanged, generator output cmp-equal to the candidate, vitest initFiles/targetedContextGuidance/qaCommitPolicy/blockedSeatGuidance/daemonGitDocs: Test Files 5 passed (5), Tests 44 passed (44). Diff read: the doc now names the read-only allowlist (status/diff/log/show/ls-files/rev-parse), forbids every git write, and tells the worker to build a HEAD-based snapshot from git ls-files of the worktree; the rest of the bullet (marker sentence, gate/contention/remote, MOE_WORKTREE_UNRESOLVED_CONFLICT, checkpoint-keeps-pending-merge, nothing auto-resolved) is byte-identical. Dependency task-b5c8fd34 landed as f7b077f7. No npm ran in the shared checkout. Not verified here: nothing deferred.",
+  "requiredCheckAtDone": null
+}

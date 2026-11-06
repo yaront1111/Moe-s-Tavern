@@ -1,0 +1,181 @@
+{
+  "id": "task-ff1f71cd2e1548d284770fd47f65bac0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: PowerShell 5.1 reads UTF-8 .moe-agent.json non-ASCII serenaProject using ANSI encoding",
+  "description": "Get-Content -Raw -Path $moeAgentConfig (and with -LiteralPath) omits -Encoding UTF8. A BOM-less UTF-8 JSON serenaProject pointing at an existing directory containing é becomes mojibake on PS5.1 and falls back to project root with override not found; pwsh7 reads it correctly. Independently reproduced during task-3ad573a7; its fixture can use a BOM to isolate wildcard behavior.",
+  "definitionOfDone": [
+    "PS5.1 honors BOM-less UTF-8 serenaProject with non-ASCII directory names.",
+    "Regression covers PS5.1 and pwsh7 reads without changing missing-path fallback behavior.",
+    "Keep literal-path binding from task-3ad573a7 if present."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED, then fix. Work from the task checkout root: `cd \"$(git rev-parse --show-toplevel)\"`. This row dependsOn task-3ad573a7, so at claim time its literal-path edits have landed:\n- the line reads `$cfg = Get-Content -Raw -LiteralPath $moeAgentConfig | ConvertFrom-Json`;\n- scripts/tests/literal-project-path.test.mjs exists.\nCheck both with grep first. Write tracked files only with the Edit/Write tools.\n\n(1) New scripts/tests/serena-project-config.test.mjs (node:test, ESM). Header comment: PS 5.1's Get-Content reads a BOM-less file as ANSI, so a UTF-8 .moe-agent.json whose serenaProject names a non-ASCII directory became mojibake and fell back to the project root. JSON is UTF-8 (RFC 8259).\n\nRead `new URL('../moe-agent.ps1', import.meta.url)`, strip the BOM and convert CRLF to LF. Cut `block = between(ps, '\\n$serenaProject = $projectPath.ToString()', '\\nif ($serenaPath -and ')` with a `between` that asserts both anchors exist, like daemon-json-cap.test.mjs:23-28.\n\nTests:\n\n(a) Static, every OS: the block's Get-Content line that reads `$moeAgentConfig` contains `-Encoding UTF8` and `-LiteralPath $moeAgentConfig`. Drop the -LiteralPath assertion only if 3ad573a7 was archived without landing, and say so in the summary. This is RED on today's line.\n\n(b) Engines: copy daemon-json-cap.test.mjs's `probe()` and its two ps1 rows (:53-60):\n- PowerShell 5.1 = powershell.exe, Windows-only, skip elsewhere with that reason;\n- PowerShell 7 = pwsh.exe on win32, else pwsh, skipped when the probe fails.\n\nFor each engine, three rows, each in its own `fs.mkdtempSync(path.join(os.tmpdir(), 'moe-serena-'))`, rmSync'd in t.after (maxRetries 5):\n- BOM-less UTF-8 naming an existing dir `serena é ü`;\n- the same file with a leading \ufeff (back-compat);\n- BOM-less naming a missing `absent é`.\n\nFor each row:\n- Write `<root>/proj/.moe-agent.json` = (bom ? '\ufeff' : '') + JSON.stringify({ serenaProject: dir }). writeFileSync with a string writes UTF-8 without a BOM.\n- Write a `\ufeff`-prefixed script: `$ErrorActionPreference = 'Stop'`, `[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)`, `$projectPath = <psq(project)>`, then `block`, then `Write-Output \"SERENA=$serenaProject\"` and `Write-Output \"SOURCE=$serenaProjectSource\"`.\n- Run `spawnSync(exe, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File', script], { encoding:'utf8', timeout:60000, windowsHide:true, env })`, with env = process.env minus /^MOE_/i so MOE_SERENA_PROJECT never leaks in.\n- Assert status 0 and strip `\\r`. Then:\n  - Existing rows: SOURCE === '.moe-agent.json', realpathSync.native(SERENA).toLowerCase() === the dir's, and no `[WARN]`.\n  - Missing row: SOURCE === 'project root (override not found)', SERENA === project, and the output includes exactly `[WARN] Serena project '<dir>' (from .moe-agent.json) not found; using Moe project root`. This is today's fallback, unchanged apart from the path now decoding correctly.\n\n(2) Wire it into CI. In .github/workflows/ci.yml, right after the `Test launcher daemon.json cap and seat re-registration` step, add a step: name `Test PowerShell .moe-agent.json read`; one comment line (PowerShell 5.1 reads a BOM-less file as ANSI unless told UTF-8; Linux runs pwsh 7); `if: runner.os != 'macOS'`; `run: node --test scripts/tests/serena-project-config.test.mjs`.\n\nRED:\n- On Linux, `node --test scripts/tests/serena-project-config.test.mjs`: test (a) fails.\n- Natively, `\"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$PWD/scripts/tests/serena-project-config.test.mjs\")\"`: the two BOM-less PowerShell 5.1 rows fail, with mojibake (`Ã©`) in SERENA or the WARN. The BOM row and every pwsh row pass.\n\nQuote both failures in the completion summary.\n\n(3) Fix scripts/moe-agent.ps1, in the .moe-agent.json read inside the Serena block (about :665). Make it `$cfg = Get-Content -Raw -LiteralPath $moeAgentConfig -Encoding UTF8 | ConvertFrom-Json`. Keep 3ad573a7's -LiteralPath (DoD 3) and every other token.\n- `-Encoding UTF8` decodes UTF-8 on PS 5.1 and 7, and consumes a BOM when present, so BOM'd files keep working.\n- Error handling: unchanged. The try/catch \"Could not parse\" WARN, the MOE_SERENA_PROJECT step and the not-found fallback stay byte for byte.\n- Keep the file's UTF-8 BOM and LF endings.\n- Change no other Get-Content site. The sibling PS 5.1 default-encoding reads (Load-Registry, project.json, KNOWN_ISSUES.md, the codex/gemini/grok configs) are out of scope and reported separately.\n\nRe-run both RED commands: all green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/serena-project-config.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        ".github/workflows/ci.yml",
+        "scripts/tests/serena-project-config.test.mjs"
+      ],
+      "note": "RED: Linux static test failed (line lacked -Encoding UTF8); Windows PS5.1 BOM-less rows failed with mojibake 'serena Ã© Ã¼' in the WARN. Fixed: added -Encoding UTF8 to the one Get-Content line (BOM + LF kept); CI step added.",
+      "startedAt": "2026-11-02T23:58:45.259Z",
+      "completedAt": "2026-11-02T23:59:24.533Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once from the task checkout root. This command's fresh output is the complete_task evidence:\n\n`cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/serena-project-config.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$PWD/scripts/tests/serena-project-config.test.mjs\")\" \"$(wslpath -w \"$PWD/scripts/tests/literal-project-path.test.mjs\")\"`\n\nExpect:\n- Linux: the static test passes. The PS rows skip unless pwsh is on PATH.\n- The parity check passes, which also checks moe-agent.ps1's BOM.\n- Windows-native: all 6 engine rows pass with NONE skipped. pwsh is on PATH on this box, so a skipped pwsh row is not evidence.\n- 3ad573a7's real-wrapper launches pass with the edited line, still printing `(source: .moe-agent.json)` from its BOM'd fixture.\n\nThe Windows leg can take several minutes. If it nears the Bash tool's 10-minute foreground cap, run the whole command in the background with output to a /mnt/d/moe-scratch log, and report that log.\n\nIf 3ad573a7 was archived and literal-project-path.test.mjs is absent, drop it from the command and say so.\n\nError handling: never pattern-kill a hung powershell.exe or node.exe. Stop only a PID your own session started.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verification green. Linux: static test passes, 6 PS rows skipped (no pwsh). Windows-native: 15/15 pass, 0 skipped (6 new engine rows plus the literal-project-path launches). parity-check PASS. Log: /mnt/d/moe-scratch/task-ff1f71cd/verify.log",
+      "startedAt": "2026-11-02T23:59:25.434Z",
+      "completedAt": "2026-11-03T00:00:07.956Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of this diff only:\n- `git diff -U0 -- scripts/moe-agent.ps1` adds only ` -Encoding UTF8` to that one line. No -LiteralPath, -Raw or ConvertFrom-Json change.\n- The BOM and LF endings are kept.\n- The new test cleans every temp root even on assertion failure.\n- Its env strips MOE_*, so a seat's MOE_SERENA_PROJECT cannot mask a failure.\n- The anchors fail loudly when moved, through between()'s assert.\n- Back-compat: an ANSI-encoded non-ASCII .moe-agent.json now decodes as UTF-8, with U+FFFD for the bad bytes, and falls back with the WARN. Accept this: such a file is not valid JSON per RFC 8259, and pwsh 7 and the sh twin already read UTF-8.\n- The ci.yml step uses the same `if:` guard as its neighbour.\n\nFix anything found and re-run step 2 before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/serena-project-config.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/tests/serena-project-config.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Self-review clean. The ps1 diff is one line and adds only -Encoding UTF8. The BOM (efbbbf) and LF endings are kept. The test registers t.after rmSync right after mkdtempSync. The env strips /^MOE_/i. The anchors go through between()'s assert. The ci.yml step uses the same runner.os != 'macOS' guard as its neighbour.",
+      "startedAt": "2026-11-03T00:00:08.768Z",
+      "completedAt": "2026-11-03T00:00:13.063Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\": worker-filed real bug (PS5.1 ANSI read of .moe-agent.json). Gated on 3ad573a7 (same Get-Content line, literal-path producer); planning may proceed now.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 338.7,
+  "comments": [
+    {
+      "id": "comment-2b3de19ce1c14620acfebe9cc493fd71",
+      "author": "governor-e6b40560",
+      "content": "Governor early start, 23:58Z. I dropped dependsOn task-3ad573a7. Its literal-path edits have already landed in a0269bcd on moe/work-2026-10-24, and that row is waiting on QA only. Your step 1 preconditions therefore hold from your worktree today:\n- the moeAgentConfig line reads `$cfg = Get-Content -Raw -LiteralPath $moeAgentConfig | ConvertFrom-Json` (a0269bcd's `@@ -678,9 +679,9 @@` hunk);\n- scripts/tests/literal-project-path.test.mjs exists.\nCheck them with grep as step 1 says. Also confirm `git merge-base --is-ancestor a0269bcd HEAD`.\nYour change is ` -Encoding UTF8` on that same line. If 3ad573a7 is rejected and its rework touches that line or ci.yml before you land, the landing reports LANDING-CONFLICT. Then re-apply your one-line edit on top; nothing else changes. Keep DoD 3 as written.",
+      "timestamp": "2026-11-02T23:57:48.526Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T19:52:01.193Z",
+  "updatedAt": "2026-11-04T19:20:43.865Z",
+  "dependsOn": [],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:02:48.259Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T22:11:26.994Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T01:12:14.806Z",
+    "wallClockMs": 10847812
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:15:55.172Z",
+  "planningNotes": {
+    "approachesConsidered": "Rejected: extend 3ad573a7's literal-project-path.test.mjs fixture (drop its BOM, add a missing-path launch). Each case is a full real-wrapper launch of minutes, and that fixture's BOM deliberately isolates the wildcard behaviour.\n\nChosen: a focused cut-and-run test of the Serena block. It takes seconds per row on PS 5.1 and pwsh 7, and its 3 rows map to DoD 1 and 2.\n\nRejected: an ANSI fallback on invalid UTF-8. JSON is UTF-8, so it is not worth the complexity.",
+    "codebaseInsights": "- The Serena block is moe-agent.ps1 :659-686, between `$serenaProject = $projectPath.ToString()` and `if ($serenaPath -and (Test-Path ...))`.\n- daemon-json-cap.test.mjs already has the PS engine probe/table (:49-60) and the cut-and-run pattern (powershellKeys :590-604: a BOM'd script with Console UTF-8 output).\n- 3ad573a7's fixture writes `.moe-agent.json` with a BOM precisely because of this bug (literal-project-path.test.mjs:130-131).\n- PS 5.1 Get-Content without -Encoding also reads :167, :308, :978, :1030, :1238, :1379, :1545, :2822, :3894, :3915 and :4598. Out of scope, reported to the governor.",
+    "risks": "- Write-Host output reaches captured stdout only with [Console]::OutputEncoding set to UTF-8; without it, PS 5.1 rows mis-decode é even when fixed.\n- os.tmpdir() on Windows may be an 8.3 short path. Compare SERENA through realpathSync.native, as literal-project-path.test.mjs does.\n- The PS 5.1 rows only run natively on Windows; a Linux-only run is not evidence for DoD 1.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      "scripts/tests/literal-project-path.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ecf00c18d8684d4abd44c53355d4017ef67728f6",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:15:55.202Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:58:45.259Z",
+  "reviewStartedAt": "2026-11-03T00:00:19.404Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && node --test scripts/tests/serena-project-config.test.mjs && bash scripts/tests/parity-check.sh && \"/mnt/c/Program Files/nodejs/node.exe\" --test \"$(wslpath -w \"$PWD/scripts/tests/serena-project-config.test.mjs\")\" \"$(wslpath -w \"$PWD/scripts/tests/literal-project-path.test.mjs\")\"",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n✔ powershell.exe claude: literal project launch and completion\n✔ pwsh.exe claude: literal project launch and completion\n✔ the .moe-agent.json read is UTF-8 and literal-path\n✔ PowerShell 5.1: BOM-less UTF-8, existing non-ASCII dir\n✔ PowerShell 5.1: UTF-8 with BOM, existing non-ASCII dir\n✔ PowerShell 5.1: BOM-less UTF-8, missing non-ASCII dir\n✔ PowerShell 7: BOM-less UTF-8, existing non-ASCII dir\n✔ PowerShell 7: UTF-8 with BOM, existing non-ASCII dir\n✔ PowerShell 7: BOM-less UTF-8, missing non-ASCII dir\nℹ tests 15\nℹ pass 15\nℹ fail 0\nℹ skipped 0\nEXIT=0",
+    "reportedAt": "2026-11-03T00:00:19.404Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.ps1",
+    ".github/workflows/ci.yml",
+    "scripts/tests/serena-project-config.test.mjs"
+  ],
+  "completionSummary": "scripts/moe-agent.ps1 now reads .moe-agent.json with `Get-Content -Raw -LiteralPath $moeAgentConfig -Encoding UTF8` (3ad573a7's -LiteralPath kept, BOM and LF kept). A BOM-less UTF-8 serenaProject with non-ASCII directory names now resolves on PS 5.1. The missing-path fallback and its WARN are unchanged. New scripts/tests/serena-project-config.test.mjs cuts the real Serena block out of the launcher: 1 static test plus 3 rows each on PS 5.1 and pwsh 7 (BOM-less existing dir, BOM existing dir, BOM-less missing dir). New CI step 'Test PowerShell .moe-agent.json read'. RED before the fix: Linux static test failed ('-Encoding UTF8' missing from the Get-Content line); Windows PS 5.1 BOM-less rows failed with mojibake: `[WARN] Serena project '...\\serena Ã© Ã¼' (from .moe-agent.json) not found`. After the fix: Linux 1 pass / 6 skipped (no pwsh); Windows-native 15/15 pass, 0 skipped (the 7 new tests plus 3ad573a7's literal-project-path launches on powershell.exe and pwsh.exe). parity-check PASS, npm run lint OK. Log: /mnt/d/moe-scratch/task-ff1f71cd/verify.log",
+  "commits": [
+    {
+      "sha": "1b667532de6949e0807cebcbaadd314b55b5266b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-02T23:57:48Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/serena-project-config.test.mjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T00:01:16.857Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T01:10:27Z",
+    "at": "2026-11-03T01:12:44.683Z"
+  },
+  "completedAt": "2026-11-03T01:12:14.806Z",
+  "reviewCompletedAt": "2026-11-03T01:12:14.806Z",
+  "reviewSummary": "Reviewed completion 1b667532 (on moe/control and moe/work-2026-10-24; net 91 LOC, 3 files). moe-agent.ps1 changes one line: adds ` -Encoding UTF8` to `Get-Content -Raw -LiteralPath $moeAgentConfig` (3ad573a7's -LiteralPath kept; BOM + LF kept; try/catch, MOE_SERENA_PROJECT step and not-found fallback untouched). ci.yml adds one step (runner.os != macOS). Re-ran task.verification in the foreground (log /mnt/d/moe-scratch/qa-ff1f71cd/verify.log, EXIT=0): Linux 1 pass/6 skipped (no pwsh); parity-check PASS; Windows-native 15/15 pass, 0 skipped (PS 5.1 x3, pwsh 7 x3, static test, 3ad573a7 real-wrapper launches). Mutation check in a scratch copy outside the checkout (-Encoding UTF8 stripped): static test and both PS 5.1 BOM-less rows fail with mojibake (`serena Ã© Ã¼`, `absent Ã©`); PS 5.1 BOM row and all pwsh 7 rows still pass, so the tests are non-vacuous. DoD: (1) PS 5.1 BOM-less existing-dir row asserts source '.moe-agent.json', realpath equality, no WARN; (2) PS 5.1 and pwsh 7 both covered, missing-dir row asserts the unchanged 'project root (override not found)' fallback and exact WARN; (3) -LiteralPath retained and pinned by the static assertion. Hygiene: temp roots rmSync'd in t.after, env strips MOE_*, anchors assert via between(). Working-tree ps1 has 4 later lines from other rows, not this change. Ponytail: nothing to cut. Out of scope per plan: other PS 5.1 default-encoding reads in moe-agent.ps1.",
+  "requiredCheckAtDone": null
+}

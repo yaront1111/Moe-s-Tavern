@@ -1,0 +1,230 @@
+{
+  "id": "task-a62b6528aa1e46f494c82f643bdf697a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: two overlapping wait_for_resource calls for one worker both park, because the existing-waiter check runs before an awaited runExclusive and the registration after it, and the first call's cleanup deletes the second call's registry entry, so disconnect cleanup and re-entry lose the live waiter",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/tools/waitForResource.ts)\n- The \"cancel the existing waiter\" check (activeResourceWaiters.get, :74) runs BEFORE `await state.runExclusive(... acquireResource ...)` (:84). The registration (activeResourceWaiters.set) runs AFTER it (:175).\n- A second call for the same worker that arrives inside that window sees no waiter yet. Its set at :175 then overwrites the first entry without cancelling the first call, so both RPCs stay parked.\n- The first call's cleanup() later deletes the map entry unconditionally (:125), which removes the second, still-live waiter's entry.\n- After that, the disconnect cleanup in server/WebSocketServer.ts (activeResourceWaiters.get(workerId)) and any re-entry can no longer find the parked second waiter. Its RPC and subscription live until its own timeout, at most 10 min.\n- Siblings don't race:\n  - wait_for_task has no await in that window.\n  - chat_wait deletes only its own entry (tools/chatWait.ts:131, `...?.timer === this.timer`).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/resourceWaiterReentry.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- Command: `npx vitest run src/__hunt__/resourceWaiterReentry.test.ts`. Result: 1 failed. Verbatim:\n```\nt=300ms  registered: [ 'call1:worker-waiter', 'call2:worker-waiter' ] | first: \"still parked\" | second: \"still parked\"\nt=1300ms first: {\"granted\":false,\"timedOut\":true,\"resourceId\":\"box\",\"position\":1,...} | second: \"still parked\" | registry has worker-waiter: false\nAssertionError: expected { Object (granted, timedOut, ...) } to deeply equal { granted: false, cancelled: true }\n```\n- Exposure: a guard gap, not a live incident. It needs two near-simultaneous waits for one worker id, for example an agent's parallel tool calls on two resources.\n\nFIX DIRECTION\n- Re-check for an existing waiter, and cancel it, right before activeResourceWaiters.set (:175), with no await in between.\n- Make cleanup() delete the entry only while it is still this call's own, the chatWait identity guard.\n- Don't touch server/WebSocketServer.ts: it is held at filing time, and the fix does not need it.\n\nFILES: packages/moe-daemon/src/tools/waitForResource.ts, plus a new vitest file.",
+  "definitionOfDone": [
+    "With two overlapping wait_for_resource calls for one worker, the earlier one resolves {granted:false, cancelled:true} once the later one registers, and activeResourceWaiters still holds the later waiter after the earlier call's cleanup runs.",
+    "A waiter's cleanup removes the registry entry only while that entry is still its own, so a disconnect cleanup finds and cancels the live waiter, in a new vitest file.",
+    "`npx vitest run` of the new file plus the existing waitForResource tests passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1, 2. packages/moe-daemon/src/tools/waitForResource.ts.\n\n(1) Add a module-level `cancelResourceWaiter(workerId: string): void` built from the current top-of-handler block (:73-80):\n- get the entry;\n- if it exists: clearTimeout(entry.timer), entry.unsubscribe(), entry.resolve({ granted: false, cancelled: true });\n- then `if (activeResourceWaiters.get(workerId) === entry) activeResourceWaiters.delete(workerId);`.\nKeep the top-of-handler call, so a plain re-entry behaves as today.\n\n(2) Call it AGAIN inside the Promise executor, immediately before `activeResourceWaiters.set(workerId, {...})` (:175), with no await in between. A second call that passed the top check while the first was inside `await state.touchWorker` / `await state.runExclusive(...)` then cancels the first waiter instead of silently overwriting it. Whichever call parks last stays registered.\n\n(3) Make cleanup() (:118-126) delete the registry entry only while it is still this call's own, as chatWait does (tools/chatWait.ts:131): `if (activeResourceWaiters.get(workerId)?.timer === timer) activeResourceWaiters.delete(workerId);`. A replaced waiter's timeout, grant or subscribe-failure cleanup can then never remove the live waiter's entry. That entry is what WebSocketServer.ts:1392's disconnect cleanup and cleanupStaleResourceWaiters look up.\n\nDo NOT touch server/WebSocketServer.ts: its disconnect sequence is correct once the registry is right. Error handling: the helper keeps the existing best-effort semantics, a cancelled waiter's unsubscribe running its own idempotent cleanup. No new throw path. Tests come in step 2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts"
+      ],
+      "note": "Added cancelResourceWaiter helper; called at top and again right before registry set (no await between); cleanup deletes only own entry (timer identity).",
+      "startedAt": "2026-11-03T23:05:14.673Z",
+      "completedAt": "2026-11-03T23:05:29.928Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 1-3. New test file packages/moe-daemon/src/tools/waitForResource.reentry.test.ts.\n\nPort /mnt/d/moe-scratch/hunt-cc441586/B/resourceWaiterReentry.test.ts. Its setup:\n- ToolTestHarness with task-holder holding lease 'box' and task-waiter owned by worker-waiter;\n- McpAdapter.handle tools/call moe.wait_for_resource, passing an onWaiterRegistered context that records owners;\n- an afterEach that drains activeResourceWaiters.\nReplace the fixed sleeps with `vi.waitFor` polling so the file is load-tolerant.\n\nCases:\n- (a) Two overlapping calls (call 1 timeoutMs 60000, call 2 timeoutMs 60000, both started without awaiting): once both registered, call 1 resolves exactly `{ granted: false, cancelled: true }`, call 2 is still parked, and `activeResourceWaiters.get('worker-waiter')` is defined.\n- (b) After call 1's cleanup has run (it has resolved), run the same disconnect sequence WebSocketServer.ts:1392-1397 uses on the registry entry: get, clearTimeout, unsubscribe, resolve cancelled, delete. Call 2 must resolve `{ granted: false, cancelled: true }` and the registry must be empty. Without the fix the entry is gone and call 2 stays parked.\n- (c) A replaced waiter's own timer does not remove the live entry: call 1 timeoutMs 1000, call 2 timeoutMs 60000; wait past 1 s (vi.waitFor on call 1's result) and assert the registry still holds call 2's entry.\n- (d) Sequential re-entry is unchanged: one call parks, a second call after it registers cancels it (mirror the existing waitForResource.test.ts:88 case; keep it short).\n\nRed first: (a)-(c) must fail against HEAD's waitForResource.ts. Record that in the completion summary. Error handling: every assertion uses toEqual/toBe on exact shapes; no bare truthiness.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts"
+      ],
+      "note": "New reentry test, 4 cases, written before the step was formally started (steps 2 and 3 ran out of order). Red at HEAD (a-c fail, d passes), green with fix, in a git-archive snapshot.",
+      "startedAt": "2026-11-03T23:06:34.695Z",
+      "completedAt": "2026-11-03T23:06:37.319Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs sync (ruling msg-71db57ac). In docs/MCP_SERVER.md `### moe.wait_for_resource`, extend the re-entry bullet (~:3132, 'Calling `wait_for_resource` again with the same `workerId` cancels the previous wait …'). After its first sentence add:\n\n'This holds when the two calls overlap too: whichever call parks last stays registered, and the other resolves cancelled.'\n\nChange nothing else; the verification grep reads 'whichever call parks last'. Error handling and tests are unaffected by this docs-only step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added overlap sentence to wait_for_resource re-entry bullet.",
+      "startedAt": "2026-11-03T23:06:26.477Z",
+      "completedAt": "2026-11-03T23:06:33.602Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification: run this once, fresh, before complete_task, on a snapshot outside the shared checkout (DoD 3):\n\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'whichever call parks last' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/waitForResource.ts $P/tools/waitForResource.reentry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/waitForResource.reentry.test.ts src/tools/waitForResource.test.ts src/tools/acquireResource.test.ts src/tools/releaseResource.generation.test.ts src/server/WebSocketServer.test.ts'`\n\nWebSocketServer.test.ts covers the disconnect cleanup that reads the registry. Submit the exit code and output tail as complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh snapshot run: exit 0, tsc clean, 5 files / 151 tests passed.",
+      "startedAt": "2026-11-03T23:06:38.484Z",
+      "completedAt": "2026-11-03T23:07:08.839Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this diff (3 files). Check each item below.\n\n(a) There is no await between the pre-set re-check and activeResourceWaiters.set, and the executor itself has none.\n\n(b) A grant that arrives for call 1 just before call 2 registers: call 1 resolves granted, its cleanup deletes only its own entry, and call 2 parks or returns granted immediately from acquireResource. The task-keyed lease is unaffected, so no double grant.\n\n(c) cleanupStaleResourceWaiters and the WebSocketServer disconnect path still delete the entry they cancel.\n\n(d) The subscribe-failure path deletes nothing it does not own.\n\n(e) Mutant proof: the new tests are red at HEAD.\n\n(f) Error handling: the helper never throws out of the handler.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts",
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForResource.ts",
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review (a)-(f) clean, no changes after step 4's run. (a) executor sync, no await between re-check and set. (b) a grant to call 1 resolves it granted and deletes only its own entry; call 2's acquireResource is task-keyed and idempotent, so no double grant. (c) stale sweep and WS disconnect still delete the entry they cancel. (d) subscribe-failure cleanup deletes only its own entry (never registered, so nothing). (e) tests a-c red at HEAD. (f) helper has no throw path.",
+      "startedAt": "2026-11-03T23:07:09.963Z",
+      "completedAt": "2026-11-03T23:07:23.984Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 450.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:48.919Z",
+  "updatedAt": "2026-11-04T19:20:44.913Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:02:41.189Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T23:10:50.009Z",
+    "wallClockMs": 488820
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-3",
+    "step-2",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:04:23.678Z",
+  "executionContract": {
+    "intendedBehavior": "For one worker, overlapping wait_for_resource calls end with exactly one parked waiter: the one that registers last; the other resolves {granted:false, cancelled:true}. A waiter's cleanup removes the registry entry only while it is its own, so disconnect cleanup and the stale sweep always find the live waiter.",
+    "acceptanceCriteria": [
+      "Two overlapping calls: the earlier resolves {granted:false,cancelled:true}; the registry holds the later one.",
+      "A replaced waiter's timer or cleanup never removes the live waiter's entry.",
+      "The disconnect sequence on the registry entry cancels the live waiter.",
+      "Existing waitForResource, acquireResource, releaseResource and WebSocketServer tests pass."
+    ],
+    "invariants": [
+      "No await between the pre-set re-check and set.",
+      "Leases and queues stay task-keyed and are untouched by waiter cancellation.",
+      "WebSocketServer.ts is unchanged."
+    ],
+    "compatibility": [
+      "The response shapes (granted, cancelled, timedOut) are unchanged.",
+      "Sequential re-entry behaviour is unchanged."
+    ],
+    "approvedScope": [
+      "waitForResource.ts cancel helper, pre-set re-check, identity-guarded cleanup",
+      "new waitForResource.reentry.test.ts",
+      "MCP_SERVER.md wait_for_resource re-entry bullet"
+    ],
+    "reuse": [
+      "chatWait.ts:131 identity guard",
+      "the hunt repro test",
+      "the existing top-of-handler cancel block"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/waitForResource.ts:73-80 cancels before the awaits; :175 sets after them; :125 deletes unconditionally.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts:1392 cancels activeResourceWaiters.get(workerId) on disconnect."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'whichever call parks last' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/waitForResource.ts $P/tools/waitForResource.reentry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/waitForResource.reentry.test.ts src/tools/waitForResource.test.ts src/tools/acquireResource.test.ts src/tools/releaseResource.generation.test.ts src/server/WebSocketServer.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Option 1, serialize the whole pre-park section per worker (a per-worker promise chain): rejected as heavier than needed.\n\nOption 2, move the top check to just before set: rejected. It would leave the old waiter live during the new call's acquire, so a grant in that window wakes the old RPC.\n\nOption 3, keep the top cancel and re-check right before set: chosen. It is the description's fix, combined with chatWait's identity-guarded delete.",
+    "codebaseInsights": "- waitForResource.ts: the top cancel is at :73-80, followed by `await state.touchWorker` (:71 before it) and `await state.runExclusive(acquireResource)` (:84). Inside the Promise executor come timer, subscribe, then set (:175) and onWaiterRegistered.\n- cleanup() deletes unconditionally (:125).\n- The disconnect cleanup at WebSocketServer.ts:1392-1397 and cleanupStaleResourceWaiters (:22-38) both key on the registry.\n- chatWait.ts:131 is the identity-guard precedent.",
+    "risks": "- The tests use real timers through McpAdapter; poll with vi.waitFor and use long timeouts except in case (c).\n- The afterEach must drain the registry so a parked RPC never leaks into the next test.\n- Keep the WebSocketServer.ts bytes untouched (held at filing).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/waitForResource.ts",
+      "packages/moe-daemon/src/tools/waitForResource.test.ts",
+      "packages/moe-daemon/src/tools/chatWait.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6a47715245babc523cae24608180dc310834f5ff",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:04:23.721Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:05:14.673Z",
+  "reviewStartedAt": "2026-11-03T23:07:31.055Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF 'whichever call parks last' docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents $P/tools/waitForResource.ts $P/tools/waitForResource.reentry.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/waitForResource.reentry.test.ts src/tools/waitForResource.test.ts src/tools/acquireResource.test.ts src/tools/releaseResource.generation.test.ts src/server/WebSocketServer.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/server/WebSocketServer.test.ts (128 tests) 16348ms\n\n Test Files  5 passed (5)\n      Tests  151 passed (151)\n   Start at  01:06:50\n   Duration  17.62s (tests 82%, transform 15%, import 3%)",
+    "reportedAt": "2026-11-03T23:07:31.055Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/waitForResource.ts",
+    "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "wait_for_resource overlap fix in waitForResource.ts: new cancelResourceWaiter(workerId) helper (resolves cancelled, clears timer, unsubscribes, drops only its own entry), called at the top of the handler and again right before activeResourceWaiters.set (executor is synchronous, no await between), so the last call to park stays registered and the earlier overlapping call resolves {granted:false,cancelled:true}. cleanup() now deletes the registry entry only while its timer matches (chatWait identity guard), so a replaced waiter's timeout/grant/subscribe-failure cleanup can no longer drop the live entry that WebSocketServer disconnect cleanup and the stale sweep look up. WebSocketServer.ts untouched. New waitForResource.reentry.test.ts (4 cases, vi.waitFor polling): red at HEAD for overlap, disconnect-after-overlap and replaced-timer cases (3 fail), sequential re-entry passes both ways; all 4 green with the fix. docs/MCP_SERVER.md re-entry bullet gains the overlap sentence ('whichever call parks last').",
+  "commits": [
+    {
+      "sha": "942717bcbab72c52dc3dad8c421087915c026777",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T23:04:23Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/waitForResource.reentry.test.ts",
+        "packages/moe-daemon/src/tools/waitForResource.ts"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T23:08:46.258Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:08:46Z",
+    "at": "2026-11-03T23:11:10.984Z"
+  },
+  "completedAt": "2026-11-03T23:10:50.009Z",
+  "reviewCompletedAt": "2026-11-03T23:10:50.009Z",
+  "reviewSummary": "Reviewed completion 942717bc (on moe/work-2026-10-24; own diff +134/-10, net 124, 3 files — under the 400 cap). Re-ran task.verification in a fresh git-archive snapshot outside the shared checkout (npm ci, tsc --noEmit, vitest on waitForResource.reentry + waitForResource + acquireResource + releaseResource.generation + WebSocketServer tests): exit 0, tsc clean, 5 files / 151 tests passed. Mutant proof: swapped the parent's (942717bc^) waitForResource.ts into the snapshot and re-ran the reentry file — 3 of 4 fail (overlap, disconnect-after-overlap, replaced-timer), sequential re-entry passes both ways; so the tests are red without the fix. DoD 1: cancelResourceWaiter(workerId) is called at the handler top and again immediately before activeResourceWaiters.set inside the synchronous Promise executor (no await between), so the earlier overlapping call resolves {granted:false,cancelled:true} and the registry keeps the later one; test (a) asserts exact shape + registry size 1. DoD 2: cleanup() deletes the entry only when get(workerId)?.timer === timer (chatWait identity guard); tests (b)/(c) mirror the WebSocketServer disconnect sequence and show it finds/cancels the live waiter, and that a replaced waiter's own 1s timeout leaves the live entry. Subscribe-failure path (cleanup before registration) deletes nothing it does not own. DoD 3: command ran green in a snapshot. Invariants held: WebSocketServer.ts unchanged by the commit, leases/queues task-keyed and untouched, response shapes unchanged. Docs: MCP_SERVER.md re-entry bullet gains the 'whichever call parks last' sentence (verification grep passes). Assertions are exact toEqual/toBe, vi.waitFor polling (load-tolerant). No weakened tests. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}
