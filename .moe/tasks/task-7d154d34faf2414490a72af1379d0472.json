@@ -15,18 +15,27 @@
     {
       "stepId": "step-1",
       "description": "DoD 4, plus DoD 2's written statement: the docs say what a verified-local job can run locally.\n\nPREREQUISITE. This row dependsOn task-ccbff5c686c44501a376539bc9e54804, carved out of it on 2026-11-06. That row lands the code:\n- start_job's agent job PATH is `toolchain + '/bin:' + JOB_PATH`, which puts /opt/moe/toolchain/bin first for worker and QA jobs alike;\n- Export skips a real `node_modules` directory that no manifest path lies under;\n- CERTIFICATION_PINS.supervisorSha256 moves to the new supervisor's sha256.\nTake every fact from its LANDED bytes, not from this plan's paraphrase: scripts/local-runner/guest-supervisor.py start_job and Export, plus its J and X rows. Find the landing with `git log moe/work-2026-10-24 --grep 'Moe-Task: task-ccbff5c686c44501a376539bc9e54804'`, or its epicSiblings landing. Where the landed code differs from this step, document the code and say so in the completion summary.\n\nEDITOR. Use this seat's own editor (Edit on Claude, apply_patch on a codex exec seat). Never use Serena, which ignores docs/, and never a shell write. Keep plain ASCII apostrophes.\n\n(a) docs/roles/architect.reference.md, '## Verified-local plans'. Add ONE bullet after the four existing ones, starting `- **Local verification runs in the seat VM**:`. It states:\n- A worker or QA job has the pinned Node toolchain first on its PATH (`/opt/moe/toolchain/bin`, the toolchain check VMs use), so `node`, `npm` and `npx` resolve.\n- The job runs on the seat VM's own network; only check jobs run offline. So `npm ci` and `npm install` reach registry.npmjs.org.\n- The export never carries an untracked `node_modules` directory. Every other byte a command leaves in the workspace reaches the candidate: a worker's lands with the change, and a QA job's is refused (`SEAT_JOB_QA_CANDIDATE_REFUSED`).\n- So a verified-local plan writes its local verification, and `checkRefs[0]`, which QA re-runs verbatim in its own seat VM, as commands that leave nothing in the workspace but `node_modules`. `npm ci && npm test` qualifies. A build, coverage or report run writes under `$HOME` or `/tmp`, or deletes its output.\n- Local runs never deliver: only the approved checks above do.\n\n(b) docs/roles/worker.reference.md. Add a new section `## Verified-local seat VMs` between '## Shared resources (exclusive infra)' and '## Claude account switch', at most 6 lines. It states:\n- Under verified-local the job runs in its seat VM (ARCHITECTURE.md, Seat VM route), on a fresh copy of the job's commit with no `.git` (snapshots refuse control paths; check CONTROL_SEGMENTS in scripts/local-runner/source-snapshot.mjs before saying it), so git commands find no repository.\n- `node`, `npm` and `npx` are the pinned toolchain, first on PATH (`/opt/moe/toolchain/bin`), and the npm registry is reachable. So run the plan's local verification in place, `npm ci && npm test` included.\n- An untracked `node_modules` directory never leaves the VM. Any other file a command writes into the workspace does: a worker's lands with the change, and a QA job that leaves one is refused. So delete build, coverage and report output before finishing, or write it under `$HOME` or `/tmp`.\n- Local runs are the seat's own evidence. Delivery comes only from the approved required checks in check VMs.\n\n(c) docs/ARCHITECTURE.md, the `- **Supervisor modes**` bullet. Change two clauses and keep the file's wrapping width:\n- `bridge` runs one agent job: add that its PATH puts the pinned Node toolchain first (`/opt/moe/toolchain/bin`), as a check job's does;\n- `export` streams the workspace's changes back: add `, never an untracked node_modules directory`.\n\nLeave docs/roles/architect.md and worker.md alone (40-line cap). Test: checkRefs[1] asserts these sentinels and runs the role-doc lint.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "docs/roles/architect.reference.md",
         "docs/roles/worker.reference.md",
         "docs/ARCHITECTURE.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "docs/roles/architect.reference.md",
+        "docs/roles/worker.reference.md",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Guidance now matches prerequisite cfb2b395a383784b311548cc0180766a15903ae0 (epicSiblings landed=true): pinned toolchain PATH for both roles, seat-network npm installs, real untracked node_modules skip, QA candidate refusal, no .git, artifact cleanup, and local verification distinct from check-VM delivery. Read start_job, Export, CONTROL_SEGMENTS, QA admission and J3/X rows. Explicitly qualified npm ci && npm test as safe only when tests leave no other workspace output. checkRefs[1] RED before edits (missing /opt/moe/toolchain/bin), GREEN after edits: R1 OK and role-doc lint 39/30/36 <=40, exit 0 under clean Linux Node 24 PATH; git diff --check clean. No package tests or installs needed in this docs-only step; generated role entries remain step 4 after governor-record wait. Only these three planned files modified.",
+      "startedAt": "2026-11-06T08:37:04.570Z",
+      "completedAt": "2026-11-06T08:38:41.757Z"
     },
     {
       "stepId": "step-2",
       "description": "The governor's records on the landed supervisor. This covers DoD 3's governor half, DoD 5, and DoD 2's real-VM line. No file changes.\n\nError handling: this step never fabricates, paraphrases or edits a record. A missing record is waited for, never assumed.\n\n1. READ. Read this row's comments: moe.get_context {taskId, commentsLimit: 50, commentsMaxChars: 0}. Each record below must be a governor comment on this row:\n- R-win: a native `cli.mjs certify` report for win32 x64, giving the report file's one JSON line verbatim, its file name, the file's sha256 (of the whole file, trailing newline included), and the host notes (Multipass version, any adapter workaround).\n- R-wsl: the same for linux x64 (WSL).\n- R-dod8: Windows run 2 of the DoD 8 task (scratch project C:\\moe-scratch\\vl-e2e, task-7a9ae68a), giving the `[seat]` lines, plus the worker's words or transcript showing that `node`/`npm` resolved and its verification commands ran, that its steps completed, and that it called complete_task.\n- R-npm: one registry probe from that seat VM, run as the agent identity with the job's PATH, with its output and exit code.\n\nIf all four exist and both reports say certified true with the landed pin, complete this step.\n\n2. REQUEST. Otherwise post ONE comment on this row that @-mentions the live governor seat. governor-a42b7613 is governing at planning time; confirm the live seat with moe.chat_who or moe.list_workers. Fill in C (task-ccbff5c6's landed commit on moe/work-2026-10-24) and P (sha256 of scripts/local-runner/guest-supervisor.py at C). The comment carries this runbook:\n(1) Build the JetBrains plugin from C, as for 15c7fb34, and install it. Its guest-supervisor.py must hash to P. This row adds only docs, so the build does not wait for it.\n(2) Certify Windows x64 and Linux x64 (WSL) with that install (docs/CERTIFICATION.md, Activation step 1). Each report's supervisorSha256 must be P. Post R-win and R-wsl, one comment per host.\n(3) In the scratch project, `get_execution_readiness {\"refresh\":true}` must answer ready. The supervisor is part of the check environment id, so the first landing may print RUNNER_ENVIRONMENT_NOT_APPROVED with a new id: add it to checkEnvironments (Activation step 8).\n(4) Re-run the Windows DoD 8 worker on task-7a9ae68a and post R-dod8.\n(5) While that worker's seat VM runs (during or right after its job, never overlapping a next job's start), run with the pinned multipass client:\n`multipass exec <seat VM> -- sudo -n -u moe-agent env -i HOME=/tmp/moe-npm-probe PATH=/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin sh -c 'mkdir -p /tmp/moe-npm-probe/p && cd /tmp/moe-npm-probe/p && npm install --no-audit --no-fund is-number@7.0.0 && node -p process.version'`\nThen post R-npm.\n(6) Unblock this row: moe.unblock_worker {taskId, resolveBlocks: true}, or moe.set_task_status WORKING.\n\n3. PARK. Then call moe.report_blocked {taskId, reason: \"waiting for the governor's re-certify (win32 x64, linux x64 WSL), the DoD 8 Windows run 2 and the registry probe: runbook comment <id>\", blockedOnTaskIds: []} and END THE TURN. The wrapper checkpoints step 1's docs to the task branch.\n\n4. RESUME. A resumed session re-reads the comments and completes this step only once all four records exist.\n- A certify that failed, a report with another supervisor sha, or a run 2 that stopped before complete_task: post a comment naming it and report_blocked again. Never record a failure as a pass.\n- A failure in task-ccbff5c6's area (node or npm not found, a node_modules candidate refusal) is that row's defect. Ask the governor to file it as a bug row, then block on that row's id.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-06T08:38:53.062Z"
     },
     {
       "stepId": "step-3",
@@ -58,8 +67,8 @@
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-5b706f9f",
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -86,15 +95,28 @@
       "author": "architect-ec70c5f6",
       "content": "From architect-ec70c5f6: task-ccbff5c6, this row's prerequisite, is planned (rev 1, TURBO-approved, now WORKING). Facts this row's gate and its self-review rely on:\n- New test rows are named J5 (local-runner-bridge.test.mjs), X8 and X9 (local-runner.test.mjs), so your checkRefs[2] pattern `^[JX][0-9]+ ` re-runs them. J3 and J4 assert the exact literal '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin'.\n- The retired pin 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e stays named in exactly one place on purpose: the new previous-pin refusal row in packages/moe-daemon/src/delivery/certificationEvidence.test.ts (CERTIFICATION_REPORT_SUPERVISOR). certificationEvidence.ts itself must no longer contain it, and ccbff5c6's gate checks that. So step 6's \"does anything still name 616463b7?\" should skip that test row; CERTIFICATION.md is the only doc your checkRefs[0] scans.\n- Export rule as planned: per directory, a real directory named exactly node_modules is skipped when no manifest path lies under it, including one nested inside a tracked node_modules. A tracked node_modules is walked as before. A node_modules symlink or regular file still exports. The agent job keeps no netns.\n- The new supervisor sha is known only once ccbff5c6 lands. Take it from the landed CERTIFICATION_PINS, not from any planning value.",
       "timestamp": "2026-11-06T08:19:48.380Z"
+    },
+    {
+      "id": "comment-19d3cdad7dcc4a29969e9531ae4e59b6",
+      "author": "worker-5b706f9f",
+      "content": "@governor-a42b7613 Step 1 is complete (docs-only; checkRefs[1] GREEN, role-doc lint passes). Step 2 still has no R-win, R-wsl, R-dod8 or R-npm governor records on this row, so I am parking per the approved plan.\n\nRunbook, now with landed identities:\nC = cfb2b395a383784b311548cc0180766a15903ae0 on moe/work-2026-10-24 (task-ccbff5c6, landed and DONE).\nP = 8a917937c1cf806ac7857ac32ffc4f832daac1a957856dac2902d085e4860349 (sha256 of guest-supervisor.py at C, checked fresh).\n\n1. Build/install the JetBrains plugin from C, as for 15c7fb34. Its guest-supervisor.py must hash to P. Do NOT wait for this docs row to land.\n2. Run native cli.mjs certify on Windows x64 and Linux x64 (WSL), per docs/CERTIFICATION.md Activation step 1. Post R-win and R-wsl, one comment per host: passing report's JSON line verbatim, report file name, whole-file sha256 including its LF, certified commit, Multipass version and host notes/any adapter workaround. Each report must be native, certified true, x64, supervisorSha256=P.\n3. In C:\\moe-scratch\\vl-e2e, get_execution_readiness {\"refresh\":true} must report ready. The supervisor changes the check environment id; if the first landing refuses RUNNER_ENVIRONMENT_NOT_APPROVED, approve the new id in checkEnvironments (Activation step 8).\n4. Re-run Windows DoD 8 worker task-7a9ae68a and post R-dod8: [seat] lines plus transcript proving node/npm resolve, local verification command exit codes, steps completed and complete_task called.\n5. While that worker's seat VM runs (during or right after its job, never overlapping the next job's start), invoke the pinned Multipass client with:\nmultipass exec <seat VM> -- sudo -n -u moe-agent env -i HOME=/tmp/moe-npm-probe PATH=/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin sh -c 'mkdir -p /tmp/moe-npm-probe/p && cd /tmp/moe-npm-probe/p && npm install --no-audit --no-fund is-number@7.0.0 && node -p process.version'\nPost R-npm with the exact command, output and exit code.\n6. After all four records are posted, unpark via moe.set_task_status {taskId:\"task-7d154d34faf2414490a72af1379d0472\", status:\"WORKING\", reason:\"R-win, R-wsl, R-dod8 and R-npm posted as comments <ids>; step 2 wait met\"}. This follows architect correction comment-2bb45143238d4b7099c31372bfdaaf5e: unblock_worker cannot restore this unassigned row, and a factual reason avoids carrying forward an unanswered-block question.\n\nNo certify report or real-VM success has been assumed. CERTIFICATION.md and generated initFiles.ts remain untouched pending your records.",
+      "timestamp": "2026-11-06T08:39:23.212Z"
+    },
+    {
+      "id": "comment-c6eaa6fbced640078a9a8dc2b1aaa545",
+      "author": "governor-a42b7613",
+      "content": "R-wsl: linux x64 (WSL) native certify PASS on the landed supervisor. governor-a42b7613, 2026-11-06.\n- Certified commit: C = cfb2b395a383784b311548cc0180766a15903ae0, the task-ccbff5c6 completion on moe/work-2026-10-24. The plugin was built at exactly C, from a git-archive snapshot: zip moe-jetbrains-0.8.0-cfb2b395.zip, sha256 788c0b449d58b091e28b7a8cb81d1a3ea1d83527ef9d808fd400eb3dd8f5e65f. The run used that zip unpacked at ~/moe-plugin-cfb2b395/moe-jetbrains.\n- P = 8a917937c1cf806ac7857ac32ffc4f832daac1a957856dac2902d085e4860349, the sha256 of scripts/local-runner/guest-supervisor.py at C. CERTIFICATION_PINS.supervisorSha256 at C equals it, and so does the unpacked copy.\n- Command: `node \"$PL/scripts/local-runner/cli.mjs\" certify --work-dir \"$HOME/moe-certify\"`, after `prerequisites` (PREREQ-EXIT=0). It ran under env -i with Node v24.21.0 and the snap client on PATH. CERTIFY-EXIT=0, 13/13 checks passed.\n- Report file name: certification-linux-x64-20261106T083928Z-ae5030.json (in ~/.moe/certification)\n- Report file sha256 (whole file, 1227 bytes, one line + LF): 9743a18795a37a7a9ff7200b813ed7c2d713482840daaa954a9addbf5d4563b5\n- Host notes: Ubuntu 24.04 x64 under WSL2, Multipass 1.17.0 snap (latest/stable, rev 19760, driver qemu). No adapter workaround, since the qgc tunnel only matters for the Windows run. The moes daemon was live on 9878 with bindHost wsl during the run, and guest-network still passed.\n- Self-check before posting, at C's certify.mjs: validateCertificationReport gives `linux x64 native true 8a917937…0349`. sha256(line + LF) equals the file sha256. image.sourceSha256 is present in certificationEvidence.ts at C.\nReport line, verbatim:\n```json\n{\"kind\":\"isolation-certification\",\"version\":1,\"platform\":\"linux\",\"arch\":\"x64\",\"transport\":\"native\",\"provider\":{\"name\":\"multipass\",\"version\":\"1.17.0\"},\"image\":{\"sourceSha256\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\",\"providerImageHash\":\"04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94\"},\"supervisorSha256\":\"8a917937c1cf806ac7857ac32ffc4f832daac1a957856dac2902d085e4860349\",\"startedAt\":\"2026-11-06T08:39:28.151Z\",\"finishedAt\":\"2026-11-06T08:55:25.783Z\",\"checks\":[{\"id\":\"provision\",\"result\":\"passed\",\"code\":null},{\"id\":\"readiness\",\"result\":\"passed\",\"code\":null},{\"id\":\"no-mounts\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-framing\",\"result\":\"passed\",\"code\":null},{\"id\":\"bridge-eof\",\"result\":\"passed\",\"code\":null},{\"id\":\"guest-network\",\"result\":\"passed\",\"code\":null},{\"id\":\"writer-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"check-containment\",\"result\":\"passed\",\"code\":null},{\"id\":\"controller-replacement\",\"result\":\"passed\",\"code\":null},{\"id\":\"cancellation\",\"result\":\"passed\",\"code\":null},{\"id\":\"recovery\",\"result\":\"passed\",\"code\":null},{\"id\":\"canary-check\",\"result\":\"passed\",\"code\":null},{\"id\":\"teardown\",\"result\":\"passed\",\"code\":null}],\"certified\":true,\"executionReady\":false}\n```",
+      "timestamp": "2026-11-06T08:55:52.247Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T06:41:38.227Z",
-  "updatedAt": "2026-11-06T08:35:35.383Z",
+  "updatedAt": "2026-11-06T08:55:52.247Z",
   "metrics": {
     "firstClaimAt": "2026-11-06T06:41:53.129Z",
     "plannedStepCount": 6,
-    "plannedDistinctFileCount": 5
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 1
   },
   "contextFetchedBy": [
     "architect-a8e13516",
@@ -108,7 +130,9 @@
   "effort": "xhigh",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-06T07:59:11.187Z",
   "executionContract": {
@@ -185,10 +209,40 @@
   "planApprovedAt": "2026-11-06T07:59:11.226Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "nothing",
+    "outcome": "committed",
     "kind": "checkpoint",
-    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-3669a6f6@2026-11-06T07:35:03Z",
-    "at": "2026-11-06T08:00:57.519Z"
-  }
+    "sessionId": "worker-5b706f9f@2026-11-06T08:35:18Z",
+    "at": "2026-11-06T08:41:03.088Z"
+  },
+  "workStartedAt": "2026-11-06T08:37:04.570Z",
+  "blockedReason": "Waiting for the governor's re-certify (win32 x64, linux x64 WSL), the DoD 8 Windows run 2 and the registry probe: runbook comment comment-19d3cdad7dcc4a29969e9531ae4e59b6. Full comments contain no R-win/R-wsl/R-dod8/R-npm records yet. Step 1 docs completed with fresh checkRefs[1] exit 0; remaining steps and full verification not claimed. Prerequisite cfb2b395 is landed; this is an external-evidence wait, not a dependency wait.",
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": "WORKING",
+  "blockedAt": "2026-11-06T08:40:24.983Z",
+  "commits": [
+    {
+      "sha": "039a5f368397de9814b15678558ffdcc45c1482d",
+      "ref": "refs/heads/moe/task/task-7d154d34faf2414490a72af1379d0472",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5b706f9f@2026-11-06T08:35:18Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "docs/roles/architect.reference.md",
+        "docs/roles/worker.reference.md"
+      ],
+      "recordedBy": "worker-5b706f9f",
+      "recordedAt": "2026-11-06T08:41:03.088Z",
+      "treeId": "2a448e6100a1f3ff7a8b8b8ab4cdc6a3af763e57",
+      "status": "BLOCKED",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "docs/ARCHITECTURE.md",
+    "docs/roles/architect.reference.md",
+    "docs/roles/worker.reference.md"
+  ],
+  "unattributedPaths": []
 }
