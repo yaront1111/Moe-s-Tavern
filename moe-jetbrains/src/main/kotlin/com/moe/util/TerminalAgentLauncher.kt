@@ -207,6 +207,7 @@ object TerminalAgentLauncher {
         CODEX("Codex", "codex"),
         GEMINI("Antigravity", "gemini"),  // the wrappers run Antigravity (agy) for gemini mode
         GROK("Grok", "grok"),
+        COPILOT("Copilot", "copilot"),
         CUSTOM("Custom...", "");
 
         companion object {
@@ -714,10 +715,11 @@ object TerminalAgentLauncher {
 
     internal fun buildCommandForTest(
         basePath: String, role: String, scriptPath: String, kind: ScriptKind, envOverrides: Map<String, String>,
-        agentCommand: String, teamName: String?, wslAgents: Boolean, workerId: String, interpreter: String? = null
+        agentCommand: String, teamName: String?, wslAgents: Boolean, workerId: String, interpreter: String? = null,
+        codexExec: Boolean = false
     ): String = buildCommand(
         basePath, role, ResolvedScript(File(scriptPath), ScriptSource.BUNDLED, kind), envOverrides, agentCommand, teamName,
-        wslAgents = wslAgents, workerId = workerId, interpreter = interpreter
+        codexExec = codexExec, wslAgents = wslAgents, workerId = workerId, interpreter = interpreter
     )
 
     internal fun buildWslBashCommandForTest(
@@ -768,6 +770,8 @@ object TerminalAgentLauncher {
                 AgentProvider.CODEX -> " -CodexExec"
                 AgentProvider.GEMINI -> " -GeminiExec"
                 AgentProvider.GROK -> " -GrokExec"
+                // Copilot has no -CopilotExec: the wrapper's generic -Interactive switch forces headless.
+                AgentProvider.COPILOT -> " -Interactive:\$false"
                 // CLAUDE / CUSTOM keep the historical -CodexExec (the wrapper
                 // ignores it for non-codex commands; tests pin this).
                 else -> " -CodexExec"
@@ -809,9 +813,12 @@ object TerminalAgentLauncher {
      *
      * Codex / Gemini / Grok providers ignore this gate: they have their own native
      * TUI vs headless toggles (`-CodexExec`, `-GeminiExec`, `-GrokExec`). Grok's
-     * role-based interactive polarity (architect/governor TUI, worker/qa headless)
-     * lives in the wrapper, not here — JetBrains never passes `-Interactive` for
-     * it. codexExec=true also forces a non-interactive run regardless of role.
+     * and Copilot's role-based interactive polarity (architect/governor TUI,
+     * worker/qa headless) lives in the wrapper, not here — JetBrains never passes
+     * a positive `-Interactive` for them. codexExec=true also forces a
+     * non-interactive run regardless of role: Grok through `-GrokExec`, Copilot
+     * (no exec flag of its own) through the wrapper's generic negative override,
+     * `-Interactive:$false` / `--no-interactive`.
      */
     internal fun shouldLaunchClaudeInteractive(
         role: String,
@@ -871,6 +878,8 @@ object TerminalAgentLauncher {
                 AgentProvider.CODEX -> " --codex-exec"
                 AgentProvider.GEMINI -> " --gemini-exec"
                 AgentProvider.GROK -> " --grok-exec"
+                // Copilot has no --copilot-exec: the wrapper's generic --no-interactive flag forces headless.
+                AgentProvider.COPILOT -> " --no-interactive"
                 // CLAUDE / CUSTOM keep the historical --codex-exec (the wrapper
                 // ignores it for non-codex commands; mirrors the PowerShell arm,
                 // whose fallback is the test-pinned one).

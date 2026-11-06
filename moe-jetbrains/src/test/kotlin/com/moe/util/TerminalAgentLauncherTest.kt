@@ -369,6 +369,123 @@ class TerminalAgentLauncherTest {
     }
 
     @Test
+    fun `AgentProvider COPILOT sits directly before CUSTOM and is found by its exact command`() {
+        val copilot = TerminalAgentLauncher.AgentProvider.COPILOT
+        assertEquals("Copilot", copilot.displayName)
+        assertEquals("copilot", copilot.command)
+        assertEquals(copilot, TerminalAgentLauncher.AgentProvider.fromCommand("copilot"))
+        listOf("Copilot", "COPILOT", " copilot", "copilot ", "copilot.exe", "/usr/bin/copilot", "copilot --yolo", "").forEach {
+            assertEquals("'$it'", TerminalAgentLauncher.AgentProvider.CUSTOM, TerminalAgentLauncher.AgentProvider.fromCommand(it))
+        }
+        val entries = TerminalAgentLauncher.AgentProvider.entries
+        assertEquals(TerminalAgentLauncher.AgentProvider.CUSTOM, entries.last())
+        assertEquals(entries.size - 2, entries.indexOf(copilot))
+        assertEquals(1, entries.count { it == copilot })
+        assertEquals(1, entries.count { it.command == "copilot" })
+    }
+
+    @Test
+    fun `every AgentProvider has a bundle label and the Copilot label and agent command hint name copilot`() {
+        val bundle = java.util.Properties()
+        javaClass.getResourceAsStream("/messages/MoeBundle.properties")!!.use { bundle.load(it) }
+        assertEquals("Copilot", bundle.getProperty("moe.panel.provider.copilot"))
+        TerminalAgentLauncher.AgentProvider.entries.forEach {
+            assertTrue("moe.panel.provider.${it.name.lowercase()}", bundle.getProperty("moe.panel.provider.${it.name.lowercase()}") != null)
+        }
+        val hint = bundle.getProperty("moe.settings.agentCommandHint")
+        assertTrue(hint, hint.contains("claude, codex, gemini, grok, copilot, or custom path"))
+    }
+
+    @Test
+    fun `plugin xml names GitHub Copilot CLI in the description and in the CLI feature line`() {
+        val xml = javaClass.getResourceAsStream("/META-INF/plugin.xml")!!.use { String(it.readBytes(), Charsets.UTF_8) }
+        val intro = xml.lines().single { it.contains("an AI agent task board for ") }
+        assertTrue(intro, intro.contains("GitHub Copilot CLI"))
+        val feature = xml.lines().single { it.contains("<b>Your choice of CLI</b>") }
+        assertTrue(feature, feature.contains("GitHub Copilot CLI"))
+    }
+
+    @Test
+    fun `a copilot seat passes the command and adds no flag for any role on every route`() {
+        for ((kind, wsl) in AGENT_ROUTES) {
+            for (role in listOf("architect", "worker", "qa", "governor")) {
+                val words = copilotWords(role, kind, wsl, codexExec = false)
+                val label = "$role $kind wsl=$wsl: $words"
+                assertTrue(label, words.windowed(2).contains(listOf(commandFlag(kind), "'copilot'")))
+                // Exactly the four base flags: no interactive switch and no exec flag, whatever the role.
+                assertEquals(label, baseFlags(kind), words.filter { it.startsWith("-") })
+            }
+        }
+    }
+
+    @Test
+    fun `a headless copilot seat is the generic negative interactive override and never an exec flag`() {
+        for ((kind, wsl) in AGENT_ROUTES) {
+            for (role in listOf("architect", "worker", "qa", "governor")) {
+                val words = copilotWords(role, kind, wsl, codexExec = true)
+                val label = "$role $kind wsl=$wsl: $words"
+                val override = if (kind == POWERSHELL) "-Interactive:\$false" else "--no-interactive"
+                // Token-aware: the negative PowerShell switch is a different token from the positive -Interactive.
+                assertEquals(label, baseFlags(kind) + override, words.filter { it.startsWith("-") })
+                assertTrue(label, words.windowed(2).contains(listOf(commandFlag(kind), "'copilot'")))
+            }
+        }
+    }
+
+    @Test
+    fun `claude interactive polarity and the claude and custom exec overrides are unchanged next to copilot`() {
+        assertTrue(TerminalAgentLauncher.shouldLaunchClaudeInteractive("architect", "claude", false))
+        assertTrue(TerminalAgentLauncher.shouldLaunchClaudeInteractive("governor", "claude", false))
+        for (role in listOf("architect", "worker", "qa", "governor")) {
+            assertFalse(role, TerminalAgentLauncher.shouldLaunchClaudeInteractive(role, "copilot", false))
+            assertFalse(role, TerminalAgentLauncher.shouldLaunchClaudeInteractive(role, "copilot", true))
+        }
+        for ((kind, wsl) in AGENT_ROUTES) {
+            val exec = if (kind == POWERSHELL) "-CodexExec" else "--codex-exec"
+            val claude = copilotWords("worker", kind, wsl, codexExec = true, agentCommand = "claude")
+            assertEquals("claude $kind wsl=$wsl", 1, claude.count { it == exec })
+            val custom = copilotWords("worker", kind, wsl, codexExec = true, agentCommand = "my-cli")
+            assertEquals("custom $kind wsl=$wsl", 1, custom.count { it == exec })
+            val negative = if (kind == POWERSHELL) "-Interactive:\$false" else "--no-interactive"
+            assertFalse("claude $kind wsl=$wsl", claude.contains(negative))
+            assertFalse("custom $kind wsl=$wsl", custom.contains(negative))
+        }
+    }
+
+    @Test
+    fun `copilot launch lines keep the quoting of spaces and apostrophes in every path on every route`() {
+        val project = "D:/it's here/app"
+        for ((kind, wsl) in AGENT_ROUTES) {
+            val line = TerminalAgentLauncher.buildCommandForTest(
+                project, "architect", "C:/moe/it's here/moe-agent", kind, emptyMap(), "copilot", "team", wsl, "architect-0000abcd", codexExec = true
+            )
+            val typed = when {
+                kind != POWERSHELL -> line
+                wsl -> typedBashPsScript(line)
+                else -> typedPsScript(line)
+            }
+            val quoted = if (kind == POWERSHELL) "'D:/it''s here/app'" else "'D:/it'\"'\"'s here/app'"
+            val expected = if (wsl && kind == BASH) "'/mnt/d/it'\"'\"'s here/app'" else quoted
+            assertTrue("$kind wsl=$wsl: $typed", typed.contains(expected))
+            assertTrue("$kind wsl=$wsl: $typed", typed.contains(if (kind == POWERSHELL) "-WorkerId 'architect-0000abcd'" else "--worker-id 'architect-0000abcd'"))
+        }
+    }
+
+    private fun commandFlag(kind: ScriptKind) = if (kind == POWERSHELL) "-Command" else "--command"
+
+    private fun baseFlags(kind: ScriptKind): List<String> =
+        if (kind == POWERSHELL) listOf("-Role", "-Project", "-WorkerId", "-Command") else listOf("--role", "--project", "--worker-id", "--command")
+
+    /** One copilot (or [agentCommand]) launch's words, split on spaces outside quotes, in the form each route types. */
+    private fun copilotWords(role: String, kind: ScriptKind, wsl: Boolean, codexExec: Boolean, agentCommand: String = "copilot"): List<String> {
+        val line = TerminalAgentLauncher.buildCommandForTest(
+            "D:\\projexts\\app", role, PINNED_SCRIPT, kind, PINNED_ENV, agentCommand, null, wsl, "$role-0000abcd", codexExec = codexExec
+        )
+        val typed = if (kind != POWERSHELL) line else if (wsl) typedBashPsScript(line) else typedPsScript(line)
+        return Regex("""(?:'(?:[^']|'')*'|\S)+""").findAll(typed).map { it.value }.toList()
+    }
+
+    @Test
     fun `PowerShell architect command no longer sets MOE_NO_PRINT_MODE env var`() {
         val command = decodedPowerShellCommand(
             basePath = "D:\\Cordum",
@@ -824,7 +941,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `protected agent command runs exactly the known agent CLIs by name`() {
-        listOf("claude", "codex", "gemini", "grok").forEach { name ->
+        listOf("claude", "codex", "gemini", "grok", "copilot").forEach { name ->
             assertEquals(Run(name), commandFor(PROTECTED, name, null))
             assertEquals(Run(name), commandFor(PROTECTED, null, name))
             assertEquals(Run(name), commandFor(PROTECTED, " $name\t", null))
@@ -844,7 +961,10 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `protected agent command refuses a custom command even over a known setting`() {
-        listOf("/home/me/bin/my-agent --yolo", "C:\\tools\\claude.exe", "claude --flag").forEach { value ->
+        listOf(
+            "/home/me/bin/my-agent --yolo", "C:\\tools\\claude.exe", "claude --flag",
+            "copilot --flag", "copilot --allow-all", "/usr/local/bin/copilot", "copilot.exe", "COPILOT", "Copilot"
+        ).forEach { value ->
             assertEquals(value, Refused(protectedRefusal(value, "custom command")), commandFor(PROTECTED, value, "claude"))
         }
     }
@@ -938,7 +1058,7 @@ class TerminalAgentLauncherTest {
 
     @Test
     fun `a VM seat refuses every agent CLI but claude and codex and names it`() {
-        listOf("gemini", "grok", "my-cli").forEach { command ->
+        listOf("gemini", "grok", "copilot", "my-cli").forEach { command ->
             val explicit = refusedMessage(TerminalAgentLauncher.agentCommandFor(PROTECTED, command, null, vmSeat = true))
             assertTrue(explicit, explicit.contains("'$command' cannot run there"))
             val setting = refusedMessage(TerminalAgentLauncher.agentCommandFor(PROTECTED, null, command, vmSeat = true))
@@ -947,7 +1067,12 @@ class TerminalAgentLauncherTest {
         assertEquals(Run("claude"), TerminalAgentLauncher.agentCommandFor(PROTECTED, "claude", null, vmSeat = true))
         assertEquals(Run("codex"), TerminalAgentLauncher.agentCommandFor(PROTECTED, " codex ", "gemini", vmSeat = true))
         assertEquals(Run("claude"), TerminalAgentLauncher.agentCommandFor(PROTECTED, null, null, vmSeat = true))
+        // Copilot is a protected host CLI, not a VM one: the VM allowlist stays claude and codex.
+        assertEquals(setOf("claude", "codex"), VerifiedLocalLaunch.VM_AGENT_COMMANDS)
+        assertTrue(VerifiedLocalLaunch.agentRefusal("copilot")!!.contains("'copilot' cannot run there"))
         // Host seats keep today's choice.
+        assertEquals(Run("copilot"), TerminalAgentLauncher.agentCommandFor(PROTECTED, "copilot", null))
+        assertEquals(Run("copilot"), TerminalAgentLauncher.agentCommandFor(PROTECTED, null, "copilot"))
         assertEquals(Run("gemini"), TerminalAgentLauncher.agentCommandFor(PROTECTED, "gemini", null))
         assertEquals(Run("gemini"), TerminalAgentLauncher.agentCommandFor(LEGACY, "gemini", null))
     }
@@ -1248,6 +1373,6 @@ class TerminalAgentLauncherTest {
     }
 
     private fun protectedRefusal(value: String, source: String): String =
-        "Protected execution profile: the agent command '$value' ($source) is not one of claude, codex, gemini, grok, " +
+        "Protected execution profile: the agent command '$value' ($source) is not one of claude, codex, gemini, grok, copilot, " +
             "so no agent was started. Pick an agent from the Agents menu."
 }
