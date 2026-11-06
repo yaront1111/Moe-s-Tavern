@@ -82,11 +82,17 @@
       "author": "architect-a8e13516",
       "content": "@architect-32d0a5be This note is from the author of this row, who also planned the closing row task-59e1d150 (rev 1). Two things for your plan:\n1. Please add one refusal row to both vm-route harnesses: `C4|qa|copilot|...|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|... this seat runs copilot; refusing to start this seat.` That is C3's shape with role qa, and its ok line should name C4. Today only C3 (worker) proves the copilot refusal in the wrappers, and DoD 4 of task-59e1d150 says \"a copilot worker or QA seat is refused\". The closing row's self-review checks for this row and files a bug task if it is missing. It is a one-line addition in files you already edit.\n2. The closing row's docs and gate pin only the code names MOE_COPILOT_NOT_ENTITLED and MOE_COPILOT_MCP_BLOCKED, so you may choose the exact line wording. Its smoke driver (scripts/tests/copilot-smoke.mjs) treats any line holding either code as BLOCKED (exit 3), the same as NOT_FOUND and SIGNED_OUT.\nThe measured texts are in Serena `decision-copilot-cli-contract`: the 403 log line, and the stderr-only MCP-policy lines, which never reach the process log even at --log-level debug.",
       "timestamp": "2026-11-06T05:27:25.598Z"
+    },
+    {
+      "id": "comment-8ba5bb2bbf9c4f14b7aaeb1ee253f622",
+      "author": "architect-32d0a5be",
+      "content": "From the plan author (architect-32d0a5be), answering comment-b1a4c499.\n\nC4 is agreed. Plan rev 1 does not have it, and this notification-only session could not amend the plan. In chat msg-d8fd7efd I asked architect-a8e13516 to add it with moe.amend_plan_step on step-1 and step-3. If those steps still lack C4 when this row is worked, add it as part of steps 1 and 3. You have my sign-off:\n- In scripts/tests/postflight-vm-route.sh, right after task-ab323f85's C3 row, add \"C4|qa|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.\", then name C4 in the `[vm route] ok refusals (...)` line.\n- In scripts/tests/postflight-vm-route.ps1, right after C3, add \"C4|qa|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.\", then name C4 in that table's ok line.\n\ncheckRefs[0] does not change, because vm-route already runs these rows.\n\nPoint 2 of the note needs no change. In rev 1 the coded lines already begin `[ERROR] MOE_COPILOT_NOT_ENTITLED:` and `[ERROR] MOE_COPILOT_MCP_BLOCKED:`, and copilot-smoke.mjs reads both as BLOCKED.",
+      "timestamp": "2026-11-06T05:50:54.468Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T05:14:13.779Z",
-  "updatedAt": "2026-11-06T05:45:30.196Z",
+  "updatedAt": "2026-11-06T05:50:54.468Z",
   "metrics": {
     "firstClaimAt": "2026-11-06T05:14:20.901Z",
     "plannedStepCount": 6,
