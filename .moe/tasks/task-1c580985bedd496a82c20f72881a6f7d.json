@@ -101,7 +101,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -119,17 +119,20 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:59.496Z",
-  "updatedAt": "2026-11-06T06:20:52.916Z",
+  "updatedAt": "2026-11-06T06:24:54.573Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:11:24.264Z",
     "plannedStepCount": 6,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 6
+    "executedStepCount": 6,
+    "doneAt": "2026-11-06T06:24:21.974Z",
+    "wallClockMs": 29577710
   },
   "contextFetchedBy": [
     "architect-a8e13516",
     "architect-a3d9076e",
-    "worker-b3b3db54"
+    "worker-b3b3db54",
+    "qa-a196fc69"
   ],
   "tier": "standard",
   "effort": "high",
@@ -244,9 +247,14 @@
   ],
   "unattributedPaths": [],
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-b3b3db54@2026-11-06T06:16:37Z",
-    "at": "2026-11-06T06:20:52.916Z"
-  }
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-06T06:23:13Z",
+    "at": "2026-11-06T06:24:54.573Z"
+  },
+  "completedAt": "2026-11-06T06:24:21.974Z",
+  "reviewCompletedAt": "2026-11-06T06:24:21.974Z",
+  "reviewSummary": "Reviewed completion eab7c845 (on moe/work-2026-10-24, contained in moe/control): 5 files, +18/-15 (net 3), text and comment only. Re-ran checkRefs[0] verbatim from the repo root: node anchor check exit 0, then `npm run lint` exit 0 with the three OK lines (architect 39, worker 30, qa 36 of max 40). The 5 touched paths are clean in the working tree, so the gate ran against the reviewed bytes. DoD: (1) README.md names GitHub Copilot CLI in the intro, the works-with badge (URL uses only %20/%C2%B7 escapes), the 'Your choice of coding CLI' row, the prerequisites and the account-rotation note, and gains one install and sign-in paragraph (npm install -g @github/copilot, copilot login, WSL note) after the Grok Build paragraph; (2) docs/PRD.md names it in both provider lists and the Copilot row no longer says 'Autocomplete only'; (3) moe-vscode/package.json (still valid JSON, description only) and moe-vscode/README.md (intro, Agent launcher, Requirements, Unreleased note) name it; (4) the injectWorkerType comment in packages/moe-proxy/src/utils.ts lists COPILOT, comment-only, lines at most 80 columns; (5) lint passes. Invariants: no neighbouring text reworded; no sentence claims installer, verified-local VM or rotation support for copilot (the README says 'install it separately' and that rotation leaves copilot seats unaffected). No forbidden pattern in added lines. Cross-checked that the claims are true: JetBrains AgentProvider.COPILOT, VS Code provider 'copilot' in extension.ts and SettingsPanel.ts, and daemon WORKER_TYPES includes COPILOT. Dependencies (JetBrains, VS Code and daemon slices) are all landed. moe-proxy was not built or tested: the change is comment-only and the live-checkout rail forbids it. Not run: parity-check.sh (the qualityGate) — the worker reported PASS and I did not reproduce it; this change touches no wrapper. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
 }

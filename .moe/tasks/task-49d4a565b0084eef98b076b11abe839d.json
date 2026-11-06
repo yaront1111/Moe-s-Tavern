@@ -55,20 +55,29 @@
     {
       "stepId": "step-3",
       "description": "Add per-headless-launch log isolation and terminal sign-out handling before generic launch-failure classification. Create a unique log child beneath the producer's secure private temp root each invocation (bash `mktemp -d \"$SECURE_TEMP_DIR/copilot-log.XXXXXX\"`; Windows use a GUID child under the producer's private temp root), append `--log-dir <child>` to the real/probe headless array, and register it in the existing cleanup path. Do not add log flags or authentication handling to the TUI. Read logs only after the native run exit code is saved and ONLY when it is nonzero. Match the literal `No authentication information found` in this launch's regular *.log files; never scan the home directory, credential stores, another iteration's logs or stdout alone. Avoid dumping matched log lines. Missing/unreadable logs mean no authentication evidence: preserve normal exit/backoff behavior, not a false sign-out. A directory-creation failure must produce an explanatory error and exit 1 before any launch, with existing cleanup; never continue with a blank path or the global log directory.\nOn evidence, emit exactly one identical fixed console line: `[ERROR] MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.` Send one #general @governors escalation with this code and the same remediation (no credential values or raw logs). Stop the heartbeat, set the PS exit status, exit 1 through existing cleanup/deregistration BEFORE launch-failure/backoff accounting. Restore native error preferences/encoding even on failure. Clean log children after inspection and retain outer cleanup as a fallback on interruption; only owned directories, never global temp cleanup. Bash already initializes create_secure_temp in the parent shell: preserve it rather than reintroducing subshell-cached-directory leaks.\nTests: fake --help succeeds; actual headless fake reads --log-dir, writes process-test-<pid>.log with `[ERROR] No authentication information found.`, and exits 1. Enable polling with one-second test intervals; require wrapper exit 1, one real invocation, one coded console line, one matching chat escalation, deregistration, no launch-failure backoff, and removed log directory. Negative cases: exit 0 with auth text; nonzero with unrelated log; nonzero with missing log; auth phrase only on stdout; a stale auth log outside the new per-launch directory. None emits MOE_COPILOT_SIGNED_OUT. Reuse two-launch fixture to assert unique log paths/cleanup and no stale evidence reuse. Assert no COPILOT_GITHUB_TOKEN/GH_TOKEN/GITHUB_TOKEN fixture secret value appears in console/chat, only env-variable names. Keep all fake activity offline and isolated.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.sh",
         "scripts/moe-agent.ps1",
         "scripts/tests/postflight-vm-route.sh",
         "scripts/tests/postflight-vm-route.ps1"
       ],
-      "startedAt": "2026-11-06T06:14:18.113Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added unique per-headless-launch --log-dir, regular-file-only literal auth evidence on nonzero exit, cleanup and terminal signed-out escalation before generic backoff. PS producer had no private temp directory (only per-PID files), so this four-file scope creates a dedicated ACL-private GUID log root with GUID children and outer cleanup rather than assuming one exists. .NET ACL APIs avoid 5.1 Security module autoload failure under fixture USERPROFILE. Focused Bash + PS5.1 Copilot suites passed including success/auth/non-auth/missing/stdout/stale logs and two launches (single probe, distinct cleaned dirs, reset hint). Bash allocator failure test passed; final gate includes latest prefix/path-space/PS allocator assertions. Routing-only scratch mutant killed on missing xhigh; no manual Git writes.",
+      "startedAt": "2026-11-06T06:14:18.113Z",
+      "completedAt": "2026-11-06T06:22:47.391Z"
     },
     {
       "stepId": "step-4",
       "description": "Verification — from this task's worktree root under WSL at a Windows-drive path, run the exact checkRefs[0] command below once as the final regression gate and retain its fresh output/exit status/wall time for complete_task. It executes only vm-route on bash + Windows PowerShell 5.1 + pwsh 7, wrapper parse checks, both parity checks, and root lint; all three actual vm-route PASS summaries and all three successful leg markers are required. Missing engines, SKIP, parse errors or row failures cannot pass. Error handling for any red gate: diagnose the named leg, fix only declared files, then rerun the same command; never substitute full postflight or rebuild live dist. Keep total wall time <=20 minutes and use only owned-PID cleanup if a child stalls. No package npm test/build/install in the live checkout. Command: timeout 1200s bash -c 'unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}; export MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC; cd scripts/tests || exit; L=$(mktemp -d); for e in powershell pwsh; do (pwsh.exe -nop -c \"cmd /c $e -nop -ep Bypass -f postflight-vm-route.ps1\" && $e.exe -nop -c \"\\$x=\\$null;[void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path ../moe-agent.ps1),[ref]\\$null,[ref]\\$x);\\\"\\$x\\\";exit !!\\$x\" && $e.exe -nop -ep Bypass -f parity-check.ps1 && echo PASS_GATE) >\"$L/$e\" 2>&1 & done; (bash -n ../moe-agent.sh && bash postflight-vm-route.sh && bash parity-check.sh && npm run lint && echo PASS_GATE) >\"$L/bash\" 2>&1; wait; tail -n5 \"$L/\"*; [ \"$(cat \"$L/\"*|grep -c \"^PASS_GATE$\")\" = 3 ] && [ \"$(cat \"$L/\"*|grep -c \"PASS postflight-vm-route\")\" = 3 ]'",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "IN_PROGRESS",
+      "affectedFiles": [],
+      "startedAt": "2026-11-06T06:22:47.422Z"
     },
     {
       "stepId": "step-5",
@@ -101,12 +110,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T22:04:03.921Z",
-  "updatedAt": "2026-11-06T06:14:18.113Z",
+  "updatedAt": "2026-11-06T06:22:47.422Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:06:18.193Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 4,
-    "executedStepCount": 2
+    "executedStepCount": 3
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
@@ -120,7 +129,8 @@
   "codexModel": "gpt-6-astra",
   "stepsCompleted": [
     "step-1",
-    "step-2"
+    "step-2",
+    "step-3"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:08:26.389Z",
