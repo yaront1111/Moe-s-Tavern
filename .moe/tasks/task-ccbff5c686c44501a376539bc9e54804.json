@@ -80,7 +80,7 @@
     }
   ],
   "planRevision": 1,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -118,16 +118,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-06T07:50:08.825Z",
-  "updatedAt": "2026-11-06T08:29:15.405Z",
+  "updatedAt": "2026-11-06T08:35:51.089Z",
   "metrics": {
     "firstClaimAt": "2026-11-06T07:55:46.657Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-06T08:35:07.933Z",
+    "wallClockMs": 2361276
   },
   "contextFetchedBy": [
     "architect-ec70c5f6",
-    "worker-12053315"
+    "worker-12053315",
+    "qa-076e761a"
   ],
   "tier": "standard",
   "effort": "xhigh",
@@ -216,10 +219,11 @@
   "approvedPlanRevision": 1,
   "workStartedAt": "2026-11-06T08:20:26.276Z",
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-12053315@2026-11-06T08:19:29Z",
-    "at": "2026-11-06T08:27:18.455Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-076e761a@2026-11-06T08:32:02Z",
+    "at": "2026-11-06T08:35:51.089Z"
   },
   "reviewStartedAt": "2026-11-06T08:26:08.164Z",
   "verification": {
@@ -257,5 +261,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-06T08:35:07.933Z",
+  "reviewCompletedAt": "2026-11-06T08:35:07.933Z",
+  "reviewSummary": "APPROVED. Completion cfb2b395 (on moe/work-2026-10-24, recorded in task.commits): 5 files, +103/-17, exactly the declared set.\n\nRe-ran stored verification verbatim, fresh, in a git-archive snapshot (Linux Node 24): exit 0, 1m27s. checkRefs[1]: \"changed top-level: ['Export', 'start_job']\", R1 OK. Node tests 572 (566 pass, 0 fail, 6 skipped); certificationEvidence.test.ts 100/100.\n\nDoD:\n1. start_job takes toolchain=TOOLCHAIN; PATH = toolchain + '/bin:' + JOB_PATH. J3/J4 pin it for claude and codex; J5 proves bare node and npm (npm via env shebang) resolve to the toolchain bin ahead of a shadow dir. No netns key; only PATH's value changed.\n2. Export skips a real dir named exactly node_modules unless a manifest path lies under it (vendored set), before os.open. Symlink and regular file still export. X8: untracked tree exports end(0), WALK_LIMIT 8 ok / 7 exits 65. X9: tracked edit, delete, new sibling, nested skip, symlink, file, Node_modules / node_modules.old.\n3. Pin 8a917937c1cf... equals sha256sum of the landed supervisor (LF); drift row green; new row refuses old pin 616463b7... with CERTIFICATION_REPORT_SUPERVISOR.\n4. Exactly the five files; no added line over 120 chars; no forbidden pattern.\n5. Gate reproduced fresh.\n\nMutations in a scratch snapshot (removed): skip-every-node_modules failed X9; PATH without toolchain failed J3/J4/J5.\n\nAdversarial pass: nothing found. The skip only removes bytes, finish() still emits deletes, WALK_LIMIT still counts the skipped name.\n\nExpected, not a defect: stored certification reports now mismatch, so verified-local readiness stays not-ready until the governor re-certifies (task-7d154d34). No real-VM certify run; out of scope.",
+  "requiredCheckAtDone": null
 }
