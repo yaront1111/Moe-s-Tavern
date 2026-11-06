@@ -545,11 +545,13 @@ only the daemon's evaluation of a certified report counts.
   `moe-agent` and `moe-check`. Readiness needs a clean cloud-init `done`, then zero mounts, the installed hashes, the
   credential denied to both identities, locked unprivileged identities and bounded resources.
 - **Supervisor modes** (`guest-supervisor.py`, run as root over the guest SSH route; its header defines every code).
-  `bridge` runs one agent job, `check` one approved check, `materialize` copies a snapshot into the workspace, `export`
-  streams the workspace's changes back, `verify` compares the workspace with its manifest, and `agents`, `toolchain` and
-  `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed input, 66 no workspace, 71 the job
-  could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal, 76 protocol violation, 77 not root. `check`
-  adds 79 (a protected path lacks its approved blob), 80 (the job changed one), 81 (the dependency install failed) and
+  `bridge` runs one agent job with the pinned Node toolchain first on PATH (`/opt/moe/toolchain/bin`), as for a check
+  job; `check` runs one approved check, `materialize` copies a snapshot into the workspace, `export` streams the
+  workspace's changes back, never an untracked node_modules directory, `verify` compares the workspace with its
+  manifest, and `agents`, `toolchain` and `dependencies` install pinned bytes. Exit codes: 0 done, 64 usage, 65 malformed
+  input, 66 no workspace, 71 the job could not start, 73 already exists, 74 I/O failure or host EOF, 75 signal,
+  76 protocol violation, 77 not root. `check` adds 79 (a protected path lacks its approved blob), 80 (the job changed one),
+  81 (the dependency install failed) and
   82 (the candidate's own package files were refused). In the guest a guard starts each job as its locked identity with
   no new privileges and in a fresh PID namespace (a check job also in its own loopback-only network namespace, under
   its rlimits), so no descendant, `setsid` or not, outlives the job.

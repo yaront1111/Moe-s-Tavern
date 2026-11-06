@@ -108,6 +108,13 @@ When a step needs exclusive-use infrastructure (a benchmark box, a staging DB, a
 2. **Busy → park, never poll**: follow the returned `nextAction` — `moe.report_blocked` with the same `resourceId`. Your task flips to BLOCKED, the wrapper stops relaunching sessions, and the daemon auto-unblocks the task (back to its pre-block status) the moment the lease is granted. Do NOT sit in a loop re-calling `acquire_resource`. For a short wait inside a live session, `moe.wait_for_resource` (blocking, ≤10 min per call) is acceptable; anything longer is report_blocked + end the session.
 3. **Release when done**: `moe.release_resource { resourceId, workerId, taskId }`, while the task is still yours. The next waiter unparks immediately. Once the row has passed to another seat (QA claimed it), the lease is that seat's to release. The 24h `maxLeaseMs` auto-expiry is a crash bound, not a substitute for releasing.
 
+## Verified-local seat VMs
+
+- Under verified-local the job runs in its seat VM (ARCHITECTURE.md, Seat VM route), on a fresh copy of the job's commit with no `.git` (snapshots refuse control paths), so git commands find no repository.
+- `node`, `npm` and `npx` use the pinned toolchain first on PATH (`/opt/moe/toolchain/bin`); the npm registry is reachable over the seat VM's own network. Run the plan's local verification in place, including `npm ci && npm test`.
+- A real, untracked `node_modules` directory (no manifest path under it) never leaves the VM. Every other workspace change becomes candidate bytes for a worker, and refuses a QA job. Delete build, coverage and report output before finishing, or write it under `$HOME` or `/tmp`.
+- Local runs are the seat's own evidence. Delivery comes only from the approved required checks in check VMs.
+
 ## Claude account switch
 
 Some machines run claude seats across several Claude subscription accounts. The wrapper picks the account before every launch. Once a usage window on yours reaches the switch percent (90% by default), or the account hits its limit, is signed out or is removed, the daemon moves you at the next step boundary:
