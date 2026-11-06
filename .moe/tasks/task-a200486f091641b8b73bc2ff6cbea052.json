@@ -104,7 +104,7 @@
     }
   ],
   "planRevision": 3,
-  "status": "REVIEW",
+  "status": "DONE",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -130,16 +130,19 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T18:22:46.400Z",
-  "updatedAt": "2026-11-06T05:17:28.641Z",
+  "updatedAt": "2026-11-06T05:31:43.583Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T18:22:49.127Z",
     "plannedStepCount": 5,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 5
+    "executedStepCount": 5,
+    "doneAt": "2026-11-06T05:30:55.063Z",
+    "wallClockMs": 40085936
   },
   "contextFetchedBy": [
     "architect-fe831cde",
-    "worker-be0f3922"
+    "worker-be0f3922",
+    "qa-a196fc69"
   ],
   "dependsOn": [
     "task-fbd2a42f10904fd78684f16f88374e73",
@@ -229,10 +232,11 @@
   "planApprovedAt": "2026-11-05T18:52:43.836Z",
   "approvedPlanRevision": 1,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "completion",
-    "sessionId": "worker-be0f3922@2026-11-06T05:03:27Z",
-    "at": "2026-11-06T05:17:28.640Z"
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-06T05:18:12Z",
+    "at": "2026-11-06T05:31:43.583Z"
   },
   "workStartedAt": "2026-11-06T05:04:25.354Z",
   "reviewStartedAt": "2026-11-06T05:16:06.530Z",
@@ -271,5 +275,9 @@
       "pushed": true
     }
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "completedAt": "2026-11-06T05:30:55.063Z",
+  "reviewCompletedAt": "2026-11-06T05:30:55.063Z",
+  "reviewSummary": "Reviewed completion 15c7fb34 (on moe/work-2026-10-24): 5 files, +31/-15, exactly the approved scope; no helper, wrapper or harness bytes touched.\n\nRe-ran both checkRefs verbatim from a fresh --shared clone at 15c7fb34:\n- checkRefs[0]: exit 0, all 4 legs GATE_OK in ~10 min (AccountPresentationTest; vm-route on ps1 5.1, pwsh 7 and sh; lease + trust-docs tests on node and node.exe; parity-check; lint). That re-runs slices A/B (SI-signin/renew/none/short, canary rows), which carry DoD 1-5.\n- checkRefs[1]: exit 0, and exit 1 on 15c7fb34^, so it discriminates.\n\nDoD 6, read against landed code:\n- ARCHITECTURE Credentials is one sub-bullet with the exact start. It covers minted-first, else read-only sign-in access token; job frame only as CLAUDE_CODE_OAUTH_TOKEN; no refresh token; host-claude renewal at <=5 min; 8 h lifetime, 3600 s short-life wait (matches VM_JOB_MIN_TOKEN_SEC in both wrappers) and the mid-job expiry route; fail closed; macOS Keychain. The codex sentence matches verified_local_refuse (sh:10253).\n- MCP_SERVER no longer says .credentials.json is never opened. It names the read-only VM exception and the 2026-11-05 directive, and marks vm-token optional.\n- CERTIFICATION step 2 is \"Sign in each rotation account\", VM token optional.\n- TROUBLESHOOTING row names all four VM_CREDENTIAL_REASONS plus short-life/no-lease/unknown (literal in both wrappers), and the new [seat] VM credential row matches sh:9990/9998 and ps1:9830/9836.\n- MoeBundle: key set unchanged, one {0} each, no apostrophe, AccountPresentationTest green.\n- No doc says the refresh token or config folder reaches a VM; no credential value appears. Helper header, SCHEMA.md and scripts/CLAUDE.md are consistent.\n\nNon-blocking: the [seat] VM credential row writes `source=minted|signin expires=<iso>`, but the minted form prints no expires=. The real Windows E1-E10 run stays with task-1a8f1d0e.",
+  "requiredCheckAtDone": null
 }

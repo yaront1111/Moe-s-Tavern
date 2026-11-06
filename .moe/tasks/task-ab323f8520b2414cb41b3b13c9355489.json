@@ -58,27 +58,39 @@
     {
       "stepId": "step-4",
       "description": "scripts/moe-agent.ps1, the twin of steps 1-2 (same strings, same argv order). Keep the file UTF-8 with BOM (the vm-route harness checks it); locate by quoted text, since task-98053b89 edits this file too.\n(a) Protected allowlist: `$Command -cnotin @('claude', 'codex', 'gemini', 'grok', 'copilot')` and the five-name refusal text of step 1. Resolve-MoeProtectedCli resolves a bare copilot (on Windows .ps1 first, then PATHEXT; npm's copilot.ps1 shim forwards piped input).\n(b) Detection (about :1228): `elseif ($cmdBase -eq \"copilot\") { $cliType = \"copilot\" }`; MOE_WORKER_TYPE then follows from ToUpperInvariant (COPILOT).\n(c) Beside $grokInteractive (about :1323): `$copilotInteractive = ($cliType -eq \"copilot\") -and $Interactive` (role default plus -Interactive / -Interactive:$false).\n(d) Banners and the polling-disable condition beside grok's (about :9044-9067), with step 1's banner strings.\n(e) The architect multi-task condition (about :10913) gains $copilotInteractive; the $oneShotSession switch gains `'copilot' { -not $copilotInteractive }`; the INTERACTIVE-suffix list `@('claude', 'grok', 'codex', 'gemini')` gains 'copilot'.\n(f) Invoke-MoeGuardedCommand: replace `& $Command @args` with `if ($MyInvocation.ExpectingInput) { $input | & $Command @args } else { & $Command @args }`. Probed 2026-11-05 on 5.1.26100 and 7.6.9 (mem:gotcha-ps1-native-stdin-utf8): ExpectingInput is true only when input is piped in, and false for unpiped, output-piped and captured calls, so every existing caller and the bodies prompt-cache-launcher/usage-launcher tests lift behave as today.\n(g) Per-launch Serena root: at the per-iteration reset (`$script:cliRoot = \"$projectPath\"`, about :10128) set `$script:MoeCopilotSerena = $serenaProject`; in Initialize-MoeWorktreeLaunch's per-CLI switch add `'copilot' { $script:MoeCopilotSerena = $serenaProject }` (there the function-local value: W, KEEP's root or '').\n(h) `elseif ($cliType -eq \"copilot\")` branch before the claude else (after grok's, about :11358-11485):\n- Not found: `[Console]::Error.WriteLine(\"[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $Command. Install it (npm install -g @github/copilot), then sign in with copilot login.\")`, `$script:MoeExitStatus = 1; exit 1` (never Write-Error: it throws under Stop, as the agy branch notes).\n- Directive and file body by grok's rules ($systemAppend + Session Context + $dynamicContext + directive). $script:CopilotPromptFile = TEMP\\moe-copilot-prompt-$Role-$myPid.md and $script:CopilotMcpFile = TEMP\\moe-copilot-mcp-$Role-$myPid.json (never a moe-mcp-config-* name, which protected-agent-command's mcpWritten counts), both written UTF-8 without BOM. The JSON has step 2's shape: moe command and args taken from $mcpConfigObj.mcpServers.moe (do NOT write a third `command = $(if ($script:MoeNode) ...` expression: test S1 counts exactly 2 JSON writers), serena from $serenaPath plus $script:MoeCopilotSerena with --context agent, env from $env: with the same keys and the attempt pair both or neither. Use ConvertTo-Json -InputObject ... -Depth 6 (probed: keeps one-element arrays and the number on both engines).\n- Error handling: any throw in either write prints step 2's MOE_COPILOT_CONFIG_FAILED line via [Console]::Error.WriteLine and exits 1, before the heartbeat starts.\n- Then Start-HeartbeatSidecar, try/finally Stop-HeartbeatSidecar, Push-Location -LiteralPath $script:cliRoot, as grok. Headless: save $global:OutputEncoding and [Console]::OutputEncoding, set both to New-Object Text.UTF8Encoding($false) (the :1884 pattern; 5.1 otherwise pipes ASCII, probed: 'café —' arrived as 'caf? ?'), run `$copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs -C \"$script:cliRoot\" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$($script:CopilotMcpFile)\"`, $script:CliExitCode = $LASTEXITCODE, and restore both encodings in finally. TUI: unpiped, the same argv minus --allow-all and --no-ask-user, plus `-i \"$copilotPointerPrompt\"`.\n(i) Declare both script vars $null beside $script:GrokPromptFile (about :846) and remove both files in the outer finally beside it (about :12265).\nCheck with ParseFile on 5.1 and 7.",
-      "status": "IN_PROGRESS",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
       ],
-      "startedAt": "2026-11-06T05:16:29.389Z"
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Implemented PowerShell twin including piped-input forwarding, UTF-8 save/restore, per-launch JSON reusing pinned moe command/args, explicit identity, launch-specific Serena root and outer-finally cleanup. ParseFile exits 0 on Windows PowerShell 5.1 and pwsh 7; UTF-8 BOM retained. Behavioral and UTF-8 mutation proof follow step 5.",
+      "startedAt": "2026-11-06T05:16:29.389Z",
+      "completedAt": "2026-11-06T05:18:20.369Z"
     },
     {
       "stepId": "step-5",
       "description": "scripts/tests/postflight-vm-route.ps1, the twin of step 3.\n(a) The recorder (the rec.cjs body) gains a copilot arm with the sh fake's extra keys (stdin only without -i; mcpFile and mcp; the pointer file's text), and the fake list `@('claude', 'codex', 'gemini', 'grok')` gains 'copilot' (copilot.cmd). A fake serena.cmd under $tempRoot\\serena-bin is passed only to copilot rows through $env:MOE_SERENA_PATH (removed in finally).\n(b) Invoke-WrapperProcess: generalize the '-AutoClaim:$false' EncodedCommand route to any `-<Switch>:$false` argument (5.1 -File cannot bind an explicit false switch), so CP-AN can pass -Interactive:$false.\n(c) A new Invoke-CopilotRows, called right after the fakes are written (before Invoke-VmcSections, for fast failure), with these rows:\n- CP-H, copilot.cmd worker: Assert-VmrLaunched, exact argv, MOE_WORKER_TYPE=COPILOT, stdin with 'Role: worker.', task-postflight, 'One-shot session:' and U+2014 (on 5.1 this is the UTF-8 proof), moe and serena servers as in step 3, 'Copilot mode: headless (stdin prompt)'.\n- CP-A, architect with $script:VmrLoop = @('-PollInterval', '1'): exit 0, the record ran, exact TUI argv, the pointer file's text as in step 3, 'Copilot mode: interactive', 'Interactive mode: polling disabled' and 'Loop: False'.\n- CP-AN, architect plus -Interactive:$false via $script:VmjExtraArgs: the headless shape.\n- CP-NF: $script:VmrCommand = $tempRoot\\missing\\copilot, \\copilot.exe and \\copilot.cmd: exit 1, exactly one line holding the exact MOE_COPILOT_NOT_FOUND text, no record.\n- CP-W: a $script:VmrSetup fixture like step 3's, giving git an identity through a GIT_CONFIG_GLOBAL file as Invoke-VmcSections does: -C, cwd and serena --project are W. Compare paths with [IO.Path]::GetFullPath, case-insensitively, because git hands back forward slashes.\nCompare argv and other arrays with -join (pwsh 7 unrolls one-element arrays, mem:gotcha-ps1-byte-order-sort-and-array-ack). In finally, reset every knob ($script:VmrLoop, VmjExtraArgs, VmrCommand, VmrSetup, MOE_SERENA_PATH, FAKE_CLAIM_WORKSPACE, FAKE_CTX_WORKSPACE, GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM). Print `[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W`.\n(d) $rows gains `C3|worker|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.`, and the ok line names C3.\nRun it to green on 5.1 (`/init \"$(command -v pwsh.exe)\" -nop -c \"cmd /c powershell -nop -ep Bypass -f postflight-vm-route.ps1\"`) and on pwsh 7, from scripts/tests on a /mnt/<drive> path, with WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC (mem:gotcha-wsl-interop-binfmt-init, mem:gotcha-qa-ps1-postflight-from-wsl).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/postflight-vm-route.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Added Copilot recorder and CP-H/A/AN/NF/W, C3, generalized explicit-false switch EncodedCommand route. Full vm-route PASS exit 0 on Windows PowerShell 5.1 and pwsh 7. Initial harness bugs corrected: use UTF-8 ReadAllText for recorder JSON (5.1 Get-Content defaults ANSI), normalize cwd/-C separately because git uses forward slashes. Scratch mutant deleting UTF-8 switch fails CP-H on 5.1; polling mutant fails Bash CP-A timeout 124. All Copilot rows also pass in scratch projects/temp paths with spaces on all 3 engines; npm-style .ps1 shim UTF-8 probe passes 5.1/7.",
+      "startedAt": "2026-11-06T05:18:20.399Z",
+      "completedAt": "2026-11-06T05:30:30.427Z"
     },
     {
       "stepId": "step-6",
       "description": "scripts/tests/protected-agent-command.test.mjs:\n- refusedLine lists `claude, codex, gemini, grok, copilot`, so every R1/R2 row pins the new text on each engine. The header comment (lines 11-12) names copilot.\n- In the first per-engine loop, beside A1, add CP1 'resolves copilot from a trusted absolute PATH entry': A1's shape with cliStub(fx, fx.trusted, 'copilot', 'trusted') and assertResolved(fx, r, 'copilot', file).\n- Beside AG5 add CP2 'under the marker a governor seat runs the trusted copilot as COPILOT': typedStub copilot in fx.trusted, role governor, AG5's PATH and env, then assert exit 0 and ranText(fx) === 'trusted copilot COPILOT\\n'. This proves the bare name RUNS, with the worker type.\nRun `node --test protected-agent-command.test.mjs` on WSL (bash rows; the PowerShell rows skip, since this host has no Linux pwsh) and through Windows node (`/init \"$(command -v pwsh.exe)\" -nop -c \"node --test protected-agent-command.test.mjs\"`: 5.1 and 7 rows, about 4 min).",
-      "status": "PENDING",
+      "status": "IN_PROGRESS",
       "affectedFiles": [
         "scripts/tests/protected-agent-command.test.mjs"
-      ]
+      ],
+      "startedAt": "2026-11-06T05:30:30.465Z"
     },
     {
       "stepId": "step-7",
@@ -116,12 +128,12 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:07.016Z",
-  "updatedAt": "2026-11-06T05:16:29.389Z",
+  "updatedAt": "2026-11-06T05:30:30.465Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T21:59:39.338Z",
     "plannedStepCount": 8,
     "plannedDistinctFileCount": 5,
-    "executedStepCount": 3
+    "executedStepCount": 5
   },
   "contextFetchedBy": [
     "architect-32d0a5be",
@@ -136,7 +148,9 @@
   "stepsCompleted": [
     "step-1",
     "step-2",
-    "step-3"
+    "step-3",
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:28:12.434Z",
