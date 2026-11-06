@@ -1,0 +1,196 @@
+{
+  "id": "task-b1f60b53620e4f70999b46a3c0ed7c3f",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's moe.amend_plan_step and moe.get_activity_log sections omit what their DONE fixes added: amend_plan_step's rail refusal (task-2cc41d1a) and get_activity_log's unknownEventTypes reply field (task-72f02ef3)",
+  "description": "Doc-sync follow-up filed by architect-74d9e1c7 at the governor's request (#architects msg-71db57ac 21:06Z ruling; msg-e05b02f9). Both code rows reached DONE before their plans could be amended. Neither completion touched docs/MCP_SERVER.md. Checked on moe/work-2026-10-24 at 15728974.\n\nGAP 1: `### moe.amend_plan_step` (task-2cc41d1a, completion fa405c59)\n- packages/moe-daemon/src/tools/amendPlanStep.ts now rail-checks the replacement text with submit_plan's rules, before any write. It applies util/rails.ts listPlanRailViolations, global forbiddenPatterns then requiredPatterns, case-insensitive substring, to planRailText over every step's effective text plus affectedFiles and newFiles.\n- It refuses only a violation the amendment INTRODUCES. A violation the plan already had neither blocks the amendment nor is named, and an amendment may remove it.\n- The refusal is assertPlanRails: code -32003, message `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: revise the replacement text to satisfy this rail and call moe.amend_plan_step again. Escape hatch: … moe.propose_rail { … targetScope: \"GLOBAL\" … }`. That is the same shape as submit_plan's **Rail refusal** note.\n- The section's Notes say none of this.\n\nGAP 2: `### moe.get_activity_log` (task-72f02ef3, completion f159784e)\n- queryActivityLog in packages/moe-daemon/src/tools/getActivityLog.ts adds `unknownEventTypes: string[]` to the reply, only when non-empty. It holds the distinct eventTypes values not in ACTIVITY_EVENT_TYPES (types/schema.ts).\n- Those values match nothing. They are reported, never refused, which keeps the contract additive.\n- The section documents neither the field nor the reply shape it extends.\n\nFIX\n- Add one Notes bullet to each of those two sections only.\n- Read the facts from the landed code; do not restate the whole submit_plan Rail refusal note, link to it instead.\n- No other section and no code changes.",
+  "definitionOfDone": [
+    "docs/MCP_SERVER.md `### moe.amend_plan_step` Notes state that the replacement text is rail-checked with submit_plan's global rules before any write, that only a violation the amendment introduces is refused (-32003 `[CONSTRAINT_VIOLATION] Rail violation: …`), and that a violation the plan already had neither blocks the amendment nor is named.",
+    "docs/MCP_SERVER.md `### moe.get_activity_log` states that eventTypes values outside ACTIVITY_EVENT_TYPES match nothing and are echoed in an additive `unknownEventTypes: string[]` reply field, present only when non-empty.",
+    "`git diff` of the completion touches only docs/MCP_SERVER.md, with hunks only inside those two sections, and `npm run lint` passes at the repo root."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1. In docs/MCP_SERVER.md `### moe.amend_plan_step` **Notes** (~:532-538), insert one bullet right after the 'Rejects the 11th amendment' bullet (~:535).\n\nFirst re-read the landed code (packages/moe-daemon/src/tools/amendPlanStep.ts ~:97-112, util/rails.ts listPlanRailViolations / planRailText / assertPlanRails). Adjust a word only if the code disagrees. Text:\n\n\"- **Rail check:** before any write, the replacement is checked with `moe.submit_plan`'s global rails: `forbiddenPatterns`, then `requiredPatterns`, by case-insensitive substring over every step's effective text plus its `affectedFiles` and `newFiles`, with the replacement in this step's place. Only a violation the amendment introduces is refused: code `-32003`, message `[CONSTRAINT_VIOLATION] Rail violation: \"<violation>\". Default action: revise the replacement text to satisfy this rail and call moe.amend_plan_step again. …`, with the same escape hatch as `moe.submit_plan`'s **Rail refusal** note. A violation the plan already had neither blocks the amendment nor is named, and an amendment may remove it.\"\n\nLink to the Rail refusal note; do not restate it. The verification greps this section for 'introduces', '[CONSTRAINT_VIOLATION] Rail violation' and 'neither blocks'. Error handling and test code are unaffected: this is a docs-only change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:24.632Z",
+      "completedAt": "2026-11-03T23:07:32.865Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 2. In docs/MCP_SERVER.md `### moe.get_activity_log` **Notes** (~:3158-3165), insert one bullet right after the `maxPayloadChars` truncation bullet (~:3160).\n\nFirst re-read packages/moe-daemon/src/tools/getActivityLog.ts (~:145 and ~:162, the eventTypes schema description ~:201) and the KNOWN_EVENT_TYPES source. Text:\n\n\"- `eventTypes` values that are not activity event types (`ACTIVITY_EVENT_TYPES` in `types/schema.ts`) match nothing. They are never refused: the reply echoes their distinct values in an additive `unknownEventTypes: string[]` field, present only when non-empty.\"\n\nThe verification greps this section for 'unknownEventTypes: string[]' and 'only when non-empty'. Touch no other section. Error handling and test code are unaffected: this is a docs-only change.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:33.712Z",
+      "completedAt": "2026-11-03T23:07:36.015Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification (DoD 1, 2, and 3's lint): run this once, fresh, before complete_task:\n\n`cd \"$(git rev-parse --show-toplevel)\" && sec() { awk -v h=\"### moe.$1\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md; } && sec amend_plan_step | grep -q 'introduces' && sec amend_plan_step | grep -qF '[CONSTRAINT_VIOLATION] Rail violation' && sec amend_plan_step | grep -q 'neither blocks' && sec get_activity_log | grep -qF 'unknownEventTypes: string[]' && sec get_activity_log | grep -q 'only when non-empty' && npm run lint`\n\nThe role-doc linter is a bash script and needs no install. Submit the exit code and output tail as complete_task evidence; that is the test evidence for this docs-only row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "startedAt": "2026-11-03T23:07:36.924Z",
+      "completedAt": "2026-11-03T23:07:40.670Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Self-review (final step), plus DoD 3's diff scope. Run:\n\n`B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); git diff --name-only \"$B\" -- . ':(exclude).moe'; git diff -U0 \"$B\" -- docs/MCP_SERVER.md | sed -n 's/^@@ -[0-9,]* +\\([0-9]*\\).*/\\1/p' | while read -r s; do awk -v s=\"$s\" '/^### /{h=$0} NR==s{print h; exit}' docs/MCP_SERVER.md; done | sort -u`\n\nExpected output:\n- the first command prints only docs/MCP_SERVER.md;\n- the loop prints only `### moe.amend_plan_step` and `### moe.get_activity_log`.\n\nPaste both into the completion summary (QA checks the same with `git show --stat <sha>`).\n\nThen read both bullets against the code once more. Check each item:\n- the introduced-only rule (`already` set vs `introduced`);\n- the default-action text, verbatim from amendPlanStep.ts;\n- the distinct-values and present-only-when-non-empty behaviour (getActivityLog.ts ~:145/:162);\n- no claim that the code does not make, e.g. error.data contents.\n\nError handling: if a check fails, fix the text and re-run step 3's command as the fresh test evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T23:07:41.557Z",
+      "completedAt": "2026-11-03T23:07:47.837Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 453.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:48:44.894Z",
+  "updatedAt": "2026-11-04T19:20:44.945Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:04:32.009Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:23:26.990Z",
+    "wallClockMs": 1134981
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-33f67e5b",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:06:06.137Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md documents amend_plan_step's introduced-only rail refusal and get_activity_log's additive unknownEventTypes reply field, with no other change.",
+    "acceptanceCriteria": [
+      "### moe.amend_plan_step Notes name the rail check before any write, the introduced-only refusal (-32003 [CONSTRAINT_VIOLATION] Rail violation: …) and that an existing violation neither blocks nor is named.",
+      "### moe.get_activity_log names unknownEventTypes: string[], present only when non-empty, for eventTypes outside ACTIVITY_EVENT_TYPES that match nothing.",
+      "The completion diff touches only docs/MCP_SERVER.md inside those two sections; npm run lint passes."
+    ],
+    "invariants": [
+      "No code changes.",
+      "No other MCP_SERVER.md section changes."
+    ],
+    "compatibility": [
+      "Docs only; no contract change."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md ### moe.amend_plan_step Notes",
+      "docs/MCP_SERVER.md ### moe.get_activity_log Notes"
+    ],
+    "reuse": [
+      "Link to the submit_plan Rail refusal note rather than restating it."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/amendPlanStep.ts:108-111 refuses only an introduced violation via assertPlanRails.",
+      "packages/moe-daemon/src/tools/getActivityLog.ts:145 and :162 compute and conditionally return unknownEventTypes."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && sec() { awk -v h=\"### moe.$1\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md; } && sec amend_plan_step | grep -q 'introduces' && sec amend_plan_step | grep -qF '[CONSTRAINT_VIOLATION] Rail violation' && sec amend_plan_step | grep -q 'neither blocks' && sec get_activity_log | grep -qF 'unknownEventTypes: string[]' && sec get_activity_log | grep -q 'only when non-empty' && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The rule I applied: one Notes bullet per section, as the row says, linking to the Rail refusal note instead of restating it. The worker re-reads the landed code before writing each bullet, so the text cannot drift from it.\n\nisEpicFinal is true only by the highest-order fallback in this bucket epic (no finalTaskId). Every row here is an independent fix, so no epic-wide regression applies to a docs-only diff. The worktree landing gate still runs parity-check and lint.",
+    "codebaseInsights": "- amendPlanStep.ts ~:97-112 builds railText over the effective step texts (with the replacement), computes `already` from the current plan, and refuses only the first violation not in `already`, via assertPlanRails(..., 'revise the replacement text to satisfy this rail and call moe.amend_plan_step again').\n- getActivityLog.ts ~:145 computes unknownEventTypes as distinct values not in KNOWN_EVENT_TYPES, and ~:162 spreads it into the reply only when non-empty.\n- The submit_plan Rail refusal note is at docs/MCP_SERVER.md ~:380.",
+    "risks": "- The diff-scope check must exclude .moe board files.\n- QA in the control checkout verifies DoD 3 with git show --stat on the completion sha, since there the merge-base is HEAD.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/tools/amendPlanStep.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "packages/moe-daemon/src/util/rails.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6a47715245babc523cae24608180dc310834f5ff",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:06:06.164Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:07:24.632Z",
+  "reviewStartedAt": "2026-11-03T23:07:51.117Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && sec() { awk -v h=\"### moe.$1\" '$0==h{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md; } && sec amend_plan_step | grep -q 'introduces' && sec amend_plan_step | grep -qF '[CONSTRAINT_VIOLATION] Rail violation' && sec amend_plan_step | grep -q 'neither blocks' && sec get_activity_log | grep -qF 'unknownEventTypes: string[]' && sec get_activity_log | grep -q 'only when non-empty' && npm run lint",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-03T23:07:51.117Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Added one Notes bullet each to docs/MCP_SERVER.md moe.amend_plan_step (rail check, introduced-only -32003 refusal, pre-existing violations neither block nor named) and moe.get_activity_log (unknownEventTypes: string[], only when non-empty). Diff scope: docs/MCP_SERVER.md only; hunks only in those two sections.",
+  "commits": [
+    {
+      "sha": "8f33694cec0d75a686a9dc88d5c8bac91ae48e49",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T23:06:21Z",
+      "paths": [
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T23:18:55.660Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:22:22Z",
+    "at": "2026-11-03T23:23:47.064Z"
+  },
+  "completedAt": "2026-11-03T23:23:26.990Z",
+  "reviewCompletedAt": "2026-11-03T23:23:26.990Z",
+  "reviewSummary": "Reviewed completion 8f33694c (on moe/work-2026-10-24). Diff is +2/-0, docs/MCP_SERVER.md only; the two hunks (new lines 536 and 3162) sit under `### moe.amend_plan_step` and `### moe.get_activity_log` and nowhere else. No code touched; net 2 LOC. Re-ran task.verification myself: the section greps ('introduces', '[CONSTRAINT_VIOLATION] Rail violation', 'neither blocks', 'unknownEventTypes: string[]', 'only when non-empty') plus `npm run lint` at repo root all passed, exit 0.\n\nClaims checked against landed code. (1) amendPlanStep.ts:97-112 rail-checks the replacement in the step's place over every step's effective text plus affectedFiles/newFiles, refuses only the first violation not already in the plan (`already` vs `introduced`) via assertPlanRails before any write, with the quoted default action; util/rails.ts checks forbiddenPatterns then requiredPatterns, case-insensitive substring; the throw is CONSTRAINT_VIOLATION -32003 with a \"Rail violation:\" message. The bullet links submit_plan's Rail refusal note (line 380) rather than restating it, and makes no error.data claim. (2) getActivityLog.ts:145 computes distinct eventTypes not in ACTIVITY_EVENT_TYPES and :162 spreads unknownEventTypes into the reply only when non-empty; the bullet matches, incl. never refused and additive.\n\nAll DoD items and executionContract acceptance criteria met. Complexity pass: nothing to cut. Docs-only row, so lint plus section greps are the plan's test evidence. Nothing deferred or unverified.",
+  "requiredCheckAtDone": null
+}

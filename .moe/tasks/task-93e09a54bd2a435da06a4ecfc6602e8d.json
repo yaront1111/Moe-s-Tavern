@@ -1,0 +1,206 @@
+{
+  "id": "task-93e09a54bd2a435da06a4ecfc6602e8d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a task file written before reopenCount existed can never be un-archived: set_task_status and the board compute undefined + 1 for the ARCHIVED to BACKLOG/WORKING reopen and updateTask refuses the NaN with an uncoded \"reopenCount must be a non-negative integer\", because StateManager.load backfills priority and comments but not reopenCount (48 live ARCHIVED rows)",
+  "description": "Filed by defect hunt #15 (task-928a468d), lane 3 (state persistence: backward compatibility with existing .moe/ state files). Verified at HEAD d5431577 in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\n- StateManager.load() backfills legacy task fields in memory (packages/moe-daemon/src/state/StateManager.ts:1066-1079): priority, comments, contextFetchedBy and stepsCompleted. It does not backfill reopenCount.\n- An un-archive counts as a reopen and computes task.reopenCount + 1. That happens in set_task_status (src/tools/setTaskStatus.ts:249) and in the board drag (src/server/WebSocketServer.ts:622). REOPEN_TASK (src/state/taskStore.ts:816) does the same for DONE/REVIEW rows. With no reopenCount on disk, the result is NaN.\n- taskStore.ts:486-488 refuses NaN with a plain Error, \"reopenCount must be a non-negative integer\". So the un-archive fails, uncoded, and the row stays ARCHIVED.\n- A null reopenCount happens to work, because null + 1 is 1.\n- createTask already defaults a missing count to 0 (taskStore.ts:338). load never does.\n\nCONTRACT\n- docs/MCP_SERVER.md:1649 (### moe.set_task_status): \"`ARCHIVED → BACKLOG/WORKING` un-archives.\"\n- docs/SCHEMA.md:488: `reopenCount: number`.\n- Epic rail: \"Fixes must be backward-compatible with existing .moe/ state files\".\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts, case 1 (\"legacy ARCHIVED row without reopenCount can be un-archived by a human\"). Copy it into packages/moe-daemon/src/__hunt__/ of a d5431577 snapshot and run `npx vitest run src/__hunt__/sideLeads.test.ts -t \"legacy ARCHIVED\"`.\n  - Expected: \"error\": null, \"status\": \"BACKLOG\"\n  - Received: \"error\": \"reopenCount must be a non-negative integer\", \"status\": \"ARCHIVED\"\n- Output: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.vitest.txt\n- Live exposure, from a read-only scan of .moe/tasks on 2026-11-03 at about 23:45Z:\n  - 48 ARCHIVED rows have no reopenCount key, mostly the 2026-02 bug-* imports;\n  - 10 more ARCHIVED rows have reopenCount null.\n  - None of them is active, so the failure shows only when a human un-archives one.\n\nFIX DIRECTION\n- In load()'s task backfill loop, set reopenCount to 0 when it is not a non-negative integer (missing, null or anything else), beside the priority and comments backfills.\n- This fixes every reopen path at once, and it touches no file an open row holds: setTaskStatus.ts is held by task-a133bd6a, and WebSocketServer.ts is named by the IDE rows.\n- Like its siblings, the backfill is in memory only. The next write of the row persists it.\n\nFILES\n- packages/moe-daemon/src/state/StateManager.ts\n- packages/moe-daemon/src/state/legacyTaskBackfill.test.ts (new)\n- Docs: none. The fix restores the documented un-archive, so no contract changes.\n\nPlacement: no open row holds these files at filing time. setTaskStatus.test.ts is only run here, never edited, because task-a133bd6a (REVIEW) edits it.",
+  "definitionOfDone": [
+    "Loading a task file with no reopenCount key, and one with reopenCount null, gives state.getTask(id).reopenCount === 0 for both (new test file packages/moe-daemon/src/state/legacyTaskBackfill.test.ts)",
+    "moe.set_task_status ARCHIVED to BACKLOG on such a loaded row succeeds and stores reopenCount 1 (same test file)",
+    "`cd packages/moe-daemon && npx vitest run src/state/legacyTaskBackfill.test.ts src/state/StateManager.test.ts src/tools/setTaskStatus.test.ts` passes, run in a snapshot outside the shared checkout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first, then the fix (both files). (a) Create packages/moe-daemon/src/state/legacyTaskBackfill.test.ts with the Write tool from the dry-run-verified prototype /mnt/d/moe-scratch/plan-93e09a54/legacyTaskBackfill.test.ts (read it, then Write it; never cp it into the tree, the rail needs a TOOL witness). On a fresh .moe/ in os.tmpdir() it has 3 tests: (1) six ARCHIVED files in the live legacy shape (no reopenCount, definitionOfDone or taskRails keys) with reopenCount missing / null / -1 / 1.5 / '2' / 3 load as 0,0,0,0,0,3, and every file's bytes are unchanged after state.load(); (2, it.each) a row with no key, and one with null, un-archives through setTaskStatusTool ARCHIVED -> BACKLOG (reason 'revive', no workerId: the human path) to status BACKLOG, reopenCount 1, reopenReason 'revive', in memory and in the task file. Run it once before the fix: test 1 and the no-key case fail (that one throws 'reopenCount must be a non-negative integer' from taskStore.ts:488); the null case passes, because null + 1 is 1. (b) Fix StateManager.load()'s task backfill loop (packages/moe-daemon/src/state/StateManager.ts:1066-1080 at a5157059) with the Edit tool. After `if (!Array.isArray(task.comments)) updates.comments = [];` add `if (!Number.isInteger(task.reopenCount) || task.reopenCount < 0) updates.reopenCount = 0;`, under a 2-line comment saying why: a file written before reopenCount existed has no key or null, so default it as createTask does (taskStore.ts:338) and every reopen path's `reopenCount + 1` stays a number. Change the loop comment to 'Backfill priority, comments and reopenCount for existing tasks'. The exact diff is /mnt/d/moe-scratch/plan-93e09a54/fix.diff. Keep the backfill in memory only, like its siblings: load() must never write the file, or the next daemon start rewrites 58 .moe/tasks files (test 1 pins the bytes); the row's next real write persists the value. Do not touch setTaskStatus.ts, WebSocketServer.ts, taskStore.ts or qaReject.ts. Every reopen site (setTaskStatus.ts:248, WebSocketServer.ts:622, taskStore.ts:816, qaReject.ts:188) reads the backfilled value. The FileWatcher reload (index.ts:821-830) calls state.load(), so an externally restored legacy file is covered too. Error handling: the default never throws and adds no IO. It runs inside load()'s existing try block, and updateTask's non-negative-integer check (taskStore.ts:486-488) stays unchanged as the backstop for a bad caller value.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "note": "Backfill added in load(); new test file written from the verified prototype. RED pre-run skipped (prototype already RED-verified in plan).",
+      "startedAt": "2026-11-04T00:29:58.081Z",
+      "completedAt": "2026-11-04T05:25:53.450Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once before complete_task: from the task worktree root, run the plan's checkRef exactly as written (mem:convention-daemon-full-suite-gate-checkref, mem:gotcha-daemon-linux-snapshot-gate). The gate:\n- archives HEAD into a mktemp snapshot outside the shared checkout and overlays the two owned files;\n- runs npm ci, the package tsc, and a tt.json typecheck of the new test;\n- stage 1: the DoD command (vitest on legacyTaskBackfill, StateManager and setTaskStatus tests);\n- stage 2: the full daemon suite (`npm test` is plain vitest run there).\nThe dry-run at a5157059 printed 'Test Files 3 passed (3) / Tests 164 passed (164)', then 'Test Files 281 passed (281) / Tests 7437 passed | 24 skipped (7461)', and exited 0 in 50 s. Counts grow if the target has moved. Negative control: with the fix reverted, the gate exits 1 at stage 1 (2 failed | 162 passed). The fresh output is the complete_task verification evidence. Never run npm in the shared checkout, and never pass TMPDIR into the env -i. setTaskStatus.test.ts is only run, never edited (another row owns it).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "note": "checkRef gate exit 0: stage 1 3 files/164 tests, stage 2 281 files/7437 passed | 24 skipped.",
+      "startedAt": "2026-11-04T05:25:55.360Z",
+      "completedAt": "2026-11-04T05:26:56.846Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of the 2-file diff (about +4/-1 in StateManager.ts, plus the new test). Check:\n(a) Twice concurrently: the FileWatcher can re-run load() while a reopen is in flight. The default is idempotent and keeps a valid count, so a reload cannot reset a count that a reopen just wrote.\n(b) Hostile inputs: missing, null, negative, fractional, string, NaN and Infinity all become 0.\n(c) Assumptions: readers that already treat a missing value as 0 (getCommitScope.ts:288, metrics.ts:99, contextNextAction.ts:31) see no change. No test expects reopenCount to be undefined after load; step 2's full suite proves it.\n(d) load() makes no writes: test 1 pins the bytes.\n(e) No docs change: docs/MCP_SERVER.md:1649 (ARCHIVED -> BACKLOG/WORKING un-archives) and docs/SCHEMA.md:488 (reopenCount: number) already describe the restored behavior.\nConfirm that the diff names exactly the two planned files and that both are declared (complete_step modifiedFiles).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "note": "Self-review of diff (+4/-1 StateManager.ts, new test): Number.isInteger rejects missing/null/string/NaN/Infinity/fraction, <0 catches negatives; valid counts kept so a concurrent FileWatcher reload is idempotent; no IO added, load bytes pinned by test; only the two planned files changed; no docs change needed.",
+      "startedAt": "2026-11-04T05:27:05.060Z",
+      "completedAt": "2026-11-04T05:27:08.392Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 469.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:00:00.696Z",
+  "updatedAt": "2026-11-04T19:20:45.104Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T00:19:35.281Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T05:56:42.554Z",
+    "wallClockMs": 20227273
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-fdb2af60",
+    "worker-593560ee",
+    "qa-1cd86a39"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T00:28:41.897Z",
+  "executionContract": {
+    "intendedBehavior": "A task file that predates reopenCount loads with reopenCount 0, in memory only. That covers a file with no key, a null, or any value that is not a non-negative integer. Every reopen path (set_task_status, the board's /ws drag, REOPEN_TASK, qa_reject) then computes a number, so a human can un-archive the 48 legacy ARCHIVED rows (and the 10 with null). A valid count is kept unchanged. load() never rewrites a task file; the row's next real write persists the value.",
+    "acceptanceCriteria": [
+      "Loading a task file with no reopenCount key, and one with reopenCount null, gives state.getTask(id).reopenCount === 0 for both; -1, 1.5 and '2' also load as 0, and 3 is kept (legacyTaskBackfill.test.ts)",
+      "set_task_status ARCHIVED -> BACKLOG on such a loaded row (human path, no workerId) succeeds and stores status BACKLOG and reopenCount 1, in memory and in the task file (same test file)",
+      "The task files' bytes are unchanged by state.load()",
+      "The checkRef passes: stage 1 is the DoD command over legacyTaskBackfill, StateManager and setTaskStatus tests, and stage 2 is the full daemon suite, run in a snapshot outside the shared checkout"
+    ],
+    "invariants": [
+      "updateTask still refuses a non-integer or negative reopenCount update (taskStore.ts:486-488 unchanged)",
+      "createTask's default (taskStore.ts:338) unchanged",
+      "setTaskStatus.ts, WebSocketServer.ts, taskStore.ts and qaReject.ts are not edited; setTaskStatus.test.ts is only run"
+    ],
+    "compatibility": [
+      "Valid non-negative integer reopenCount values load unchanged",
+      "Backward-compatible with existing .moe/ state files (epic rail): no task file is rewritten at load. The default reaches disk only with the row's next real write, exactly like the priority and comments backfills",
+      "No MCP tool or wire contract change: docs/MCP_SERVER.md:1649 and docs/SCHEMA.md:488 already state the restored behavior"
+    ],
+    "approvedScope": [
+      "StateManager.load() task backfill loop (packages/moe-daemon/src/state/StateManager.ts:1066-1080 at a5157059): one reopenCount default and its loop comment",
+      "New test file packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+    ],
+    "reuse": [
+      "Reuses load()'s existing backfill loop: no new helper, and no per-site `?? 0` at the four reopen sites"
+    ],
+    "sourceAssumptions": [
+      "StateManager.load() (StateManager.ts:1064-1080 at a5157059) loads tasks with loadEntities and backfills priority, comments, contextFetchedBy and stepsCompleted in memory via this.tasks.set(id, { ...task, ...updates })",
+      "index.ts:821-830: the FileWatcher change callback reloads through state.load(), so the backfill also covers external edits",
+      "setTaskStatus.ts:221-248: isReopening (REVIEW/DONE/ARCHIVED -> WORKING/BACKLOG/PLANNING) sets updates.reopenCount = task.reopenCount + 1; WebSocketServer.ts:622, taskStore.ts:816 and qaReject.ts:188 add 1 the same way",
+      "Live scan of .moe/tasks on 2026-11-04: 48 files have no reopenCount key and 10 have null, all ARCHIVED; no other invalid values"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/StateManager.ts packages/moe-daemon/src/state/legacyTaskBackfill.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/legacyTaskBackfill.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/state/legacyTaskBackfill.test.ts src/state/StateManager.test.ts src/tools/setTaskStatus.test.ts > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) `?? 0` at each `reopenCount + 1` site (setTaskStatus.ts:248, WebSocketServer.ts:622, taskStore.ts:816, qaReject.ts:188). Rejected: four files, two of them in other rows' lanes, and any future site repeats the bug. (b) Persist the backfill at load (a write per legacy row). Rejected: it would rewrite 58 .moe/tasks files on the next daemon start (board churn), and the sibling backfills are in memory only. (c) Chosen: one in-memory default in load()'s existing loop.",
+    "codebaseInsights": "load() is also the FileWatcher's reload path (index.ts:821-830), so one backfill covers both startup and external edits. updateTask validates only the update's own reopenCount (taskStore.ts:486), so a legacy row fails only when it is reopened. A null count already worked by accident (null + 1 is 1). Readers already default a missing count to 0 (getCommitScope.ts:288, metrics.ts:99, contextNextAction.ts:31).",
+    "risks": "Do not write task files in load(); test 1 pins the bytes. Do not edit setTaskStatus.test.ts; it is only run. Prototype status: RED 2 failed | 1 passed; GREEN 3 DoD files 164/164; full suite 281 files, 7437 passed | 24 skipped; tsc clean. The gate dry-run and negative control were both run from a --shared clone at a5157059 with uncommitted edits.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/setTaskStatus.ts",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8ca6a40bbda169dea598b087c4809d990e1db30b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T00:28:41.938Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:29:58.081Z",
+  "reviewStartedAt": "2026-11-04T05:27:11.573Z",
+  "verification": {
+    "command": "checkRef: git archive snapshot outside repo + overlay owned files; npm ci; tsc --noEmit; tsc -p tt.json; vitest run legacyTaskBackfill/StateManager/setTaskStatus tests; then npm test (full daemon suite)",
+    "exitCode": 0,
+    "outputTail": "Test Files  3 passed (3)\n      Tests  164 passed (164)\n Test Files  281 passed (281)\n      Tests  7437 passed | 24 skipped (7461)\nEXIT=0",
+    "reportedAt": "2026-11-04T05:27:11.573Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+  ],
+  "completionSummary": "StateManager.load() now backfills reopenCount to 0 in memory for any task whose value is not a non-negative integer (missing, null, negative, fractional, string), beside the priority/comments backfills. Legacy ARCHIVED rows can be un-archived again via set_task_status (stores reopenCount 1). load() writes no files. New test legacyTaskBackfill.test.ts covers the load values, byte-unchanged files and the un-archive path.",
+  "commits": [
+    {
+      "sha": "d7e17aa399fdde89ddfe1d13ed8615de3c0d15d1",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:24:16Z",
+      "paths": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/legacyTaskBackfill.test.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:28:12.694Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T05:54:29Z",
+    "at": "2026-11-04T05:57:07.653Z"
+  },
+  "completedAt": "2026-11-04T05:56:42.554Z",
+  "reviewCompletedAt": "2026-11-04T05:56:42.554Z",
+  "reviewSummary": "Approved. Reviewed completion d7e17aa3 (on moe/work-2026-10-24, in control HEAD 4469377b): +72/-1, 2 files only (StateManager.ts +4/-1, new legacyTaskBackfill.test.ts +68); under the size cap. setTaskStatus.ts, WebSocketServer.ts, taskStore.ts, qaReject.ts untouched (invariants hold). Re-ran the plan's checkRef myself in a git-archive snapshot outside the shared checkout: npm ci, tsc --noEmit and the tt.json typecheck clean; stage 1 (DoD command over legacyTaskBackfill, StateManager, setTaskStatus tests) 3 files/164 tests passed; stage 2 full daemon suite 285 files/7464 passed, 24 skipped; exit 0. Negative control: with the fix line deleted in the snapshot, legacyTaskBackfill.test.ts fails 2 of 3 ('reopenCount must be a non-negative integer', taskStore.ts:488); only the null case passes (null+1=1), as predicted, so the tests catch the bug. DoD 1: missing/null/-1/1.5/'2' load as 0, 3 is kept. DoD 2: set_task_status ARCHIVED->BACKLOG (no workerId) stores BACKLOG + reopenCount 1 in memory and in the file, for no-key and null rows. DoD 3: passes in snapshot. load() file bytes pinned unchanged by the test. Backfill is in-memory only in load()'s existing loop; Number.isInteger rejects NaN/Infinity/strings/null/fractions, <0 catches negatives; valid counts preserved, so a FileWatcher reload cannot reset a count. updateTask's check stays as the backstop. No docs change needed (MCP_SERVER.md:1649, SCHEMA.md:488 already state it). Complexity pass: nothing to cut. Snapshot removed; no npm run in the shared checkout.",
+  "requiredCheckAtDone": null
+}

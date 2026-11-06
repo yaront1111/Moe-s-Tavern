@@ -1,0 +1,199 @@
+{
+  "id": "task-1cb559b7501d4304be47e822fc539dd8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: complete_step stores modifiedFiles without the normalizeAffectedFiles check declare_files and submit_plan apply, so an absolute, traversing or non-string entry returns success but silently drops out of the ASSERTED tier, and a non-array value also drops the affectedFiles fallback its own warning reports",
+  "description": "Found by defect hunt #10 (task-49a2c07f, architect-1dd28c7c) on 2026-11-03. The holder re-ran the repro and re-derived the lines below at HEAD 677d051a. This is the residual of task-e3d41183, which added only the count cap.\n\nPROBLEM\n- complete_step checks only the number of modifiedFiles entries (completeStep.ts:93, the e3d41183 cap) and stores the raw value (:115).\n- Its siblings that feed the same ASSERTED tier normalize paths and refuse bad ones:\n  - declare_files (declareFiles.ts:48-50) runs normalizeAffectedFiles, under the comment \"an absolute or traversing path is a caller mistake to fix, not something to store\";\n  - submit_plan does the same for affectedFiles and newFiles (submitPlan.ts:404, :410).\n- The read side silently drops what it cannot normalize:\n  - tolerantNormalizePath (util/attributionTiers.ts:39-45) returns null for such an entry, so it never reaches get_commit_scope's asserted list;\n  - completedStepFiles (:102-105) reads `s.modifiedFiles || s.affectedFiles`, so a stored non-empty junk list also suppresses the step's planned affectedFiles fallback.\n- A non-array value is stored, and the plan sanitizer then turns it into [] (state/validators.ts:790). An empty array is truthy, so the fallback is lost there too, while complete_step's own warning (completeStep.ts:158-160) says it \"fell back to the step's affectedFiles\".\n- An absolute path draws no warning at all, because the list is non-empty.\n- Claude Code's Edit and Write tools take absolute paths, so `<projectRoot>/src/x.ts` is a natural spelling for a worker to report.\n- Consequences in shared mode, with another worker live:\n  - an edit that neither the plan nor a TOOL-tier harvest covers becomes MOE_ATTRIBUTION_UNRESOLVED;\n  - planned files drop from the ASSERTED tier to PLANNED.\n- None of the 2979 stored steps on this board has a malformed entry. This is a guard gap, not a live incident.\n\nEVIDENCE: repro at HEAD 677d051a, run in a git-archive snapshot outside the checkout\n- Files: /mnt/d/moe-scratch/hunt-49a2c07f/B/zzHuntB_modifiedFilesShape.test.ts, output in A_modifiedFilesShape.out.txt.\n- Command: `cd packages/moe-daemon && NO_COLOR=1 npx vitest run src/tools/zzHuntB_modifiedFilesShape.test.ts`\n- An absolute path, and separately '../x.ts': `promise resolved \"{ success: true, …(7) }\" instead of rejecting`.\n- An accepted absolute path is lost from asserted: `+ \"lost\": [ \"/tmp/moe-tools-test-…/src/new-helper.ts\" ]`.\n- A string instead of an array: `expected { stored: [], asserted: [] } to deeply equal { stored: undefined, …(1) }`. The expected asserted list holds \"src/planned.ts\".\n- Control (passes): declare_files refuses an absolute path, a '../' path and an object entry with INVALID_INPUT.\n- Result: Tests 4 failed | 1 passed (5).\n- normalizeAffectedFiles itself already does the right thing:\n  - ['./src/a.ts','src\\\\b.ts','src/a.ts'] becomes ['src/a.ts','src/b.ts'];\n  - 'C:\\\\x.ts', '../x.ts', '/abs/x.ts', {path} and a bare string each throw MoeError -32602.\n\nFIX DIRECTION\n- In completeStep.ts, run `normalizeAffectedFiles(params.modifiedFiles, 'modifiedFiles')`:\n  - after the e3d41183 count cap, so its message does not change;\n  - before any write, including the strict recordStepCompletion.\n- Store the normalized, deduplicated list. That refuses, with INVALID_INPUT, a non-array value, a non-string or blank entry, an over-long entry, and an absolute, drive-letter or traversing path, exactly as declare_files does.\n- An omitted or empty modifiedFiles keeps today's warning and fallback.\n\nFILES\n- packages/moe-daemon/src/tools/completeStep.ts\n- packages/moe-daemon/src/tools/completeStep.pathShape.test.ts (new)\n- Neither file is held at filing time.\n\nVERIFICATION\nRun vitest in a snapshot or the task worktree, never in the shared checkout: `npx vitest run src/tools/completeStep.test.ts src/tools/completeStep.modifiedFiles.test.ts src/tools/completeStep.pathShape.test.ts`.",
+  "definitionOfDone": [
+    "In the new completeStep.pathShape.test.ts, complete_step rejects with INVALID_INPUT (-32602) each of these modifiedFiles values: [<projectRoot>/src/x.ts], ['../x.ts'], ['C:\\\\x.ts'], [{path:'a.ts'}] and the bare string 'src/a.ts'. For each one the task file stays byte-identical: the step is still IN_PROGRESS, with no stepsCompleted change and no note.",
+    "In the same file, ['./src/a.ts','src\\\\b.ts','src/a.ts'] is stored as ['src/a.ts','src/b.ts'], and get_commit_scope's asserted list contains both paths.",
+    "`npx vitest run src/tools/completeStep.test.ts src/tools/completeStep.modifiedFiles.test.ts src/tools/completeStep.pathShape.test.ts` passes, and the first two files are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first (load test-driven-development). Create packages/moe-daemon/src/tools/completeStep.pathShape.test.ts with the Write tool. Never cp the scratch draft into the tree: a shell write leaves no TOOL witness. Read-only reference: /mnt/d/moe-scratch/plan-1cb559b7/completeStep.pathShape.test.ts. The architect dry-ran it red at base, green with the fix, and clean under the gate's tt.json typecheck.\n\nFixture:\n- ToolTestHarness with setupMoeFolder({ schemaVersion: 6 }) and createEpic.\n- Task task-w: WORKING, assigned to worker-1, contextFetchedBy ['worker-1'], one IN_PROGRESS step step-1 with affectedFiles ['src/planned.ts'].\n- Worker worker-1: CODING, currentTaskId task-w.\n- await h.state.load(). afterEach calls flushActivityLog(h.state), then h.cleanup().\n\nUse exactly these case-title prefixes, because the red checkRef greps them:\n- (p1)-(p5), DoD 1, as one it.each over a typed table `Array<[string, string, () => unknown]>`. Use the typed table, not `as const`: that form fails tt.json with TS7024. The values:\n  - (p1) [`${h.testDir}/src/x.ts`]\n  - (p2) ['../x.ts']\n  - (p3) ['C:\\\\x.ts']\n  - (p4) [{path:'a.ts'}]\n  - (p5) the bare string 'src/a.ts'\n  Each call passes a note. Each must reject with a MoeError whose code is MoeErrorCode.INVALID_INPUT (-32602). Afterwards .moe/tasks/task-w.json must be byte-identical to a read taken before the call, step-1 must still be IN_PROGRESS with note undefined, and stepsCompleted must be [].\n- (n1) DoD 2: ['./src/a.ts','src\\\\b.ts','src/a.ts'] is stored as exactly ['src/a.ts','src/b.ts'], and get_commit_scope {taskId:'task-w', workerId:'worker-1'} asserted contains both.\n- (c1) control: ['src/ok.ts'] is stored as given, with no warning.\n- (c2) control: an omitted modifiedFiles keeps the warning matching /fell back to the step's affectedFiles \\(1 path\\(s\\)\\)/, stores no modifiedFiles, and asserted still contains src/planned.ts.\n\nRun it once against the unfixed code. Expected: Tests 6 failed | 2 passed (8), with only (c1) and (c2) green.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts"
+      ],
+      "note": "Resumed pre-existing IN_PROGRESS step (start_step correctly refused a second start); clean worktree verified. Created tests through main-session apply_patch. Fresh isolated snapshot /tmp/moe-1cb5-red.3sqtBv: npm ci --prefer-offline, then npx vitest run src/tools/completeStep.pathShape.test.ts exited 1: 6 failed | 2 passed (8). Only (p1)-(p5) and (n1) fail on current unfixed code; (c1)/(c2) controls pass, matching planned RED.",
+      "startedAt": "2026-11-03T21:11:29.492Z",
+      "completedAt": "2026-11-03T21:16:51.304Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Edit packages/moe-daemon/src/tools/completeStep.ts. This is the only runtime file; declareFiles.ts, util/affectedFiles.ts, getCommitScope.ts and docs/MCP_SERVER.md stay unchanged.\n\nChanges:\n- Import normalizeAffectedFiles from '../util/affectedFiles.js'. It is the same normalizer declare_files (declareFiles.ts:50) and submit_plan (submitPlan.ts:404, :410) run.\n- Directly after the e3d41183 count cap (:93-95), add `const modifiedFiles = normalizeAffectedFiles(params.modifiedFiles, 'modifiedFiles');`. Keep the cap first so its message never changes. The new line comes before the strict recordStepCompletion (:101-106) and before any task write.\n  - Comment: same normalizer as declare_files and submit_plan; get_commit_scope drops what it cannot normalize (util/attributionTiers.ts tolerantNormalizePath), so refuse it here rather than store it.\n- Store the normalized list: `...(modifiedFiles.length ? { modifiedFiles } : {})` at :115.\n- Compute the warning from it: `const modifiedFilesOmitted = modifiedFiles.length === 0;` at :158.\n\nError handling: normalizeAffectedFiles throws INVALID_INPUT (-32602) for each of these, with the field name modifiedFiles:\n- a non-array value;\n- a non-string or blank entry, or one over 500 characters;\n- an absolute, drive-letter or traversing path.\nThe throw comes before any write, so a refused call changes nothing and the worker retries with project-relative paths. Omitted, null or [] still normalize to [] and keep today's MODIFIED-FILES-OMITTED warning and the affectedFiles fallback. A Windows backslash path and a './' prefix are normalized, and duplicates are dropped.\n\nReference diff (read-only): /mnt/d/moe-scratch/plan-1cb559b7/completeStep.fix.diff. With it the new file passes 8/8. The architect's mutants were each killed:\n- storing params.modifiedFiles raw kills (n1);\n- replacing the normalizer with an Array.isArray fallback kills (p1)-(p5) and (n1).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "note": "Reused normalizeAffectedFiles exactly as planned, immediately after the unchanged raw-count cap and before recordStepCompletion/task writes. Store only nonempty normalized lists and derive omitted warning from normalized length. Runtime scope remains only completeStep.ts; GREEN/typechecks and adjacent-suite checks are batched into approved step-3 verification.",
+      "startedAt": "2026-11-03T21:16:51.330Z",
+      "completedAt": "2026-11-03T21:17:28.977Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE (DoD 1-3). From your task worktree, run both checkRefs as ONE command, each in its own subshell: `( <checkRefs[0]> ) && ( <checkRefs[1]> )`. Each leg cds into its own mktemp snapshot, so a bare && would break the second leg. That command and its output tail are the complete_task verification evidence.\n\n- [0] is the gate. It archives HEAD's packages/moe-daemon, overlays your two files, runs npm ci with nvm's Linux node 24 under env -i, then tsc --noEmit plus a tt.json typecheck of the new test. It runs vitest over:\n  - completeStep* (completeStep.test.ts, completeStep.modifiedFiles.test.ts and the new file: DoD 3);\n  - getCommitScope, declareFiles, completionAuthorization, enforcement.integration, lifecycleFixes, taskTimestamps, governanceFeatures and util/attributionTiers.\n  The architect's dry-run printed `Test Files 11 passed (11)` and `Tests 234 passed (234)`, and the gate exited 1 when completeStep.ts was unfixed.\n- [1] is the red-at-base leg. It runs the new file against completeStep.ts pinned at ac3ea38f, which is byte-identical to 677d051a. It requires exit 1, (c1) and (c2) green, and (p1)-(p5) and (n1) red, then prints RED-AT-BASE. It was dry-run both uncommitted and after a simulated landing commit.\n\nThe gate names its files because a daemon-only snapshot fails delivery/acceptance.test.ts and util/executionContractDocs.test.ts at base: they need the repo-root scripts/ and docs/.\n\nError handling for a red run: fix the code, never the cases. If a listed suite other than the new file fails, compare it with a run on the unedited completeStep.ts first.\n\nNever run npm in the shared checkout.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran exact combined (checkRefs[0]) && (checkRefs[1]) once in separate mktemp snapshots: exit 0. Both production tsc --noEmit and new-test tt.json tsc passed; Test Files 11 passed (11), Tests 234 passed (234). Red-at-base: Tests 6 failed | 2 passed (8), exactly (p1)-(p5)/(n1), RED-AT-BASE. Additional mandatory worktree landing gate `bash scripts/tests/parity-check.sh && npm run lint` exited 0 (PASS parity-check.sh; all role docs within limits). Existing completeStep.test.ts and completeStep.modifiedFiles.test.ts unchanged. No paths edited in this verification step.",
+      "startedAt": "2026-11-03T21:17:29.004Z",
+      "completedAt": "2026-11-03T21:18:17.597Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, once (load adversarial-self-review), on `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the new test.\n\nChecklist:\n(a) The normalization runs before recordStepCompletion. Under verified-local, a refused call must record no step evidence on the attempt. Read :97-106 to confirm the order.\n(b) The count cap still fires first, with its message unchanged; completeStep.modifiedFiles.test.ts pins it. Note that 51 duplicates are refused even though they normalize to 1 path; that is deliberate and keeps the cap's meaning.\n(c) An omitted, null or [] modifiedFiles behaves exactly as before: same warning text, no modifiedFiles key stored.\n(d) No caller in the repo passes a path the normalizer refuses. The daemon tests that call complete_step pass plain relative paths, and the stored './src/a.ts' fixtures in getCommitScope.test.ts and attributionTiers.test.ts are task data, not calls.\n(e) `git diff --name-only` lists only the two planned files.\n(f) No added line contains a project.json globalRails.forbiddenPatterns string.\n\nRecord the findings, with both legs' printed Tests lines, in the complete_task summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review of task diff plus new test: no findings. Normalization follows unchanged raw-count cap (51 duplicates still refused), precedes strict attempt evidence and all task/activity/chat writes. Authorization before it is read-only. Null/undefined/[] normalize to [] and store no modifiedFiles key; warning text unchanged. Non-string/blank/overlong/absolute/traversing shapes fail through existing helper. No new shared-state mutation, resource lifetime, or concurrency path; existing serialized dispatch unchanged. Audited actual complete_step callsites: relative paths or omission except deliberate new negative tests. Only completeStep.ts and new pathShape test touched; compatibility suites unchanged; no forbidden added patterns; diff whitespace clean. Fresh verification: Test Files 11 passed (11), Tests 234 passed (234); red-at-base Tests 6 failed | 2 passed (8), RED-AT-BASE. Landing parity/lint gate exit 0.",
+      "startedAt": "2026-11-03T21:18:17.625Z",
+      "completedAt": "2026-11-03T21:18:58.514Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 425.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:42:26.509Z",
+  "updatedAt": "2026-11-04T19:20:44.676Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:03:10.634Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:05:48.748Z",
+    "wallClockMs": 3758114
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-26483323",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:08:40.946Z",
+  "executionContract": {
+    "intendedBehavior": "moe.complete_step normalizes modifiedFiles with normalizeAffectedFiles, the normalizer declare_files and submit_plan use, before any write. It refuses with INVALID_INPUT a non-array value, a non-string or blank entry, and an absolute, drive-letter or traversing path. Otherwise it stores the normalized, deduplicated list, so every stored path reaches get_commit_scope's ASSERTED tier.",
+    "invariants": [
+      "A refused call writes nothing: no task write, no step evidence on the attempt, no note, no activity event.",
+      "The count cap (more than 50 entries) still fires first, with its message unchanged.",
+      "An omitted, null or [] modifiedFiles keeps today's MODIFIED-FILES-OMITTED warning, stores no modifiedFiles key, and keeps the step's affectedFiles fallback."
+    ],
+    "compatibility": [
+      "completeStep.test.ts and completeStep.modifiedFiles.test.ts pass unchanged.",
+      "Plain project-relative paths are stored byte-for-byte as today.",
+      "The response shape is unchanged. declareFiles.ts, util/affectedFiles.ts, getCommitScope.ts and docs/MCP_SERVER.md are not edited."
+    ],
+    "reuse": [
+      "normalizeAffectedFiles from util/affectedFiles.ts, used as is, exactly as declare_files and submit_plan call it."
+    ],
+    "sourceAssumptions": [
+      "tools/completeStep.ts:93-95 has the e3d41183 count cap, :101-106 the strict recordStepCompletion, :115 stores params.modifiedFiles raw, and :158 computes modifiedFilesOmitted from params. The file is byte-identical at 677d051a and ac3ea38f.",
+      "util/affectedFiles.ts:93 normalizeAffectedFiles: null or undefined gives []; a non-array throws INVALID_INPUT 'must be an array of strings'; each entry goes through normalizeAffectedFile, and the result is deduplicated in first-seen order.",
+      "util/attributionTiers.ts:39-45 tolerantNormalizePath gives null for what the normalizer refuses, and :102-105 reads `s.modifiedFiles || s.affectedFiles`."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/completeStep{.ts,.pathShape.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/completeStep.pathShape.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{completeStep,getCommitScope,declareFiles,completionAuthorization,enforcement.integration,lifecycleFixes,taskTimestamps,governanceFeatures} src/util/attributionTiers > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp $P/completeStep.pathShape.test.ts \"$S/$P/\" && git show ac3ea38fe92a7df25ced9df044dfa591322a7864:$P/completeStep.ts > \"$S/$P/completeStep.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/tools/completeStep.pathShape.test.ts > ../l 2>&1; r=$?; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] || exit 1; for k in c1 c2; do ! grep -aqF \"> ($k) \" ../l || exit 1; done; for k in p1 p2 p3 p4 p5 n1; do grep -aqF \"> ($k) \" ../l || exit 1; done; echo RED-AT-BASE'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Rewriting an absolute path inside the project root to a relative one was rejected: declare_files refuses such a path instead, and the two ASSERTED-tier writers must agree.",
+      "Normalizing before the count cap was rejected because it would change the cap's message and meaning, which completeStep.modifiedFiles.test.ts pins."
+    ],
+    "codebaseInsights": "Three tools write the ASSERTED tier: submit_plan's affectedFiles and newFiles, declare_files, and complete_step's modifiedFiles. Only complete_step skipped normalizeAffectedFiles. The read side, attributionTiers.tolerantNormalizePath, silently drops what the normalizer would refuse. None of the 2979 stored steps on this board has a malformed entry, so this is a guard gap.",
+    "risks": [
+      "A worker that today reports absolute paths now gets an INVALID_INPUT and must retry with relative paths. That is visible and fixable, where today the path is silently dropped.",
+      "The first draft's typecheck failed with TS7024 on an `as const` it.each table. The typed table in step 1 avoids it."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/completeStep.ts",
+      "packages/moe-daemon/src/util/affectedFiles.ts",
+      "packages/moe-daemon/src/tools/declareFiles.ts",
+      "packages/moe-daemon/src/util/attributionTiers.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ac3ea38fe92a7df25ced9df044dfa591322a7864",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:08:40.977Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:11:29.492Z",
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:04:11Z",
+    "at": "2026-11-03T22:06:20.365Z"
+  },
+  "reviewStartedAt": "2026-11-03T21:19:14.449Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/completeStep{.ts,.pathShape.test.ts} \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/completeStep.pathShape.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/{completeStep,getCommitScope,declareFiles,completionAuthorization,enforcement.integration,lifecycleFixes,taskTimestamps,governanceFeatures} src/util/attributionTiers > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }' ) && ( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp $P/completeStep.pathShape.test.ts \"$S/$P/\" && git show ac3ea38fe92a7df25ced9df044dfa591322a7864:$P/completeStep.ts > \"$S/$P/completeStep.ts\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/tools/completeStep.pathShape.test.ts > ../l 2>&1; r=$?; grep -aE \"^ +Tests |^ FAIL \" ../l; [ $r = 1 ] || exit 1; for k in c1 c2; do ! grep -aqF \"> ($k) \" ../l || exit 1; done; for k in p1 p2 p3 p4 p5 n1; do grep -aqF \"> ($k) \" ../l || exit 1; done; echo RED-AT-BASE' )",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  11 passed (11)\n      Tests  234 passed (234)\nPinned-base expected failures: (p1), (p2), (p3), (p4), (p5), (n1)\n      Tests  6 failed | 2 passed (8)\nRED-AT-BASE\nCombined checkRefs exit code: 0\nAdditional mandatory worktree landing gate: bash scripts/tests/parity-check.sh && npm run lint\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nLanding gate exit code: 0",
+    "reportedAt": "2026-11-03T21:19:14.449Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts",
+    "packages/moe-daemon/src/tools/completeStep.ts"
+  ],
+  "completionSummary": "complete_step now uses normalizeAffectedFiles after the unchanged raw-count cap and before strict attempt evidence or task writes; stores normalized/deduplicated paths and preserves omitted/null/[] warning/fallback. Added 8 regression cases covering malformed input with byte-identical task state, normalization and asserted scope, plus compatibility controls. Existing completeStep.test.ts and completeStep.modifiedFiles.test.ts unchanged. Fresh combined checkRefs exited 0: both tsc checks clean; Test Files 11 passed (11), Tests 234 passed (234). Pinned-base leg: Tests 6 failed | 2 passed (8), exactly p1-p5/n1, RED-AT-BASE. Mandatory parity/lint gate passed. Adversarial review found no issues: cap first, normalization before all writes, existing authorization read-only, relative/omitted callers compatible; only planned two files touched, no forbidden additions, diff whitespace clean. Serena handoff recorded. Wrapper owns landing.",
+  "commits": [
+    {
+      "sha": "716b7bc66c49713c060a343f72010f731a5b2ca3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T21:13:37Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/completeStep.pathShape.test.ts",
+        "packages/moe-daemon/src/tools/completeStep.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T21:20:44.715Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "completedAt": "2026-11-03T22:05:48.748Z",
+  "reviewCompletedAt": "2026-11-03T22:05:48.748Z",
+  "reviewSummary": "Reviewed completion 716b7bc6 (on moe/control and moe/work-2026-10-24; 2 files, +83/-2, net 81 LOC): completeStep.ts runs normalizeAffectedFiles(params.modifiedFiles,'modifiedFiles') right after the unchanged count cap and before strict recordStepCompletion/any write; stores the normalized, deduped list only when non-empty; MODIFIED-FILES-OMITTED now derives from normalized length. completeStep.test.ts and completeStep.modifiedFiles.test.ts untouched. Re-ran task.verification in git-archive snapshots outside the checkout, EXIT=0: tsc --noEmit + tt.json typecheck clean; vitest completeStep*, getCommitScope, declareFiles, completionAuthorization, enforcement.integration, lifecycleFixes, taskTimestamps, governanceFeatures, util/attributionTiers = Test Files 11 passed (11), Tests 234 passed (234); red-at-base (completeStep.ts pinned ac3ea38f) = Tests 6 failed | 2 passed (8), exactly p1-p5/n1 red, RED-AT-BASE. DoD1: pathShape p1-p5 assert INVALID_INPUT for absolute, '../x.ts', 'C:\\\\x.ts', {path} entry, bare string, task file byte-identical, step IN_PROGRESS, note undefined, stepsCompleted []. DoD2: n1 stores ['src/a.ts','src/b.ts'] and get_commit_scope asserted has both. DoD3: named vitest files pass. Tests are mutation-resistant; controls c1 (relative stored as given, no warning) and c2 (omitted keeps warning + fallback, no key stored). No non-test caller passes modifiedFiles, no forbidden patterns, scope is exactly the two planned files. Note, not a defect: 51 duplicates are refused by the cap before dedup (deliberate). Ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,250 @@
+{
+  "id": "task-47c4204380ae4759b79782012a36f69f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: chat_pin and chat_unpin record no actor on PIN_CREATED / PIN_REMOVED (chat_unpin takes no workerId, StateManager.unpinMessage takes no actor, and pinnedBy lives only in PIN_CREATED's payload), so get_activity_log by workerId misses every pin change",
+  "description": "Filed by governor-e6b40560 from item 1 of defect hunt #8's held-back list (task-21d671c1, architect-1dd28c7c, #governors msg-adb6f774). The hunt held it until task-3e1d0c2e landed, because the fix touches StateManager.ts. 3e1d0c2e is DONE (f8b8d60c).\n\nPROBLEM (verified by reading moe/work-2026-10-24 at f8b8d60c)\n- get_activity_log { workerId } keeps only events whose own workerId matches (tools/getActivityLog.ts:131-132). That field is set from `worker?.id || proposal?.workerId || actorWorkerId` (state/activityLog.ts:83).\n- state/chatStore.ts:542 appends `PIN_CREATED` with `{ channelId, messageId, pinnedBy }` and no actorWorkerId. The pinner shows up only in the payload, so the per-seat filter never matches.\n- state/chatStore.ts:559 appends `PIN_REMOVED` with `{ channelId, messageId }` and no actor at all.\n- tools/chatUnpin.ts declares no workerId property (:11-15). StateManager.unpinMessage(channelId, messageId) (StateManager.ts:927-928) has no actor parameter.\n- The actor family (c05bf92d, 2e3012b9, d981e0b0, e977c32b, 1064df99, 3e1d0c2e) records the caller as the event's actor everywhere else.\n\nEFFECT\nA per-seat audit cannot see who pinned or unpinned a message. Pins are the governor's and humans' todo and reference list.\n\nDEPENDENCY\ndependsOn task-3064fd45 (PLANNING). That row gives chat_pin chat_send's sender guard (\"system\" refused NOT_ALLOWED, unregistered ids refused INVALID_INPUT) and resolves chat_pin's and chat_unpin's channel reference. Its DoD limits its diff to chatPin.ts, chatUnpin.ts and chatPin.test.ts. This row builds on that guard: the actor it records should be the validated caller, and chat_unpin's new workerId should get the same guard. Plan against 3064fd45's plan. WORKING claims wait until it is DONE.\n\nFIX DIRECTION (the architect decides)\n- Thread an optional actorWorkerId through chatStore pinMessage and unpinMessage and their StateManager wrappers into appendActivity, as 3e1d0c2e did for the epic tools.\n- chat_pin passes its validated workerId.\n- chat_unpin accepts the proxy-injected workerId, guards it like chat_pin and passes it on.\n- The /ws PIN_MESSAGE and UNPIN_MESSAGE paths (WebSocketServer.ts ~1125-1143) keep working. Recording 'human' there, as /ws already passes for pinnedBy, is optional.\n- Payloads stay the same, pinnedBy included.\n\nGate: narrow, per the epic-be924fb8 ruling msg-bbf4f109. Run the chat pin test files plus StateManager.test.ts and WebSocketServer.test.ts.",
+  "definitionOfDone": [
+    "chat_pin and chat_unpin record the caller's workerId as the actor on PIN_CREATED and PIN_REMOVED, so get_activity_log { workerId } returns both events for that seat; the PIN_CREATED payload is unchanged (pinnedBy kept).",
+    "chat_unpin accepts the caller's workerId and applies the same sender guard chat_pin has after task-3064fd45 (\"system\" refused NOT_ALLOWED, an unregistered id refused INVALID_INPUT, \"human\" allowed); the /ws pin and unpin paths still work.",
+    "A daemon regression test fails before the fix and passes after it, and `npx vitest run src/state/StateManager.test.ts src/server/WebSocketServer.test.ts` plus the chat pin test files stay green (run in a snapshot outside the shared checkout)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Thread the actor through the pin store and its wrapper (chatStore.ts, StateManager.ts). This follows the f8b8d60c pattern: a trailing optional `actorWorkerId?: string` that ends up as appendActivity's 7th argument. That argument is the event's workerId (activityLog.ts:83), the field the get_activity_log filter reads (getActivityLog.ts:131-132).\n\n(a) chatStore.ts pinMessage (:517-545). Make the PIN_CREATED append (:542) `state.appendActivity('PIN_CREATED', { channelId, messageId, pinnedBy }, undefined, undefined, undefined, undefined, pinnedBy)`.\n- pinnedBy already IS the validated caller on both paths: chat_pin's guarded workerId (after task-3064fd45) and /ws PIN_MESSAGE's 'human' (WebSocketServer.ts:1127).\n- So pinMessage's signature, chatPin.ts and WebSocketServer.ts all stay unchanged.\n\n(b) chatStore.ts unpinMessage (:547-561).\n- Add a trailing `actorWorkerId?: string` and pass it as the 7th argument of the PIN_REMOVED append (:559).\n- Keep the payload exactly `{ channelId, messageId }`. The description says payloads stay as they are.\n\n(c) StateManager.ts wrapper (:927-929): `async unpinMessage(channelId: string, messageId: string, actorWorkerId?: string): Promise<void> { return unpinMessage(this, channelId, messageId, actorWorkerId); }`. Touch no other method: task-3e1d0c2e's epic and task methods are DONE and are not yours.\n\nOut of scope:\n- The /ws UNPIN_MESSAGE call (WebSocketServer.ts:1141) passes no actor, so a board unpin keeps recording none, as today. The description calls 'human' there optional, and leaving it keeps the diff to 5 files.\n- PIN_TOGGLED (togglePinDone, /ws only).\n\nError handling: the 'Channel not found', 'Message not found in channel', 'Message already pinned' and 'Pin not found' throws all stay before the append, unchanged. An omitted actor records exactly what HEAD records.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts"
+      ],
+      "note": "pinMessage passes pinnedBy as appendActivity's 7th arg (actor); unpinMessage + StateManager.unpinMessage gain trailing optional actorWorkerId forwarded to PIN_REMOVED. Payloads unchanged.",
+      "startedAt": "2026-11-03T19:30:21.834Z",
+      "completedAt": "2026-11-03T19:30:46.067Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "chat_unpin accepts the caller's workerId, guards it and passes it on (chatUnpin.ts).\n\nThis row depends on task-3064fd45, so the file you start from already resolves the channel (resolveChannelRef, then notFound) and calls `state.unpinMessage(channel.id, params.messageId)`. Read that landed version first.\n\n(a) Schema.\n- Add `workerId: { type: 'string', description: 'Worker removing the pin (a registered worker or \"human\"; omitted means \"human\")' }` to inputSchema.properties.\n- Do NOT add it to `required`. That keeps the change additive: \"No breaking changes to MCP tool API contracts\". The proxy stamps a workerId on every agent call anyway.\n\n(b) Guard. Apply chat_send's sender rule (chatSend.ts:40-53), in the compact form task-3064fd45 gave chatPin.ts.\n- `if (params.workerId !== undefined && typeof params.workerId !== 'string') throw invalidInput('workerId', 'must be a string')`\n- `const actor = params.workerId || 'human'`\n- `if (actor === 'system') throw notAllowed('chat_unpin as \"system\"', 'reserved for daemon-internal messages')`\n- `if (actor !== 'human' && !state.getWorker(actor) && !state.tryLoadWorkerFromDisk(actor)) throw invalidInput('workerId', 'Unknown sender: workerId must be a registered worker or \"human\"')`\n- Put the guard after the existing channel and messageId string checks and BEFORE the channel resolution and the store call. Refuse 'system' before the registry lookup, so it gets NOT_ALLOWED and not INVALID_INPUT.\n- Import notAllowed.\n\n(c) Call `state.unpinMessage(channel.id, params.messageId, actor)`.\n\nError handling: every refusal comes before the store call, so a refused unpin writes no pins file, emits no PINS_UPDATED and appends no PIN_REMOVED. The response shape stays `{ success: true }`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "note": "chat_unpin: optional workerId (not required), actor = workerId||'human', 'system' -> NOT_ALLOWED before registry lookup, unregistered -> INVALID_INPUT, all before channel resolution and store call; actor passed to state.unpinMessage.",
+      "startedAt": "2026-11-03T19:30:46.920Z",
+      "completedAt": "2026-11-03T19:30:57.672Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Tests in chatPin.test.ts. task-3064fd45 created this file; it lands before this row (dependsOn), so extend it. It is listed as newFiles only because HEAD at planning time (f8b8d60c) does not have it yet.\n\nReuse its fixture and helpers: h, generalId(), send, pin, unpin, posted(), expectNoPin(). Import getActivityLogTool from './getActivityLog.js'. Before reading events, call `await flushActivityLog(h.state)`.\n\nAdd one describe block:\n(a1) chat_pin as 'worker-a' records PIN_CREATED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId: generalId(), messageId, pinnedBy: 'worker-a' }` (unchanged).\n(a2) A pin as 'human', then an unpin as 'worker-a', records PIN_REMOVED with event.workerId 'worker-a'. Its payload deep-equals `{ channelId, messageId }`.\n(a3) `getActivityLogTool(h.state).handler({ workerId: 'worker-a', eventTypes: ['PIN_CREATED', 'PIN_REMOVED'] }, h.state)` returns exactly those two events for the seat. Assert the event names and ids, not only a count.\n(a4) chat_unpin with workerId 'system' rejects { code: MoeErrorCode.NOT_ALLOWED }; with 'worker-ghost' it rejects { code: MoeErrorCode.INVALID_INPUT }. Each time the pin is still listed in h.state.getPins(generalId()), and no PIN_REMOVED was appended.\n(a5) chat_unpin as 'human', and chat_unpin with workerId omitted, each succeed and record PIN_REMOVED with workerId 'human'.\n(a6) The board path: `await h.state.unpinMessage(generalId(), messageId)` with no actor still removes the pin, and its PIN_REMOVED has no workerId (unchanged).\n\n(a1)-(a5) fail on HEAD plus task-3064fd45: no actor is recorded, and chat_unpin has no guard.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatPin.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatPin.test.ts"
+      ],
+      "note": "Extended chatPin.test.ts (landed by 3064fd45) with a 'pin events record the caller as actor' describe: a1-a6. First gate run: a3/a5 failed only because get_activity_log reads newest-first; assertions made order-independent; re-verified in step 5.",
+      "startedAt": "2026-11-03T19:30:58.661Z",
+      "completedAt": "2026-11-03T19:32:05.842Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Contract text in docs/MCP_SERVER.md, the '### moe.chat_pin' and '### moe.chat_unpin' sections only. Edit with your seat's editor (Edit, or apply_patch on codex exec). Never use a shell write or Serena: the global rail on TOOL witnesses.\n\nchat_pin params:\n- channel: 'channel id, or name in either \"general\" or \"#general\" form'.\n- workerId: 'a registered worker or \"human\"; \"system\" is refused NOT_ALLOWED and an unregistered id INVALID_INPUT'. That rule landed with task-3064fd45, which left this file alone.\n\nchat_unpin params:\n- the same channel wording;\n- a new line `workerId?: string  // Optional: worker removing the pin, a registered worker or \"human\" (omitted: \"human\"); same refusals as chat_pin`.\n\nAdd one note under the two sections: PIN_CREATED and PIN_REMOVED record the caller as the activity event's workerId, so get_activity_log { workerId } finds them. Payloads are unchanged.\n\nPlacement: task-66108835 (chat_wait, in REVIEW at planning time) also declares docs/MCP_SERVER.md, for its own chat_wait section. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` first. Edit only these two sections: they are distinct hunks, and worktree-mode merge-tree lands distinct hunks cleanly.\n\nError handling: if a section header has moved, locate it by its '### moe.chat_unpin' heading. Never rewrite the whole file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Edited only the moe.chat_pin and moe.chat_unpin sections (channel wording, workerId rule/optional param, actor note) with the Edit tool; 66108835's chat_wait section untouched.",
+      "startedAt": "2026-11-03T19:32:13.563Z",
+      "completedAt": "2026-11-03T19:32:35.425Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run this one command, exactly, from the task worktree. It is the complete_task evidence, and the same command is checkRefs[0].\n\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{chatStore,StateManager}.ts packages/moe-daemon/src/tools/{chatUnpin.ts,chatPin.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatPin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/getActivityLog.test.ts src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'`\n\nWhat it does: it snapshots HEAD plus the 5 owned files outside the shared checkout (the global rail forbids npm ci or test in place). It typechecks the daemon and the test file, then runs the narrow gate from the description, per ruling msg-bbf4f109.\n\nMeasured on HEAD f8b8d60c, without chatPin.test.ts (not landed yet): this filter set passed 10 files and 375 tests in about 25 s. Expect 11 or more files, all passing, and exit 0.\n\nError handling for a red run: read the FAIL lines in ../v.log in the snapshot, fix the file of the step that owns the failure, and re-run the whole command. Never submit a narrowed subset.\n\nIf `cp` fails on chatPin.test.ts, task-3064fd45 has not landed. Stop and moe.report_blocked on it; do not create the file yourself.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Plan gate (checkRefs[0]) fresh: tsc clean, tt.json clean, vitest 11 files / 388 tests passed, exit 0. Red-at-base (HEAD chatStore/StateManager/chatUnpin + new test): 6 failed (a1-a6) | 7 passed (p1-p7).",
+      "startedAt": "2026-11-03T19:32:36.345Z",
+      "completedAt": "2026-11-03T19:33:15.725Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this row's diff. Load adversarial-self-review, then check:\n1. 'system' is refused NOT_ALLOWED before the registry lookup, and 'human' (or an omitted workerId) skips the lookup.\n2. A refused unpin leaves the pin, the pins file and the activity log untouched.\n3. Payloads are unchanged: pinnedBy stays in PIN_CREATED, and nothing is added to PIN_REMOVED.\n4. The /ws pin path still records 'human'. The /ws unpin path still works, now with no actor, exactly as before.\n5. No inputSchema property is required that was not required before (No breaking changes to MCP tool API contracts).\n6. Concurrency: unpinMessage still runs inside state.mutex.runExclusive, and the actor is a value, not shared state.\n7. No added line contains any string from the project.json globalRails.forbiddenPatterns list.\n8. `git status --short` lists only the 5 files.\nFix anything this finds, then re-run the step 5 command before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts",
+        "packages/moe-daemon/src/tools/chatPin.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial review, all 8 items clean; no edits after the green gate run. Noted, not changed: (1) an explicit workerId \"\" on chat_unpin is treated as omitted (\"human\"), per the plan's `params.workerId || 'human'`; chat_pin still refuses \"\". (2) A seat whose id is neither in memory nor on disk now gets INVALID_INPUT on chat_unpin where it used to succeed; that is the DoD's requested guard, identical to chat_pin. (3) /ws UNPIN_MESSAGE still passes no actor, so a board unpin records none, as before. git status lists exactly the 5 files; no forbidden pattern in any added line.",
+      "startedAt": "2026-11-03T19:33:16.645Z",
+      "completedAt": "2026-11-03T19:33:37.008Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3064fd451d69413e968604c5d582f7a3"
+  ],
+  "priority": "LOW",
+  "order": 411.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:22:41.722Z",
+  "updatedAt": "2026-11-04T19:20:44.561Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:24:33.842Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T19:37:53.093Z",
+    "wallClockMs": 799251
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-ed0f6a9e",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T19:28:15.039Z",
+  "executionContract": {
+    "intendedBehavior": "PIN_CREATED and PIN_REMOVED carry the caller as the activity event's workerId, so get_activity_log { workerId } returns a seat's pin and unpin events. chat_unpin accepts an optional workerId, defaulting to \"human\", and applies chat_pin's sender guard: \"system\" is refused NOT_ALLOWED, an unregistered id INVALID_INPUT, and \"human\" is allowed. Payloads stay unchanged, and the /ws pin and unpin paths keep working.",
+    "invariants": [
+      "Every chat_unpin refusal happens before the store call: no pins-file write, no PINS_UPDATED, no PIN_REMOVED.",
+      "The PIN_CREATED payload stays { channelId, messageId, pinnedBy } and the PIN_REMOVED payload stays { channelId, messageId }.",
+      "StateManager.unpinMessage keeps working with two arguments (the /ws path)."
+    ],
+    "compatibility": [
+      "chat_unpin's workerId is optional and additive; a caller that omits it is treated as \"human\".",
+      "Existing .moe activity logs and pins files are read unchanged."
+    ],
+    "reuse": [
+      "The trailing optional actorWorkerId pattern from f8b8d60c (task-3e1d0c2e), and StateManager.appendActivity's 7th parameter.",
+      "chat_send's sender rule (chatSend.ts:40-53) in task-3064fd45's compact chatPin.ts form."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{chatStore,StateManager}.ts packages/moe-daemon/src/tools/{chatUnpin.ts,chatPin.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatPin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/getActivityLog.test.ts src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Adding an actor parameter to pinMessage as well: rejected, because pinnedBy already is the validated caller on both paths. Using it as the actor leaves chatPin.ts and WebSocketServer.ts untouched.",
+      "Making chat_unpin's workerId required: rejected as a contract break.",
+      "Passing 'human' from /ws UNPIN_MESSAGE: optional per the description, and left out to keep the diff to 5 files."
+    ],
+    "codebaseInsights": [
+      "get_activity_log filters on the event-level workerId (getActivityLog.ts:131-132), which activityLog.ts:83 sets from worker, proposal, or actorWorkerId. A payload field such as pinnedBy is never matched.",
+      "chatPin.test.ts and the chat_unpin channel resolution come from task-3064fd45. Its reference diff is /mnt/d/moe-scratch/plan-3064fd45/reference-fix.diff, and its prototype test is /mnt/d/moe-scratch/plan-3064fd45/chatPin.test.ts."
+    ],
+    "risks": [
+      "docs/MCP_SERVER.md is co-declared by task-66108835 (REVIEW). Edit only the chat_pin and chat_unpin sections, with a TOOL-witnessed editor.",
+      "If 3064fd45 landed a different chatUnpin.ts shape than its reference diff, adapt to what landed.",
+      "The chatPin.test.ts typecheck (tt.json) may expose fixture type errors from 3064fd45. That file is in this row's scope, so fix them."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/chatUnpin.ts",
+      "packages/moe-daemon/src/tools/chatPin.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "23afe7dafcc3a4b8ab4d741b02b0ca6d41007d32",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T19:28:15.076Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:30:21.834Z",
+  "reviewStartedAt": "2026-11-03T19:33:50.275Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/{chatStore,StateManager}.ts packages/moe-daemon/src/tools/{chatUnpin.ts,chatPin.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatPin.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/chatPin.test.ts src/tools/chat src/tools/getActivityLog.test.ts src/tools/registry.test.ts src/state/StateManager.test.ts src/server/WebSocketServer.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n Test Files  11 passed (11)\n      Tests  388 passed (388)\nexit=0",
+    "reportedAt": "2026-11-03T19:33:50.275Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/chatUnpin.ts",
+    "packages/moe-daemon/src/tools/chatPin.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "PIN_CREATED and PIN_REMOVED now carry the caller as the activity event's workerId, so get_activity_log { workerId } returns a seat's pin and unpin events. Payloads are unchanged (pinnedBy kept in PIN_CREATED; PIN_REMOVED stays { channelId, messageId }).\n\nChanges (5 files):\n- state/chatStore.ts: pinMessage passes pinnedBy (already the validated caller on chat_pin and /ws 'human') as appendActivity's 7th arg; unpinMessage gains a trailing optional actorWorkerId forwarded to PIN_REMOVED.\n- state/StateManager.ts: unpinMessage(channelId, messageId, actorWorkerId?) wrapper; the 2-arg /ws call still works and records no actor, as before.\n- tools/chatUnpin.ts: optional workerId (not in required, additive). actor = workerId || 'human'; 'system' -> NOT_ALLOWED before the registry lookup; an id that is not 'human', not in memory and not on disk -> INVALID_INPUT 'Unknown sender'; a non-string -> INVALID_INPUT. Every refusal precedes channel resolution and the store call, so a refused unpin writes no pins file, emits no PINS_UPDATED and appends no PIN_REMOVED.\n- tools/chatPin.test.ts: new describe a1-a6 (actor + unchanged payloads, get_activity_log per seat, refusals leave pin and log untouched, 'human' and omitted record 'human', board path with no actor records none).\n- docs/MCP_SERVER.md: chat_pin and chat_unpin sections only (channel wording, workerId rule, actor note).\n\nVerification (snapshot outside the shared checkout, the plan's exact command): tsc clean, tt.json clean, vitest 11 files / 388 tests passed, exit 0 (chatPin, chat family, getActivityLog, registry, StateManager, WebSocketServer). Red-at-base (HEAD chatStore/StateManager/chatUnpin + new test): 6 failed (a1-a6) | 7 passed (p1-p7).\n\nNotes for QA: a3/a5 sort their results because get_activity_log reads newest-first. An explicit workerId \"\" on chat_unpin counts as omitted ('human'), per the plan; chat_pin still refuses \"\". A seat unknown to the registry and disk now gets INVALID_INPUT on chat_unpin (the DoD's requ",
+  "commits": [
+    {
+      "sha": "499f80b493469fce97c8db87184e543cdce6f936",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T19:29:01Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/chatPin.test.ts",
+        "packages/moe-daemon/src/tools/chatUnpin.ts"
+      ],
+      "recordedBy": "architect-1dd28c7c",
+      "recordedAt": "2026-11-03T19:35:07.408Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T19:35:22Z",
+    "at": "2026-11-03T19:38:23.253Z"
+  },
+  "completedAt": "2026-11-03T19:37:53.093Z",
+  "reviewCompletedAt": "2026-11-03T19:37:53.093Z",
+  "reviewSummary": "Reviewed completion 499f80b4 (on moe/work-2026-10-24 and moe/control; 5 files, +129/-12, net 117 incl. tests; no size issue). Diff matches the plan: chatStore pinMessage passes pinnedBy as appendActivity's 7th arg (actor), unpinMessage + StateManager.unpinMessage gain a trailing optional actorWorkerId; chat_unpin gets an optional workerId (not in required, so additive), actor = workerId||'human', 'system' -> NOT_ALLOWED before the registry lookup, unknown id -> INVALID_INPUT, non-string -> INVALID_INPUT, all before resolveChannelRef and the store call. Payloads unchanged. /ws PIN_MESSAGE still records 'human' via pinnedBy; /ws UNPIN_MESSAGE still calls the 2-arg wrapper (records no actor, as before, covered by a6). Docs: only the chat_pin/chat_unpin sections of docs/MCP_SERVER.md.\nRe-ran: (1) git archive of 499f80b4, no overlay, tsc + tt.json clean, vitest chatPin + chat family + getActivityLog + registry + StateManager + WebSocketServer = 11 files / 388 tests passed. (2) The task's exact verification.command from the control checkout (HEAD had advanced to 5681b6db, a chat_wait commit that touches none of these files): exit 0, 11 files / 395 tests. (3) Six mutants in the snapshot, each killed by the intended case: PIN_CREATED actor dropped (a1,a3,a6), PIN_REMOVED actor dropped (a2,a3,a5), store call uses params.workerId (a5), 'system' branch removed (a4), unknown-sender guard removed (a4), actor added to PIN_REMOVED payload (a2). Files restored and cmp-checked, baseline 13/13.\nDoD: item 1 (actor on both events, get_activity_log { workerId } returns them, payload kept) = a1/a2/a3; item 2 (guard, human allowed, /ws paths work) = a4/a5/a6 + WebSocketServer.test.ts green; item 3 (regression test red before, green after) = worker's red-at-base 6 failed + my M1/M2 mutants. Non-blocking notes: explicit workerId \"\" on chat_unpin counts as omitted ('human') per plan, while chat_pin refuses \"\"; PIN_TOGGLED and /ws unpin still record no actor (out of scope).",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

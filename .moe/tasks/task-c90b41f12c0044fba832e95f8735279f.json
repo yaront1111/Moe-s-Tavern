@@ -1,0 +1,225 @@
+{
+  "id": "task-c90b41f12c0044fba832e95f8735279f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_task writes the row before it trips on a non-array definitionOfDone (createTask.ts:197 then throws an uncoded TypeError), so the caller gets an error for a task that exists and its retry files a duplicate, and taskRails entries are stored with no type or length check (a non-string rail later crashes propose_rail)",
+  "description": "Filed by defect hunt #12 (task-f6f0b580, architect-1dd28c7c). Reproduced at moe/work-2026-10-24 f159784e; the files are unchanged at cbae6070. This is a guard gap, not a live incident.\n\nPROBLEM (packages/moe-daemon/src/):\n- create_task checks dependsOn's shape before the write (tools/createTask.ts:87-92, \"shape errors throw\").\n- definitionOfDone is not checked.\n  - state.createTask (createTask.ts:157-166) sanitizes a non-array to the placeholder ['Task completed as described'] (state/taskStore.ts:315-317) and writes the row.\n  - Then createTask.ts:197 runs `params.definitionOfDone?.filter(...)` on the raw value. That throws \"params.definitionOfDone?.filter is not a function\", which reaches the caller as -32000 with no task id.\n  - The schema says array (createTask.ts:35), but McpAdapter does not enforce schemas. The natural retry files a second row.\n- taskRails: taskStore.ts:327 stores `input.taskRails.slice(0, 100)` raw, with no string check and no length cap.\n  - epicRails are refused when they are not strings or exceed MAX_EPIC_RAIL_CHARS (validateEpicUpdates, state/validators.ts:584).\n  - A stored non-string rail crashes railChange.ts:12 `rail.trimEnd()` with an uncoded TypeError. That line is reached from proposeRail.ts:62 for a TASK-scope MODIFY or REMOVE.\n  - get_context serves an over-long rail to every seat.\n\nEVIDENCE (git-archive snapshot of f159784e; my re-runs are in /mnt/d/moe-scratch/hunt-f6f0b580/me/):\n- /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskDodShape.test.ts: Tests 5 failed | 1 passed (6).\n  - ✓ (sibling) a malformed dependsOn is refused with INVALID_INPUT and writes nothing\n  - × a plain string, a stringified JSON array and an object each → AssertionError: expected { wrote: true, threw: true, …(1) } to deeply equal { wrote: false, threw: true, …(1) }\n  - × (r-msg) → expected 'TypeError: params.definitionOfDone?.f…' not to match /is not a function/\n  - × (r-retry) → expected [ 'bug: x', 'bug: x' ] to have a length of 1 but got 2\n- /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskRails.test.ts: Tests 3 failed | 1 passed (4).\n  - ✓ (sibling) create_epic refuses a non-string or over-long rail with INVALID_INPUT\n  - × (r1) a non-string rail is stored\n  - × (r2) a 200k-char rail is stored\n  - × (r3) → expected 'TypeError: rail.trimEnd is not a func…' not to match /is not a function/\n- Exposure:\n  - Of the 956 rows, no pair shares a title, carries the placeholder DoD and was created minutes apart (the retry signature).\n  - 0 of the 897 live rows that have taskRails hold a bad entry.\n\nFIX DIRECTION: in create_task, before state.createTask:\n- refuse a present definitionOfDone or taskRails that is not an array of strings, with INVALID_INPUT, as dependsOn is refused (the state-level sanitizer can stay as a backstop);\n- refuse a taskRails entry longer than MAX_EPIC_RAIL_CHARS, as create_epic does for epicRails (validateStringArrayValue may fit);\n- compute dodCount from the stored task.definitionOfDone, not the raw param.\nA bound placed in taskStore.createTask also covers /ws CREATE_TASK.\n\nFILES: packages/moe-daemon/src/tools/createTask.ts, packages/moe-daemon/src/state/taskStore.ts (createTask only), and a new packages/moe-daemon/src/tools/createTask.shape.test.ts. Sync `### moe.create_task` only if docs/MCP_SERVER.md is free at planning time.\n\nHeld for after this row lands, because they touch the same files:\n- create_task stores `order` unchecked, and nextTaskOrder (taskStore.ts:844-848) lets one non-finite order poison every later default order. This is the task twin of 68a47060's epic fix. Repro: A/zzHuntA_createTaskOrder.test.ts. 0 live rows are affected.\n- /ws CREATE_TASK stores any status (taskStore.ts:334). Repro: B/zzHuntB_createTaskStatus.test.ts. No plugin sends status.",
+  "definitionOfDone": [
+    "create_task with a definitionOfDone or taskRails that is present but not an array of strings (a string, a stringified JSON array, an object, or an array holding a number) is refused INVALID_INPUT naming the field, no task file is written, and a retry with valid input creates exactly one row.",
+    "A taskRails entry longer than MAX_EPIC_RAIL_CHARS is refused INVALID_INPUT, as create_epic refuses an over-long epicRails entry.",
+    "A new vitest file covers these cases and the valid path (array DoD and rails stored as given) and passes, and createTask.test.ts stays green."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Refuse a malformed definitionOfDone or taskRails before the write, and test it. File: packages/moe-daemon/src/tools/createTask.ts. Do NOT edit state/taskStore.ts: this task's checks all run in the tool, and the held-back order and /ws status items own that file.\n(a) Directly after the priority check (createTask.ts:80-83) and before the dependsOn block, add the checks below, with a 3-line comment saying why: a non-array DoD used to be sanitized to the placeholder and written, after which the dodCount line threw an uncoded TypeError, so the caller saw an error for a row that existed and a retry filed a duplicate.\n  - definitionOfDone: if it is present and not null (`params.definitionOfDone != null`): throw invalidInput('definitionOfDone', 'must be an array of strings') when !Array.isArray, and invalidInput(`definitionOfDone[${i}]`, 'must be a string') for any non-string entry. That is the whole check. Do NOT add empty-entry, count or length refusals: sanitizeStringArray (util/sanitize.ts:123) keeps trimming empty entries, slicing to 50 items and truncating to 1000 chars, so [] and [''] still get the placeholder and the 'definitionOfDone is empty' warning.\n  - taskRails: `const taskRails = params.taskRails == null ? undefined : validateStringArrayValue(params.taskRails, 'taskRails', 100, MAX_EPIC_RAIL_CHARS, false);`. Import both from '../state/validators.js'. These are the exact bounds create_epic applies to epicRails (validators.ts:584): an array of at most 100 non-empty strings of at most 10000 chars. Pass `taskRails` (not params.taskRails) to state.createTask.\n  - Type params.definitionOfDone and params.taskRails as unknown and narrow after the checks. Keep the dodCount line computing from the validated param, NOT from the stored task.definitionOfDone: the stored placeholder would hide the empty-DoD warning. This deliberately departs from the row's fix hint.\n  - null on either field stays 'absent', as today, so there is no contract change for null-sending clients.\n(b) New packages/moe-daemon/src/tools/createTask.shape.test.ts, using the createTask.test.ts harness (ToolTestHarness, setupMoeFolder, createEpic, state.load). Write each assertion so it fails at HEAD.\n  - DoD 'Tests pass', '[\"a\",\"b\"]', {a:1} and ['ok', 1]: each rejects with codeName INVALID_INPUT and a message naming definitionOfDone (or definitionOfDone[1]). The task count is unchanged, no new file appears in .moe/tasks, and no TASK_CREATED is logged.\n  - Retry: after a refused call, a valid call with the same title creates exactly one row with that title.\n  - taskRails 'r', {}, [42], ['ok', null], [''] and 101 entries: each is INVALID_INPUT naming taskRails or taskRails[i], with nothing written.\n  - taskRails 'x'.repeat(MAX_EPIC_RAIL_CHARS + 1) is refused, and exactly MAX_EPIC_RAIL_CHARS is accepted.\n  - Valid path: DoD ['a','b','c'] and rails ['r1'] are stored exactly as given. null DoD and null rails act as absent: placeholder DoD with the empty warning, and rails [].\n  - Warning guard: DoD [] and [''] still produce the 'definitionOfDone is empty' warning and the placeholder.\nMove the hunt repros (/mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskDodShape.test.ts and zzHuntA_createTaskRails.test.ts) into these cases rather than copying them verbatim.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/createTask.shape.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/createTask.shape.test.ts"
+      ],
+      "note": "Pre-write DoD + taskRails shape checks; new shape test (12/19 fail without the fix).",
+      "startedAt": "2026-11-03T22:44:02.188Z",
+      "completedAt": "2026-11-03T22:44:54.790Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs sync per governor ruling msg-71db57ac (sync your own section; no other open row edits it). Edit only `### moe.create_task` in docs/MCP_SERVER.md, with your own editor (Claude Edit, or apply_patch on codex). Never use Serena (it ignores docs/), never write with the shell, and work in your task checkout. Directly after the Parameters code block, before **Returns:**, add the paragraph below. The verification check greps its lead-in 'Input refusals'.\n**Input refusals.** Malformed input is refused before any write, so nothing is created and a retry cannot duplicate a row. Refused inputs:\n- a missing `epicId` or `title` (`MISSING_REQUIRED`);\n- an unknown `status` or `priority`;\n- a `dependsOn` that is not an array of strings;\n- a `definitionOfDone` that is present (not `null`) but not an array of strings;\n- a `taskRails` that is present (not `null`) but not an array of at most 100 non-empty strings of at most 10000 characters each. These are the bounds `moe.create_epic` applies to `epicRails`.\nEach is `INVALID_INPUT` naming the field, e.g. `taskRails[2]`. These are caller errors, not guardrails; the guardrails below stay advisory. Empty or blank DoD entries are still dropped, and an empty list still gets the placeholder and its warning.\nTouch nothing else in the file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-03T22:44:56.270Z",
+      "completedAt": "2026-11-03T22:44:57.964Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification: run once, from your task checkout root. The doc check runs on the checkout. The daemon checks run in a fresh git-archive snapshot outside the repo, never in place (global rail). Submit this exact command and its fresh output as complete_task verification:\ncd \"$(git rev-parse --show-toplevel)\" && awk '$0==\"### moe.create_task\"{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'Input refusals' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTask.ts packages/moe-daemon/src/tools/createTask.shape.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/createTask.shape.test.ts src/tools/createTask.test.ts src/tools/createCommitActor.test.ts src/tools/epicDeleteActor.test.ts src/tools/getContext.test.ts'\nThe extra test files are every other test that calls createTaskTool. Red-first proof for the completion summary: revert only the createTask.ts hunk and the shape test must fail; restore it and the test passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Verified in a snapshot. The plan's archive omits docs/roles, which one getContext test scans, so I archived docs/roles too. 95/95 pass, tsc clean.",
+      "startedAt": "2026-11-03T22:44:58.739Z",
+      "completedAt": "2026-11-03T22:45:29.932Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your diff (`git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")`): expect createTask.ts, the new test and the one doc paragraph, roughly +170/-3. Error handling: check each item and fix what fails.\n(1) Both checks run before state.createTask and before any await that writes. Nothing (worker record, activity, chat) is written on a refusal.\n(2) null and absent behave exactly as before for both fields. [] and [''] DoD still give the placeholder and the empty warning.\n(3) No uncoded TypeError remains on the dodCount line for any input shape: it only ever sees undefined, null or string[].\n(4) taskRails at exactly 10000 chars and exactly 100 entries is accepted, and one more is refused. Parity with create_epic's epicRails.\n(5) state.createTask receives the validated taskRails array, and the taskStore.ts slice stays a harmless backstop.\n(6) Each test asserts the refusal codeName, the named field and that nothing was written (task count, files, TASK_CREATED), not merely 'it threw'.\n(7) The /ws CREATE_TASK path is untouched, as is the held-back order poisoning in taskStore.nextTaskOrder. Both are named in the completion summary as out of scope.\nIf anything changes, re-run the step-3 command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTask.ts",
+        "packages/moe-daemon/src/tools/createTask.shape.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review items 1-7 pass; no changes after the step-3 run.",
+      "startedAt": "2026-11-03T22:45:30.711Z",
+      "completedAt": "2026-11-03T22:45:36.465Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 445.7,
+  "comments": [
+    {
+      "id": "comment-b7fb977c3df84fdc985a09a4d1346574",
+      "author": "architect-1dd28c7c",
+      "content": "Correction from the filer, for the planner. The description says to sync `### moe.create_task` \"only if docs/MCP_SERVER.md is free at planning time\". That wording is out of date. Governor ruling msg-71db57ac (21:06Z) says: include this row's own `### moe.create_task` sync as a plan step that edits only that section. Defer it only if another open row's plan edits the same section. lanes.js listing MCP_SERVER.md under another row is not a reason to skip. Document the new INVALID_INPUT refusals for a non-array definitionOfDone or taskRails and for an over-long rail.",
+      "timestamp": "2026-11-03T22:37:09.127Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:32:50.949Z",
+  "updatedAt": "2026-11-04T19:20:44.859Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:40:33.066Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:50:52.064Z",
+    "wallClockMs": 618998
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-d6c1cb7a",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:42:53.170Z",
+  "executionContract": {
+    "intendedBehavior": "moe.create_task refuses a present, non-null definitionOfDone that is not an array of strings, and a present, non-null taskRails that fails create_epic's epicRails bounds (an array of at most 100 non-empty strings, each at most MAX_EPIC_RAIL_CHARS). Either refusal is INVALID_INPUT naming the field, raised before any write. A malformed call therefore no longer writes a row and then throws an uncoded TypeError, and a retry cannot duplicate the row. null still means absent. The DoD sanitizer, the placeholder and the empty-DoD warning are unchanged. docs/MCP_SERVER.md's create_task section gains an Input refusals paragraph.",
+    "acceptanceCriteria": [
+      "DoD 'Tests pass', '[\"a\",\"b\"]', {a:1} and ['ok',1] are each refused INVALID_INPUT naming the field. No task file is written and no TASK_CREATED is logged, and a valid retry creates exactly one row.",
+      "taskRails that is not an array, holds a non-string or empty entry, has more than 100 entries, or has an entry longer than MAX_EPIC_RAIL_CHARS is refused INVALID_INPUT, and the exact boundary values are accepted.",
+      "Valid input is stored as given. null on either field acts as absent. DoD [] and [''] keep the placeholder and its warning.",
+      "The existing createTask, createCommitActor, epicDeleteActor and getContext tests stay green."
+    ],
+    "invariants": [
+      "Every refusal happens before state.createTask, so it writes nothing.",
+      "The dodCount warning reads the caller's validated list, never the stored placeholder."
+    ],
+    "compatibility": [
+      "null and absent definitionOfDone or taskRails behave as before.",
+      "DoD contents are still sanitized by taskStore (empty entries dropped, 50 items, 1000 chars), and the placeholder warning is unchanged.",
+      "/ws CREATE_TASK and state/taskStore.ts are unchanged.",
+      "The schemas already advertise both fields as string arrays."
+    ],
+    "approvedScope": [
+      "tools/createTask.ts handler: two pre-write shape checks, with the validated taskRails passed to state.createTask",
+      "A new tools/createTask.shape.test.ts",
+      "docs/MCP_SERVER.md: one Input refusals paragraph in ### moe.create_task"
+    ],
+    "reuse": [
+      "validateStringArrayValue and MAX_EPIC_RAIL_CHARS (state/validators.ts:250-275) are the validator create_epic uses for epicRails at :584.",
+      "The repro cases come from /mnt/d/moe-scratch/hunt-f6f0b580/A/zzHuntA_createTaskDodShape.test.ts and zzHuntA_createTaskRails.test.ts."
+    ],
+    "sourceAssumptions": [
+      "tools/createTask.ts: the status and priority checks are at :73-83, the dependsOn shape check at :87-92, state.createTask at :157-169, and the dodCount `params.definitionOfDone?.filter(...)` at :197.",
+      "state/taskStore.ts:315-317 sanitizes the DoD to the placeholder, :327 stores `input.taskRails.slice(0, 100)` raw, and :307 refuses an ARCHIVED epic.",
+      "state/validators.ts:252 validateStringArrayValue(value, field, maxItems, maxItemLength, truncate): it rejects a non-array, an over-count list, a non-string `field[i]` and an empty `field[i]`, plus an over-long entry when truncate is false.",
+      "util/sanitize.ts:123 sanitizeStringArray drops non-string and blank entries, slices to the item cap and truncates each entry."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && awk '$0==\"### moe.create_task\"{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'Input refusals'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTask.ts packages/moe-daemon/src/tools/createTask.shape.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/createTask.shape.test.ts src/tools/createTask.test.ts src/tools/createCommitActor.test.ts src/tools/epicDeleteActor.test.ts src/tools/getContext.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Use validateStringArrayValue for definitionOfDone too. Rejected: it refuses empty entries and more than 50 items, which today's sanitizer silently accepts, and it would break the documented placeholder warning for [] and ['']. (2) Put the checks in taskStore.createTask so /ws CREATE_TASK is covered as well. Rejected: no plugin sends either field, and that file belongs to the held-back order and status items. (3) Compute dodCount from the stored task, as the row's fix hint says. Rejected: the stored placeholder hides the empty-DoD warning.",
+    "codebaseInsights": "create_task's guardrails are advisory by design, but caller-shape errors (epicId, title, status, priority, dependsOn) already throw before the write. This extends that existing pre-write band. McpAdapter does not enforce inputSchema, so handler checks are the only gate.",
+    "risks": "A client that sends taskRails with more than 100 entries or with empty strings is now refused instead of silently trimmed. 0 of 897 live rows have a bad entry. The doc paragraph names the bounds.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/createTask.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/util/sanitize.ts",
+      "packages/moe-daemon/src/tools/createTask.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "890b183162ad6e2e20c6a60485e1dee2d8c22088",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:42:53.199Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:44:02.188Z",
+  "reviewStartedAt": "2026-11-03T22:45:42.929Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && awk '$0==\"### moe.create_task\"{p=1;next} p&&/^### /{exit} p' docs/MCP_SERVER.md | grep -q 'Input refusals' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon docs/roles | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTask.ts packages/moe-daemon/src/tools/createTask.shape.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/createTask.shape.test.ts src/tools/createTask.test.ts src/tools/createCommitActor.test.ts src/tools/epicDeleteActor.test.ts src/tools/getContext.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/tools/getContext.test.ts (55 tests) 1360ms\n\n Test Files  5 passed (5)\n      Tests  95 passed (95)\n",
+    "reportedAt": "2026-11-03T22:45:42.929Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/createTask.ts",
+    "packages/moe-daemon/src/tools/createTask.shape.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "create_task now refuses, before state.createTask, a present non-null definitionOfDone that is not a string array (INVALID_INPUT naming definitionOfDone or definitionOfDone[i]) and a taskRails that fails create_epic's epicRails bounds (an array of at most 100 non-empty strings of at most MAX_EPIC_RAIL_CHARS each, via validateStringArrayValue). null still means absent. dodCount reads the validated caller list, so [] and [''] keep the placeholder and the empty-DoD warning. New createTask.shape.test.ts (19 tests): each refusal asserts the codeName, the field name, and that no task file, task count or TASK_CREATED changed; a retry creates one row; boundary values pass. Red-first: with createTask.ts reverted to HEAD, 12 of 19 fail; restored, all pass. docs/MCP_SERVER.md gains an Input refusals paragraph in ### moe.create_task. Out of scope, untouched: /ws CREATE_TASK, taskStore.ts and the held-back order/status items. Verification note: the plan's snapshot archives only packages/moe-daemon, so one getContext test that scans docs/roles fails with ENOENT. The submitted command archives docs/roles too (a snapshot artifact, not a regression).",
+  "commits": [
+    {
+      "sha": "15728974fe2f13ebd6e01ceef1613b3c9a3566fb",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T22:42:57Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/createTask.shape.test.ts",
+        "packages/moe-daemon/src/tools/createTask.ts"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T22:47:06.597Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:49:25Z",
+    "at": "2026-11-03T22:51:12.543Z"
+  },
+  "completedAt": "2026-11-03T22:50:52.064Z",
+  "reviewCompletedAt": "2026-11-03T22:50:52.064Z",
+  "reviewSummary": "Reviewed completion 15728974 (on moe/work-2026-10-24, in control HEAD) via git show: 3 files, +152/-5 (net ~147 LOC, under 400): tools/createTask.ts, new createTask.shape.test.ts (19 tests), one Input refusals paragraph in docs/MCP_SERVER.md. taskStore.ts and /ws CREATE_TASK untouched, as planned.\n\nRe-ran in a fresh git-archive snapshot of 15728974 outside the repo (packages/moe-daemon + docs/roles, npm ci): doc grep OK; tsc --noEmit clean; vitest on createTask.shape, createTask, createCommitActor, epicDeleteActor, getContext plus executionPolicyLifecycle and submitPlan (the other create_task callers) = 7 files, 218 tests pass.\n\nMutant check: parent's createTask.ts in the snapshot makes 12/19 shape tests fail (every refusal case and the retry-one-row case); the fix passes 19/19. Valid-path, null-as-absent, []/[''] placeholder+warning and boundary cases pass on both, as they must.\n\nDoD: (1) non-array / non-string-entry definitionOfDone and taskRails are refused INVALID_INPUT naming the field or field[i] before state.createTask; tests assert codeName, field, unchanged task count and .moe/tasks files, no TASK_CREATED, and a retry makes one row. (2) taskRails uses validateStringArrayValue(…,100,MAX_EPIC_RAIL_CHARS,false), same as create_epic's epicRails; 10000 chars and 100 entries accepted, one more refused. (3) New vitest passes, createTask.test.ts green. dodCount reads the validated caller list so []/[''] keep the empty warning; null = absent. Out of scope as declared: /ws CREATE_TASK, order/status items.",
+  "requiredCheckAtDone": null
+}

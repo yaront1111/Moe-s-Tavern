@@ -1,0 +1,217 @@
+{
+  "id": "task-d3a964a84dd14814a19f5074df52fc5f",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "[CQ-M07u] Test rows for two QA-found mutant survivors: vm-control's default runner probe, certification report equality",
+  "description": "Slice of CQ-M07 (task-1a8f1d0e199046a289e94a5453d758b8, the final acceptance row). Filed by its planner architect-c33f294e on 2026-11-04. It collects two QA hand-forwards posted on that row. Both are test gaps, not defects: the shipped code is correct, but a regression would go unseen. This row is tests only.\n\n1. vm-control's production runner probe (comment-1834b0bb, QA qa-1b5727b1 on CQ-M07g task-9076afab)\n- In scripts/local-runner/vm-control.mjs, every VC-C3/VC-R2 row injects runnerAlive. So three mutants pass every test: M28 (cleanupReport `runnerAlive = runnerProbe` changed to `() => false`), M29 (the same in reconcileReport) and M30 (runVmControl `deps.runnerAlive ?? (() => false)`).\n- Any of them would purge a seat VM whose runner is still alive on this host.\n- The row to add, in scripts/tests/local-runner-vm-control.test.mjs:\n  - one seat record whose runner is this test process (`${process.pid}@<token>` in the format the production probe parses), with host localRunnerHost() and platform process.platform;\n  - the fake daemon says the seat is gone, and the lease is free;\n  - call cleanupReport, reconcileReport and runVmControl (deps.call only) with NO runnerAlive;\n  - expect the record preserved (or held) with reason 'runner-alive' and zero provider delete calls.\n\n2. certification report equality (comment-66f37d9b, QA qa-97c4310b on CQ-M07a task-5a635bc9)\n- In packages/moe-daemon/src/delivery/certificationEvidence.test.ts, 6 strict-to-loose swaps (=== to ==) survive in the checkCertificationReport port: report.kind, version, transport, provider.name, executionReady and the check-row id.\n- Add refused VARIANTS rows with JSON type-confusion values: version '1' and true; kind ['isolation-certification']; transport ['injected'] with certified false; provider name ['multipass']; executionReady 0; one check id ['provision'].\n- Each must be refused with the reader's existing fixed code.\n\nDELIVERABLE: new rows in those two test files only.\n\nNOT IN SCOPE: any runtime change (vm-control.mjs, certificationEvidence.ts, certify.mjs); other test files; docs.\n\nVERIFICATION: `node --test scripts/tests/local-runner-vm-control.test.mjs`, then, in a git-archive snapshot of HEAD with this task's test file overlaid (npm ci there, env -i with Linux node 24), `npx vitest run src/delivery/certificationEvidence.test.ts`.",
+  "definitionOfDone": [
+    "local-runner-vm-control.test.mjs has the default-probe row: a seat record whose runner is this process on this host, the daemon saying gone and the lease free, cleanupReport, reconcileReport and runVmControl run with no injected runnerAlive. Each keeps the record with reason 'runner-alive' and makes zero provider delete calls.",
+    "Mutants M28, M29 and M30 (comment-1834b0bb) each fail that row. The completion summary gives the scratch-copy evidence.",
+    "certificationEvidence.test.ts has refused rows for the type-confusion values in comment-66f37d9b, each expecting the reader's existing fixed code. An === to == mutant of each of the 6 compared fields fails its row. The completion summary gives the scratch-copy evidence.",
+    "git diff names only scripts/tests/local-runner-vm-control.test.mjs and packages/moe-daemon/src/delivery/certificationEvidence.test.ts.",
+    "`node --test scripts/tests/local-runner-vm-control.test.mjs` passes, and `npx vitest run src/delivery/certificationEvidence.test.ts` passes in a git-archive snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test row VC-P2 in scripts/tests/local-runner-vm-control.test.mjs (DoD 1, 2). Edit with the Edit tool in your task worktree W (a TOOL witness: no shell write and no subagent edit). Append this test after VC-P1, the file's last test, exactly as in the reference diff /mnt/d/moe-scratch/d3a9-win/intended.diff (dry-run green at 0fa7750e):\n```js\n\ntest('VC-P2 with no probe injected, a runner alive on this host holds its seat VM through cleanupReport, reconcileReport and runVmControl', async t => {\n  const { ledger, names: [name] } = await ledgerWith(t, [{ workerId: 'me', runner: `${process.pid}@x`, host: localRunnerHost() }]); // this process\n  const { calls, provider } = fakeProvider({ [name]: 'Running' });\n  const daemon = fakeDaemon({ seats: { me: gone('me') } }); // the seat is gone and no lease is held: only the runner probe keeps the VM\n  const proof = { ledger, provider: { ...provider, keyDir: scratch(t) }, call: daemon.call };\n  const held = [{ instance: name, reason: 'runner-alive' }];\n  const cleanup = { schema: 'moe-vm-cleanup-v1', deleted: [], preserved: held, errors: [], invalid: 0 };\n  const reconcile = { schema: 'moe-vm-reconcile-v1', reconciled: [], unknown: [], invalid: 0, held, retired: [] };\n  assert.deepEqual([await cleanupReport(proof), await reconcileReport(proof)], [cleanup, reconcile]);\n  for (const [command, report] of [['cleanup', cleanup], ['reconcile', reconcile]]) {\n    const out = await captured([command, '--project', scratch(t)], proof);\n    assert.deepEqual([out.code, JSON.parse(out.stdout)], [0, report]);\n  }\n  assert.deepEqual([calls, daemon.calls, (await ledger.read(name)).phase], [[], [SL, SL, SL, SL], 'owned']); // no provider call, no lease read\n});\n```\nWhy each piece:\n- The record's runner is this test process: `${process.pid}@x`, the `<pid>@<token>` form runnerProbe parses, on host localRunnerHost(). The ledger stamps platform as process.platform, so the production runnerProbe (signal 0 to this pid) answers true.\n- fakeDaemon says the seat is gone and lists no resources, so the lease is free. Only the runner probe can hold the VM.\n- No runnerAlive is passed anywhere:\n  - cleanupReport and reconcileReport use their `runnerAlive = runnerProbe` default;\n  - runVmControl, called through the file's captured() helper with deps ledger, provider and call only, passes `deps.runnerAlive`, which is undefined, so the default applies there too.\n- Expected:\n  - cleanup preserves the record and reconcile holds it, with reason 'runner-alive', both called directly and as runVmControl's one JSON line (exit 0);\n  - the fake provider records NO call at all, so nothing is deleted;\n  - the daemon sees exactly four moe.get_seat_liveness calls and never moe.list_resources (the runner check comes before the lease read);\n  - the record stays 'owned'.\n- keyDir is a scratch dir, so a mutant that purges cannot touch the real key dir.\n- On error handling: the row uses the file's own scratch() helper, whose t.after rmSync removes every temp dir on pass and on failure.\n\nPlan-time results:\n- 20/20 pass on Linux node 24 (19 at base).\n- Under Windows node.exe: 18 pass plus 2 existing skips.\n- M28, M29 and M30 (comment-1834b0bb) each fail VC-P2 alone (`ℹ fail 1`).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "note": "VC-P2 added; CONFUSED rows added (step 2 edits done in same pass)",
+      "startedAt": "2026-11-04T12:28:07.160Z",
+      "completedAt": "2026-11-04T12:28:31.680Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Type-confusion rows in packages/moe-daemon/src/delivery/certificationEvidence.test.ts (DoD 3). Edit tool in W. Make two insertions, exactly as in the reference diff /mnt/d/moe-scratch/d3a9-win/intended.diff.\n\n(a) Insert directly after the line `for (const { platform, arch, versionSuffix: v } of CERTIFICATION_PINS.hosts) VARIANTS.push(...)`, the line before `describe('drift', () => {`:\n```ts\n// JSON type confusion: each value is == (never ===) to what its field accepts, so an === to == swap of that one comparison accepts it.\nconst CONFUSED: Array<[string, 'SCHEMA' | 'CHECKS', Report]> = [\n  ['(t1) version as the string 1', 'SCHEMA', valid({ version: '1' })], ['(t2) version true', 'SCHEMA', valid({ version: true })],\n  ['(t3) kind as a one-item array', 'SCHEMA', valid({ kind: ['isolation-certification'] })], ['(t4) executionReady 0', 'SCHEMA', valid({ executionReady: 0 })],\n  ['(t5) transport injected as a one-item array', 'SCHEMA', { ...injected, transport: ['injected'] }],\n  ['(t6) transport native as a one-item array', 'SCHEMA', valid({ transport: ['native'], certified: false })],\n  ['(t7) provider name as a one-item array', 'SCHEMA', valid({ provider: { name: ['multipass'], version: null } })],\n  ['(t8) a check id as a one-item array', 'CHECKS', valid({ checks: edit(passing(), 0, { id: ['provision'] }) })],\n];\nfor (const [name, , value] of CONFUSED) VARIANTS.push([name, value, false]);\n```\n(b) Inside describe('drift'), directly after the `it.each(VARIANTS)('%s: the port and validateCertificationReport agree', ...)` block, insert:\n```ts\n  it.each(CONFUSED)('%s is refused as CERTIFICATION_REPORT_%s', (_name, code, value) => {\n    expect(checkCertificationReport(value)).toStrictEqual({ ok: false, code: `CERTIFICATION_REPORT_${code}` });\n  });\n```\nWhy:\n- Each value is == but not === to what its field accepts: a one-item array's string form, true == 1, '1' == 1, 0 == false. So an === to == swap of exactly that comparison accepts it.\n- Pushed into VARIANTS as a refused row, each value also goes through the drift row, so certify.mjs validateCertificationReport must refuse it too. It does: it uses === and ['native','injected'].includes.\n- The second it.each pins the reader's existing fixed code: CERTIFICATION_REPORT_SCHEMA for the six report-level values, CERTIFICATION_REPORT_CHECKS for the check id (validChecks rejects the row).\n- transport gets two rows because it has two killable swaps: (t5) for `transport === 'injected'` and (t6) for `transport === 'native' ||`. A third swap, inside `certified === (transport === 'native' && ...)`, is an equivalent mutant: a transport that passes the earlier strict test is a string, where == and === agree. Name it as equivalent in the summary, with no row for it.\n- The (tN) prefixes let checkRefs[2] pin which row died, because vitest prints `> (tN) ` on a FAIL line.\n- Keep two rows per line where they fit, within the file's existing width of about 180 characters (comment-66f37d9b's advice).\n\nPlan-time results:\n- 99/99 pass (83 at base, plus 8 VARIANTS rows and 8 code rows).\n- tsc with a scratch tsconfig (types node, vitest/globals) on this file: 0 errors, the same as the base.\n- Each of the 7 swaps fails only its own rows: 4 for version, 2 for every other field.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "startedAt": "2026-11-04T12:28:32.194Z",
+      "completedAt": "2026-11-04T12:28:35.211Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once, after steps 1-2 (DoD 2-5), from W's root. Run each checkRef in its own Bash call, because each one cds into its own snapshot. checkRefs[0] is the gate: its fresh exit code and output are the moe.complete_task verification. checkRefs[1] and checkRefs[2] give the mutant evidence for the summary.\n\n[0]: cd \"$(git rev-parse --show-toplevel)\" && set -o pipefail && node --test --test-reporter=spec scripts/tests/local-runner-vm-control.test.mjs 2>&1 | grep -E '^(ℹ (tests|pass|fail)|✖|✔ VC-P2)' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp packages/moe-daemon/src/delivery/certificationEvidence.test.ts $S/packages/moe-daemon/src/delivery/ && cd $S/packages/moe-daemon && E=\"env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" && $E npm ci --no-audit --no-fund >/dev/null 2>&1 && $E npx vitest run src/delivery/certificationEvidence.test.ts 2>&1 | grep -aE '^ +(Test Files|Tests) |FAIL'\n\n[1]: cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C $S && cp scripts/tests/local-runner-vm-control.test.mjs $S/scripts/tests/ && cd $S && f=scripts/local-runner/vm-control.mjs && cp $f o && m(){ cp o $f && node -e 'f=require(\"fs\");[,p,a,b]=process.argv;s=f.readFileSync(p,\"utf8\");s.split(a).length==2||process.exit(9);f.writeFileSync(p,s.replace(a,b))' $f \"$1\" \"$2\" && node --test --test-reporter=spec scripts/tests/local-runner-vm-control.test.mjs > l 2>&1; r=$?; cp o $f; echo \"$3 rc=$r $(grep -E '^(ℹ fail|✖ VC-)' l | sort -u | cut -c1-12 | tr '\\n' ' ')\"; [ $r = 1 ] && grep -q '^ℹ fail 1$' l && grep -q '^✖ VC-P2 ' l; } && m \"runnerProbe }) => ledgerReport('moe-vm-cl\" \"() => false }) => ledgerReport('moe-vm-cl\" M28 && m \"runnerProbe }) => ledgerReport('moe-vm-re\" \"() => false }) => ledgerReport('moe-vm-re\" M29 && m \"deps.runnerAlive }\" \"deps.runnerAlive ?? (() => false) }\" M30 && cmp $f o && echo VM-MUTANTS-KILLED\n\n[2]: cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp --parents packages/moe-daemon/src/delivery/certificationEvidence.test.ts $S && cd $S/packages/moe-daemon && export NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin && npm ci --no-audit >/dev/null 2>&1 && t=src/delivery/certificationEvidence && cp $t.ts ../o && m(){ cp ../o $t.ts && node -e 'f=require(\"fs\");[,p,a]=process.argv;s=f.readFileSync(p,\"utf8\");s.split(a).length==2||process.exit(9);f.writeFileSync(p,s.replace(a,a.replace(\"===\",\"==\")))' $t.ts \"$1\" && npx vitest run $t.test.ts > ../l 2>&1; r=$?; cp ../o $t.ts; echo \"$2 $(grep -aE '^ +Tests ' ../l)\"; [ $r = 1 ] && grep -aqE \"Tests +[24] failed \\|\" ../l && grep -aqF \"> ($2) \" ../l; } && m \"kind ===\" t3 && m \"version === 1\" t1 && m \"=== 'native' ||\" t6 && m \"=== 'injected'\" t5 && m \"name ===\" t7 && m \"executionReady ===\" t4 && m \"id === C\" t8 && cmp $t.ts ../o && echo CERT-MUTANTS-KILLED\n\nWhat they do:\n- [0] runs node --test on the vm-control file in place, which the rails allow for scripts/tests. It then archives HEAD's packages/moe-daemon and scripts/ into a mktemp dir; scripts/ is needed because the test reads scripts/local-runner/certify.mjs, certified-provider.json and guest-supervisor.py. It copies your edited certificationEvidence.test.ts over the archive and runs npm ci and vitest on that one file under env -i with Linux node 24. The shared checkout's node_modules are Windows-native, so never run npm ci there. Expected: ℹ tests 20, ℹ pass 20, ℹ fail 0, and Tests 99 passed (99).\n- [1] mutates scripts/local-runner/vm-control.mjs in the snapshot copy only. The replace is exact-once and exits 9 if an anchor moved. Each of M28, M29 and M30 must fail exactly one test, VC-P2. It prints VM-MUTANTS-KILLED.\n- [2] swaps === for == at 7 anchors in the snapshot copy of certificationEvidence.ts. Each run must fail 2 or 4 tests, including the row with that (tN) prefix. It prints CERT-MUTANTS-KILLED.\n- The mutants never touch W or the shared checkout. The snapshots stay in /tmp, because a planned command must not contain rm.\n\nPlan-time runs on a scratch clone at 0fa7750e:\n- with the new rows, all three exit 0;\n- with the original test files, [1] and [2] exit 1 at their first mutant (M28: ℹ fail 0; t3: 83 passed), so they cannot pass vacuously.\n\nDoD 4: `git status --porcelain` in W must list exactly the two test files, both ' M'.\n\nPaste the M28-M30 and t1-t8 lines printed by [1] and [2] into the completion summary (DoD 2, 3). If HEAD moved and an anchor no longer matches (node exits 9), run that mutant by hand against the moved expression and report it; never edit the rows to suit a mutant.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "startedAt": "2026-11-04T12:28:35.983Z",
+      "completedAt": "2026-11-04T12:29:15.624Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff only, then moe.complete_task: checkRefs[0] as the verification, and the M28-M30 and t1-t8 lines in the summary. If this step changes any byte, rerun step 3 first.\n1. Scope: `git status --porcelain` and `git diff --stat` name only the two test files, about +16 and +13 lines, as in the reference diff. No runtime file changed (vm-control.mjs, lifecycle.mjs, certify.mjs, certificationEvidence.ts), and no other test was edited.\n2. VC-P2 holds only because of the production probe. proof has no runnerAlive key, and the seat is gone and the lease free, so any probe answer other than true would let the VM go. The record is this process on this host, so the row is deterministic on every OS: the probe never signals another process.\n3. Each CONFUSED value is refused by the shipped port and by certify.mjs (the VARIANTS drift row). The code row uses toStrictEqual with the fixed code, not just ok:false.\n4. Flakiness: the rows use only their own scratch dirs and fakes, with no timers, network or ports.\n5. The summary names the third transport swap as an equivalent mutant, with the reason from step 2.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-vm-control.test.mjs",
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+      ],
+      "startedAt": "2026-11-04T12:29:16.380Z",
+      "completedAt": "2026-11-04T12:29:20.863Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 231.21,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T11:57:06.036Z",
+  "updatedAt": "2026-11-04T19:20:41.124Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T12:13:28.005Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T12:32:16.144Z",
+    "wallClockMs": 1128139
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-5772dacf",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T12:26:52.282Z",
+  "executionContract": {
+    "intendedBehavior": "Two test-only additions that pin behavior the shipped code already has.\n- scripts/tests/local-runner-vm-control.test.mjs gets VC-P2. With no runnerAlive injected, cleanupReport, reconcileReport and runVmControl hold a seat VM whose runner is this live process on this host (reason 'runner-alive', zero provider calls).\n- packages/moe-daemon/src/delivery/certificationEvidence.test.ts gets eight JSON type-confusion rows. The reader refuses each with its fixed code, and each is also a refused VARIANTS drift row against certify.mjs.\nTogether they kill mutants M28-M30 and the === to == swaps of kind, version, transport (both killable swaps), provider.name, executionReady and the check-row id.",
+    "acceptanceCriteria": [
+      "VC-P2: a seat record whose runner is this process on this host; the daemon says gone and the lease is free; cleanupReport, reconcileReport and runVmControl (cleanup and reconcile) run with no injected runnerAlive. Each keeps the record with reason 'runner-alive', and the provider records zero calls.",
+      "Mutants M28, M29 and M30 each fail VC-P2 and only VC-P2; the summary gives checkRefs[1]'s lines.",
+      "certificationEvidence.test.ts refuses version '1' and true, kind ['isolation-certification'], transport ['injected'] and ['native'] with certified false, provider name ['multipass'], executionReady 0 (CERTIFICATION_REPORT_SCHEMA) and check id ['provision'] (CERTIFICATION_REPORT_CHECKS). Each is also a refused VARIANTS row.",
+      "An === to == swap of each compared field (kind, version, both transport swaps, provider.name, executionReady, check-row id) fails its own (tN) rows; the summary gives checkRefs[2]'s lines.",
+      "The diff names only the two test files; checkRefs[0] passes (vm-control 20/20, certificationEvidence 99/99)."
+    ],
+    "invariants": [
+      "No runtime file changes: scripts/local-runner/vm-control.mjs, lifecycle.mjs, certify.mjs and packages/moe-daemon/src/delivery/certificationEvidence.ts stay byte-identical.",
+      "Existing rows are unchanged: the vm-control file has 20 tests (19 + VC-P2) and the certification file 99 (83 + 16).",
+      "Mutations happen only in mktemp snapshot copies, never in W or the shared checkout."
+    ],
+    "compatibility": [
+      "The vm-control row runs on Linux, macOS and Windows, as CI's local-runner step does: it signals only its own pid and takes the host from localRunnerHost().",
+      "certificationEvidence.test.ts stays a vitest file run in a Linux snapshot, as CI runs daemon vitest on ubuntu."
+    ],
+    "approvedScope": [
+      "scripts/tests/local-runner-vm-control.test.mjs: one new test, VC-P2, after VC-P1, built from the file's existing helpers (ledgerWith, fakeProvider, fakeDaemon, gone, captured, scratch, SL).",
+      "packages/moe-daemon/src/delivery/certificationEvidence.test.ts: a CONFUSED table plus its VARIANTS push after the hosts loop, and one it.each(CONFUSED) in describe('drift') after the VARIANTS it.each."
+    ],
+    "reuse": [
+      "VC-P2 reuses the file's helpers: ledgerWith, fakeProvider, fakeDaemon, gone, captured, scratch and SL. The certification rows reuse valid, injected, edit and passing, and the VARIANTS drift row."
+    ],
+    "sourceAssumptions": [
+      "vm-control.mjs at 0fa7750e: cleanupReport and reconcileReport default to `runnerAlive = runnerProbe`. runVmControl passes `runnerAlive: deps.runnerAlive`, which is undefined when not injected, so the default applies. runnerProbe parses `^([1-9][0-9]{0,9})@` and requires record.host === localRunnerHost() and record.platform === process.platform.",
+      "lifecycle.mjs seatHoldReason checks the seat, then the runner, then the lease. A held record gets no provider call in cleanupOwned or in reconcileSeats.",
+      "certificationEvidence.ts checkCertificationReport returns code CHECKS when validChecks fails, else SCHEMA. It compares kind, version, transport (three times), provider.name and executionReady with ===, and validChecks compares the row id with ===.",
+      "certify.mjs validateCertificationReport uses === for kind, version, name, executionReady and id, and ['native','injected'].includes for transport, so it refuses every CONFUSED value."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && set -o pipefail && node --test --test-reporter=spec scripts/tests/local-runner-vm-control.test.mjs 2>&1 | grep -E '^(ℹ (tests|pass|fail)|✖|✔ VC-P2)' && S=$(mktemp -d) && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp packages/moe-daemon/src/delivery/certificationEvidence.test.ts $S/packages/moe-daemon/src/delivery/ && cd $S/packages/moe-daemon && E=\"env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" && $E npm ci --no-audit --no-fund >/dev/null 2>&1 && $E npx vitest run src/delivery/certificationEvidence.test.ts 2>&1 | grep -aE '^ +(Test Files|Tests) |FAIL'",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD scripts | tar -x -C $S && cp scripts/tests/local-runner-vm-control.test.mjs $S/scripts/tests/ && cd $S && f=scripts/local-runner/vm-control.mjs && cp $f o && m(){ cp o $f && node -e 'f=require(\"fs\");[,p,a,b]=process.argv;s=f.readFileSync(p,\"utf8\");s.split(a).length==2||process.exit(9);f.writeFileSync(p,s.replace(a,b))' $f \"$1\" \"$2\" && node --test --test-reporter=spec scripts/tests/local-runner-vm-control.test.mjs > l 2>&1; r=$?; cp o $f; echo \"$3 rc=$r $(grep -E '^(ℹ fail|✖ VC-)' l | sort -u | cut -c1-12 | tr '\\n' ' ')\"; [ $r = 1 ] && grep -q '^ℹ fail 1$' l && grep -q '^✖ VC-P2 ' l; } && m \"runnerProbe }) => ledgerReport('moe-vm-cl\" \"() => false }) => ledgerReport('moe-vm-cl\" M28 && m \"runnerProbe }) => ledgerReport('moe-vm-re\" \"() => false }) => ledgerReport('moe-vm-re\" M29 && m \"deps.runnerAlive }\" \"deps.runnerAlive ?? (() => false) }\" M30 && cmp $f o && echo VM-MUTANTS-KILLED",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp --parents packages/moe-daemon/src/delivery/certificationEvidence.test.ts $S && cd $S/packages/moe-daemon && export NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin && npm ci --no-audit >/dev/null 2>&1 && t=src/delivery/certificationEvidence && cp $t.ts ../o && m(){ cp ../o $t.ts && node -e 'f=require(\"fs\");[,p,a]=process.argv;s=f.readFileSync(p,\"utf8\");s.split(a).length==2||process.exit(9);f.writeFileSync(p,s.replace(a,a.replace(\"===\",\"==\")))' $t.ts \"$1\" && npx vitest run $t.test.ts > ../l 2>&1; r=$?; cp ../o $t.ts; echo \"$2 $(grep -aE '^ +Tests ' ../l)\"; [ $r = 1 ] && grep -aqE \"Tests +[24] failed \\|\" ../l && grep -aqF \"> ($2) \" ../l; } && m \"kind ===\" t3 && m \"version === 1\" t1 && m \"=== 'native' ||\" t6 && m \"=== 'injected'\" t5 && m \"name ===\" t7 && m \"executionReady ===\" t4 && m \"id === C\" t8 && cmp $t.ts ../o && echo CERT-MUTANTS-KILLED"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Assert the fixed code inside the VARIANTS it.each. Rejected: its tuple is [name, value, accepted], so every existing row would need a code. A separate CONFUSED table pushed into VARIANTS keeps the drift agreement and adds the fixed code for exactly the new rows.\n- One transport row, as comment-66f37d9b suggests. Not enough: `transport === 'native' ||` is a second killable swap that the ['injected'] row does not kill, so (t6) covers it. The swap inside `certified === (transport === 'native' && ...)` is an equivalent mutant.\n- Testing runnerProbe directly. VC-P1 already does, and it cannot see M28-M30, which are the defaults in the report functions and runVmControl.\n- A separate live process as the runner. Unnecessary: this test process is alive by construction, and the probe only sends signal 0.",
+    "codebaseInsights": "- node --test uses the spec reporter here: a failing test prints `✖ <name>`, and the summary prints `ℹ fail N`.\n- vitest prints a FAIL line as `> drift > <title>`, so the (tN) prefixes pin the row.\n- The shared checkout's packages/moe-daemon/node_modules are Windows-native. npm ci in a /tmp snapshot takes about 2 s with node v24.21.0.\n- certificationEvidence.test.ts imports scripts/local-runner/{certify.mjs,certified-provider.json,guest-supervisor.py}, so its snapshot needs scripts/.\n- Test files are not type-checked by the build. A scratch tsconfig (`types: [node, vitest/globals]`) showed 0 errors, before and after.",
+    "risks": "- If HEAD moves before the claim and a mutant anchor changes, the replacer exits 9 and checkRefs[1] or [2] fails loudly. Run that mutant by hand against the moved expression and say so in the summary; never weaken the check.\n- QA re-running checkRefs[0] in the control checkout runs node --test in place, which is fine, and copies the landed test file, which is a no-op.\n- The certification file's lines run to about 180 chars; keep the new ones within that.\n- The CQ-M07 final row (task-1a8f1d0e) already depends on this task and declares neither file, so no ordering change is needed.",
+    "keyFiles": [
+      "scripts/tests/local-runner-vm-control.test.mjs",
+      "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+      "scripts/local-runner/vm-control.mjs (cleanupReport, reconcileReport, runnerProbe, runVmControl)",
+      "scripts/local-runner/lifecycle.mjs (seatHoldReason, reconcileSeats, cleanupOwned)",
+      "packages/moe-daemon/src/delivery/certificationEvidence.ts (checkCertificationReport, validChecks)",
+      "/mnt/d/moe-scratch/d3a9-win/intended.diff (reference diff; cr1-3.txt are the checkRefs)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "54dd64fb4fffd59906c221bdeec934f095d86c0b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T12:26:52.320Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T12:28:07.160Z",
+  "reviewStartedAt": "2026-11-04T12:29:24.489Z",
+  "verification": {
+    "command": "checkRefs[0]: node --test scripts/tests/local-runner-vm-control.test.mjs + snapshot vitest run src/delivery/certificationEvidence.test.ts",
+    "exitCode": 0,
+    "outputTail": "✔ VC-P2 ...\nℹ tests 20\nℹ pass 20\nℹ fail 0\n Test Files  1 passed (1)\n      Tests  99 passed (99)",
+    "reportedAt": "2026-11-04T12:29:24.489Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-vm-control.test.mjs",
+    "packages/moe-daemon/src/delivery/certificationEvidence.test.ts"
+  ],
+  "completionSummary": "Added VC-P2 (vm-control default runner probe; 20/20) and 8 JSON type-confusion rows (CONFUSED table + VARIANTS push + it.each code row) in certificationEvidence.test.ts (99/99). Only those two test files changed. Mutants (snapshot copies): M28/M29/M30 each rc=1, 'ℹ fail 1', only '✖ VC-P2' -> VM-MUTANTS-KILLED. Cert === to == swaps: t3 2 failed, t1 4 failed, t6 2, t5 2, t7 2, t4 2, t8 2 (of 99) -> CERT-MUTANTS-KILLED. The third transport swap (inside certified === (transport === 'native' && ...)) is an equivalent mutant: a transport that passes the earlier strict test is a string, where == and === agree; no row.",
+  "commits": [
+    {
+      "sha": "7f83a3cd435c93135694bc5f2ff9fe5f28cb4523",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T12:27:09Z",
+      "paths": [
+        "packages/moe-daemon/src/delivery/certificationEvidence.test.ts",
+        "scripts/tests/local-runner-vm-control.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T12:30:13.885Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T12:30:20Z",
+    "at": "2026-11-04T12:32:34.823Z"
+  },
+  "completedAt": "2026-11-04T12:32:16.144Z",
+  "reviewCompletedAt": "2026-11-04T12:32:16.144Z",
+  "reviewSummary": "Reviewed completion 7f83a3cd (in control HEAD). Diff: 2 test files, +29/-0; runtime files (vm-control.mjs, lifecycle.mjs, certify.mjs, certificationEvidence.ts) zero diff; no test deleted/weakened.\n\nRe-ran checkRefs:\n[0] node --test local-runner-vm-control.test.mjs: tests 20, pass 20, fail 0, ✔ VC-P2. Snapshot (git archive HEAD + test file, npm ci, env -i node 24) vitest certificationEvidence.test.ts: 99 passed (99).\n[1] M28, M29, M30 in snapshot copy: each rc=1, ℹ fail 1, only ✖ VC-P2; file restored (cmp) -> VM-MUTANTS-KILLED.\n[2] === to == swaps in snapshot copy: t3 kind 2 failed; t1 version 4 failed; t6 transport native 2; t5 transport injected 2; t7 provider.name 2; t4 executionReady 2; t8 check id 2 (of 99), each incl. its own (tN) row; restored -> CERT-MUTANTS-KILLED.\n\nDoD: (1) VC-P2: runner `${process.pid}@x` on localRunnerHost(), daemon says gone, lease free, no runnerAlive injected into cleanupReport/reconcileReport/runVmControl; asserts 'runner-alive' preserved/held, zero provider calls, 4 liveness calls, phase 'owned'. (2) M28-M30 killed. (3) CONFUSED t1-t8 are refused VARIANTS rows (drift vs certify.mjs) and toStrictEqual-checked with the fixed code (SCHEMA x7, CHECKS for check id). (4) diff names only the two files. (5) both suites pass.\n\nEquivalent-mutant claim verified: certificationEvidence.ts:78 already requires transport strictly 'native'||'injected', so the :82 `transport === 'native'` only sees strings where == and === agree; no row possible.\n\nNo blocking issues. VC-P2 signals only its own pid, so platform-neutral.",
+  "requiredCheckAtDone": null
+}

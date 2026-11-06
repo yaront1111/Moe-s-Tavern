@@ -1,0 +1,270 @@
+{
+  "id": "task-a617a03519fc40b189125a38714ef777",
+  "epicId": "epic-be924fb8",
+  "title": "bug: messageExistsInChannel reads only the newest 1 MiB of a channel's JSONL, so chat_send's replyTo and chat_pin refuse a real message older than that (in #general, 16.5 MB, anything more than a few hours old), chat_pin with an uncoded Error, although pinMessage's comment says it \"scans full JSONL, no limit\"",
+  "description": "Filed by the governor from hunt #15's held items (task-928a468d, architect-1dd28c7c, msg-492975dd). Re-verified at tip f76c55f3. None of the files below changed since the repro's HEAD, d5431577.\n\nPROBLEM\n- packages/moe-daemon/src/state/chatStore.ts:357-372 (messageExistsInChannel) reads `readTailJsonl(state, messagesFile, 1024 * 1024)`: only the newest 1 MiB. Its docstring (:352-355) says \"Older messages cannot be referenced\".\n- Its pin caller contradicts that: pinMessage at chatStore.ts:522 says \"Validate messageId exists in channel (scans full JSONL, no limit)\".\n- chat_send's replyTo check (tools/chatSend.ts:63) uses the same function.\n- Live sizes at filing: #general (chan-b6d8273b.jsonl) is 16.5 MB, #governors 2.5 MB, #workers 1.5 MB. The architect measured that the newest 1 MiB of #general reached back only to about 17:57Z on 11-03, roughly 6 hours.\n\nEFFECT\n- chat_send with replyTo naming a real, older message is refused INVALID_INPUT \"Invalid replyTo: message ... not found in channel\".\n- chat_pin of such a message is refused with a bare `Error: Message not found in channel` (chatStore.ts:524), with no MoeError code. Pinned messages are meant as durable todos and references, so pinning an older ruling is exactly the use case.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_chatTailWindow.test.ts, run at d5431577 in a snapshot outside the checkout; output in chatTailWindow.vitest.txt. One message is followed by about 1 MiB of later lines. Then both chat_send replyTo and chat_pin of the first message fail as described above.\n\nFIX DIRECTION AND PITFALL\nGive the replyTo and pin checks a lookup that covers the whole file and stays bounded in memory: a streamed scan, or a per-channel id index. Error handling: chat_pin's not-found becomes a coded MoeError.\nPitfall: chatRead.ts:120 (all-channel mode) and util/chatBacklog.ts:316 (chat_wait) also call messageExistsInChannel. There it decides whether an explicit sinceId belongs to a channel. getMessages still reads only the tail (chatStore.ts:301-306, its own TODO). A full-file \"yes\" there would therefore send an old sinceId into getMessages' expired-cursor fallback and replay the newest window on every call, which is what the chatBacklog comment guards against. Keep those two callers' behavior, for example with a separate full-file check used only by replyTo and pin, and pin it with a test.\n\nFILES\nchatStore.ts, possibly chatSend.ts and chatPin.ts, one vitest file, and docs/MCP_SERVER.md's `### moe.chat_send` and `### moe.chat_pin` sections (ruling msg-71db57ac). No open row holds these files at filing. Gate: the vitest file, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "chat_send with replyTo naming a real message older than the newest 1 MiB of its channel succeeds, and chat_pin pins such a message (the hunt repro's two cases pass). An id the channel never had is still refused: INVALID_INPUT for chat_send, and a coded MoeError, not a bare Error, for chat_pin.",
+    "An explicit sinceId older than the read window behaves exactly as before in chat_read's all-channel mode and in chat_wait. A vitest case pins it: no newest-window replay.",
+    "The comments at chatStore.ts:352-355 and :522 and the `### moe.chat_send` and `### moe.chat_pin` sections state the real lookup bound."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Test first. Create packages/moe-daemon/src/tools/chatMessageLookup.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy: a shell write leaves no TOOL witness (global rail). Start from the architect's prototype at /mnt/d/moe-scratch/plan-a617a035/chatMessageLookup.test.ts (158 lines, 7 cases). It ports the hunt repro /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_chatTailWindow.test.ts.\n\nHarness: ToolTestHarness, shaped like chatPin.test.ts: setupMoeFolder({ schemaVersion: 6 } as never), createEpic, workers worker-a (CODING), worker-reader and worker-peer; afterEach runs flushActivityLog, then cleanup. It imports CHAT_READ_WINDOW_BYTES and MESSAGE_SCAN_CHUNK_BYTES from '../state/chatStore.js' (step 2 exports them). Its pushPastWindow(channel) appends worker-peer lines of about 640 bytes, in the store's own line format, until more than CHAT_READ_WINDOW_BYTES + 64 KiB follow, and returns the newest filler id.\n\nCases:\n(1) Only the whole-file lookup finds a message older than the window: log size > CHAT_READ_WINDOW_BYTES, state.messageExistsInChannel is false, state.messageExistsAnywhereInChannel is true.\n(2) chat_send with replyTo naming it resolves { success: true, channel }, and the stored line (found by the returned messageId via getMessages) has that replyTo. PITFALL: the hunt repro asserts `{ message: { replyTo } }`, a shape chat_send never returns (it returns { success, messageId, channel, timestamp, routingTargets }), so that case fails even with the fix. Do not copy it.\n(3) chat_pin pins it: { success: true, pin: { messageId, pinnedBy: 'worker-a', done: false } }, and getPins lists it.\n(4) Refusals (the error handling under test). Setup: a #general line older than the window whose replyTo and mentions hold ghost ids, plus a real #workers message. For 'msg-never-sent', the replyTo-only id, the mentions-only id and the #workers id: chat_send rejects { code: INVALID_INPUT, codeName: 'INVALID_INPUT', context: { field: 'replyTo' } }, and chat_pin rejects with an instanceof MoeError carrying { code: NOT_FOUND, codeName: 'NOT_FOUND', context: { entity: 'Message', id } }. No pin and no pins file are written.\n(5) A target line starting at MESSAGE_SCAN_CHUNK_BYTES - 13, so the first chunk ends one byte into a 3-byte ✓, sitting behind a malformed padding line: the whole-file lookup finds it, the windowed one does not.\n(6) chat_read all-channel mode, with workerId worker-reader, an explicit sinceId = an old #workers message, and the stored #workers cursor at the newest filler line: no #workers line comes back. After one new #workers line, exactly that line comes back, and the stored cursor is unchanged (a peek).\n(7) chat_wait (channels [#workers], the same sinceId and cursor, one new line, timeoutMs 1000) delivers exactly the new line.\n\nCases 6 and 7 pin DoD 2: the sinceId callers' behavior is unchanged. Build them on #workers with worker-peer lines, never #general system lines: agent reads hide those as feed, which would mask a replay (mem:gotcha-chat-read-peek).\n\nArchitect RED at d1062cb0, with the constants inlined: cases 1-5 fail with the real refusals ('[INVALID_INPUT] Invalid replyTo', the bare 'Message not found in channel' Error, the missing method). Cases 6-7 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
+      ],
+      "note": "Created chatMessageLookup.test.ts (7 cases) with the Write tool, from the architect's prototype. The hunt repro's wrong chat_send assertion is not copied: case 2 checks success plus the stored line's replyTo. RED not run here, because the new exports arrive in step 2; the step-5 checkRef runs the whole thing.",
+      "startedAt": "2026-11-04T05:45:57.717Z",
+      "completedAt": "2026-11-04T05:46:30.261Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The lookup, in packages/moe-daemon/src/state/chatStore.ts (line numbers at d1062cb0). Type it with your own editor (Edit on Claude, apply_patch on codex exec). Never `git apply`, `patch` or `cp` the prototype: a shell write leaves no TOOL witness. Reference: /mnt/d/moe-scratch/plan-a617a035/prototype.diff.\n\n- Import: `import { notFound } from '../util/errors.js';` (errors.ts imports nothing from state/, so there is no cycle).\n- Above readTailJsonl (:261), add two exported constants:\n  - `CHAT_READ_WINDOW_BYTES = 1024 * 1024`: the newest bytes that getMessages reads and messageExistsInChannel checks. The two must agree.\n  - `MESSAGE_SCAN_CHUNK_BYTES = 256 * 1024`: the whole-file scan's chunk size, exported for the test.\n  getMessages (:306) and messageExistsInChannel (:363) use CHAT_READ_WINDOW_BYTES in place of the literal `1024 * 1024`. Nothing else in them changes.\n- Rewrite messageExistsInChannel's docstring (:352-356, DoD 3). It checks only the NEWEST CHAT_READ_WINDOW_BYTES (1 MiB), the window getMessages reads, and it is bounded on purpose. chat_read's all-channel mode (chatRead.ts:120) and chat_wait's catch-up (collectChatBacklog, chatBacklog.ts:316) ask it whether getMessages can page from an explicit sinceId. An id older than the window would trip getMessages' expired-cursor fallback (:331-334) and replay the newest window on every call. Checks that must find a message whatever its age use messageExistsAnywhereInChannel. Do NOT touch chatRead.ts or chatBacklog.ts.\n- Add `export function messageExistsAnywhereInChannel(state, channelId, messageId): boolean` after messageExistsInChannel:\n  (a) If messageExistsInChannel finds the id, return true. Most references are recent, so the common case costs what it costs today.\n  (b) Otherwise open the channel's JSONL with fs.openSync. The error handling: ENOENT returns false; any other error is thrown, because an unreadable log must not read as \"no such message\".\n  (c) Read from offset 0 in MESSAGE_SCAN_CHUNK_BYTES chunks with fs.readSync into one reused Buffer, prefixing the carried unfinished last line. Cut lines at 0x0A bytes, which never occur inside a UTF-8 sequence, so no character is split. Decode only complete lines. At EOF (a read of 0), the carried bytes are the last line.\n  (d) Pre-filter each block with Buffer.indexOf for the id as a JSON string (Buffer.from(JSON.stringify(messageId))), and JSON.parse only the lines that contain it. A match is `parsed?.id === messageId`; the same id in another line's replyTo, mentions or content is not a match. Skip a malformed line.\n  (e) Close the fd in a finally.\n  Memory stays at one chunk plus one line (sendMessage caps content at 10 KB). Never read the whole file into one buffer or string. The prototype puts the per-block parse in a module-private helper, blockHoldsMessage(block, needle, messageId). The docstring states the bound and the error rule.\n- pinMessage (:522-525): replace the check with `if (!messageExistsAnywhereInChannel(state, channelId, messageId)) throw notFound('Message', messageId);`. Replace the 'scans full JSONL, no limit' comment with one that states the real lookup: the newest window first, then the whole JSONL.\n  notFound gives code NOT_FOUND (-32001), codeName 'NOT_FOUND', the message '[NOT_FOUND] Message not found: <id>' and context { entity: 'Message', id }. The /ws PIN_MESSAGE path (WebSocketServer.ts:1130) gets the same refusal, and its catch (:1212) already adds code and codeName for a MoeError.\n  Leave 'Channel not found' and 'Message already pinned' as they are (out of scope).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts"
+      ],
+      "note": "chatStore.ts, all edits with the Edit tool: notFound import; exported CHAT_READ_WINDOW_BYTES and MESSAGE_SCAN_CHUNK_BYTES; getMessages and messageExistsInChannel use the window constant; messageExistsInChannel docstring rewritten; new exported messageExistsAnywhereInChannel (window check first, then a sync chunked scan with a Buffer.indexOf prefilter, ENOENT false, other errors thrown, fd closed in finally) plus the private blockHoldsMessage helper; pinMessage uses the whole-file lookup and throws notFound('Message', id), and its 'scans full JSONL, no limit' comment is replaced. chatRead.ts and chatBacklog.ts are untouched.",
+      "startedAt": "2026-11-04T05:46:30.503Z",
+      "completedAt": "2026-11-04T05:47:08.098Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Expose the lookup and use it. Edit with your own editor.\n\n- packages/moe-daemon/src/state/StateManager.ts:\n  - Add messageExistsAnywhereInChannel to the './chatStore.js' import list (:161), alphabetically before messageExistsInChannel.\n  - Add a delegate after messageExistsInChannel's (:869-871): `messageExistsAnywhereInChannel(channelId: string, messageId: string): boolean { return messageExistsAnywhereInChannel(this, channelId, messageId); }`.\n- packages/moe-daemon/src/tools/chatSend.ts:58-66: the replyTo check calls `state.messageExistsAnywhereInChannel(channel.id, params.replyTo)`. Keep the typeof check and the INVALID_INPUT refusal text unchanged. The comment says the check covers the whole JSONL, not only getMessages' newest window.\n\nchatPin.ts needs no change, because pinMessage throws the coded refusal itself.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "note": "StateManager.ts: messageExistsAnywhereInChannel in the chatStore import list (alphabetical) plus a delegate after messageExistsInChannel's. chatSend.ts: the replyTo check calls state.messageExistsAnywhereInChannel, and its comment says the whole JSONL is covered. The typeof check and INVALID_INPUT text are unchanged. chatPin.ts untouched, since pinMessage throws the coded refusal itself.",
+      "startedAt": "2026-11-04T05:47:08.971Z",
+      "completedAt": "2026-11-04T05:47:23.537Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs: sync your own two sections of docs/MCP_SERVER.md. This follows governor ruling msg-71db57ac, and no other open row edits these sections (1f84f4e4 edits get_activity_log, 87cba58c edits submit_plan). Use Edit on Claude or apply_patch on codex exec. Never use Serena, which ignores docs/, and never a shell write (mem:gotcha-docs-edit-via-bash-python-no-tool-witness).\n\n- `### moe.chat_send` (:2572): append to **Notes:**, after the routingTargets bullet (:2597): '- `replyTo` must name a message of the same channel, whatever its age: the check reads the newest 1 MiB of the channel's log first, then scans the whole file. An id the channel does not hold is refused `INVALID_INPUT` (`field: replyTo`).'\n- `### moe.chat_pin` (:2759): after the **Returns:** block (:2775) and before the PIN_CREATED paragraph, add: '`messageId` must name a message of that channel, whatever its age: like `moe.chat_send`'s `replyTo` check, the lookup reads the newest 1 MiB of the channel's log first, then scans the whole file. An id the channel does not hold is refused `NOT_FOUND` (`context: { entity: 'Message', id }`); the board's `PIN_MESSAGE` frame gets the same refusal.'\n\nNo other section changes; chat_read's sinceId behavior is unchanged. Re-grep both anchors first, and if they have moved, insert at the same places.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, both edits with the Edit tool: a replyTo Notes bullet in ### moe.chat_send, and a messageId paragraph in ### moe.chat_pin before the PIN_CREATED paragraph. Both say the lookup reads the newest 1 MiB first, then scans the whole file, and name the refusal (INVALID_INPUT field replyTo; NOT_FOUND context { entity: 'Message', id }, also for the board's PIN_MESSAGE frame). No other section touched.",
+      "startedAt": "2026-11-04T05:47:24.764Z",
+      "completedAt": "2026-11-04T05:47:37.533Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written (918 chars). The same text is at /mnt/d/moe-scratch/plan-a617a035/checkref-gate.txt.\n\nWhat it does:\n- builds a whole-tree `git archive HEAD` snapshot in `mktemp -d` (mem:gotcha-harness-snapshot-needs-full-archive);\n- overlays the four owned code files with cp --parents from packages/moe-daemon/src;\n- under env -i, with nvm Node v24.21.0 and NO_COLOR=1, runs npm ci, `npx tsc --noEmit`, and a typecheck of the new test through a scratch tt.json (the package tsconfig excludes tests; mem:gotcha-daemon-linux-snapshot-gate);\n- runs `npx vitest run src/tools/chat src/state/StateManager.test.ts`: every chat tool suite, plus StateManager's chat and pin tests.\n\nExpected: exit 0, 'Test Files  10 passed (10)' and 'Tests  282 passed (282)'. The counts may grow if peers land chat tests first. The last line is 'chatMessageLookup ok (<tmp dir>)', which requires the new file's row with exactly 7 tests, so keep exactly the 7 cases.\n\nArchitect dry runs, from a --shared clone at d1062cb0 with the prototype uncommitted:\n- the gate: exit 0, in about 16 s;\n- control A (base runtime with the new test): exit 1 on TS2305/TS2551;\n- control B (a planted TS2322 in the test): exit 1;\n- the full daemon suite on the prototype: 281 files, 7441 passed, 24 skipped.\n\nNever run npm ci or npm test in the shared checkout or the worktree (global rail). Submit verification { command: <the checkRef>, exitCode: 0, outputTail: <its last lines> }.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
+      ],
+      "note": "Ran the executionContract checkRef verbatim from the worktree root, in a git-archive snapshot (/tmp/tmp.V9IjjXTS1M): exit 0, Test Files 10 passed (10), Tests 282 passed (282), last line 'chatMessageLookup ok (/tmp/tmp.V9IjjXTS1M)'. The full tsc and the test typecheck passed. Nothing was modified in this step.",
+      "startedAt": "2026-11-04T05:47:38.800Z",
+      "completedAt": "2026-11-04T05:48:13.122Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of your own diff, last, before moe.complete_task (mutant mechanics: mem:convention-daemon-vitest-mutant-checkref).\n\n- The split holds: chatRead.ts and chatBacklog.ts are untouched, and both still call state.messageExistsInChannel.\n- Mutants. Run them in the gate's snapshot only, never in the worktree. Apply each with one sed, and restore from your overlay copy:\n  - M1: point chatRead.ts:120 and chatBacklog.ts:316 at messageExistsAnywhereInChannel. Cases 6 and 7 must fail.\n  - M2: drop the exact id compare (return true on any needle hit). Case 4 must fail.\n  - M3: reset the carry on every chunk. Case 5 must fail.\n  - M4: keep pinMessage's bare Error. Case 4 must fail.\n  In the architect's runs, each mutant failed exactly the named case(s) and nothing else.\n- Edge inputs:\n  - an id with JSON-escaped characters: the needle is JSON.stringify(id), the same spelling sendMessage writes;\n  - an empty file, and a file with no trailing newline;\n  - a malformed line or a `null` line (`parsed?.id`);\n  - a deleted channel log: ENOENT gives false, so chat_send refuses INVALID_INPUT and chat_pin refuses NOT_FOUND.\n- Resources: the fd closes on every path, including a throw from readSync. There is no stream and no async iterator, so nothing is left open.\n- Cost: the scan runs only on a window miss, synchronously, under the tool mutex. The architect measured about 5 ms per 16.7 MB miss on a native filesystem, on a copy of the live #general.\n- The test does not copy the hunt repro's `{ message: { replyTo } }` assertion.\n\nIf anything changes, re-run the step-5 command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/chatMessageLookup.test.ts"
+      ],
+      "note": "Self-review done; no code changed, so the step-5 run still stands. Split holds: chatRead.ts and chatBacklog.ts are untouched and still call state.messageExistsInChannel. Mutants run only in the gate snapshot: M1 (sinceId callers on the whole-file lookup) failed cases 6 and 7; M2 (no exact id compare) failed case 4; M3 (carry reset per chunk) failed case 5; M4 (bare Error in pinMessage) failed case 4. Nothing else failed in any run, and the restored snapshot passes 7/7. Edge inputs checked against the code: empty file and no trailing newline (EOF read of 0 treats the carry as the last line), a null or bare-string line (msg?.id), ENOENT (false, so INVALID_INPUT / NOT_FOUND), fd closed in finally including a readSync throw. Theoretical only: an empty messageId would parse every line (bounded; chat_send skips a falsy replyTo), and a multi-MB line with no newline would grow the carry (sendMessage caps lines at 10 KB). The test does not copy the repro's { message: { replyTo } } assertion.",
+      "startedAt": "2026-11-04T05:48:13.587Z",
+      "completedAt": "2026-11-04T05:49:02.573Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 470.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:02:16.939Z",
+  "updatedAt": "2026-11-04T19:20:45.112Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T00:22:40.468Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T05:59:57.135Z",
+    "wallClockMs": 20236667
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "architect-c33f294e",
+    "worker-a408f113",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T05:44:54.579Z",
+  "executionContract": {
+    "intendedBehavior": "moe.chat_send's replyTo check and moe.chat_pin find a message anywhere in its channel's JSONL, whatever its age. The same holds for the board's /ws PIN_MESSAGE, which goes through pinMessage. The lookup checks the newest 1 MiB window first, then runs a synchronous chunked scan of the whole file, whose memory stays at one chunk plus one line. A reply to, or a pin of, a real message older than the newest 1 MiB (in #general, anything more than a few hours old) now succeeds. An id the channel does not hold is still refused: INVALID_INPUT (field replyTo) for chat_send, and for chat_pin a coded MoeError NOT_FOUND (context { entity: 'Message', id }) in place of a bare Error. The explicit-sinceId lookups of chat_read's all-channel mode and chat_wait's catch-up keep the windowed messageExistsInChannel. So an old sinceId still reads from the caller's stored cursor and never replays the newest window. The comments on messageExistsInChannel and on pinMessage's check, and the ### moe.chat_send and ### moe.chat_pin sections, state the real lookup bound.",
+    "acceptanceCriteria": [
+      "A message is followed by more than CHAT_READ_WINDOW_BYTES of later lines. chat_send with replyTo naming it resolves success: true, the stored reply carries that replyTo, and chat_pin pins it (cases 2 and 3 of chatMessageLookup.test.ts).",
+      "The ids are one never sent, one present only as another line's replyTo or mentions, and a real id of another channel. For each, chat_send rejects INVALID_INPUT with context.field 'replyTo', and chat_pin rejects with a MoeError of code NOT_FOUND, codeName 'NOT_FOUND', context { entity: 'Message', id }. No pin or pins file is written (case 4).",
+      "A target line that straddles a scan chunk boundary inside a multi-byte character, behind a malformed line, is found by messageExistsAnywhereInChannel and not by messageExistsInChannel (cases 1 and 5).",
+      "chat_read all-channel mode and chat_wait, given an explicit sinceId older than the window, read from the stored cursor, with no newest-window replay (cases 6 and 7).",
+      "messageExistsInChannel's docstring, the comment on pinMessage's check, and the ### moe.chat_send and ### moe.chat_pin sections state the lookup bound. The 'scans full JSONL, no limit' comment is gone.",
+      "The checkRef exits 0, and its last line is 'chatMessageLookup ok (<dir>)'."
+    ],
+    "invariants": [
+      "messageExistsInChannel stays bounded to CHAT_READ_WINDOW_BYTES, the same window getMessages reads. chatRead.ts:120 and chatBacklog.ts:316 keep calling it, and both files stay unchanged.",
+      "messageExistsAnywhereInChannel never loads the whole file into one buffer or string: it holds one chunk plus the carried unfinished line.",
+      "A match is the parsed line's own id in that channel's log. A substring in another field, or in another channel's log, never counts.",
+      "The file descriptor is closed on every path."
+    ],
+    "compatibility": [
+      "No MCP schema change: chat_send and chat_pin inputs and replies are unchanged. chat_pin's unknown-id refusal changes from an uncoded Error ('Message not found in channel: <id>') to MoeError NOT_FOUND ('[NOT_FOUND] Message not found: <id>'). The /ws PIN_MESSAGE ERROR frame gains code and codeName additively. No client matches the old text (grep of moe-jetbrains/src and moe-vscode/src).",
+      "chat_read and chat_wait behave exactly as before for every sinceId.",
+      "No .moe/ format change: JSONL lines and pins files are read and written as before."
+    ],
+    "approvedScope": [
+      "state/chatStore.ts: the exported CHAT_READ_WINDOW_BYTES and MESSAGE_SCAN_CHUNK_BYTES; the exported messageExistsAnywhereInChannel and a module-private per-block helper; the window constant in getMessages and messageExistsInChannel; messageExistsInChannel's docstring; pinMessage's check, comment and coded refusal; the notFound import.",
+      "state/StateManager.ts: the import and a messageExistsAnywhereInChannel delegate.",
+      "tools/chatSend.ts: the replyTo check and its comment.",
+      "tools/chatMessageLookup.test.ts (new, 7 cases).",
+      "docs/MCP_SERVER.md: one Notes bullet in ### moe.chat_send and one paragraph in ### moe.chat_pin."
+    ],
+    "reuse": [
+      "messageExistsInChannel (readTailJsonl over the newest window) as the first, cheap check.",
+      "notFound(entity, id) from util/errors.ts, as chat_send's and chat_pin's channel refusals already do.",
+      "Node fs.openSync/readSync and Buffer.indexOf: no new dependency and no stream lifecycle.",
+      "ToolTestHarness and the chatPin.test.ts fixture shape. The hunt repro /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_chatTailWindow.test.ts is ported with a corrected chat_send assertion. The prototype is at /mnt/d/moe-scratch/plan-a617a035/."
+    ],
+    "sourceAssumptions": [
+      "At d1062cb0, chatStore.ts:306 is getMessages' readTailJsonl(state, messagesFile, 1024 * 1024), and :331-334 is the expired-cursor fallback that returns the newest window.",
+      "chatStore.ts:352-356 is messageExistsInChannel's docstring ('Bounded to the last 1 MB ... Older messages cannot be referenced'), and :363 reads the same 1 MiB tail.",
+      "chatStore.ts:522-525 is pinMessage's comment 'scans full JSONL, no limit' and its `throw new Error(`Message not found in channel: ${messageId}`)`.",
+      "chatSend.ts:63 calls state.messageExistsInChannel(channel.id, params.replyTo) and refuses with invalidInput('replyTo', ...).",
+      "chatRead.ts:120 and util/chatBacklog.ts:316 call state.messageExistsInChannel for an explicit sinceId.",
+      "StateManager.ts:161 imports messageExistsInChannel from './chatStore.js', and :869-871 is its delegate.",
+      "WebSocketServer.ts:1130 (PIN_MESSAGE) calls state.pinMessage(pinCh, pinMsgId, 'human'). The catch at :1212 adds code and codeName for a MoeError.",
+      "docs/MCP_SERVER.md: ### moe.chat_send is at :2572 (Notes :2591-2597), and ### moe.chat_pin is at :2759 (Returns :2772-2775, the PIN_CREATED paragraph at :2777)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$T/packages/moe-daemon/src\" && cp --parents state/chatStore.ts state/StateManager.ts tools/chatSend.ts tools/chatMessageLookup.test.ts \"$L/packages/moe-daemon/src/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatMessageLookup.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/chat src/state/StateManager.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aqE '✓ src/tools/chatMessageLookup\\.test\\.ts \\(7 tests\\)' ../v.log && echo \"chatMessageLookup ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Switching all four callers to a whole-file lookup: rejected. chat_read's all-channel mode and chat_wait would hand an old sinceId to getMessages, whose expired-cursor fallback replays the newest window on every call. The row names this pitfall.\n- A per-channel in-memory id index: rejected. It grows with the channel, needs invalidation on deleteChannel and on outside file changes, and costs a rebuild after every restart. The scan is paid only on a window miss.\n- An async stream or readline scan: rejected. An early return from a for-await over a FileHandle stream risks an unhandled EBADF 'error' after close. Tool dispatch already runs under the global mutex, so async buys nothing here.\n- Decoding every line (StringDecoder plus split): it works, but it is about 8x slower. On a copy of the live #general (16.7 MB), a full miss scan took 44 ms that way against 5 ms with the byte prefilter.\n- Exporting the window constant makes the getMessages and messageExistsInChannel agreement explicit, since the sinceId callers depend on it, and lets the test size its fixture from it.",
+    "codebaseInsights": "- Every chat lookup lives in state/chatStore.ts; tools reach it through the StateManager delegates.\n- getMessages reads only the newest 1 MiB (its own TODO). An explicit sinceId outside that window falls back to the newest window, which is why chat_read and chat_wait ask messageExistsInChannel first (mem:gotcha-chat-read-peek).\n- #general's system lines (sender system, no mentions) are feed that agent reads hide.\n- The /ws ERROR frame adds code and codeName only for a MoeError.\n- Tool dispatch runs under the global reentrant mutex, so a sync scan cannot interleave with a channel delete or an append.\n- The live daemon runs on Windows (daemon.json projectPath D:/...). Through WSL's /mnt/d 9p mount the same scan is I/O-bound, at about 120-170 ms; that is not the daemon's cost.",
+    "risks": "- The hunt repro's chat_send case asserts `{ message: { replyTo } }`, which chat_send never returns, so it fails even with the fix. Case 2 asserts success plus the stored line's replyTo instead. QA should judge DoD 1 by cases 2 and 3, not by the raw repro file.\n- Cases 6 and 7 must not use #general system filler: hidden feed would mask a replay. The prototype uses #workers with worker-peer lines.\n- The chat_wait case skips the waiting worker's own lines, so the filler sender must not be worker-reader.\n- The gate pins '(7 tests)'. Adding a case means updating the command, so keep exactly 7.\n- Applying prototype.diff with git apply, patch or cp is a shell write with no TOOL witness (global rail). Type the edits with Edit/Write or apply_patch.\n- Out of scope and left alone: StateManager.test.ts:2090's misleading title ('finds messages regardless of age'), and pinMessage's bare 'Channel not found' and 'Message already pinned' Errors.\n- A sync scan blocks the event loop on a window miss only: about 5 ms per 16.7 MB on a native filesystem, and it grows linearly with the log.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/chatStore.ts",
+      "packages/moe-daemon/src/tools/chatSend.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/chatRead.ts",
+      "packages/moe-daemon/src/util/chatBacklog.ts",
+      "packages/moe-daemon/src/tools/chatPin.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "docs/MCP_SERVER.md",
+      "/mnt/d/moe-scratch/plan-a617a035/prototype.diff"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "bf35a0a78efeb6d813ab2a96487e045262b1f402",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T05:44:54.611Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:45:57.717Z",
+  "reviewStartedAt": "2026-11-04T05:49:29.237Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$T/packages/moe-daemon/src\" && cp --parents state/chatStore.ts state/StateManager.ts tools/chatSend.ts tools/chatMessageLookup.test.ts \"$L/packages/moe-daemon/src/\" && cd \"$L/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/chatMessageLookup.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/chat src/state/StateManager.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aqE '✓ src/tools/chatMessageLookup\\.test\\.ts \\(7 tests\\)' ../v.log && echo \"chatMessageLookup ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  10 passed (10)\n      Tests  282 passed (282)\nchatMessageLookup ok (/tmp/tmp.V9IjjXTS1M)",
+    "reportedAt": "2026-11-04T05:49:29.237Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/chatMessageLookup.test.ts",
+    "packages/moe-daemon/src/state/chatStore.ts",
+    "packages/moe-daemon/src/state/StateManager.ts",
+    "packages/moe-daemon/src/tools/chatSend.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "chat_send's replyTo check and chat_pin (and the board's PIN_MESSAGE, which goes through pinMessage) now find a message anywhere in its channel's JSONL, whatever its age. chatStore.ts: new exported messageExistsAnywhereInChannel checks the newest window first, then runs a synchronous chunked scan of the whole file (256 KiB chunks, one carried unfinished line, Buffer.indexOf prefilter on the JSON-quoted id, exact parsed `id` compare, ENOENT false, other read errors thrown, fd closed in finally). Exported CHAT_READ_WINDOW_BYTES (shared by getMessages and messageExistsInChannel) and MESSAGE_SCAN_CHUNK_BYTES. pinMessage uses the whole-file lookup and throws notFound('Message', id), a coded NOT_FOUND, instead of a bare Error; its 'scans full JSONL, no limit' comment and messageExistsInChannel's docstring now state the real bound. StateManager.ts gains the delegate; chatSend.ts calls it. messageExistsInChannel stays windowed, and chatRead.ts (all-channel sinceId) and chatBacklog.ts (chat_wait) are untouched, so an old sinceId still reads from the stored cursor with no newest-window replay. New chatMessageLookup.test.ts has 7 cases (old message found/replied/pinned; ghost, replyTo-only, mentions-only and other-channel ids refused INVALID_INPUT / coded NOT_FOUND with no pin written; a line straddling a chunk with a split multi-byte char; the chat_read and chat_wait no-replay cases). docs/MCP_SERVER.md: one Notes bullet in ### moe.chat_send and one paragraph in ### moe.chat_pin. Verification: the plan's checkRef, exit 0, 10 test files / 282 tests passed, 'chatMessageLookup ok'. Mutants in the snapshot: M1 failed cases 6 and 7, M2 and M4 case 4, M3 case 5, nothing else. The project qualityGate (parity-check.sh and npm run lint) passes in the worktree.",
+  "commits": [
+    {
+      "sha": "9224de154f8b84e97c3f6a46b98ab92241382ab2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T05:44:57Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.ts",
+        "packages/moe-daemon/src/state/chatStore.ts",
+        "packages/moe-daemon/src/tools/chatMessageLookup.test.ts",
+        "packages/moe-daemon/src/tools/chatSend.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T05:50:31.453Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-c33f294e@2026-11-04T05:24:02Z",
+    "at": "2026-11-04T06:01:05.060Z"
+  },
+  "completedAt": "2026-11-04T05:59:57.135Z",
+  "reviewCompletedAt": "2026-11-04T05:59:57.135Z",
+  "reviewSummary": "Reviewed completion 9224de15 (on moe/control HEAD; 5 files, +252/-12, net 240, under cap), reading the recorded diff.\n\nRe-run: the task's checkRef verbatim in a fresh git-archive snapshot: exit 0, 10 files / 282 tests passed, 'chatMessageLookup ok'; tsc and test typecheck clean; overlay bytes identical to 9224de15's blobs, and none of the touched or adjacent files changed since. Adjacent daemon tests (joinTeam.notification, util chatPayload/mentionRouter/utilFixes, src/server): 24 files / 551 passed. Own mutant M1 (chatRead.ts:120 and chatBacklog.ts:316 pointed at the whole-file lookup) fails exactly cases 6 and 7, so the no-replay pin is mutation-resistant.\n\nDoD 1: replyTo/pin find a message older than the 1 MiB window (cases 1-3). Ghost, replyTo-only, mentions-only and other-channel ids are refused INVALID_INPUT (field replyTo) for chat_send and a coded NOT_FOUND MoeError (context {entity:'Message', id}) for chat_pin, no pin file written (case 4).\nDoD 2: chatRead.ts and chatBacklog.ts untouched, still on the windowed messageExistsInChannel; cases 6 (chat_read all-channel) and 7 (chat_wait) pin it.\nDoD 3: docstring and pinMessage comment state the real bound; 'scans full JSONL, no limit' is gone; chat_send Notes bullet and chat_pin paragraph present in docs/MCP_SERVER.md at HEAD.\n\nCode: window check first, then a 256 KiB chunked scan with one carried line, cut at 0x0A (UTF-8 safe, case 5), Buffer.indexOf prefilter, exact parsed-id compare, ENOENT false, other errors thrown, fd closed in finally. No client matches the old error text. Complexity: nothing to cut (blockHoldsMessage may re-parse a line whose needle repeats; harmless).",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,231 @@
+{
+  "id": "task-8383080c17fa4406886ef6781f26e9c4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the JetBrains plugin reads MOE_DAEMON_COMMAND only when no bundled daemon script resolves, so the override is dead in a normal install. For the documented example `npx moe-daemon` it never appends `start`, so when the override is used it runs `npx moe-daemon --project <path>`, which prints usage and exits 0 without starting a daemon",
+  "description": "Hunt #17 (task-3488566e) found this as held item (b). The governor re-checked the code at 59e95024.\n\n- **Spawn order:** MoeDaemonSupervisor.kt:182-190 uses buildDirectDaemonCommand (the bundled or local daemon script) whenever that script resolves. It falls back to buildDaemonCommand, the only reader of MOE_DAEMON_COMMAND, only when the script does not resolve. Yet docs/CONFIGURATION.md:60 documents MOE_DAEMON_COMMAND as the \"Daemon start command override (JetBrains plugin)\", and CLAUDE.md describes it as override resolution.\n- **Missing `start`:** buildDaemonCommand (:665-690) appends `start` only when the command ends in .cmd, .ps1 or .js, or equals `moe-daemon`. So the documented example `npx moe-daemon` becomes `npx moe-daemon --project \"<path>\"`. Given no subcommand, the daemon CLI prints usage and exits 0 without writing daemon.json. Evidence: /mnt/d/moe-scratch/hunt-3488566e/A/repro-daemon-command.{sh,out}.\n- **WSL host suffix:** the override branch returns before the WSL agent-mode `--host` suffix is added. Check whether an override daemon in WSL agent mode binds loopback only.\n\nFix direction:\n- An explicitly set MOE_DAEMON_COMMAND wins over the bundled script.\n- Append `start` whenever the command names no daemon subcommand. Match the daemon CLI's subcommand list, not file extensions.\n- In WSL agent mode, add the same --host suffix as the other spawn paths unless the command already carries --host.\n- Keep the {projectPath} template and an explicit --project working as they do today.\n\nPlacement: task-fe811130 also edits MoeDaemonSupervisor.kt (the bindHost probe). Edit only buildDaemonCommand and the spawn-path selection, and put the tests in their own test class or block. No dependency edge is needed in worktree mode. The Kotlin gate is gradlew.bat test from Windows, run under the jetbrains-gradle lease.",
+  "definitionOfDone": [
+    "With MOE_DAEMON_COMMAND set, the plugin spawns the override even when a bundled daemon script resolves. With it unset, the spawn path is unchanged. A JUnit test pins both cases.",
+    "buildDaemonCommand turns `npx moe-daemon`, or any command that names no daemon subcommand, into one that runs `start --project <path>`. It leaves unchanged a command that already names a subcommand, carries --project or uses {projectPath}. In WSL agent mode it adds the --host suffix the other spawn paths add, unless the command already carries --host. JUnit tests pin each case.",
+    "docs/CONFIGURATION.md's MOE_DAEMON_COMMAND row states the precedence and the start rule. `./gradlew test` passes, run as gradlew.bat test from Windows under the jetbrains-gradle lease."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Implement the precedence and the command rewrite (DoD 1 and 2) in moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt with the session's own editing tool (Edit on a Claude seat, apply_patch on a codex exec seat), never a shell write or a subagent. Keep every hunk in the four places below: sibling task-fe811130 (bindHost probe, not yet planned) edits isReachable, the :151-166 reuse/delete block, DaemonInfo and this file's companion object.\n\n(a) Constructor seam, inserted directly after the `processLookup` parameter (:43), before `replaceConfirmer`:\n    // MOE_DAEMON_COMMAND, injected by tests because a JVM cannot change its own environment.\n    private val daemonCommandOverride: () -> String? = { System.getenv(\"MOE_DAEMON_COMMAND\") },\nNot earlier: RuntimeSelectionPolicyTest.kt:2243 passes the first 11 parameters (through processLookup) positionally, so an insertion before position 12 breaks its compile. Not after docSync: a seam fe811130 may append there would collide in the merge.\n\n(b) Spawn selection in ensureDaemonRunningImpl (:182). Replace\n    val direct = if (isProtected) protectedCommandOrRefuse(projectBasePath) ?: return false else buildDirectDaemonCommand(projectBasePath)\nwith\n    // A set MOE_DAEMON_COMMAND wins over every daemon script; the protected profile never reads the environment.\n    val overrideCommand = if (isProtected) null else daemonCommandOverrideOrNull()\n    val direct = when {\n        isProtected -> protectedCommandOrRefuse(projectBasePath) ?: return false\n        overrideCommand != null -> null\n        else -> buildDirectDaemonCommand(projectBasePath)\n    }\nand at :190 pass it on: `val command = buildDaemonCommand(projectBasePath, overrideCommand)`. One read per call, so the selection and the command always agree.\n\n(c) Replace buildDaemonCommand (:665-691). The installed start-daemon.cmd branch and the `moe-daemon start` fallback stay as they are; only the override branch changes, and hostSuffix moves to the top:\n    internal fun buildDaemonCommand(basePath: String, overrideCommand: String? = daemonCommandOverrideOrNull()): String {\n        val hostSuffix = if (wslAgentsEnabled()) \" --host $WSL_BIND_HOST\" else \"\"\n        val raw = overrideCommand?.trim()?.takeIf { it.isNotEmpty() }\n        if (raw != null) {\n            val words = commandWords(raw)\n            val command = when {\n                raw.contains(\"{projectPath}\") -> raw.replace(\"{projectPath}\", basePath)\n                raw.contains(\"--project\") -> raw\n                words.drop(1).any { it in daemonSubcommands } -> \"$raw --project \\\"$basePath\\\"\"\n                else -> \"$raw start --project \\\"$basePath\\\"\"\n            }\n            return if (\"--host\" in words) command else command + hostSuffix\n        }\n        // the installed branch and the fallback, unchanged\n    }\nKDoc it with the rules: {projectPath} is substituted, and a command carrying it or --project is otherwise used as written; any other command gets `start` unless a word after the first is a daemon subcommand, then `--project \"<basePath>\"`; WSL agent mode appends ` --host wsl` unless a word of the command is `--host`. Why `start` is only appended: the daemon reads its subcommand only as its first argument (packages/moe-daemon/src/index.ts parseArgs, `args[0] || 'start'`), so nothing appended fixes a command with arguments of its own, and CONFIGURATION.md tells the operator to name it. The DoD's \"leaves unchanged a command that already names a subcommand\" means no `start` is inserted; `--project` is still appended exactly as today.\n\n(d) Directly after buildDaemonCommand (not in the companion object) add:\n    private fun daemonCommandOverrideOrNull(): String? = try {\n        daemonCommandOverride()?.trim()?.takeIf { it.isNotEmpty() }\n    } catch (ex: Exception) {\n        log.warn(\"Cannot read MOE_DAEMON_COMMAND; starting the daemon without it\", ex)\n        null\n    }\n    // The daemon CLI's subcommands: the word cases of main() in packages/moe-daemon/src/index.ts, plus accounts.\n    private val daemonSubcommands = setOf(\"start\", \"stop\", \"status\", \"init\", \"doctor\", \"version\", \"accounts\", \"check-architecture\", \"_run\")\n    /** The command's words as a shell splits them, quotes removed: a quoted path with spaces is one word. */\n    private fun commandWords(command: String): List<String> =\n        Regex(\"\\\"[^\\\"]*\\\"|'[^']*'|\\\\S+\").findAll(command).map { it.value.trim('\"', '\\'') }.toList()\n-v and --version are left out: they are flags, not subcommands.\n\nError handling: a seam that throws (a SecurityException reading the environment) is logged and treated as unset, so the bundled daemon still starts; spawn failures stay in the existing try/catch that publishes onStatus(false, ...). The protected branch never calls daemonCommandOverride (test O2 pins it).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+      ],
+      "note": "Added the daemonCommandOverride seam after processLookup, made the spawn selection prefer a set override (PROTECTED never reads it), and rewrote buildDaemonCommand: start appended unless a daemon subcommand is named, host suffix unless --host is present. Added daemonCommandOverrideOrNull, daemonSubcommands and commandWords. Not compiled yet; the Gradle run is step 4.",
+      "startedAt": "2026-11-04T07:16:25.978Z",
+      "completedAt": "2026-11-04T07:16:57.437Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "TESTS (DoD 1 and 2). Create moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt (JUnit 4 with a TemporaryFolder rule, like its neighbours) with the session's own editing tool. It is a class of its own so that task-fe811130's cases in MoeDaemonSupervisorTest.kt never meet these in a merge. MoeDaemonSupervisorTest.FakeProcess is private, so add a private nested `StubProcess : Process()`: alive until destroy() or waitFor(), empty input and error streams, a ByteArrayOutputStream output, and exitValue() throwing IllegalThreadStateException while alive. Expectations are literal strings with the literal \"wsl\", never the production constant or helpers. The spawn prefix is `if (MoeDaemonSupervisor.isWindowsHost()) listOf(\"cmd\", \"/c\") else listOf(\"bash\", \"-lc\")`, because the gate runs on Windows. Every supervisor gets profile = { RuntimeProfile.LEGACY } (O2 excepted) and docSync = { _, _ -> }. Below, p is /srv/my proj, Q is p wrapped in double quotes, and R is root.absolutePath wrapped in double quotes.\n\nO1 `O1 a set override wins over a resolving daemon script and an unset or blank one keeps the direct spawn`. root is a new folder holding .moe/ and a written packages/moe-daemon/dist/index.js (the script findInParents resolves, as in W1). A helper spawn(wsl, seam) builds a supervisor with processStarter = { started += it.command().toList(); StubProcess() }, wslAgentsEnabled = { wsl } and daemonCommandOverride = seam, asserts that ensureDaemonRunning() is true and returns started.single(). Pins:\n- { \"npx moe-daemon\" } gives the prefix + `npx moe-daemon start --project R`;\n- the same with wsl = true gives the prefix + `npx moe-daemon start --project R --host wsl`;\n- { null }, { \"\" }, { \"   \" } and { throw SecurityException(\"denied\") } each give cmd.drop(2) == listOf(\"start\", \"--project\", root.absolutePath) and File(cmd[1]).canonicalFile == script.canonicalFile: today's direct spawn. The throw covers the error handling: unreadable counts as unset.\nO2 `O2 the protected profile never reads the override`: profile = { RuntimeProfile.PROTECTED }, installedRoot = { null }, nodeExecutable = { null }, daemonCommandOverride = { reads++; \"npx moe-daemon\" } and a recording processStarter. ensureDaemonRunning() is false, reads == 0 and nothing started (installedArtifact(null, ...) refuses with \"installed Moe runtime not found\").\nO3 `O3 a command naming no daemon subcommand gets start and one naming a subcommand keeps its own` (wsl false; supervisor.buildDaemonCommand(p, raw); exact equality):\n- `npx moe-daemon` -> `npx moe-daemon start --project Q` (the documented example);\n- `moe-daemon` -> `moe-daemon start --project Q`;\n- `node /opt/moe/daemon/index.js` -> `node /opt/moe/daemon/index.js start --project Q`;\n- the installer's value, C:\\Program Files\\Moe\\moe-daemon\\start-daemon.cmd wrapped in double quotes -> that value + ` start --project Q`;\n- `node \"/opt/my start/index.js\"` -> that value + ` start --project Q` (a quoted word is not a subcommand);\n- `npx moe-daemon start` -> `npx moe-daemon start --project Q` (no second start);\n- `npx moe-daemon init` -> `npx moe-daemon init --project Q`;\n- `  npx moe-daemon  ` -> `npx moe-daemon start --project Q` (trimmed);\n- buildDaemonCommand(p, \"   \") == buildDaemonCommand(p, null): blank is unset. Compare the two, because the unset branch may find a real installed start-daemon.cmd on a Windows host.\nNo result above contains \"--host\".\nO4 `O4 a command carrying --project or {projectPath} is used as written` (wsl false):\n- `node /opt/moe/index.js start --project \"{projectPath}\"` -> `node /opt/moe/index.js start --project Q`;\n- `my-wrapper {projectPath}` -> `my-wrapper /srv/my proj`;\n- `npx moe-daemon start --project /srv/other` -> unchanged;\n- `npx moe-daemon --project /srv/other` -> unchanged. Comment it: the daemon reads its subcommand only as its first argument, so an appended start could not fix it, and CONFIGURATION.md tells the operator to name it.\nO5 `O5 WSL agent mode appends --host wsl unless the command carries --host` (wsl true):\n- `npx moe-daemon` -> `npx moe-daemon start --project Q --host wsl`;\n- `npx moe-daemon start --host 127.0.0.1` -> `npx moe-daemon start --host 127.0.0.1 --project Q` (exactly one --host);\n- `node /opt/moe/index.js start --project \"{projectPath}\"` -> `node /opt/moe/index.js start --project Q --host wsl`;\n- `npx moe-daemon start --project /srv/other` -> `npx moe-daemon start --project /srv/other --host wsl`.\n\nThen in MoeDaemonSupervisorTest.kt touch only W1 and W2 (:503-543), so that the new precedence cannot flip them on a machine whose environment sets MOE_DAEMON_COMMAND (the Windows installer sets it):\n- W1's constructor call gains `daemonCommandOverride = { null }`;\n- in W2, delete the stale comment line `// MOE_DAEMON_COMMAND is the operator's verbatim command and never carries --host.` and the `Assume.assumeTrue(System.getenv(\"MOE_DAEMON_COMMAND\").isNullOrBlank())` line, and add `daemonCommandOverride = { null }` to its constructor call.\nKeep the Assume import, which other tests use. Add nothing else to that file: task-fe811130 adds its cases there.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "newFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "New MoeDaemonCommandOverrideTest O1-O5 plus a nested StubProcess; MoeDaemonSupervisorTest changed only in W1 (daemonCommandOverride = { null }) and W2 (the stale comment and Assume removed, same seam added). Not run yet; the Gradle run is step 4.",
+      "startedAt": "2026-11-04T07:17:09.158Z",
+      "completedAt": "2026-11-04T07:17:52.994Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCS (the CONFIGURATION.md half of DoD 3): edit docs/CONFIGURATION.md with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat, never Serena or a shell write. Replace only the `MOE_DAEMON_COMMAND` row (:60, Agent Scripts table), keeping its four columns.\n- Description. It must state: the JetBrains plugin's daemon start command; when set (non-blank) it wins over every daemon script the plugin finds (the bundled, repository or global-config copy); the protected profile never reads it and starts only the installed daemon; the plugin runs it with `bash -lc` (`cmd /c` on Windows) after these rewrites: `{projectPath}` becomes the project path, and a command that carries `--project` or `{projectPath}` is otherwise used as written; any other command gets `start` appended unless it already names a daemon subcommand (`start`, `stop`, `status`, `init`, `doctor`, `version`, `accounts`, `check-architecture`, `_run`), then `--project \"<path>\"`; the daemon reads its subcommand only as its first argument, so a command with arguments of its own must name it (`npx moe-daemon start --port 9877`); in WSL agent mode `--host wsl` is appended unless the command carries `--host`; the Windows installer sets it to its `start-daemon.cmd` shim, so an installer machine starts that daemon instead of the bundled one.\n- Default column: `Unset (bundled daemon)`. Example column: `npx moe-daemon`, unchanged.\nTouch no other line. docs/PLUGIN_SPEC.md:74, docs/ARCHITECTURE.md:63 and installer/README.md:37 already agree with the new precedence. CONFIGURATION.md is not vendored into the daemon's generated files, so nothing needs regenerating.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Replaced only the MOE_DAEMON_COMMAND row: precedence, start rule, --project/{projectPath}, WSL --host rule, installer note; default column now \"Unset (bundled daemon)\".",
+      "startedAt": "2026-11-04T07:17:53.795Z",
+      "completedAt": "2026-11-04T07:18:03.731Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY once, after steps 1-3 (DoD 3: `./gradlew test` passes). WSL has no JDK, so run the Windows gradlew.bat from this task's worktree, the form QA accepts for `./gradlew test` (mem:gotcha-jetbrains-gradle-from-wsl). Hold the `jetbrains-gradle` lease only around each Gradle run: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId } (if queued, moe.wait_for_resource), then moe.release_resource, on failure too (mem:convention-jetbrains-gradle-lease). The exact command:\ncmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-8383080c17fa4406886ef6781f26e9c4\\moe-jetbrains && .\\gradlew.bat test --rerun\"\nIf your worktree is elsewhere, put `wslpath -w \"$MOE_WORKTREE_PATH\"` in the cd. While iterating, a focused run with the unquoted filter `--tests com.moe.services.MoeDaemonCommandOverrideTest` is fine; the full run is the evidence. Confirm real execution in moe-jetbrains/build/test-results/test/: TEST-com.moe.services.MoeDaemonCommandOverrideTest.xml carries tests=\"5\" failures=\"0\" errors=\"0\"; every TEST-*.xml timestamp is after the run start (the Windows clock lags WSL by about 3.5 s); and the suite totals (the grep/awk in mem:gotcha-gradle-jetbrains-shared-box) show 0 failures and 0 errors. On a red exit with a truncated tail, check the Gradle daemon log for the MessageIOException IPC flake before believing it. In complete_task, verification.command is the exact cmd.exe line, labelled as the Windows run of `./gradlew test`, with the totals in the summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Windows `gradlew.bat test --rerun` from the task worktree under the jetbrains-gradle lease: BUILD SUCCESSFUL in 51s, exit 0. TEST-*.xml totals: 44 classes, tests=671 skipped=6 failures=0 errors=0 (6 skipped are existing Assume skips). TEST-com.moe.services.MoeDaemonCommandOverrideTest.xml: tests=5 failures=0 errors=0, timestamp 07:21:18Z, after the 07:20:51Z run start. Lease released.",
+      "startedAt": "2026-11-04T07:18:04.579Z",
+      "completedAt": "2026-11-04T07:21:56.981Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "SELF-REVIEW once, as the last step (load adversarial-self-review), over this task's diff only. The plan was written without a Gradle dry run, so prove the tests bite with mutants in an archive copy, never in the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy, Worker variant): `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/m8383/repo`, copy this task's changed and new files over it, then for each mutant make one exact-anchor replace, run `cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\moe-scratch\\m8383\\repo\\moe-jetbrains && .\\gradlew.bat test --tests com.moe.services.MoeDaemonCommandOverrideTest --rerun\"` under the lease, restore, and check the sha256. Each must turn red:\n- M1: the selection keeps buildDirectDaemonCommand when an override is set (O1);\n- M2: the `overrideCommand != null` branch moved before `isProtected`, with the read made unconditional (O2);\n- M3: the old extension rule, `start` only for .cmd/.ps1/.js or `moe-daemon` (O3);\n- M4: commandWords as a plain whitespace split (O3, the quoted path);\n- M5: the override branch drops hostSuffix (O5).\nName each mutant's failing test in the complete_task summary. Then the checklist:\n- two ensureDaemonRunning calls racing: one override read per call, cooldown and attempt counters unchanged;\n- null, blank, padded, quoted and huge values;\n- a value carrying both {projectPath} and --host;\n- the Windows `cmd /c` and POSIX `bash -lc` prefixes;\n- nothing under PROTECTED calls daemonCommandOverride;\n- MoeDaemonSupervisorTest.kt changed only in W1 and W2;\n- `git diff --stat` shows exactly the four planned files.\nIf the review changes any byte, re-run step 4's command and use that output as the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt"
+      ],
+      "note": "Self-review done in an archive copy under the lease: M0 baseline green; M1 (direct script kept) fails O1; M2 (override before PROTECTED, unconditional read) fails O2; M3 (old extension rule) fails O3, O1, O5; M4 (whitespace split) fails O3 only after I changed the O3 quoted-path fixture to `node \"/opt/my start dir/index.js\"` (the planned fixture would not have bitten); M5 (drops host suffix) fails O1, O5; M6 (ignores --host) fails O5; M7 (rethrow in override read) fails O1. Every restore sha256-checked and the worktree src hashes are unchanged by the harness. Checklist: one override read per ensureDaemonRunning call, PROTECTED never reads the seam, blank/padded/quoted values covered, W1/W2 are the only MoeDaemonSupervisorTest edits, git diff --stat shows the four planned files. Theoretical: `--host=wsl` equals form and a flag value equal to a subcommand are not special-cased. Re-ran the full Windows gate after the fixture byte change: 671 tests, 0 failures, 0 errors.",
+      "startedAt": "2026-11-04T07:21:57.853Z",
+      "completedAt": "2026-11-04T07:25:14.895Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 492.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:53:50.379Z",
+  "updatedAt": "2026-11-04T19:20:45.332Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:58:16.989Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T07:35:18.055Z",
+    "wallClockMs": 2221066
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T07:15:05.229Z",
+  "executionContract": {
+    "intendedBehavior": "Under the legacy profile, a non-blank MOE_DAEMON_COMMAND is the daemon start command even when a bundled, repository or global-config daemon script resolves; an unset, blank or unreadable one keeps today's direct spawn. The override is rewritten so that it starts a daemon: `start` is appended when it names no daemon subcommand and carries neither --project nor {projectPath}; `--project \"<path>\"` is appended as before; and in WSL agent mode `--host wsl` is appended unless it carries --host. The protected profile never reads it.",
+    "acceptanceCriteria": [
+      "With an override set and a resolving daemon script, the spawned command is the shell (`bash -lc`, or `cmd /c` on Windows) running the rewritten override.",
+      "`npx moe-daemon` becomes `npx moe-daemon start --project \"<path>\"`, and a command naming a subcommand gets no second `start`.",
+      "A command carrying --project or {projectPath} is used as written, apart from the template substitution and the WSL --host suffix.",
+      "In WSL agent mode the override command carries exactly one --host."
+    ],
+    "invariants": [
+      "PROTECTED never calls daemonCommandOverride and still spawns only the installed daemon.",
+      "With no override, the spawn command is identical to before: the direct script, the installed start-daemon.cmd, or the moe-daemon fallback.",
+      "isReachable, the :151-166 reuse/delete block and the companion object are untouched."
+    ],
+    "compatibility": [
+      "Constructor parameters through processLookup keep their positions (RuntimeSelectionPolicyTest.kt:2243).",
+      "One-argument buildDaemonCommand(basePath) calls still compile, through the default parameter.",
+      "The {projectPath} template and an explicit --project behave as today."
+    ],
+    "approvedScope": [
+      "MoeDaemonSupervisor: constructor parameter daemonCommandOverride; the ensureDaemonRunningImpl spawn selection; buildDaemonCommand; new private daemonCommandOverrideOrNull, daemonSubcommands and commandWords",
+      "MoeDaemonCommandOverrideTest O1-O5; the MoeDaemonSupervisorTest W1/W2 constructor calls",
+      "the docs/CONFIGURATION.md MOE_DAEMON_COMMAND row"
+    ],
+    "reuse": [
+      "WSL_BIND_HOST and the wslAgentsEnabled seam for the suffix; buildDirectDaemonCommand, resolveInstalledDaemonCommand and the moe-daemon fallback are unchanged; the constructor-seam pattern every other test seam in this class uses."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/index.ts parseArgs: command = args[0] || 'start'; main() handles accounts, version, start, _run, stop, status, init, doctor and check-architecture.",
+      "MoeDaemonSupervisor.kt:182 is the direct selection, :190 the buildDaemonCommand call, :665-691 buildDaemonCommand, :693-703 buildDirectDaemonCommand, :1015 WSL_BIND_HOST.",
+      "RuntimeSelectionPolicy.installedArtifact(null, ...) returns Rejected(\"installed Moe runtime not found\").",
+      "installer/moe-installer.iss:20 sets MOE_DAEMON_COMMAND to the quoted start-daemon.cmd path."
+    ],
+    "checkRefs": [
+      "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-8383080c17fa4406886ef6781f26e9c4\\moe-jetbrains && .\\gradlew.bat test --rerun\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Keep System.getenv inside buildDaemonCommand and Assume-skip in tests (today's W2): no override case could be pinned, because a JVM cannot set its own environment; a constructor seam like the file's other seams is used instead. 2) Insert `start` right after the daemon program: the program's end cannot be found in a shell string (`npx -y moe-daemon`, `node --flag index.js`), so `start` is only appended, and the docs say a command with its own arguments must name the subcommand. 3) Append `start` to commands carrying --project or {projectPath}: the daemon reads its subcommand only as its first argument (index.ts parseArgs), so an appended start cannot fix them, and the DoD keeps them as written. 4) Clear MOE_DAEMON_COMMAND for the test JVM in build.gradle.kts: a build-file edit for two tests; injecting `{ null }` into W1/W2 stays local. 5) Constants in the companion object: kept as private members next to buildDaemonCommand instead, away from the companion, where task-fe811130 is likely to add bindHost constants. DoD reading: 'leaves unchanged a command that already names a subcommand' means no `start` is inserted; `--project \"<path>\"` is still appended as today.",
+    "codebaseInsights": "- Spawn order today (MoeDaemonSupervisor.kt:182-196): PROTECTED uses the installed daemon only. LEGACY uses buildDirectDaemonCommand (repo packages/moe-daemon/dist/index.js, moe-daemon/dist/index.js, the bundled daemon/index.js, the global-config copy). Only when none resolves does it take the shell command from buildDaemonCommand, the only reader of MOE_DAEMON_COMMAND.\n- Daemon CLI (packages/moe-daemon/src/index.ts): parseArgs takes `args[0] || 'start'`. main() handles accounts before parseArgs. The word cases are start, stop, status, init, doctor, check-architecture, version and _run. Anything else prints usage and exits 0, which is the bug's symptom.\n- installer/moe-installer.iss:20 sets MOE_DAEMON_COMMAND to the quoted path of its start-daemon.cmd shim, which runs `node index.js %*`. Today the override is dead there, because the bundled daemon always resolves.\n- RuntimeSelectionPolicyTest.kt:2243 constructs the supervisor with 11 positional args, so the seam must sit after processLookup.\n- MoeDaemonSupervisorTest.FakeProcess is private. W2 (:524) is the only existing reference to the variable, and its comment becomes false with this fix.\n- The Windows gate host's environment has no MOE_DAEMON_COMMAND (checked 2026-11-04), so the existing suite is unaffected there; W1/W2 get `{ null }` anyway.",
+    "risks": "- Windows installer machines change behaviour: the installer's MOE_DAEMON_COMMAND now wins, so the plugin starts the installer's daemon instead of its bundled one. DoD 1 intends this, and the docs row says so. The bundled-docs upgrade still runs before the spawn, and the daemon rewrites stale marked copies at its own start.\n- Under `bash -lc`, a `$` or backtick in a project path still expands inside `--project \"<path>\"`, unchanged from today.\n- `--project` detection stays today's substring check. Subcommand and `--host` detection are word matches, so a flag value equal to a subcommand (`--name init`) suppresses `start`.\n- task-fe811130 edits the same file. The hunks are placed apart (step 1), but on a landing conflict keep both sides.\n- Gradle runs are your own processes: hold the lease only around them and release it on failure too.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/RuntimeSelectionPolicyTest.kt",
+      "packages/moe-daemon/src/index.ts",
+      "docs/CONFIGURATION.md",
+      "installer/moe-installer.iss"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "320918dce4e7993a57d03004b90dc350e449d333",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T07:15:05.261Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T07:32:53Z",
+    "at": "2026-11-04T07:35:44.336Z"
+  },
+  "workStartedAt": "2026-11-04T07:16:25.978Z",
+  "reviewStartedAt": "2026-11-04T07:25:30.610Z",
+  "verification": {
+    "command": "cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d D:\\projexts\\moes\\.worktrees\\task-8383080c17fa4406886ef6781f26e9c4\\moe-jetbrains && .\\gradlew.bat test --rerun\"",
+    "exitCode": 0,
+    "outputTail": "Windows run of ./gradlew test, jetbrains-gradle lease held, run start 2026-11-04T07:24:20Z. > Task :test ... BUILD SUCCESSFUL in 29s; 11 actionable tasks: 3 executed, 8 up-to-date. TEST-*.xml totals: 44 classes, tests=671 skipped=6 failures=0 errors=0; TEST-com.moe.services.MoeDaemonCommandOverrideTest.xml tests=5 failures=0 errors=0 timestamp 2026-11-04T07:24:26Z (after the run start). Gate: bash scripts/tests/parity-check.sh PASS; npm run lint OK.",
+    "reportedAt": "2026-11-04T07:25:30.610Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "A set MOE_DAEMON_COMMAND now wins over every resolving daemon script (legacy profile; PROTECTED never reads it), and the override is rewritten so it starts a daemon. MoeDaemonSupervisor gets a `daemonCommandOverride` constructor seam right after processLookup. buildDaemonCommand(basePath, overrideCommand) substitutes {projectPath}, uses a command with --project as written, appends `--project \"<p>\"` when a word after the first is a daemon subcommand, and otherwise appends `start --project \"<p>\"`, so `npx moe-daemon` becomes `npx moe-daemon start --project \"<p>\"`. In WSL agent mode it appends ` --host wsl` unless the command has a --host word. A throwing seam is logged and treated as unset. New MoeDaemonCommandOverrideTest O1-O5, W1/W2 in MoeDaemonSupervisorTest get `{ null }`, and the docs/CONFIGURATION.md row states the precedence and the start rule. Windows `./gradlew test` (gradlew.bat test --rerun under the jetbrains-gradle lease): 671 tests, 6 skipped, 0 failures, 0 errors, 44 classes; MoeDaemonCommandOverrideTest 5/5. Mutants in an archive copy (M0 baseline green): M1 -> O1, M2 -> O2, M3 -> O3/O1/O5, M4 -> O3 (after I changed the O3 quoted-path fixture to `node \"/opt/my start dir/index.js\"`, because the planned one would not have bitten), M5 -> O1/O5, M6 -> O5, M7 -> O1. Quality gate: parity-check.sh PASS, npm run lint OK. Known limits: the `--host=wsl` form and a flag value equal to a subcommand are not special-cased. Windows installer machines now start the installer's start-daemon.cmd instead of the bundled daemon (intended by DoD 1, stated in the docs).",
+  "commits": [
+    {
+      "sha": "3cd256eb36359471bc677c029e0e2e9ac6d1f457",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T07:15:17Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonCommandOverrideTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T07:26:21.591Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T07:35:18.055Z",
+  "reviewCompletedAt": "2026-11-04T07:35:18.055Z",
+  "reviewSummary": "Reviewed completion 3cd256eb via git show (on moe/work-2026-10-24, in moe/control HEAD; 4 files, +219/-24, ~195 net LOC, under the 400 cap).\n\nRe-ran the Windows `gradlew.bat test --rerun` in the task worktree under the jetbrains-gradle lease (released). I first confirmed `git diff --quiet 3cd256eb <worktree HEAD> -- moe-jetbrains` is clean. BUILD SUCCESSFUL, exit 0. XML totals: 44 classes, 676 tests, 6 skipped, 0 failures, 0 errors. MoeDaemonCommandOverrideTest 5/5, timestamp 07:34:04Z, after the 07:33:55Z run start. The worker's 671 plus 5 sibling tests from f9395bf5 (same supervisor file) gives 676, so the merge compiles and passes. parity-check.sh PASS, npm run lint OK.\n\nDoD 1: a non-blank override is selected ahead of the direct script. PROTECTED never reads the seam, and there is one read per call. O1 and O2 pin both cases, including unset, blank and throwing seams.\nDoD 2: `start` is appended unless a word after the first is a daemon subcommand. A --project or {projectPath} command is used as written. WSL mode adds one --host. O3 (quoted-path fixture with a standalone `start`), O4 and O5 use literal expectations.\nDoD 3: the CONFIGURATION.md row states precedence, the start rule, the WSL rule and the installer note. Gradle is green.\n\nInvariants hold: the positional constructor call in RuntimeSelectionPolicyTest is intact, the no-override path and isReachable are untouched, and MoeDaemonSupervisorTest changed only in W1/W2. No tests were weakened. I did not rerun the worker's mutants.\n\nNot blocking: `--host=wsl` and a flag value equal to a subcommand are not special-cased (documented). Windows cmd /c quoting of a quoted first word is unchanged by this commit and I did not run it.",
+  "requiredCheckAtDone": null
+}

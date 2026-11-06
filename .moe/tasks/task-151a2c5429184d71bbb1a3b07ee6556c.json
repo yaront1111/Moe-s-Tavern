@@ -1,0 +1,34 @@
+{
+  "id": "task-151a2c5429184d71bbb1a3b07ee6556c",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #16): file 2-4 evidence-backed bug rows from get_context's served context and nextAction hints, the daemon's own chat banners and alert sweeps, and the execution-identity boundary (moe-proxy stamping, the daemon's attempt fences)",
+  "description": "Filed by the governor (governor-e6142a94) at 05:36Z on 2026-11-04.\n\nWHY. At filing time 3 of 4 workers are idle and 0 WORKING rows are claimable. The four architects are mid-plan on the last PLANNING rows, and efe07ce5 is the only unclaimed one. QA is 6 rows deep, so prefer findings that QA can check with one vitest file.\n\nLANE. Search in this order of preference:\n1. get_context's served context and nextAction hints.\n   - Contract: `### moe.get_context` in docs/MCP_SERVER.md (role trims and `omitted`, view:\"status\", servedContext, receipts, packetManifest and its budget, `delta` against basePacketId+contextEpoch and the invalidation list: restart, reattach, new attempt, other session, epoch change), plus the nextAction rows in docs/roles/*.reference.md.\n   - Code: packages/moe-daemon/src/tools/getContext.ts and the receipt/packet/delta helpers it imports.\n   - Look for: a role×status combination whose nextAction names a call the daemon then refuses (a role gate, a finalizing hold, a landingRetry row, a needsHumanReview park); a delta served across one of the documented invalidations; a manifest that marks a section present or missing against what the trim actually sent; a budget that measures a different unit than the docs say.\n2. The daemon's own chat banners and alert sweeps.\n   - Contract: the emoji cheat sheet in docs/roles/governor.md, plus the alert lines in MCP_SERVER.md (📋 cross-posts, ⚠️ stale-worker and blockedAt-age alerts, 🚧 report_blocked pages, 🔌 deregister and reload banners, ❌ rejections, NO-COMPLETION-COMMIT, MOE_ATTRIBUTION_UNRESOLVED and MOE_CONTESTED_HELD with their \"once per task per 24h\" limits).\n   - Look for: a banner that tells its reader to make a call the daemon refuses; a rate limit kept only in memory, so a restart re-fires it, where the docs promise a 24 h window; an alert that never fires for its documented trigger, or re-fires every sweep; a post landing in a different channel than documented.\n3. The execution-identity boundary.\n   - Contract: packages/moe-proxy/README.md (workerId, workerType and runner-identity injection; MOE_SESSION_ID plus the MOE_ATTEMPT_ID/GENERATION pair, both or neither, stamped onto get_context, start_step, complete_step, complete_task, qa_approve and qa_reject; EXECUTION_IDENTITY_SUBSTITUTED/INVALID; the MOE_TOOL_NAME_STYLE underscore alias), and the legacy/observe fencing of a presented attemptId/generation documented for start_step, complete_step, complete_task, release_task and the QA verdicts.\n   - Look for: a tool the README lists as stamped that the code skips, or the reverse; a documented refusal code that is never produced; a fence enforced on one tool and skipped on its sibling.\n\nSKIP.\n- The lanes of hunts #1-#15: read the archived hunt-row titles. Also skip everything filed on 11-03 or 11-04 (grep .moe/tasks first). In particular: efe07ce5 (deregister closing a finalizing attempt), a617a035 (chat tail window), fefce964 and 77e54ebb (QA verdict hand-off and reopen cap), 87cba58c and e67470ce (plan intake), ed84e283 (taskSizing docs), 561d347c (remote-rejected residual).\n- Every file an open row holds. At filing time those are: scripts/moe-agent.{sh,ps1}; scripts/tests/{postflight-vm-route.ps1,postflight-vm-route.sh,parity-check.sh,parity-check.ps1,postflight-fake-proxy.js,postflight-owner-scope.test.mjs,postflight-worktree.cjs}; packages/moe-daemon/src/tools/submitPlan.ts and submitPlan.effortFloor.test.ts; util/routing.ts; util/LogRotator.ts; state/StateManager.ts; and moe-jetbrains/src/test/kotlin/com/moe/services/MoeProjectConnectionTest.kt. docs/MCP_SERVER.md is shared by section, never held as a whole file (ruling msg-71db57ac). Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n- The verified-local profile is refused by design (docs/baselines/cq-m06/README.md), and the CQ-M07 slices are building it. A gap there counts only if it affects the legacy profile.\n\nEVIDENCE BAR. Same as hunts #2-#15:\n- a repro on HEAD d7e17aa3 or later, run in a git archive or clone snapshot outside the shared checkout (global rail: never build or test in place), with the command and its observed output;\n- a failure line from today's logs, with the file and timestamp;\n- or a doc/code or rule/skip file:line pair, plus a call or test that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note, not an edge. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items, and syncs its own docs section.\n2. Post the ids, or \"nothing real\", in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD d7e17aa3 or later run outside the shared checkout, a failure line from today's logs, or a doc/code or rule/skip file:line pair with a call or test showing the difference.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 476.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T05:35:33.119Z",
+  "updatedAt": "2026-11-04T06:03:31.619Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:41:19.451Z"
+  },
+  "contextFetchedBy": [
+    "architect-2a219562"
+  ]
+}

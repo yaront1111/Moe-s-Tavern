@@ -1,0 +1,42 @@
+{
+  "id": "task-d5d589723ca1460aa9b76bdca512f982",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #14): file 2-4 evidence-backed bug rows from dead-worker handling and the worker-lifecycle tools, and from IDE client follow-through on today's DONE daemon behavior changes (JetBrains first, then VS Code)",
+  "description": "Filed by the governor at 23:07Z on 2026-11-03.\n\nWHY. Hunts #12 and #13 filed 8 rows, and most are already DONE. PLANNING is about to run dry: 2 rows are being planned, and an architect is idle. 6 coders are mid-row and will free up in 10-20 min. This hunt's rows should be ready for them.\n\nLANE. Search in this order of preference:\n1. Dead-worker handling and the worker-lifecycle tools. The contract is the \"Dead-worker handling\" bullet in packages/moe-daemon/CLAUDE.md:\n   - the restart purge (purgeAllWorkers), and the restart hold with reconcileWindowMs;\n   - deregister_worker, including the hot-reload hold (reloadHoldMs);\n   - the REVIEW stale release (reviewStaleTimeoutMs), nextStatusForRelease routing and isTaskClaimable;\n   - the tools packages/moe-daemon/src/tools/{heartbeat,deregisterWorker,unblockWorker,getHandoffHistory,checkApproval}.ts.\n   Look for a documented rule the code doesn't implement, or a path that skips a rule its siblings apply. Example: one release path that routes a status differently from nextStatusForRelease, or a presence rule that counts idle time for WORKING/PLANNING where the doc says never. Cite the doc line and the code line, and show the difference with a call.\n2. IDE client follow-through on today's DONE daemon behavior changes. JetBrains first (moe-jetbrains/src/main/kotlin/**), then VS Code (moe-vscode/src/**). Look for a client control that now always fails, surfaces a raw error frame, or offers an action the daemon now refuses or reroutes. Cases to check:\n   - 625c7cfe: UPDATE_EPIC with status ARCHIVED now runs archive_epic's guards. EpicDetailDialog.kt:31 still offers ARCHIVED in its status combo; that is hunt #9's held item (b), so check it first. Also check VS Code's epic status control.\n   - 7cef0861: delete_task/delete_epic role gate. The board's /ws path is unchanged, but check any client that calls the MCP tools.\n   - 42aeed8a and 8cb8ff4a: the approvalMode switch now clears and arms SPEED timers. Check what the settings UI shows for a pending plan after a switch.\n   - c8d6dbd5 and 0adea941: release_task force rules. JetBrains Release Agent sends force since 0f2e958f; check VS Code.\n   Cite the client file:line plus the daemon refusal line, and show it with a /ws or MCP call, or a unit test of the client's handler.\n\nSkip:\n- Hunts #12 and #13 lanes (daemon side): the board-edit tools, the /ws mutation handlers, account rotation and the server plumbing. Their rows are filed: 7cef0861, 625c7cfe, 42aeed8a, c90b41f1, add61302, 5158e85b, 0b3a1185, a62b6528, 301cf760, plus 8cb8ff4a, bc6ba91b and b1f60b53.\n- Hunt #11's sweeps.ts blocked-timeout alert, unless the finding is new.\n- Every file an open row holds. At filing time that is scripts/moe-agent.{sh,ps1}, scripts/tests/{parity-check.*,postflight-fake-proxy.js,postflight-owner-scope.test.mjs,postflight-vm-route.*,postflight-worktree.cjs}, submitPlan.ts and approvalModeSwitch.test.ts (8cb8ff4a), and waitForResource.ts (a62b6528). docs/MCP_SERVER.md is shared by section, never held as a whole file (ruling msg-71db57ac).\n- Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n\nAlready known, so don't re-file: everything filed on 2026-11-03 (grep .moe/tasks first), plus the held items in task-afe61cc0's description. The verified-local path is refused by design (docs/baselines/cq-m06/README.md) and the CQ-M07 slices are building it, so a gap there counts only if it affects the legacy profile.\n\nEVIDENCE BAR. Same as hunts #2-#13. Work only from real evidence:\n- A repro on HEAD 80ea39d0 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place. JetBrains gradle runs only under the jetbrains-gradle lease.\n- A failure line from today's logs: the file and the timestamp.\n- A rule/skip, client/daemon or doc/code file:line pair, plus a test or call that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. In worktree mode a shared file gets a placement note, not an edge. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file or one focused gradle test class. Each row syncs its own docs section (ruling msg-71db57ac), unconditionally.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 80ea39d0 or later run outside the shared checkout, a failure line from today's logs, or a rule/skip, client/daemon or doc/code file:line pair with a call or test showing the difference.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a hunt #12/#13 row. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 454.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:07:58.564Z",
+  "updatedAt": "2026-11-03T23:33:12.371Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:08:14.138Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "governor-e6b40560"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-1dd28c7c@2026-11-03T23:08:12Z",
+    "at": "2026-11-03T23:33:12.371Z"
+  }
+}

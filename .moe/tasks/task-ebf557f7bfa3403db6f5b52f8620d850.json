@@ -1,0 +1,231 @@
+{
+  "id": "task-ebf557f7bfa3403db6f5b52f8620d850",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/analyze-task-metrics.mjs counts a bucket's done as status DONE only, so delivered rows the Done-column Clear archived (ARCHIVED with metrics.doneAt) drop out: on today's board the 9-12 and 13+ step buckets read 0 done though 12 of their 13 rows were delivered, and 205 of 824 delivered rows are missing (script twin of task-83cf11f5)",
+  "description": "Filed by defect hunt #18 (task-1c736204, lane 3: the metrics surfaces), 2026-11-04.\n\nPROBLEM\n- scripts/analyze-task-metrics.mjs:163 `const done = inBucket.filter((t) => t.status === 'DONE')`; it is reported as the bucket's `done` at :175, and in the table header at :199.\n- The board's Done-column Clear archives delivered rows, so they drop out of `done` but stay in `tasks`. The done rate per size bucket, which the script's own footer tells you to tune settings.taskSizing from, is understated, and every Clear makes it worse.\n- task-83cf11f5 (DONE, 2f03c0f6) fixed the same rule in the daemon: packages/moe-daemon/src/util/metrics.ts:60-64 isDelivered counts DONE, or ARCHIVED with a non-blank metrics.doneAt. The script was not updated.\n\nEVIDENCE (under /mnt/d/moe-scratch/hunt-1c736204/B/)\n- The script run read-only on a 07:15Z copy of today's .moe/ (1008 tasks, 947 with a plan), out/analyze-task-metrics.txt: done 265 / 354 / 0 / 0 for the 1-4 / 5-8 / 9-12 / 13+ step buckets.\n- A hand count with the isDelivered rule, out/handcount-delivered-by-bucket.txt: delivered 338 / 473 / 11 / 1. In total 619 vs 824: 205 delivered rows are missing.\n- Repro: zzHuntB-analyze-task-metrics-done.test.mjs (copy it into scripts/tests/ of a `git archive 320918dc` snapshot). `node --test` fails at HEAD with \"done=1: the delivered-then-archived row is missing; 1 !== 2\" (out/zzHuntB-analyze-task-metrics-done.txt). The hunt holder re-ran it.\n\nFIX DIRECTION\n- Count done with the daemon's isDelivered rule, inlined. The .mjs script cannot import the TS module, so say so in a one-line comment that names util/metrics.ts isDelivered as the twin.\n- Keep the JSON key `done` and the table column, so --json consumers do not break.\n- Error handling: a row whose metrics is missing or not an object counts as DONE-only, exactly as today. Never throw on a malformed record.\n- Add the new test to the node --test list in .github/workflows/ci.yml (:267 holds the scripts list).\n\nFILES (3): scripts/analyze-task-metrics.mjs; scripts/tests/analyze-task-metrics.test.mjs (new); .github/workflows/ci.yml. None is held at filing (lanes.js 08:05Z). No dependsOn.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/analyze-task-metrics.test.mjs` passes against a temp project fixture with one DONE row, one ARCHIVED row with metrics.doneAt and one ARCHIVED row without it, each with plannedStepCount 2. `node scripts/analyze-task-metrics.mjs --project <fixture> --json` gives buckets[0].tasks === 3 and done === 2.",
+    "The same test file shows that an all-ARCHIVED fixture whose rows carry metrics.doneAt gives done === tasks in every non-empty bucket, and that a blank doneAt ('  ') or a missing metrics object is not counted as delivered.",
+    "`grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml` prints a line, and the hunt repro (B/zzHuntB-analyze-task-metrics-done.test.mjs) passes in a snapshot of the fix."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Create scripts/tests/analyze-task-metrics.test.mjs with the session's own editing tool: Write on a Claude seat, apply_patch on a codex exec seat. Never use a shell write or a subagent.\n\nHarness, node:test (same imports as the hunt repro /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs):\n- a mkdtemp project under os.tmpdir() with .moe/tasks/, removed in finally or t.after;\n- a task(id, status, metrics, plan = a 2-step implementationPlan) writer;\n- run = execFileSync(process.execPath, [script, '--project', root, '--json'], { env: { PATH: process.env.PATH } }), parsed. The clean env keeps the seat's MOE_PROJECT_PATH out.\n\nRows (exact values; each must fail at the base commit):\n- T1 (DoD 1): one DONE row, one ARCHIVED row with metrics.doneAt, and one ARCHIVED row without it, each with plannedStepCount 2. Expect buckets[0].tasks === 3 and buckets[0].done === 2.\n- T2 (DoD 2):\n  - All-ARCHIVED rows with metrics.doneAt and plannedStepCount 2, 6, 10 and 14 (one per bucket): done === tasks in every non-empty bucket.\n  - A row with doneAt '  ', a row with no metrics object (its size comes from the 2-step plan) and a row whose metrics is the string 'x': none counts as done, and the script still exits 0.\n- T3: without --json, the table row for '1-4 steps' shows the same done value as the JSON. The column header stays 'done'.\n\nRun `node --test scripts/tests/analyze-task-metrics.test.mjs` before step 2 and record the failing rows in the step note (RED).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "note": "RED at base: 3 of 4 fail (DONE+ARCHIVED-with-doneAt done=1 not 2; all-ARCHIVED buckets done=0; table row 1 not 2). The negative guard (blank/missing/non-object metrics) passes at base, as expected.",
+      "startedAt": "2026-11-04T08:15:43.099Z",
+      "completedAt": "2026-11-04T08:16:07.092Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (DoD 1-3) with the session's own editing tool.\n\n1. scripts/analyze-task-metrics.mjs:\n   - Add a function isDelivered(t) beside stepCount (:141). It returns true when t?.status === 'DONE', or when t?.status === 'ARCHIVED' and typeof t?.metrics?.doneAt === 'string' and t.metrics.doneAt.trim() !== ''.\n   - Give it a one-line comment naming its twin: packages/moe-daemon/src/util/metrics.ts isDelivered (task-83cf11f5). This .mjs cannot import the TS module, so the rule is inlined; keep the two in step.\n   - Replace :163 with `const done = inBucket.filter(isDelivered);`.\n   - Keep the JSON key `done` and the table column unchanged, so --json consumers do not break.\n   - Error handling: a missing or non-object metrics value means \"not archived-delivered\". The helper never throws on a malformed record, and nothing else in the script changes.\n2. .github/workflows/ci.yml: append ` scripts/tests/analyze-task-metrics.test.mjs` to the node --test list of the \"Test agent runtime discovery\" step (:267). Keep the line otherwise byte-identical.\n\nRun the step-1 file: every row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/analyze-task-metrics.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "modifiedFiles": [
+        "scripts/analyze-task-metrics.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Added isDelivered (twin comment) and switched the done filter; appended the test path to ci.yml line 267. New test: 4/4 pass.",
+      "startedAt": "2026-11-04T08:16:07.811Z",
+      "completedAt": "2026-11-04T08:16:22.607Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 1-3), once. From the task worktree root, run exactly:\nnode --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\"\n\nIt must exit 0. The last leg runs the hunt repro unchanged against the fixed script in a scratch tree outside the checkout; the repro resolves ../analyze-task-metrics.mjs from its own folder. Its fresh output is the complete_task verification evidence: both node:test summaries and the ci.yml line.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/analyze-task-metrics.mjs"
+      ],
+      "note": "Verification command exit 0: new test 4/4, ci.yml line 267 matches, hunt repro 1/1 against the fixed script.",
+      "startedAt": "2026-11-04T08:16:23.294Z",
+      "completedAt": "2026-11-04T08:16:31.334Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Check:\n- Does isDelivered match util/metrics.ts:60-64 exactly? DONE, or ARCHIVED with a non-blank string doneAt. A REVIEW row with a stale doneAt is not delivered, and a DONE row without metrics is delivered.\n- Can any task JSON (null metrics, metrics an array or a string, doneAt a number) make the script throw or count wrongly?\n- Are the JSON shape and the table header unchanged?\n- Is the ci.yml list otherwise byte-identical, and does the step still run on every OS?\n- Does the new test leave no temp dir behind, and pass a clean env?\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/analyze-task-metrics.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Self-review: isDelivered matches util/metrics.ts exactly (DONE, or ARCHIVED with non-blank string doneAt); optional chaining covers null/string/array metrics and numeric doneAt without throwing; JSON key and table header unchanged; ci.yml diff is a one-path append; test cleans its temp dir via t.after and runs a clean env. Re-ran the step-3 command fresh: exit 0.",
+      "startedAt": "2026-11-04T08:18:52.125Z",
+      "completedAt": "2026-11-04T08:18:55.057Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 503.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:04:04.228Z",
+  "updatedAt": "2026-11-04T19:20:45.431Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:11:41.156Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:20:56.296Z",
+    "wallClockMs": 555140
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-5772dacf",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:12:49.873Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/analyze-task-metrics.mjs counts a size bucket's `done` with the daemon's delivered rule (util/metrics.ts isDelivered, task-83cf11f5): a DONE row, or an ARCHIVED row with a non-blank metrics.doneAt. Delivered rows that the Done-column Clear archived stay in the done count. The JSON key, the table column and every other number are unchanged, and the new test runs in CI.",
+    "acceptanceCriteria": [
+      "Fixture DONE + ARCHIVED-with-doneAt + ARCHIVED-without, all with plannedStepCount 2: buckets[0].tasks === 3 and done === 2.",
+      "All-ARCHIVED rows with doneAt give done === tasks in every non-empty bucket. A blank doneAt, a missing metrics object or a non-object metrics value is not delivered, and the script exits 0.",
+      "ci.yml runs scripts/tests/analyze-task-metrics.test.mjs, and the hunt repro passes unchanged against the fixed script."
+    ],
+    "invariants": [
+      "The --json output shape and the table columns are unchanged.",
+      "The script stays read-only and imports only node: builtins.",
+      "No record shape makes the done count throw."
+    ],
+    "compatibility": [
+      "--json consumers keep the `done` key; only its value now includes archived-delivered rows.",
+      "--commits mode is untouched."
+    ],
+    "approvedScope": [
+      "scripts/analyze-task-metrics.mjs: a new isDelivered helper and the :163 done filter.",
+      "scripts/tests/analyze-task-metrics.test.mjs (new).",
+      ".github/workflows/ci.yml: one path appended to the :267 node --test list."
+    ],
+    "reuse": [
+      "The daemon's rule, packages/moe-daemon/src/util/metrics.ts:60-64 isDelivered, inlined because a .mjs cannot import the TS module.",
+      "The hunt repro's fixture shape (/mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs)."
+    ],
+    "sourceAssumptions": [
+      "At 3cd256eb, scripts/analyze-task-metrics.mjs:163 counts done as status === 'DONE' only, and :175/:199 report it.",
+      "util/metrics.ts:60-64: DONE, or ARCHIVED with a non-blank string metrics.doneAt; util/reopen.ts strips doneAt on reopen, and archiving keeps it.",
+      ".github/workflows/ci.yml:267 is the 'Test agent runtime discovery' node --test list of scripts/tests files."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Import the daemon's isDelivered from packages/moe-daemon/dist. Rejected: the script must run with no build, and dist is the live runtime here.\n2) Inline the rule with a twin comment. Chosen, as the row asks.\n3) Add a separate 'delivered' column next to 'done'. Rejected: it changes the output shape, and 'done' was always meant as delivered.",
+    "codebaseInsights": "- Hunt #18 evidence is in /mnt/d/moe-scratch/hunt-1c736204/B/out/. On today's board the 9-12 and 13+ step buckets read 0 done although 12 of their 13 rows were delivered, and 205 of 824 delivered rows are missing from done.\n- The script reads MOE_PROJECT_PATH as a --project fallback, so tests pass a clean env.",
+    "risks": "- The rule must stay identical to the daemon's: a REVIEW or WORKING row with a leftover doneAt must not count (reopen strips it).\n- The ci.yml line is long; append the path without disturbing it.",
+    "keyFiles": [
+      "scripts/analyze-task-metrics.mjs",
+      "packages/moe-daemon/src/util/metrics.ts",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a0e2e328b5e7cc6b704a468a485fd5409e5c8b3b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:12:49.904Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:15:43.099Z",
+  "commits": [
+    {
+      "sha": "c9fb0437dc39b4f653853df4f53bf70a156befa7",
+      "ref": "refs/heads/moe/task/task-ebf557f7bfa3403db6f5b52f8620d850",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:14:43Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:17:08.267Z",
+      "treeId": "2b8b5c5f530a181b4acabb82a91e79b39cf27ec2",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "76e261b3681bf9509b93f380c5a64fdef740a3b2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:17:44Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/analyze-task-metrics.mjs",
+        "scripts/tests/analyze-task-metrics.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:19:58.587Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/analyze-task-metrics.test.mjs",
+    "scripts/analyze-task-metrics.mjs",
+    ".github/workflows/ci.yml"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T08:20:01Z",
+    "at": "2026-11-04T08:21:29.482Z"
+  },
+  "reviewStartedAt": "2026-11-04T08:19:02.167Z",
+  "verification": {
+    "command": "node --test scripts/tests/analyze-task-metrics.test.mjs && grep -n \"analyze-task-metrics.test.mjs\" .github/workflows/ci.yml && S=$(mktemp -d /tmp/moe-ebf5-gate-XXXXXX) && mkdir -p \"$S/scripts/tests\" && cp scripts/analyze-task-metrics.mjs \"$S/scripts/\" && cp /mnt/d/moe-scratch/hunt-1c736204/B/zzHuntB-analyze-task-metrics-done.test.mjs \"$S/scripts/tests/\" && node --test \"$S/scripts/tests/zzHuntB-analyze-task-metrics-done.test.mjs\"",
+    "exitCode": 0,
+    "outputTail": "new test: tests 4, pass 4, fail 0; ci.yml line 267 matches analyze-task-metrics.test.mjs; hunt repro: tests 1, pass 1, fail 0",
+    "reportedAt": "2026-11-04T08:19:02.167Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "analyze-task-metrics.mjs now counts a size bucket's done with the daemon's isDelivered rule (DONE, or ARCHIVED with non-blank metrics.doneAt), inlined with a twin comment. JSON key and table column unchanged; malformed metrics counts as not archived-delivered and never throws. Added scripts/tests/analyze-task-metrics.test.mjs (4 cases) and appended it to the ci.yml node --test list. Hunt repro passes against the fixed script.",
+  "completedAt": "2026-11-04T08:20:56.296Z",
+  "reviewCompletedAt": "2026-11-04T08:20:56.296Z",
+  "reviewSummary": "Reviewed completion 76e261b3 (on moe/work-2026-10-24, contained in control HEAD; 3 files, +96/-2 net 94 LOC, well under 400). Re-ran task.verification myself: `node --test scripts/tests/analyze-task-metrics.test.mjs` 4/4 pass; `grep -n analyze-task-metrics.test.mjs .github/workflows/ci.yml` hits line 267 (diff is a one-path append to the 'Test agent runtime discovery' node --test list, otherwise byte-identical); hunt repro zzHuntB-analyze-task-metrics-done.test.mjs copied unchanged into a scratch tree with the fixed script: 1/1 pass, exit 0, scratch dir removed. Mutation check: new test file against the base (76e261b3^) script fails 3 of 4 (DONE+ARCHIVED-with-doneAt done=1 not 2; all-ARCHIVED buckets; table row), and the negative guard passes at base as expected, so tests discriminate. DoD 1: fixture DONE + ARCHIVED w/ doneAt + ARCHIVED w/o doneAt, plannedStepCount 2 gives buckets[0].tasks===3, done===2 (test 1). DoD 2: all-ARCHIVED w/ doneAt at 2/6/10/14 steps gives done===tasks per bucket (test 2); blank doneAt '  ', missing metrics, string metrics, null metrics, numeric doneAt, stale-doneAt REVIEW row all not delivered, DONE row without metrics delivered, script exits 0 (test 3). DoD 3: ci.yml line present, repro passes. Code review: isDelivered in analyze-task-metrics.mjs inlines packages/moe-daemon/src/util/metrics.ts:60-64 exactly (DONE, or ARCHIVED with non-blank string metrics.doneAt), optional chaining so no record shape throws; twin comment names util/metrics.ts and task-83cf11f5; JSON key `done` and table header unchanged (test 4 asserts header 'done'); --commits mode untouched; script still imports node: builtins only; test uses clean env and cleans its temp dir via t.after. Scope matches approvedScope (3 files). Not run: full CI matrix / role-doc lint (not touched by this diff). No ponytail findings worth a card.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,290 @@
+{
+  "id": "task-f9874361f83742fb860a35d6f110b8e0",
+  "epicId": "epic-dce3a64f31a44d948f771137a2c0dbed",
+  "title": "bug: a worktree completion lands on main with no qualityGate when post-flight cannot read .moe/project.json (both wrappers fail open)",
+  "description": "Filed by WT-19's whole-epic adversarial review (task-b1ca54f2716442be889a14623eb59983, step 7).\n\nPROBLEM. A worktree completion takes its target and its qualityGate from the wrapper's own post-flight read of .moe/project.json, and that read fails open. A file that is missing, half-written or malformed leaves the defaults in place:\n- consolidationBranch '' becomes target main;\n- qualityGate '' means no L6 gate;\n- the lease follows as git-land-main.\nThe wrapper never consults the attempt's pinned workspace.target from claim/get_context.\n\nEVIDENCE. Checked on merged tree 88e507e5, which is moe/work-2026-10-24 at 1558f141 plus task-b1ca54f2716442be889a14623eb59983.\n- sh: scripts/moe-agent.sh:3087-3088 in read_commit_settings: `except Exception: s = {}`, and `|| parsed=\"\"` after the python call.\n- sh: :7729-7730 in land_worktree_completion: `target=\"${CS_CONSOLIDATION_BRANCH:-main}\"` and `QUALITY_GATE=\"${CS_QUALITY_GATE:-}\"`.\n- ps1: scripts/moe-agent.ps1:2924, where a missing file skips the read, and :2954-2956, `catch { # Malformed project.json - defaults stand. }`.\n- ps1: :7217-7218 in Invoke-MoeWorktreeCompletion, where the target falls back to 'main'.\n- The MOE_DISABLE_QUALITY_GATE=1 refusal keys on the configured gate. That gate is also '' after the misread, so the refusal cannot fire.\n\nIMPACT. One bad read breaks rail 1, \"with a qualityGate set, no worktree landing skips L6\". The completion squash-lands:\n- ungated;\n- on main instead of the consolidation branch;\n- under the wrong lease, so it is not excluded against peers landing on the real target.\nThe move is still CAS or a non-forced push, so nothing is rewritten. But main in this repo is PR-only (human decision of 2026-11-02), so an ungated landing there needs a human revert. Likelihood is low, but nothing bounds it: a hand edit, a partial write or a read error is enough.\n\nFIX DIRECTION. Change both twins:\n- In worktree mode, take the target from the attempt's pinned workspace.target.\n- Fail closed. When project.json is missing or unparseable at post-flight, refuse the completion landing with a named code; the bytes stay on moe/task/&lt;taskId&gt; and the next session retries.\n- Tell \"key absent\" (defaults apply) apart from \"file unreadable\" (refuse).\n- Add a scenario for each engine.",
+  "definitionOfDone": [
+    "With .moe/project.json missing or malformed at post-flight, both wrappers refuse the worktree completion landing with a named code: no merge, no push, no git-land-* lease taken, and the bytes stay on moe/task/<taskId>.",
+    "The completion target is the attempt's pinned workspace.target when present; a settings value that disagrees is refused or warned, never silently replaced by main.",
+    "A postflight-worktree or worktree-landing scenario per engine (sh and ps1) covers the unreadable-settings case, and parity-check.sh / parity-check.ps1 both exit 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST, then RED on both engines. In scripts/tests/postflight-worktree.cjs add ONE table-driven block, `async function wtSettings()`, directly after wtLeaseFails's closing brace and before the comment that introduces wtLeaseSignal (the governor's placement note: its own block beside the completion-landing scenarios, never at the end of the file). Register it with ONE standalone line `cases['wt-settings']=wtSettings;` right after `cases['wt-follow-lock']=wtFollowLock;`, so no line of the big Object.assign changes (task-d2d6ac4b may register cases there). Reuse the module helpers (repo, landRun, launch, REVIEW, LANDS, gateCmd, mainOf, done, leases, rpcs, rows, journal, unlanded, revOf, parents, git, write, tail) and add no fake-proxy knob. Budget: the block at or under about 90 lines; the task's whole diff at or under about 250 net LOC.\n\n(A) Unreadable at post-flight: one landRun per case with REVIEW plus WT_GATE_LOG, repo settings {...LANDS, qualityGate: gateCmd()}. The CLI writes src/a.txt 'done\\n' and corrupts the CONTROL checkout's .moe/project.json mid-session through WT_CLI_WRITE keyed by its absolute path path.join(p.dir,'.moe','project.json') (the fake CLI resolves an absolute key as-is). Bytes: 'empty' '', 'truncated' '{\"settings\":{\"autoCommit\":true,', 'array' '[]', 'settings-string' '{\"settings\":\"x\"}'. 'missing' instead deletes the file with fs.rmSync before the launch. 'truncated' runs in remote mode: a bare origin built like wtUnlanded's bare helper (main pushed) and MOE_LAND_NET_BACKOFF_SEC '0'. Per case assert, in one deepEqual with a named message plus tail(r.log): main unmoved; done(p) mapped to [outcome, code, pushed] is exactly [['failed','MOE_LAND_SETTINGS_UNREADABLE',false]] and the row's message starts with '.moe/project.json is missing or malformed'; leases(p) is []; no record_candidate RPC and zero gate-log rows; no receipt journal; the task branch's src/a.txt is 'done\\n'; unlanded(p) mapped to [outcome, unlandedReason, targetTip] is exactly [['unlanded','gate',null]] and its rescueRef resolves to the task-branch tip; the log contains '[WARN] MOE_LAND_SETTINGS_UNREADABLE: task task-postflight -- '. In 'truncated', `git for-each-ref` of the bare origin is identical before and after the run (no push).\n\n(B) Key absent: 'absent' writes '{\"id\":\"proj-worktree\"}' (no settings) the same way. The completion lands: one committed row on refs/heads/main, zero gate runs, no lease call, and neither new code in the log.\n\n(C) Pinned target: a repo with settings {...LANDS, qualityGate: gateCmd()} and a local branch moe/work-x cut at main; every launch passes FAKE_CLAIM_WORKSPACE: p.ws({target:'moe/work-x'}). Run 'pinned' (src/a.txt 'pinned\\n'): refs/heads/moe/work-x gains one commit whose parent is its old tip and whose src/a.txt is 'pinned\\n'; main unmoved; the committed row's ref is 'refs/heads/moe/work-x'; at least one lease call, every one with resourceId 'git-land-moe-work-x'; one gate run; exactly one log line '[WARN] MOE_LAND_TARGET_MISMATCH: task task-postflight -- .moe/project.json names main, but this attempt was cut from moe/work-x; it lands on moe/work-x.' Then rewrite project.json (a fixture write before the launch) with consolidationBranch 'moe/work-x' added and run 'agree' (src/a.txt 'agree\\n'): moe/work-x moves again, main stays unmoved, and the log has no MOE_LAND_TARGET_MISMATCH.\n\nRED: run the new case against this worktree's still-unmodified wrappers on both engines and keep the failing assertion lines for the completion summary (today both twins land every (A) case on main, and land (C) on main). sh: S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\". ps1 on PS 5.1 from WSL: MOE_WORKTREE_ONLY=wt-settings WSLENV=MOE_WORKTREE_ONLY \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell. See mem:gotcha-postflight-worktree-mutant-copy and mem:convention-postflight-scratch-harness.\n\nError handling in the harness: every run goes through launch(), whose timeout and exit assertions fail the case; never catch an assertion and continue.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Added wtSettings (+38 lines) after wtLeaseFails and before the wtLeaseSignal comment, registered with one standalone line `cases['wt-settings']=wtSettings;` after wt-follow-lock. (A) missing/empty/truncated(remote, bare origin)/array/settings-string, (B) absent, (C) pinned + agree. No fake-proxy knob. RED on unmodified wrappers, both engines (sh on bash, ps1 on PS 5.1 via node.exe): 'missing' FAILED -- main moved (c3979069 sh / 8d7ac55d ps1), row ['committed',undefined,false] instead of ['failed','MOE_LAND_SETTINGS_UNREADABLE',false], finalize ['landed'] instead of ['unlanded','gate',null], no rescue ref, no code line. Both wrappers land the unreadable-settings completion ungated on main.",
+      "startedAt": "2026-11-03T13:36:42.176Z",
+      "completedAt": "2026-11-03T13:41:25.470Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "SH TWIN, scripts/moe-agent.sh only (edit in this worktree with a TOOL-witnessed editor, then `bash -n scripts/moe-agent.sh` and `bash scripts/tests/parity-check.sh`). Keep every hunk inside read_commit_settings, land_worktree_completion and unlanded_reason (task-d2d6ac4b edits other sites of this file).\n(a) read_commit_settings (~line 3090) must tell 'key absent' (its default) from 'file unreadable'. In the python program, load the JSON in its own try (`except Exception: d = None`); s = d.get('settings') if d is a dict, else None; readable = d is a dict and (s is None or s is a dict); a non-dict s then becomes {} as today. Emit 'true' or 'false' as an 11th field AFTER qualityGate, and never reorder the first ten. In bash, set CS_SETTINGS_READABLE=false before the python call, read the 11th field in the same read group, then default it to false, so a failed or empty python run reads as unreadable (fail closed). Keep encoding utf-8: the daemon cannot parse a BOM'd project.json either. Every existing CS_* value must stay identical for every input, so shared mode is unchanged (epic rail 4). Update the function's comment: one read per iteration plus the worktree completion's fresh post-flight read; a key left out takes its default; a file that is missing, unreadable, not JSON or not a JSON object, or whose settings value is present and not an object, is unreadable.\n(b) land_worktree_completion (~line 7756): its first statement becomes `read_commit_settings`, so the landing sees project.json as it is at post-flight, as the ps1 twin does (ps1 ~11064). Then declare st=\"${CS_CONSOLIDATION_BRANCH:-main}\" and target=\"${MOE_WT_TARGET:-}\": the claim's workspace.target, which provision_worktree checked is a local branch (~3389) and stored (~3466). The existing case that maps a target holding ? or [ to main now applies to st, then `[ -n \"$target\" ] || target=\"$st\"`. After the owner-refusal return, when CS_SETTINGS_READABLE is true and st differs from target, print in yellow exactly: [WARN] MOE_LAND_TARGET_MISMATCH: task $LAND_TASK_ID -- .moe/project.json names $st, but this attempt was cut from $target; it lands on $target.\n(c) The refusal: a new branch directly after `if [ \"$l2\" = failed ]`, ahead of the journal and target checks: `elif [ \"$CS_SETTINGS_READABLE\" != true ]; then LAND_CODE=MOE_LAND_SETTINGS_UNREADABLE; LAND_MESSAGE=\".moe/project.json is missing or malformed, so this landing cannot read its qualityGate\"`. It precedes the MOE_DISABLE_QUALITY_GATE refusal, wt_target_checked_out, acquire_land_lease and wt_land_rounds: there is no lease call, merge-tree, gate, journal or push, and LAND_OUTCOME stays failed.\n(d) unlanded_reason: `MOE_COMMIT_FAILED_GATE|MOE_LAND_SETTINGS_UNREADABLE) echo gate ;;`. The existing outcome block then prints '[WARN] <code>: task <id> -- <message>; <target> did not move and the task's bytes stay on <branch>.' and runs take_unlanded_route gate: a rescue ref of the task tip, the failed row with pushed false, and finalize_attempt unlanded with reason gate. The daemon returns the row to WORKING with landingRetry, and the next session merges the target and lands again; the 3rd consecutive unlanded landing blocks it.\nError handling: anything but a literal 'true' flag refuses, so this error handling fails closed; take_unlanded_route's own failure path (a failed rescue ref or row keeps the attempt finalizing and stops the seat) is unchanged. Done when the step-1 sh command prints '[worktree] wt-settings ok'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "sh twin: read_commit_settings emits an 11th field (readable = dict and settings absent/null/dict), CS_SETTINGS_READABLE defaults false before python and after the read group (fail closed); first ten fields byte-identical to HEAD's reader on 21 inputs (empty, [], null, scalar, truncated, BOM, non-utf8, settings \"\"/[]/0/\"x\"/null/{}, full settings, glob cb, missing). land_worktree_completion: read_commit_settings first; st=consolidationBranch||main (?/[ -> main), target=MOE_WT_TARGET||st; MOE_LAND_TARGET_MISMATCH warning after the owner-refusal return when readable and st != target; refusal branch MOE_LAND_SETTINGS_UNREADABLE right after the l2-failed branch. unlanded_reason maps it to gate. bash -n ok, parity-check.sh PASS, MOE_WORKTREE_ONLY=wt-settings sh: '[worktree] wt-settings ok'. Scope note: the step-1 test also needed the EXISTING fake knob FAKE_LEASE_RESOURCE='git-land-moe-work-x' on the pinned/agree launches (the fake asserts each lease call's resourceId; default git-land-main), so postflight-worktree.cjs changed by one token; no new fake-proxy knob.",
+      "startedAt": "2026-11-03T13:41:27.593Z",
+      "completedAt": "2026-11-03T13:47:42.797Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "PS1 TWIN, scripts/moe-agent.ps1 only, kept UTF-8 with its BOM. Edit with a TOOL-witnessed editor, then parse the file on PS 5.1 with [System.Management.Automation.Language.Parser]::ParseFile and run `bash scripts/tests/parity-check.sh`. Keep every hunk inside Read-MoeCommitSettings, Invoke-MoeWorktreeCompletion (never its catch/finally, which is task-d2d6ac4b's site) and Get-MoeUnlandedReason.\n(a) Read-MoeCommitSettings (~line 2947): add settingsReadable = $false to the defaults. Inside the existing try, after ConvertFrom-Json, take the property with $cfg.PSObject.Properties['settings'] (not Get-MoeProp, whose return unrolls arrays). Test types with the FULL name [System.Management.Automation.PSCustomObject], never the [PSCustomObject] accelerator, which means PSObject and matches wrapped scalars. This is Get-MoeWorkspaceClaim's idiom (ps1 ~3116-3117). settingsReadable becomes $true only when $cfg is such an object and its settings property is absent, $null or such an object, and only then are the keys read, exactly as today. These leave it $false: a missing file, the catch (Get-Content or ConvertFrom-Json throws), an empty or blank file (PS 5.1 yields $null), '[]', a scalar, or a settings value that is not an object. No existing key changes value for any input.\n(b) Invoke-MoeWorktreeCompletion (~line 7245): after the L2 'refused' return, compute $st from consolidationBranch by today's rule. Then $target = [string]$script:MoeWtTarget when it is set (Initialize-MoeWorktree ~3350, after the local-branch check at ~3191), else $st. When $Settings.settingsReadable and $st -cne $target (case-sensitive, like git refs), Write-Host -ForegroundColor Yellow the step-2 sentence verbatim with $tid, $st and $target. Add `elseif (-not $Settings.settingsReadable) { $res.Code = 'MOE_LAND_SETTINGS_UNREADABLE'; $L.Msg = '.moe/project.json is missing or malformed, so this landing cannot read its qualityGate' }` directly after the `$l2.Outcome -eq 'failed'` branch. It then precedes the target check, the MOE_DISABLE_QUALITY_GATE refusal, Test-MoeTargetCheckedOut, Acquire-MoeLandLease and Invoke-MoeWorktreeRounds.\n(c) Get-MoeUnlandedReason: map MOE_LAND_SETTINGS_UNREADABLE to 'gate', so Invoke-MoeUnlandedRoute runs as it does for a gate failure.\nError handling: settingsReadable defaults to $false, so any path that never proves the file readable refuses. Done when the step-1 ps1 command prints '[worktree] wt-settings ok'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "ps1 twin (BOM kept, PS 5.1 ParseFile 0 errors, parity-check.sh PASS). Read-MoeCommitSettings: settingsReadable=$false default; inside the try, $obj = $cfg -is [System.Management.Automation.PSCustomObject], $sp = $cfg.PSObject.Properties['settings'], readable = $obj -and (no prop | null | PSCustomObject). Deviation, to honour the executionContract invariant (\"every existing key keeps its value for every input\"): the keys are still read exactly as today (Get-MoeProp + if ($st)), not gated on the flag -- gating would change e.g. today's reads under odd shapes; the refusal keys on the flag alone. Verified on PS 5.1: HEAD vs new reader on 20 inputs (empty, blank, [], null, scalar, truncated, {}, no settings, settings null/\"x\"/\"\"/[]/[{..}]/0/{}, full, top-level array, missing) -> every existing key SAME; flag agrees with the sh reader. Invoke-MoeWorktreeCompletion: $st by today's rule, $target = $script:MoeWtTarget else $st, MOE_LAND_TARGET_MISMATCH (Write-Host Yellow, same sentence as sh) when readable and $st -cne $target; refusal elseif right after the l2-failed branch. Get-MoeUnlandedReason maps it to gate (map literal split over two lines). Catch/finally untouched. MOE_WORKTREE_ONLY=wt-settings,codes ps1 on PS 5.1: wt-settings ok, codes ok; sh codes ok.",
+      "startedAt": "2026-11-03T13:47:44.544Z",
+      "completedAt": "2026-11-03T13:50:57.427Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "DOCS, two files, one hunk each.\n\ndocs/CONFIGURATION.md: in the table 'Codes a worktree-mode wrapper prints', add two rows directly after the MOE_LAND_LEASE_RELEASE_FAILED row.\n- MOE_LAND_SETTINGS_UNREADABLE: at a worktree completion's post-flight, .moe/project.json is missing, not JSON, not a JSON object, or its settings is not an object, so the qualityGate cannot be read. Nothing lands and no lease is taken, the bytes stay on moe/task/<taskId>, and the task returns unlanded (gate) for the next session to retry. A key that is only absent keeps its default.\n- MOE_LAND_TARGET_MISMATCH: a warning. project.json names a different target from the claim's workspace.target that this attempt was cut from; the completion still lands on the attempt's target.\n\nscripts/CLAUDE.md: in the line that starts '- **The unlanded route**' only, extend 'MOE_COMMIT_FAILED_GATE to gate' so it also names MOE_LAND_SETTINGS_UNREADABLE (project.json missing or malformed at post-flight, refused before L3).\n\nTouch no other line. WT-19 (task-b1ca54f2) edits CONFIGURATION.md's qualityGate and worktreeMode rows and the Worktree mode intro, and a worktree landing conflicts on adjacent lines (mem:gotcha-adjacent-line-edits-conflict-in-worktree-landing). No test changes in this step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md"
+      ],
+      "note": "docs/CONFIGURATION.md: two rows (MOE_LAND_SETTINGS_UNREADABLE, MOE_LAND_TARGET_MISMATCH) directly after the MOE_LAND_LEASE_RELEASE_FAILED row. scripts/CLAUDE.md: only the '**The unlanded route**' line, MOE_COMMIT_FAILED_GATE and MOE_LAND_SETTINGS_UNREADABLE (...refused before L3) to gate. No other line touched. npm run lint OK. Residual (left per the plan's touch-no-other-line rule): the Completion bullet's '(a literal consolidationBranch, else main)' wording now describes the target only approximately (the daemon pins workspace.target from those settings at claim time).",
+      "startedAt": "2026-11-03T13:50:59.428Z",
+      "completedAt": "2026-11-03T13:51:26.892Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "VERIFICATION, once, fresh, from this task worktree's root after the last tracked edit. Its output is the complete_task evidence (DoD 3). Run exactly this ONE command:\nN=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && bash scripts/tests/parity-check.sh && $P \"$(wslpath -w scripts/tests/parity-check.ps1)\" && S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings,codes node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\" && MOE_WORKTREE_ONLY=wt-settings,codes WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh' && \"$N\" scripts/tests/postflight-safe.mjs powershell && $P \"$(wslpath -w scripts/tests/worktree-landing.ps1)\"\n\nIt takes about 80-90 min. Start it detached (setsid nohup) with a log and an EXIT= line, wait in the foreground with bounded polls, never end the turn while it runs, and kill only PIDs your own session started.\n\nWhat it covers:\n- The two MOE_WORKTREE_ONLY runs must print '[worktree] wt-settings ok' and '[worktree] codes ok' on each engine.\n- postflight-safe bash and powershell rerun every postflight scenario, shared mode included, since read_commit_settings feeds it.\n- worktree-landing.sh and .ps1 rerun the held-out landing cases.\n\nError handling for a red run: read the failing case's assertion, fix the code (never an existing case's expectations), and rerun the WHOLE command. Paste the tails of the failing run and the final run (mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's ONE verification command, verbatim, fresh, from the worktree root after the last tracked edit (runner D:\\moe-scratch\\f987-tools\\gate.sh, log gate.log): START 2026-11-03T13:52:11Z, END 15:18:11Z (86 min), EXIT=0; sha256 of all 5 changed files identical at start and end. Results: parity-check.sh PASS, parity-check.ps1 PASS; sh cjs: codes ok, wt-settings ok (2 ok, 0 failed); ps1 PS 5.1 cjs: codes ok, wt-settings ok (2 ok, 0 failed); postflight-safe bash {exit 0, lastScenario Z, failureClass NONE}; worktree-landing.sh 18 passed, 0 failed; postflight-safe powershell {exit 0, lastScenario Z, failureClass NONE}; worktree-landing.ps1 18 passed, 0 failed. No red run, so no fix iteration. Landing check: target moved to 946358a8 (WT-19 etc.); WT-19's CONFIGURATION.md hunks end at line 233, mine are at 263-264 (not adjacent); a git-archive of 946358a8 + my diff passes the L6 gate (parity-check.sh PASS, npm run lint OK); worktree-e2e.cjs on the target keeps claim target == settings consolidationBranch.",
+      "startedAt": "2026-11-03T13:51:59.955Z",
+      "completedAt": "2026-11-03T15:19:04.220Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "ADVERSARIAL SELF-REVIEW (adversarial-self-review skill), then complete_task.\n\nMutants. Put each in its own `cp -r` copy of this worktree's scripts/ outside the repo (ps1 copies keep the BOM; mem:gotcha-postflight-worktree-mutant-copy). Run them with MOE_WORKTREE_ONLY=wt-settings, after an unmutated control copy passes. Each must FAIL with an AssertionError.\n- sh M1: drop the refusal branch.\n- sh M2: drop the post-flight read_commit_settings line (the mid-session cases then land gated on main).\n- sh M3: target back to CS_CONSOLIDATION_BRANCH:-main ('pinned' lands on main).\n- sh M4: drop MOE_LAND_SETTINGS_UNREADABLE from unlanded_reason (no unlanded finalize).\n- sh M5: readable = d is a dict only ('settings-string' lands).\n- sh M6: print the mismatch line unconditionally ('agree' fails).\n- ps1 P1: drop the refusal branch.\n- ps1 P2: $target = $st.\n- ps1 P3: settingsReadable = $true whenever ConvertFrom-Json did not throw ('array' lands).\n- ps1 P4: drop the map entry.\nExpected survivor: -cne to -ne (no case-only branch pair). Record every result in the completion summary.\n\nChecklist:\n- Two seats landing at once: the lease id follows the pinned target, and the refusal takes no lease.\n- Every input class: missing, empty, truncated, array, scalar settings, absent settings, a mid-session change.\n- MOE_WT_TARGET and $script:MoeWtTarget are always set on a worktree completion.\n- The owner guard still runs first.\n- Shared-mode landing and every existing settings value are unchanged.\n- No new MOE_* name appears in one twin only.\n- The diff is at or under about 250 net LOC, tests included.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n\nName the out-of-scope residuals from planningNotes.risks in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "note": "Adversarial self-review. No code change. The bytes are checkpoint 5ae55687; working-tree and HEAD sha256 equal the hashes the step-5 gate ran on.\n\nMUTANTS: each ran in its own cp -r copy of scripts/ with MOE_WORKTREE_ONLY=wt-settings (driver D:\\moe-scratch\\f987-tools\\{apply.py,mut.sh}, results\\*.result). The unmutated controls ctl-sh and ctl-ps both pass.\nKilled with an AssertionError (case that killed it):\n- M1, drop the sh refusal: missing.\n- M2, drop the post-flight read_commit_settings: empty.\n- M3, target back to CS_CONSOLIDATION_BRANCH:-main: pinned.\n- M4, drop the sh unlanded_reason entry: missing.\n- M5, readable = dict only: settings-string.\n- M6, print the mismatch unconditionally: absent.\n- P1, drop the ps1 refusal: missing.\n- P2, $target = $st: pinned.\n- P3, settingsReadable always $true: empty.\n- P4, drop the map entry: missing.\nP5 (-cne to -ne) survives, as expected: no case covers a branch pair that differs only by case.\n\nCHECKLIST\n- Lease id: acquire_land_lease and Acquire-MoeLandLease take the pinned target. The pinned case asserts every lease resourceId is git-land-moe-work-x.\n- No lease on refusal: the refusal branch comes before acquire, and leases(p)=[] is asserted.\n- Input classes covered: missing, empty, truncated (remote), array, settings-string, absent, plus a mid-session corruption through an absolute WT_CLI_WRITE.\n- MOE_WT_TARGET ($script:MoeWtTarget) is set only by provisioning, after its local-branch check, and reset every iteration. If it is empty the target falls back to the settings rule, today's behavior.\n- The owner guard runs first: the refusal comes after the L2 'refused' return.\n- CS_* are assigned only inside read_commit_settings, so the post-flight re-read changes no other state. The function ends with return 0, so it is set -e safe. Python is a hard startup requirement.\n- ps1 lands with its fresh post-flight read ($moeSettings at ~11085).\n- Both codes appear in both twins; the codes case passes on both engines.\n- No forbidden pattern in any added line.\n- Size: +107/-23 (84 net).\n\nMERGED TREE: the target is now 2b934dce, including d2d6ac4b. git merge-tree onto it is clean (tree 256f3f11). A git-archive of that tree passes:\n- L6: parity-check.sh PASS, npm run lint OK.\n- wt-settings and codes: ok on sh and on PS 5.1.\n\nTHEORETICAL, not fixed:\n- pwsh 7's ConvertFrom-Json enumerates a top-level one-element array into its object, so pwsh reads [{\"settings\":{...}}] as readable where python says not. Even then the gate comes from that object.\n- echo -e interprets backslash escapes in a consolidationBranch inside the warning line. The effect is cosmetic, and the existing lines already do the same.",
+      "startedAt": "2026-11-03T15:23:35.706Z",
+      "completedAt": "2026-11-03T15:28:24.379Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG by the governor under the human's standing \"move from backlog\" (2026-11-02 21:00Z). The row is fleet-filed: WT-19's step-7 whole-epic review (worker-8cf0816c, msg-45ae900d) created it. It has no dependsOn. The human can drag it back to BACKLOG to veto.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 51,
+  "comments": [
+    {
+      "id": "comment-b08077913ff3449e8d3125cecba73caf",
+      "author": "governor-e6b40560",
+      "content": "Placement note from the governor. This is worktree mode, so there is no dependsOn edge.\n- task-d2d6ac4b (promoted alongside this row) edits the same twins and scenario suite.\n- WT-19 (task-b1ca54f2) has all 7 steps done and lands its wrapper changes next. The line numbers in this description come from the merged tree 88e507e5, which includes WT-19. Re-read them against the target at claim time.\n- Keep the hunks inside read_commit_settings / land_worktree_completion and their ps1 twins.\n- Put the new unreadable-settings scenarios in their own block next to the completion-landing scenarios, not at the end of postflight-worktree.cjs.",
+      "timestamp": "2026-11-03T13:08:26.331Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T12:30:24.086Z",
+  "updatedAt": "2026-11-04T19:20:39.966Z",
+  "contextFetchedBy": [
+    "governor-e6b40560",
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-af7be174"
+  ],
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T13:08:06.615Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T13:08:25.095Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T16:28:41.122Z",
+    "wallClockMs": 12016027
+  },
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T13:35:29.182Z",
+  "executionContract": {
+    "intendedBehavior": "Worktree mode only. Both wrappers read .moe/project.json at a worker completion's post-flight: sh adds a fresh read at the top of land_worktree_completion, and ps1 already reads there. The landing is refused as MOE_LAND_SETTINGS_UNREADABLE before L3 when the file is missing, unreadable or not JSON, is not a JSON object, or has a settings value that is present and not an object. The refusal makes no git-land-* lease call, merge-tree, gate run, receipt journal or push. L2 has already committed W's dirt to moe/task/<taskId>. The unlanded route parks that tip on a rescue ref, records the failed completion row (pushed false) and finalizes the attempt unlanded with reason gate. The daemon then returns the task to WORKING and the next session retries; the third consecutive unlanded landing blocks it. This error handling fails closed. A readable file with absent keys keeps today's defaults. The completion target is the attempt's pinned workspace.target (MOE_WT_TARGET / $script:MoeWtTarget, captured and checked at pre-flight), so the lease id, the merge base and the publication follow it. A readable settings target that differs prints MOE_LAND_TARGET_MISMATCH, and the landing still goes to the pinned target, never to main by default.",
+    "acceptanceCriteria": [
+      "On both engines, the wt-settings cases missing, empty, truncated (remote mode), array and settings-string each end with exactly one failed MOE_LAND_SETTINGS_UNREADABLE completion row. In each: no lease call, gate run or candidate; no journal; the target and origin unmoved; the task branch holds the session's bytes; finalize_attempt reports unlanded with reason gate, and its rescueRef resolves to the task tip.",
+      "On both engines, a readable project.json without settings lands on the defaults, with no gate run and no lease call.",
+      "On both engines, with the claim's workspace.target moe/work-x and settings that name no consolidationBranch, the completion lands on moe/work-x under lease git-land-moe-work-x, main is unmoved, and exactly one MOE_LAND_TARGET_MISMATCH line prints. With settings naming moe/work-x, no mismatch line prints.",
+      "parity-check.sh and parity-check.ps1 exit 0, and the codes case passes on both engines.",
+      "postflight-safe bash and powershell, and worktree-landing.sh and .ps1, pass with no existing case changed."
+    ],
+    "invariants": [
+      "Shared-mode landing is unchanged. Every existing CS_* variable and Read-MoeCommitSettings key keeps its value for every project.json input. Only the new readability flag is added, and only land_worktree_completion / Invoke-MoeWorktreeCompletion read it.",
+      "The owner guard (L0-L2) still runs before the refusal, and an owner refusal still returns before any target logic.",
+      "The target branch, main included, moves only through the existing CAS or non-forced push after the gate. No publication path is added.",
+      "Both twins print the same codes and the same two sentences, and moe-agent.ps1 keeps its UTF-8 BOM.",
+      "finalize_attempt's unlandedReason stays within the daemon's UNLANDED_REASONS. No daemon change."
+    ],
+    "compatibility": [
+      "Every existing fixture (postflight-worktree repo(), worktree-landing.sh seat(), worktree-e2e.cjs) sets the claim's workspace.target equal to the settings target, so their landings are unchanged.",
+      "finalize_attempt is called with the existing outcome unlanded and reason gate. The daemon and the wire are unchanged.",
+      "Shared mode, checkpoints, receipt replay and the migration landing (which already refuses a blank gate as MOE_MIGRATION_NO_GATE) keep today's behavior."
+    ],
+    "approvedScope": [
+      "scripts/moe-agent.sh: read_commit_settings, land_worktree_completion, unlanded_reason.",
+      "scripts/moe-agent.ps1: Read-MoeCommitSettings, Invoke-MoeWorktreeCompletion (outside its catch/finally), Get-MoeUnlandedReason.",
+      "scripts/tests/postflight-worktree.cjs: the new wtSettings block and its one registration line.",
+      "docs/CONFIGURATION.md: two code-table rows. scripts/CLAUDE.md: the unlanded-route line."
+    ],
+    "reuse": [
+      "The unlanded route (take_unlanded_route / Invoke-MoeUnlandedRoute) with reason gate, exactly as the MOE_DISABLE_QUALITY_GATE=1 refusal already uses it before any lease call (wtLeaseFails 'disabled').",
+      "Get-MoeWorkspaceClaim's idiom of PSObject.Properties plus the full PSCustomObject type name (ps1 ~3116-3117).",
+      "The existing harness helpers (repo, landRun, gateCmd, leases, done, unlanded, journal) and wtUnlanded's bare-origin pattern. No new fake-proxy knob."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh read_commit_settings (~3090) fails open: python's except Exception sets s = {}, and a crash leaves parsed empty. It emits ten 0x1f-separated fields. It runs once per iteration at pre-flight (sh ~9531), not at post-flight.",
+      "land_worktree_completion (~7756) takes target from CS_CONSOLIDATION_BRANCH:-main and QUALITY_GATE from CS_QUALITY_GATE. LAND_BRANCH carries the target into sync_land_target, wt_land_rounds and wt_publish; acquire_land_lease takes it as its argument.",
+      "provision_worktree (~3325) reads the claim's workspace.target, else get_context's. It stops with MOE_WORKTREE_CREATE_FAILED unless the target is a local branch (~3389), then sets MOE_WT_TARGET (~3466). ps1 Get-MoeWorkspaceClaim and Initialize-MoeWorktree match (~3191, ~3350).",
+      "ps1 Read-MoeCommitSettings (~2947) skips a missing file and swallows a malformed one (catch: defaults stand). The worktree post-flight passes its post-flight read (~11064) into Invoke-MoeWorktreeCompletion (~7245), which takes the target from consolidationBranch, else main (~7251).",
+      "unlanded_reason (~7697) and Get-MoeUnlandedReason (~7203) map MOE_COMMIT_FAILED_GATE to gate. take_unlanded_route / Invoke-MoeUnlandedRoute park T, record the row and finalize unlanded. release_land_lease / Release-MoeLandLease make no RPC when no lease is held.",
+      "The daemon's resolveAttemptWorkspace derives workspace.target from live settings at claim/get_context time (mem:decision-worktree-attempt-workspace-contract). So the pinned target is the one the wrapper captured at pre-flight and cut W from.",
+      "In postflight-worktree.cjs the fake CLI resolves WT_CLI_WRITE keys against W, so an absolute key writes the control checkout. codes() compares the MOE_LAND_ family across both wrappers, and WT-19's pending parity-check adds MOE_LAND_ to section 1."
+    ],
+    "checkRefs": [
+      "N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && bash scripts/tests/parity-check.sh && $P \"$(wslpath -w scripts/tests/parity-check.ps1)\" && S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings,codes node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\" && MOE_WORKTREE_ONLY=wt-settings,codes WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh' && \"$N\" scripts/tests/postflight-safe.mjs powershell && $P \"$(wslpath -w scripts/tests/worktree-landing.ps1)\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Refuse the landing on a target mismatch: rejected. A refused landing routes back, the next claim gets the NEW settings target, and the resume merges it into a W cut from the old one. The next squash would then carry W's whole base onto the new target (on this repo, moe/work-2026-10-24's lead over main, onto main). Landing on the pinned target keeps the squash relative to W's base, and the warning flags the drifted setting. The DoD's 'refused or warned' allows either. (2) A plain failed row without routing: rejected. The REVIEW row would reach QA, whose landed-commit gate then blocks it with a misleading MOE_CONTROL_CHECKOUT_BEHIND. The unlanded gate route is a bounded retry: BLOCKED at the 3rd consecutive. (3) A new daemon unlandedReason: rejected, because it means a schema change plus daemon tests in two more files. 'gate' is truthful: the gate cannot be established. (4) Refusing before L2: rejected. The owner guard must run first, and L2 is what keeps the bytes on the task branch. (5) utf-8-sig in sh: rejected. The daemon cannot parse a BOM'd project.json either, sh refusing one is fail-safe, and sh's shared mode stays byte-identical. (6) Re-reading at the top of worktree_postflight, which would also give full ps1 parity for the autoCommit decision: rejected, to keep the hunks inside land_worktree_completion per the governor's placement note.",
+    "codebaseInsights": "sh reads settings once per iteration at pre-flight (sh ~9531). ps1 reads at pre-flight (~9796) and again at post-flight (~11064), and lands with the post-flight copy. The target reaches L3-L10 only through land_worktree_completion's local target (LAND_BRANCH, the lease id) and through Invoke-MoeWorktreeCompletion's $target, $ref and $res.Branch. MOE_WT_TARGET and $script:MoeWtTarget are reset every iteration and set only by provisioning, after its local-branch check, so a worktree completion always has one. The precedent is the MOE_DISABLE_QUALITY_GATE=1 refusal: it comes before any lease call, uses code MOE_COMMIT_FAILED_GATE, and is routed unlanded with reason gate (wtLeaseFails 'disabled').",
+    "risks": "Out of scope; name these in the completion summary. (a) With unreadable settings L2's attribution.exclude list is empty, as it is today for every worktree checkpoint. (b) follow_control_checkout, qa_control_preflight, the QA removal and the sweep still derive the target from settings; none of them moves a target. (c) sh still decides autoCommit and checkpoint from its pre-flight read. (d) PS 5.1's lenient ConvertFrom-Json can differ from python (a BOM, case-duplicate keys), always in a fail-safe direction. PowerShell traps: the [PSCustomObject] accelerator is PSObject, Get-MoeProp unrolls arrays, and -ne is case-insensitive. Landing conflicts: task-d2d6ac4b is being planned concurrently on the same twins and suite. Keep the hunks to the named functions and the one registration line, and expect the unlanded conflict route if a peer edits an adjacent line (mem:gotcha-adjacent-line-edits-conflict-in-worktree-landing).",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/tests/postflight-worktree.cjs",
+      "scripts/tests/postflight-fake-proxy.js",
+      "packages/moe-daemon/src/tools/finalizeAttempt.ts",
+      "docs/CONFIGURATION.md",
+      "scripts/CLAUDE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "eaad2635fcf26163be34ddb763d29f977eeca187",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T13:35:29.215Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T13:36:42.176Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T15:30:07Z",
+    "at": "2026-11-03T16:29:16.869Z"
+  },
+  "commits": [
+    {
+      "sha": "5ae5568738ccce2c083b5664bee1eb4ec6b53fe3",
+      "ref": "refs/heads/moe/task/task-f9874361f83742fb860a35d6f110b8e0",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T13:35:31Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T15:21:05.651Z",
+      "treeId": "9b733530940bca93d2430b1671fb6e6de3ab7410",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "6cca2104b00faca1405dff2dce4645e327235fb3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T15:21:44Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/CLAUDE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-worktree.cjs"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T15:29:48.208Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-worktree.cjs",
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "docs/CONFIGURATION.md",
+    "scripts/CLAUDE.md"
+  ],
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-03T15:29:01.162Z",
+  "verification": {
+    "command": "N=\"/mnt/c/Program Files/nodejs/node.exe\" && P=\"/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File\" && bash scripts/tests/parity-check.sh && $P \"$(wslpath -w scripts/tests/parity-check.ps1)\" && S=$(mktemp -d /mnt/d/moe-scratch/f987-XXXXXX) && cp scripts/tests/postflight-fake-proxy.js \"$S/fp.js\" && MOE_WORKTREE_ONLY=wt-settings,codes node scripts/tests/postflight-worktree.cjs sh \"$PWD/scripts/moe-agent.sh\" \"$S/fp.js\" \"$S\" \"$BASH\" && MOE_WORKTREE_ONLY=wt-settings,codes WSLENV=MOE_WORKTREE_ONLY \"$N\" \"$(wslpath -w scripts/tests/postflight-worktree.cjs)\" ps1 \"$(wslpath -w scripts/moe-agent.ps1)\" \"$(wslpath -w \"$S/fp.js\")\" \"$(wslpath -w \"$S\")\" powershell && env $(compgen -e | grep -E '^(MOE_|CLAUDE)' | sed 's/^/-u /') bash -c 'node scripts/tests/postflight-safe.mjs bash && bash scripts/tests/worktree-landing.sh' && \"$N\" scripts/tests/postflight-safe.mjs powershell && $P \"$(wslpath -w scripts/tests/worktree-landing.ps1)\"",
+    "exitCode": 0,
+    "outputTail": "START 2026-11-03T13:52:11Z HEAD=eaad2635 (worktree dirty: the 5 task files; sha256 sh 2fb68947.. ps1 1356a2c5.. cjs 464a8ba8.. CONFIGURATION a672e6b5.. CLAUDE 928e0ac3.., identical at END and in checkpoint 5ae55687)\nPASS parity-check.sh\nPASS parity-check.ps1\n[worktree] codes ok\n[worktree] wt-settings ok\n[worktree] 2 ok, 0 failed\n[worktree] codes ok\n[worktree] wt-settings ok\n[worktree] 2 ok, 0 failed\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge ... PASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nPASS local hunks-merge ... PASS remote push-unanswered-peer-lands\nworktree-landing: 18 passed, 0 failed, 0 errors\nEND 2026-11-03T15:18:11Z\nEXIT=0\n--- merged-tree recheck this session (target 2b934dce incl. task-d2d6ac4b; merge-tree clean, tree 256f3f11, git-archive snapshot): PASS parity-check.sh; npm run lint OK; sh: [worktree] codes ok, wt-settings ok, 2 ok 0 failed; PS 5.1: [worktree] codes ok, wt-settings ok, 2 ok 0 failed",
+    "reportedAt": "2026-11-03T15:29:01.162Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Worktree completions now fail closed when post-flight cannot read .moe/project.json, and they land on the attempt's pinned workspace.target. Both twins changed; 84 net LOC across 5 files.\n\n- sh: read_commit_settings emits an 11th field, CS_SETTINGS_READABLE. It defaults to false, so a failed python run also refuses.\n- ps1: Read-MoeCommitSettings gets the matching settingsReadable flag. It uses PSObject.Properties and the full PSCustomObject type name.\n- Readable means a JSON object whose settings is absent, null or an object. Shared-mode CS_* and other keys are unchanged for every input (checked on 20+ inputs per engine).\n- land_worktree_completion re-reads the settings. Its target is MOE_WT_TARGET / $script:MoeWtTarget, else the old settings rule. A differing settings target prints MOE_LAND_TARGET_MISMATCH, and the landing still goes to the pinned target.\n- MOE_LAND_SETTINGS_UNREADABLE refuses right after the L2-failed branch: no lease, merge-tree, gate, journal or push. unlanded_reason maps it to gate, so the task branch tip is parked on a rescue ref, a failed row is recorded with pushed false, and the attempt is finalized unlanded with reason gate.\n- Tests: wt-settings in postflight-worktree.cjs covers missing, empty, truncated (remote), array, settings-string, absent, pinned and agree. RED on the unmodified wrappers on both engines.\n- Docs: two rows in CONFIGURATION.md and the unlanded-route line in scripts/CLAUDE.md.\n\nMutants (wt-settings): M1-M6 and P1-P4 are all killed with an AssertionError. P5 (-cne to -ne) survives as expected, since no case covers a branch pair that differs only by case.\n\nVerification:\n- The plan's command ran in full 13:52-15:18Z, EXIT=0, on bytes sha256-identical to checkpoint 5ae55687. This session did not re-run the 86-min command.\n- Rechecked this session on the merged tree (target 2b934dce, which includes d2d6ac4b; merge-tree clean): parity-check.sh, lint, and wt-settings plus codes pass on sh and on PS 5.1.\n\nResiduals, out of scope",
+  "completedAt": "2026-11-03T16:28:41.122Z",
+  "reviewCompletedAt": "2026-11-03T16:28:41.122Z",
+  "reviewSummary": "Reviewed completion 6cca2104 (moe/work-2026-10-24 and origin; squash onto 2b934dce): +107/-23, 84 net, 5 declared files, in scope.\n\nRe-ran task.verification on clones at 6cca2104 (blobs = recorded), MOE_/CLAUDE stripped, 15:33-16:28Z:\n- Linux: parity-check.sh PASS; lint OK; wt-settings+codes sh 2 ok; postflight-safe bash exit 0, Z, NONE; worktree-landing.sh 18/18.\n- PS 5.1: parity-check.ps1 PASS; wt-settings+codes ps1 2 ok; postflight-safe powershell exit 0, Z, NONE; worktree-landing.ps1 18/18.\n\nMutants on landed bytes: sh M1/M2/M3/M5 and ps1 P1/P2/P3 each die with an AssertionError; controls pass.\n\nShared mode: sh read_commit_settings at HEAD^ vs HEAD on 24 inputs (missing, empty, [], null, scalar, truncated, BOM, non-utf8, odd settings values, full, glob). The first ten CS_* match on all; the flag is false on every unreadable input and when python fails.\n\nDoD1: the refusal follows the l2-failed branch in both twins, before lease, merge-tree, gate, journal and push. Routed unlanded (gate), it rescues T from the task branch. Tests assert all of this.\nDoD2: target = MOE_WT_TARGET / $script:MoeWtTarget. A mismatch prints the same sentence once in both twins; the lease is git-land-moe-work-x.\nDoD3: a scenario per engine; both parity checks exit 0.\n\nDocs present. No forbidden patterns; no existing case changed.\n\nResiduals (non-blocking, worker-listed): follow, QA preflight and sweep still read the settings target; the L2 exclude list is empty when unreadable; pwsh 7 unwraps a one-element array; a half-written file counts toward the 3-unlanded block.",
+  "requiredCheckAtDone": null
+}

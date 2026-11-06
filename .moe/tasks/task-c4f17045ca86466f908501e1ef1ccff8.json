@@ -1,0 +1,228 @@
+{
+  "id": "task-c4f17045ca86466f908501e1ef1ccff8",
+  "epicId": "epic-be924fb8",
+  "title": "bug: moe-team.ps1 hands each role's command to `Start-Process powershell -Command` with unescaped embedded quotes, so the child's argv parser strips them and a project path, team name or scripts dir containing a space is split (team \"Moe Team\" binds Team=Moe, ProjectName=Team), though the sh twin passes its own spaces test",
+  "description": "Filed by the 11-03 #6 defect hunt (task-cea8fa39, architect-1dd28c7c). Found by a hunt subagent; I re-ran the harness myself.\n\nPROBLEM\nscripts/moe-team.ps1 builds each role's command at :99 (worker), :112 (qa) and :125 (architect) as\n  \"cd `\"$scriptDir`\"; .\\moe-agent.ps1 -Role <role> $projectArg $commandArg $teamArg\"\nQuote-ForCommand (:37-46) has already wrapped each value in plain `\"...\"`. The next line hands the command over as `Start-Process powershell -ArgumentList \"-NoExit\", \"-Command\", $cmd` (:100, :113, :126).\n- Start-Process joins the -ArgumentList entries with single spaces and quotes none of them. scripts/moe-agent.ps1:848-850 says exactly this, which is why moe-agent.ps1 has ConvertTo-MoeArgumentLine (:852).\n- powershell.exe's argv parser therefore consumes the embedded quotes, and -Command re-joins what is left with spaces. The child sees `-Project D:\\proj plain`: `-Project D:\\proj` plus a stray positional `plain`.\n- moe-agent.ps1's parameters are positional (Role, Project, ProjectName, WorkerId, ...), so each leftover word binds to the next free one.\n- The comment at :48-50 promises the opposite: \"paths containing spaces, quotes, or `$` survive the child `powershell -Command` re-parse\".\n- The team name falls back to \"Moe Team\" (:79, :83) when the -Project path cannot be resolved or a -ProjectName misses the registry. Any Windows profile path with a space (C:\\Users\\First Last\\...) breaks the project argument and the scripts dir.\n- The sh twin is covered by scripts/test-team-quoting.sh (\"Test 1: Path with spaces\"). The ps1 twin has no such test.\nThis is the same class as the DONE moe-agent.ps1 autostart fix task-8c875cc8. The root CLAUDE.md \"Run\" section presents `scripts/moe-team.{ps1,sh}` as the way to launch a full team.\n\nEVIDENCE (Windows PowerShell 5.1.26100, HEAD 19d5e67a)\nHarness: /mnt/d/moe-scratch/hunt-cea8/B/team-quote/run-cases.ps1. nospace/scripts/moe-team-harness.ps1 is moe-team.ps1 lines 1-98 verbatim (I checked with diff). The worker launch differs only in that -NoExit is swapped for -NoProfile with -Wait -NoNewWindow. A fake moe-agent.ps1 with the real param block records $PSBoundParameters. My re-run output is /mnt/d/moe-scratch/hunt-cea8/mine/team-quote-rerun.out.txt.\n- Case 1, no spaces (control): bound Role=worker, Project=...\\projplain, Team=plainteam.\n- Case 2, `-Project \"...\\proj plain\"`:\n  - string handed to Start-Process: `... -Project \"D:\\moe-scratch\\hunt-cea8\\B\\team-quote\\proj plain\" -Command \"claude\" -Team \"proj plain\"`\n  - the child bound: Project=\"D:\\moe-scratch\\hunt-cea8\\B\\team-quote\\proj\", Team=\"proj\", ProjectName=\"plain\", WorkerId=\"plain\"\n- Case 3, `-Team \"Moe Team\"`: bound Team=\"Moe\", ProjectName=\"Team\".\n- Case 4, scripts dir \"...\\with space\\scripts\": \"Set-Location : A positional parameter cannot be found that accepts argument 'space\\scripts'.\", then \".\\moe-agent.ps1 : The term '.\\moe-agent.ps1' is not recognized ...\". The agent never starts.\n\nFIX DIRECTION\nBuild the child command so that neither the Windows argv parser nor the second PowerShell parse can split or expand it. Preferred: `-EncodedCommand` (Base64 of the UTF-16LE text) of a command that writes every value as a single-quoted PowerShell literal (`'` doubled), invokes the agent as `& '<agentScript>' -Role ... -Project '<p>' -Team '<t>' ...`, and needs no `cd`. Keep `$`, backtick and `'` in values literal; that is Quote-ForCommand's intent (:40-44). The script must stay ASCII and run on Windows PowerShell 5.1.\n\nFILES\n- scripts/moe-team.ps1\n- scripts/tests/team-launch-quoting.test.mjs (new test)\nThe test is Windows-only, using the repo convention `{ skip: process.platform !== 'win32' && 'Windows only' }`. It needs no production seam:\n- Run a copy of moe-team.ps1 from a temp scripts dir whose path has a space, next to a fake moe-agent.ps1 (the real param block) that writes $PSBoundParameters to a JSON file.\n- In the calling session, define a proxy `function Start-Process` that drops \"-NoExit\", adds -Wait -NoNewWindow and calls `Microsoft.PowerShell.Management\\Start-Process`. A function shadows the cmdlet, so no window opens.\nOut of scope: scripts/moe-agent.ps1, which the CQ-M07n chain holds, and moe-team.sh.\n\nNOTES FOR THE PLANNER\n- scripts/tests/literal-project-path.test.mjs statically scans moe-team.ps1:\n  - every Start-Process must keep the escaped `-WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(...))`;\n  - path cmdlets need -LiteralPath;\n  - a path-cmdlet name inside an expandable string or a @\"...@\" here-string surfaces as \"uninspected\".\n  Build the child command so that test still passes. `& '<agentScript>'` avoids naming Set-Location at all.\n- Run the new test with Windows node (`node.exe --test ...` from a snapshot on a D:\\ path). Under WSL node it skips.",
+  "definitionOfDone": [
+    "`node.exe --test scripts/tests/team-launch-quoting.test.mjs` passes on Windows. Running moe-team.ps1 from a temp scripts dir whose path contains a space, with `-Project '<tmp>\\proj plain' -Team 'Moe Team' -NoQa -NoArchitect`, makes the fake moe-agent.ps1 record exactly Role=worker, Project='<tmp>\\proj plain', Command='claude' and Team='Moe Team', with no ProjectName or WorkerId bound. A second case with a value containing `$` and `'` records it byte-for-byte.",
+    "In the same test file, a no-space control (all three roles, no -No* switch) records Role, Project, Command and Team only, one record per role.",
+    "`node --test scripts/tests/literal-project-path.test.mjs` still passes, `[System.Management.Automation.Language.Parser]::ParseFile` on scripts/moe-team.ps1 reports 0 errors, the file stays ASCII, and the diff touches only scripts/moe-team.ps1 and the new test file."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD first: create scripts/tests/team-launch-quoting.test.mjs, the Windows-only regression test for DoD 1 and 2 plus the new error-handling path. A dry-run-verified reference is /mnt/d/moe-scratch/plan-c4f1/ref/team-launch-quoting.test.mjs (sha256 a2698ad349474adb...): Read it and create the file with the Write tool (a cp or any shell write leaves no TOOL witness). Shape, modelled on scripts/tests/daemon-autostart-argv.test.mjs:\n- ENGINES: PowerShell 5.1 (%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe) and PowerShell 7 (where.exe pwsh.exe, else skip 'pwsh.exe not found'). On any non-win32 platform every row skips with a 'Windows only' reason (Linux node: 8 skipped).\n- fixture(t, dir): root = fs.realpathSync.native(fs.mkdtempSync(...)), which is 8.3-free and removed in t.after. <root>\\<dir>\\scripts holds a copy of the real scripts/moe-team.ps1. <root>\\records collects one record-<PID>.json per child.\n- DRIVER: a .ps1 written with a \ufeff BOM and run -NoProfile -NonInteractive -ExecutionPolicy Bypass -File from the fixture root, never from the scripts dir. It does four things:\n  (1) Lifts the real param block from scripts/moe-agent.ps1 with [System.Management.Automation.Language.Parser]::ParseFile -> $ast.ParamBlock.Extent.Text. It writes the fake moe-agent.ps1 beside the copy as UTF-8 with BOM (the block has non-ASCII comments): the param block plus a RECORDER that writes {bound: every $PSBoundParameters key, unbound: @($args), cwd: (Get-Location -PSProvider FileSystem).ProviderPath} as JSON.\n  (2) Defines an advanced function Start-Process (FilePath, ArgumentList, WorkingDirectory) that prints 'START-PROCESS FilePath=<f> NoExit=<bool>'. When TEAM_QUOTE_FAIL is set it calls Write-Error 'simulated launch failure' and returns. Otherwise it swaps -NoExit for -NoProfile -NonInteractive and calls Microsoft.PowerShell.Management\\Start-Process @PSBoundParameters -Wait -NoNewWindow. The function shadows the cmdlet, so no window opens and each child finishes before the next starts.\n  (3) Splats the case params (plus DelayBetween 0) into the copy.\n  (4) Exits with the copy's $LASTEXITCODE, or 3 when a success row left an error in $Error.\n  Case values reach the driver through a UTF-8 JSON file, never through PowerShell source text.\n- Rows, per engine:\n  R1 (DoD 1): dir 'with space', -Project <root>\\proj plain -Team 'Moe Team' -NoQa -NoArchitect. The record list deepStrictEquals [{bound:{Role:'worker', Project, Command:'claude', Team:'Moe Team'}, unbound:[], cwd:<scripts dir>}], so no ProjectName or WorkerId is bound. Stdout has a 'NoExit=True' line.\n  R2 (DoD 1, $ and '): dir \"it's $HOME dir\". The Project path holds ', $HOME, a backtick and U+2019. The Team holds an ASCII \", ASCII ', $(Write-Output PWNED), U+2018/U+2019 and U+201C/U+201D. CommandArgs is ['--flag', \"two words 'q' $env:USERNAME\"]. That one record must match byte-for-byte; the exact strings are in the reference. The curly quotes catch an ASCII-only escape, the \" catches a -Command text launch, and the 2-entry CommandArgs catches a space join.\n  R3 (DoD 2): dir 'plain', -Project <root>\\projplain -Team plainteam, no -No* switch. Exactly three records (architect, qa, worker, sorted by Role) with only Role, Project, Command and Team bound, and three 'NoExit=True' lines.\n  R4 (error handling): TEAM_QUOTE_FAIL=1 with -NoQa -NoArchitect. Exit 1; stdout matches /Failed to start the worker agent: .*simulated launch failure/ and /Launched 0 agent\\(s\\)/; no record.\n- run(): spawn with windowsHide and a 120 s cap. On the cap, run taskkill /pid <that recorded pid> /T /F and nothing else (never kill by name or pattern).\nThen run it RED against the unfixed script: \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/team-launch-quoting.test.mjs must end with pass 2 / fail 6. R1, R2 and R4 fail on both engines and R3 passes; the dry run at HEAD 7a08e3d9 gave exactly that. The cwd check is deliberate: step 2 keeps the child in the scripts dir.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "note": "Created scripts/tests/team-launch-quoting.test.mjs with the Write tool, from the dry-run reference. RED against unfixed moe-team.ps1 under Windows node: tests 8 / pass 2 / fail 6. R1, R2 and R4 fail on both PowerShell 5.1 and 7, and the R3 no-space control passes.",
+      "startedAt": "2026-11-03T18:14:52.294Z",
+      "completedAt": "2026-11-03T18:15:31.740Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix scripts/moe-team.ps1 with the Edit tool (TOOL-witnessed; never a shell write). A dry-run-verified reference is /mnt/d/moe-scratch/plan-c4f1/ref/moe-team.ps1 (sha256 3546a3f8920118a8...); diff it against HEAD to see the whole change, about +34/-17.\n(a) Quote-ForCommand returns \"'\" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Value) + \"'\". That is a single-quoted literal in which nothing expands, and the escape doubles all five single-quote characters (ASCII ' and U+2018-U+201B; mem:gotcha-powershell-curly-quotes-psquote). Never use a hand-rolled -replace of the ASCII ' alone. Replace its comment, and delete the stale comment above $projectArg that says values 'survive the child powershell -Command re-parse'.\n(b) CommandArgs: join the quoted entries with \",\", not \" \". A [string[]] parameter takes one argument, and HEAD bound the second entry to moe-agent.ps1's next positional parameter (ProjectName).\n(c) Add function Start-AgentWindow([string]$RoleName), defined after $teamArg:\n- $line = \"& $(Quote-ForCommand $agentScript) -Role $RoleName $projectArg $commandArg $teamArg\". There is no cd; the script runs by its full path.\n- $encoded = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($line)).\n- try { Start-Process powershell -ArgumentList \"-NoExit\", \"-EncodedCommand\", $encoded -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape($scriptDir)) -ErrorAction Stop; return $true } catch { Write-Host \"Failed to start the $RoleName agent: $($_.Exception.Message)\" -ForegroundColor Red; return $false }.\n-WorkingDirectory is now the escaped scripts dir, so the child still starts where the old cd put it (rows R1-R3 pin cwd). Keep -NoExit. Add no -NoProfile or -ExecutionPolicy, so launch behaviour is unchanged. A full-line comment above the function says why: Start-Process joins -ArgumentList with single spaces and quotes nothing, and the child's argv parser drops embedded double quotes (task-c4f17045).\n(d) Error handling:\n- Each role block becomes `if (Start-AgentWindow \"<role>\") { $launched++ } else { $failed++ }` for worker, qa and architect. Banners, launch order and the DelayBetween sleeps are unchanged.\n- Initialise $failed = 0 beside $launched.\n- After the 'Launched N agent(s)' line, add `if ($failed -gt 0) { Write-Host \"$failed agent(s) failed to start.\" -ForegroundColor Red; exit 1 }`. Exit stays 0 when every requested role started.\nConstraints the static test enforces:\n- The file stays ASCII and BOM-less.\n- Start-Process keeps the exact -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(...)) form at top level.\n- No path-cmdlet name (Set-Location, Test-Path, ...) and no Start-Process inside a string or a trailing comment; literal-project-path.test.mjs flags those as 'uninspected'. Mention them only in full-line comments.\nThe param block, defaults, Load-Registry and the team-name fallback stay byte-identical. Then rerun the step-1 test with Windows node: 8 pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "note": "Edited scripts/moe-team.ps1 with the Edit tool only. Quote-ForCommand now returns a single-quoted literal via CodeGeneration.EscapeSingleQuotedStringContent. CommandArgs are comma-joined. New Start-AgentWindow sends the command as -EncodedCommand (Base64 UTF-16LE), keeps -NoExit, and uses the escaped scripts dir as -WorkingDirectory, with try/catch and -ErrorAction Stop. Each role block counts $launched or $failed, and the script exits 1 after its summary when a launch failed. The stale comment above $projectArg is removed. The file is byte-identical to the dry-run reference (diff clean), +33/-19. New test under Windows node: tests 8 / pass 8 / fail 0 (PowerShell 5.1 and 7).",
+      "startedAt": "2026-11-03T18:15:33.167Z",
+      "completedAt": "2026-11-03T18:16:14.219Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once, fresh, from the worktree root (a D: path, so Windows node maps the cwd). Submit its output as the moe.complete_task evidence: cd \"$(git rev-parse --show-toplevel)\" && export PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:$PATH\" && ! LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/moe-team.ps1 && powershell.exe -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-team.ps1).Path,[ref]$null,[ref]$e); if ($e.Count) { $e | % Message; exit 1 }; \"ParseFile OK\"' && node --test scripts/tests/literal-project-path.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/team-launch-quoting.test.mjs\nExpected:\n- The ASCII grep prints nothing.\n- 'ParseFile OK'.\n- literal-project-path under WSL node: pass 3 / skipped 5. Its Windows launcher rows skip under Linux node; both G1/G2 static rows, moe-team.ps1 included, must pass.\n- team-launch-quoting under Windows node: tests 8 / pass 8. Where pwsh.exe is absent it is pass 4 / skipped 4; say so in the evidence.\nThe dry run on this host was green 8/8 in about 10 s. A run with no 'tests N' summary line did not run (mem:gotcha-node-test-windows-path-glob).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-team.ps1",
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "note": "Ran the plan's verification command fresh, exit 0. ASCII grep printed nothing; ParseFile OK; literal-project-path.test.mjs under WSL node is tests 8 / pass 3 / skipped 5, with the moe-team.ps1 G1/G2 static row passing; team-launch-quoting under Windows node is tests 8 / pass 8 / fail 0 (PowerShell 5.1 and 7, pwsh.exe present).",
+      "startedAt": "2026-11-03T18:16:15.773Z",
+      "completedAt": "2026-11-03T18:16:34.750Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the 2-file diff (load adversarial-self-review). Check:\n(1) Scope: the task diff touches only scripts/moe-team.ps1 and scripts/tests/team-launch-quoting.test.mjs (DoD 3). No ci.yml, moe-agent.ps1 or moe-team.sh.\n(2) `grep -n '\"-Command\",' scripts/moe-team.ps1` prints nothing (no text launch left), and every value in $line goes through Quote-ForCommand.\n(3) Inputs:\n- $null or '' binds as '' (PowerShell turns $null into '' for [string]).\n- An empty CommandArgs entry stays an empty element.\n- A value with a newline or tab survives (single-quoted literal inside Base64).\n- Huge values: the Windows command line caps at 32767 chars and the Base64 of UTF-16 is about 2.7x the text, far above realistic paths.\n(4) Known residual, not a regression: a scripts dir containing [ ] binds every parameter correctly, but Windows PowerShell 5.1 itself starts the child in $PSHOME. That is its startup quirk, the one literal-project-path.test.mjs's driver works around, and HEAD failed outright there.\n(5) No process is killed except the test's own recorded PID.\n(6) Re-read both files as an attacker: can any value close the literal or reach an argv parser?\nRecord the findings in the completion summary. Fix any defect before moe.complete_task, then rerun the step-3 command.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-team.ps1"
+      ],
+      "newFiles": [
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-team.ps1",
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "note": "Adversarial self-review, no defects found. (1) git status shows only scripts/moe-team.ps1 (modified) and scripts/tests/team-launch-quoting.test.mjs (new). (2) No '\"-Command\",' left; every value in the child line goes through Quote-ForCommand, and the role name is a hard-coded literal. (3) Probed through the real escape and tokenizer: $null binds as '', an empty CommandArgs entry stays an element, newline and tab survive, 0 parse errors; huge values are far under the 32767-char cap. (4) Known residual, not a regression: a scripts dir with [ ] binds correctly but PS 5.1 starts the child in $PSHOME. (5) The only kill is the test's taskkill of its own recorded driver PID at the cap. (6) As an attacker: values reach the child only inside Base64 as single-quoted literals escaped by the official EscapeSingleQuotedStringContent, and no argv parser sees them. File is ASCII and BOM-less.",
+      "startedAt": "2026-11-03T18:16:36.491Z",
+      "completedAt": "2026-11-03T18:17:21.431Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 392.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:32:08.766Z",
+  "updatedAt": "2026-11-04T19:20:44.386Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:51:19.006Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T18:21:14.990Z",
+    "wallClockMs": 1795984
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-33f67e5b",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T18:12:54.696Z",
+  "executionContract": {
+    "intendedBehavior": "moe-team.ps1 starts each requested role's Windows PowerShell window with the agent command sent as -EncodedCommand (Base64 of UTF-16LE). In that command the agent script path and every value (project path or name, command, each CommandArgs entry, team) is a single-quoted PowerShell literal escaped with CodeGeneration.EscapeSingleQuotedStringContent, and CommandArgs entries are comma-separated. A value containing spaces, ASCII or curly quotes, $, $(...) or backticks binds to the intended moe-agent.ps1 parameter unchanged, whatever the scripts dir is called. The child keeps -NoExit and starts in the scripts dir, as the old cd did. A window that fails to start prints 'Failed to start the <role> agent: <message>', is not counted, and the script exits 1 after its summary.",
+    "acceptanceCriteria": [
+      "Windows node: scripts/tests/team-launch-quoting.test.mjs passes 8/8 with PowerShell 5.1 and 7 as the parent (4 pass + 4 skipped when pwsh.exe is absent). R1 uses a spaced scripts dir with -Project '<tmp>\\proj plain' -Team 'Moe Team' -NoQa -NoArchitect. It records exactly {Role:'worker', Project:'<tmp>\\proj plain', Command:'claude', Team:'Moe Team'}: no ProjectName or WorkerId, unbound [], cwd = the scripts dir.",
+      "R2: Project, Team and CommandArgs values holding $, $(...), a backtick, ASCII and curly single quotes, and ASCII and curly double quotes are recorded byte-for-byte; CommandArgs binds as the 2-element array.",
+      "R3: a no-space control with all three roles records worker, qa and architect once each, with only Role, Project, Command and Team bound.",
+      "R4: a Start-Process failure prints 'Failed to start the <role> agent: <message>', is not counted, and moe-team.ps1 exits 1 after 'Launched 0 agent(s)'.",
+      "node --test scripts/tests/literal-project-path.test.mjs passes, including the moe-team.ps1 G1/G2 static row. ParseFile reports 0 errors, moe-team.ps1 is ASCII-only, and the diff touches only scripts/moe-team.ps1 and scripts/tests/team-launch-quoting.test.mjs."
+    ],
+    "invariants": [
+      "moe-team.ps1's param block, defaults, Load-Registry, the team-name fallback ('Moe Team' or the project leaf), the banners, the worker -> qa -> architect order and the DelayBetween sleeps are unchanged.",
+      "Every Start-Process in moe-team.ps1 keeps -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape(...)) at top level. No listed path-cmdlet name and no Start-Process appears in a string or a trailing comment (literal-project-path.test.mjs G1/G2 plus its coverage check).",
+      "Each role window still runs Windows PowerShell (powershell) with -NoExit and starts in the scripts dir.",
+      "No value is placed in a double-quoted or argv-quoted context; each is a single-quoted literal inside the -EncodedCommand text.",
+      "moe-team.ps1 stays ASCII-only and BOM-less, and parses on PowerShell 5.1 and 7."
+    ],
+    "compatibility": [
+      "Callers (the docs/DEVELOPMENT.md examples, operators) keep the same parameters. The exit code is 0 when every requested role started. It is 1 only when a launch failed (new) or on the existing missing-agent or missing-project errors.",
+      "moe-agent.ps1 (held by the CQ-M07n chain) and moe-team.sh are untouched. The fake agent lifts moe-agent.ps1's live param block, so a later parameter change there is followed automatically."
+    ],
+    "approvedScope": [
+      "scripts/moe-team.ps1: the Quote-ForCommand body and comment, the CommandArgs join, a new function Start-AgentWindow, the three role launch blocks, $failed and the exit-1 tail; the stale comment above $projectArg is removed.",
+      "scripts/tests/team-launch-quoting.test.mjs (new): ENGINES, fixture, a DRIVER with an AST-lifted fake moe-agent.ps1 and a Start-Process shadow function, rows R1-R4 per engine."
+    ],
+    "reuse": [
+      "[System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent (PowerShell 3+, verified on 5.1.26100) doubles all five single-quote characters, so there is no hand-rolled -replace.",
+      "-EncodedCommand is built with [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes(...)), as in scripts/tests/mention-provenance.ps1 (task-e856c246) and JetBrains powerShellLine (task-76d4500a).",
+      "The test harness is modelled on scripts/tests/daemon-autostart-argv.test.mjs: ENGINES, a realpath fixture, run with a cap and taskkill of the recorded PID, show().",
+      "ConvertTo-MoeArgumentLine (moe-agent.ps1:852) is not reused: moe-agent.ps1 is out of scope, and argv quoting alone still leaves the child's -Command text re-parse."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-team.ps1 has not changed since a0269bcd. Quote-ForCommand (:37-46) wraps values in double quotes. :99/:112/:125 build 'cd \"$scriptDir\"; .\\moe-agent.ps1 -Role <r> ...', and :100/:113/:126 pass that as Start-Process powershell -ArgumentList \"-NoExit\", \"-Command\", $cmd.",
+      "scripts/moe-agent.ps1's param block (Role, Project, ProjectName, WorkerId, Command, CommandArgs as [string[]], ...) has no CmdletBinding. Its parameters are positional in declaration order, so an extra word binds to the next free parameter.",
+      "scripts/tests/literal-project-path.test.mjs staticTests() scans moe-team.ps1. Start-Process needs a top-level escaped -WorkingDirectory, and path cmdlets need -LiteralPath. A listed name outside full-line comments, <# #> blocks and @' here-strings must be an inspected command.",
+      "Windows PowerShell 5.1 starts in $PSHOME when its inherited cwd contains brackets. The literal-project-path.test.mjs launch() comment says so, and the dry run reproduced it for a '[x]' scripts dir."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && export PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:$PATH\" && ! LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/moe-team.ps1 && powershell.exe -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-team.ps1).Path,[ref]$null,[ref]$e); if ($e.Count) { $e | % Message; exit 1 }; \"ParseFile OK\"' && node --test scripts/tests/literal-project-path.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/team-launch-quoting.test.mjs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three approaches were weighed.\n(1) Argv-quote each -ArgumentList entry the way ConvertTo-MoeArgumentLine does and keep -Command. Rejected: the child still re-parses the joined -Command text, so $ and quotes need a second escaping layer, and a 5.1 parent drops embedded double quotes. Mutant M5 (single-quoted values sent through -Command) keeps R1 green but fails R2 on the \".\n(2) powershell -File <agent> <args>. Rejected: -File cannot pass a [string[]] (CommandArgs) and still needs argv quoting.\n(3) Chosen: -EncodedCommand with single-quoted literals, the task's preferred direction.\nWorking directory: keep the scripts dir through Start-Process -WorkingDirectory, which is what the old cd gave. Not the caller's location (mutant M3 fails R1-R3) and not the project, which would change where a PowerShell claude seat runs; that is out of scope.\nError handling: a Start-Process failure used to print PowerShell's own error and still count the window as launched. The plan adds try/catch with -ErrorAction Stop, an honest count and exit 1, covered by R4.",
+    "codebaseInsights": "- Start-Process (5.1 and 7) joins -ArgumentList with single spaces and quotes nothing (moe-agent.ps1:848-850).\n- moe-agent.ps1's parameters are positional in declaration order, so split words bind to ProjectName and then WorkerId. A [string[]] parameter takes one argument, so CommandArgs must be comma-joined; HEAD's space join bound the second entry to ProjectName (mutant M2 fails R2).\n- literal-project-path.test.mjs is the static guard for moe-team.ps1. A 5.1 child of a pwsh 7 parent ran fine in the dry run (no PSModulePath trouble).\n- PS 5.1 emits a harmless 'Preparing modules for first use' CLIXML blob on stderr.\nDry-run evidence (/mnt/d/moe-scratch/plan-c4f1, HEAD 7a08e3d9):\n- The fix tree is green 8/8 (5.1 and 7, about 10 s). The HEAD tree fails 6 and passes 2.\n- Mutants M1 (ASCII-only escape), M2 (space join), M3 (caller cwd), M4 (no -ErrorAction Stop) and M5 (-Command text launch) are each caught on both engines.\n- The literal-project-path static rows and ParseFile on 5.1 and 7 are OK, and Linux node skips all 8 rows.\n- The full step-3 command exits 0 in the fix tree.",
+    "risks": "- Brackets in the scripts dir: parameters bind correctly, but 5.1 starts the child in $PSHOME (probe /mnt/d/moe-scratch/plan-c4f1/probe-br). HEAD failed outright there, so this is not a regression.\n- CI wiring of the new test is deliberately left out because DoD 3 limits the diff to 2 files. A follow-up row can append it to ci.yml's Windows-only 'Test PowerShell daemon autostart arguments' step.\n- Pre-existing and unchanged: a PowerShell interactive claude seat launched by moe-team.ps1 for a project other than the scripts' own checkout runs in the scripts dir, which the account trust step treats as outside the project.\n- The driver exits 3 on any $Error entry. -ErrorAction SilentlyContinue still records errors, so every success row passes -Team and never reaches moe-team's Resolve-Path fallback.\n- Write the new test file with the Write tool and edit moe-team.ps1 with Edit: shell writes leave no TOOL witness.",
+    "keyFiles": [
+      "scripts/moe-team.ps1",
+      "scripts/tests/literal-project-path.test.mjs",
+      "scripts/tests/daemon-autostart-argv.test.mjs",
+      "scripts/moe-agent.ps1",
+      "/mnt/d/moe-scratch/plan-c4f1/ref/moe-team.ps1",
+      "/mnt/d/moe-scratch/plan-c4f1/ref/team-launch-quoting.test.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e9f6e21fdf42a735f4a0ed13e751acdd5a1f918a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T18:12:54.725Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T18:14:52.294Z",
+  "reviewStartedAt": "2026-11-03T18:17:52.791Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && export PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:$PATH\" && ! LC_ALL=C grep -nP '[^\\x00-\\x7F]' scripts/moe-team.ps1 && powershell.exe -NoProfile -Command '$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-team.ps1).Path,[ref]$null,[ref]$e); if ($e.Count) { $e | % Message; exit 1 }; \"ParseFile OK\"' && node --test scripts/tests/literal-project-path.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/team-launch-quoting.test.mjs",
+    "exitCode": 0,
+    "outputTail": "ASCII grep: no output. ParseFile OK. literal-project-path.test.mjs (WSL node): tests 8, pass 3, fail 0, skipped 5 (moe-team.ps1 G1/G2 row passes; Windows launcher rows skip under Linux node). team-launch-quoting.test.mjs (Windows node): PowerShell 5.1 x4 pass, PowerShell 7 x4 pass; ℹ tests 8 / pass 8 / fail 0 / skipped 0. RED before the fix: tests 8 / pass 2 / fail 6.",
+    "reportedAt": "2026-11-03T18:17:52.791Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/team-launch-quoting.test.mjs",
+    "scripts/moe-team.ps1"
+  ],
+  "completionSummary": "moe-team.ps1 no longer splits spaced values: each role window now gets its agent command as -EncodedCommand (Base64 UTF-16LE) of `& '<agentScript>' -Role <r> -Project '..' -Command '..' [-CommandArgs '..','..'] -Team '..'`. Every value, the agent script path included, is a single-quoted literal escaped with CodeGeneration.EscapeSingleQuotedStringContent. That escape doubles ASCII and curly single quotes, and nothing expands. CommandArgs are comma-joined, since the old space join bound entry 2 to ProjectName. The child keeps -NoExit and starts in the scripts dir via the escaped -WorkingDirectory (the old cd is gone, with no Set-Location). New Start-AgentWindow wraps Start-Process in try/catch with -ErrorAction Stop. A failed window prints 'Failed to start the <role> agent: <message>', is not counted, and the script exits 1 after 'Launched N agent(s)'. Exit stays 0 when every role starts. Diff is two files: scripts/moe-team.ps1 (+33/-19, ASCII, BOM-less) and the new scripts/tests/team-launch-quoting.test.mjs. TDD: under Windows node the new test was RED against the unfixed script (8 tests, pass 2, fail 6), then GREEN (8/8) after the fix. The rows run a copy of the real moe-team.ps1 in a scripts dir containing a space, with a fake moe-agent.ps1 whose param block is lifted by the PowerShell AST and a Start-Process shadow function (no window opens): R1 spaced scripts dir, Project and Team 'Moe Team' records exactly Role/Project/Command/Team with cwd = the scripts dir; R2 values with $, $(...), backtick, ASCII and curly quotes, plus a 2-entry CommandArgs, are recorded byte-for-byte; R3 no-space control records worker, qa and architect once each; R4 a Start-Process failure exits 1. Each row runs on PowerShell 5.1 and 7. literal-project-path.test.mjs passes (3 pass, 5 Windows rows skipped under WSL node), ParseFile reports 0 errors. Adversarial review: no -Command text launch remains; $null, an empty CommandArgs entry, newline and tab all bind correctly (probed through the ",
+  "commits": [
+    {
+      "sha": "c99801aaf8f68b714cf86b459dbf21b53c05627b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T18:13:15Z",
+      "paths": [
+        "scripts/moe-team.ps1",
+        "scripts/tests/team-launch-quoting.test.mjs"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T18:18:57.074Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T18:19:12Z",
+    "at": "2026-11-03T18:21:44.115Z"
+  },
+  "completedAt": "2026-11-03T18:21:14.990Z",
+  "reviewCompletedAt": "2026-11-03T18:21:14.990Z",
+  "reviewSummary": "Approved. Reviewed completion c99801aa (git show; on moe/work-2026-10-24): 2 files, +199/-19 (net 180): scripts/moe-team.ps1 and new scripts/tests/team-launch-quoting.test.mjs.\n\nRe-ran task.verification, exit 0: ASCII grep empty, file BOM-less; ParseFile OK; literal-project-path.test.mjs (WSL node) 8 tests/3 pass/5 skipped, moe-team.ps1 G1/G2 row passes; team-launch-quoting.test.mjs (Windows node) 8/8 pass (PS 5.1 x4, PS 7 x4).\n\nMutation check: new test vs pre-fix moe-team.ps1 (git archive of c99801aa^ in a scratch dir outside the repo, deleted after): 8 tests, 2 pass, 6 fail (R1, R2, R4 on both engines; R3 control passes). Tests detect the bug.\n\nDoD: R1 spaced scripts dir with 'proj plain' and 'Moe Team' records exactly Role/Project/Command/Team, unbound [], cwd = scripts dir (no ProjectName/WorkerId). R2 $, $(...), backtick, ASCII and curly quotes byte-for-byte, 2-entry CommandArgs binds as 2 elements. R3 no-space control: worker, qa, architect once each. R4 launch failure prints 'Failed to start the worker agent: ...', not counted, exit 1 after 'Launched 0 agent(s)'. literal-project-path G1/G2 passes, 0 parse errors, ASCII, diff limited to the 2 permitted files.\n\nCode: Quote-ForCommand returns a single-quoted literal via EscapeSingleQuotedStringContent; agent path and every value go through it; command sent as -EncodedCommand (Base64 UTF-16LE); no '\"-Command\",' launch left; escaped -WorkingDirectory kept at top level; param block, defaults, fallback, banners, order, delays unchanged. Test shadows Start-Process, lifts the real param block by AST, kills only its own recorded PID.\n\nNon-blocking: test not wired into ci.yml (worker flagged follow-up; DoD limited diff to 2 files); a [ ] scripts dir still starts PS 5.1 in $PSHOME though params bind; 5 literal-project-path Windows rows skip under WSL node and are outside this change. ponytail pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

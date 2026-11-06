@@ -1,0 +1,226 @@
+{
+  "id": "task-20f59bc955f44875832072dcec91868e",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: local-runner-bridge.test.mjs I1 and I3 probe the agent child with a bare kill(pid, 0) right after the bridge supervisor exits, so a job the uncontained fixture leaves for PID 1 to reap reads as alive; I3 fails at :532 under load and CI's \"Test local runner prerequisite bundles\" step goes red at random (1 of 7 CI-shaped and 1 of 8 loaded runs on bc4793cf); sibling gap of task-b712ce09's S11 probe fix",
+  "description": "Filed by hunt #20 (task-9f3eac6d, a CI dry run of moe/work-2026-10-24 at bc4793cf). It goes in this epic because task-b712ce09, the S11 twin of this race, was filed and fixed here, and CQ-R (the bridge's own epic) is complete.\n\nPROBLEM\n- local-runner-bridge.test.mjs:443 defines `alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } }`. kill(pid, 0) succeeds for a zombie, and for a process that is still exiting.\n- I1 (:493) and I3 (:532, once for each of its 16 cases) assert `alive(host.child) === false` straight after the supervisor's exit event or `host.end()`.\n- `host.child` is the job's global pid (AGENT_CHILD :439).\n- The test runs as non-root, so guest-supervisor.py runs uncontained (see the GUARD comment, :99-104). The guard forks init, init starts the job with Popen, and all three share the guard's process group.\n- On exit 74 or 76, relay()'s `finally` (guest-supervisor.py:563-569) SIGKILLs that group, but `reap(child)` waits for the guard only. init and the job are reparented and reaped later by PID 1, so right after the supervisor's exit the job's pid can still exist.\n- task-b712ce09 (DONE 11-02, fb32db90) fixed the same race for S11. Its probe counts a process as unable to run by CANNOT_RUN (:1220-1226): State Z or X, SIGKILL pending in ShdPnd, or PF_EXITING. Another sibling (:1172) polls up to 5 s for its pids to go.\n- I1 and I3 got neither fix.\n\nEVIDENCE (HEAD bc4793cf, every MOE_* var cleared, Linux node 24, WSL kernel 6.18)\n- CI dry run, step \"Test local runner prerequisite bundles\" (its 14 files): exit 1 (tests 741, pass 737, fail 1, skipped 3). It ran in parallel with two other CI jobs. Log: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/j4/08-local-runner.log\n    test at scripts/tests/local-runner-bridge.test.mjs:517:1\n    ✖ I3 an unknown, answered or malformed host response ends the bridge as a protocol violation (928.700442ms)\n      AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n      true !== false\n          at TestContext.<anonymous> (file:///.../scripts/tests/local-runner-bridge.test.mjs:532:12)\n- The same file alone, unloaded: 6 of 6 runs pass (90 pass, 1 skipped). Logs: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/bridge-rerun-*.log\n- With 16 busy-loop processes running, I1+I3 failed 1 of 8 runs at the same :532 assertion. Repro: `bash /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh <snapshot root> [runs] [burners]`; it kills only the burner PIDs it records. Logs: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/bridge-load-*.log\n\nFIX DIRECTION\n- Test-side. Give I1 and I3 the \"gone\" rule that S11 settled on: a pid is gone when it is reaped or its /proc view is CANNOT_RUN.\n  - That means /proc/<pid>/status and /proc/<pid>/stat on Linux, with kill(pid, 0) elsewhere.\n  - Alternatively, wait a bounded time for it to disappear, as :1172 does.\n- Keep the final assertion that the job does not survive the bridge, and leave the exit-code assertions unchanged.\n- Do not change relay(). Its contract (guest-supervisor.py:19-20) is to kill the child group before the stream ends, not to reap every descendant.\n\nFILES: scripts/tests/local-runner-bridge.test.mjs only. Not held by any open row (lanes.js -v at 09:12Z).\nPLACEMENT: no dependsOn. It is file-disjoint from 62ec51f1, 1dfec7a4 and bbd7ad2d.",
+  "definitionOfDone": [
+    "I1 and I3 count the job pid as gone only when it is reaped or its /proc view cannot run (the S11 CANNOT_RUN rule), or after a bounded wait of at most 5 s, and still fail when the job is alive and runnable after that.",
+    "`bash /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh <snapshot root> 10` reports 0 of 10 failed runs on a Linux git-archive snapshot of the fix commit, and `node --test scripts/tests/local-runner-bridge.test.mjs` passes unloaded there.",
+    "The row's diff leaves scripts/local-runner/guest-supervisor.py unchanged, and the CI step's 14-file `node --test scripts/tests/local-runner*.test.mjs` command (as listed in ci.yml) exits 0 in that snapshot with every MOE_* var unset."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "The fix (DoD 1), with your own Edit tool, in scripts/tests/local-runner-bridge.test.mjs only. This follows the filer's follow-up (comment-3b4a7351): reuse the zombie-aware probe the file already has, rather than porting the S11 CANNOT_RUN script.\n\nWhy: `running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z')` (:1145, with procState at :1144) is what S9 polls for up to 5 s (:1172). relay() SIGKILLs the job group but reaps only the guard (guest-supervisor.py:559-566), so PID 1 reaps the job a moment later.\n\nEdits:\n- I1, :493: replace `assert.equal(alive(host.child), false);` with two lines: `for (let waited = 0; waited < 5000 && running(host.child); waited += 100) await sleep(100);` and `assert.equal(running(host.child), false);`. Put a one-line comment above them: `// relay() kills the job group but reaps only the guard: PID 1 reaps the job, so give it the S9 wait (:1172).`\n- I3, :532, inside its per-case loop: the same two lines, without the comment.\n- Keep :490's positive `assert.ok(alive(host.child), ...)` and every exit-code assertion unchanged.\n- Do not move procState or running. They are module-scope consts, and the file has no top-level await, so node:test runs every body after module evaluation. Both new references also come after several awaits.\n- Do not touch scripts/local-runner/guest-supervisor.py or relay(). Its contract (:19-20) is to kill the child group, not to reap every descendant.\n\nThis is test-only: no runtime code or error handling changes. sleep is already imported at :12.\n\nA validated prototype of exactly this diff (+5/-2) passed the step 2 gate at 95d91dc2 in a scratch clone.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "I1 and I3 now poll running(host.child) for up to 5 s before asserting it is false.",
+      "startedAt": "2026-11-04T10:01:31.511Z",
+      "completedAt": "2026-11-04T10:01:47.149Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, once (DoD 2 and 3). From the task worktree, run the checkRefs command exactly as written. Its fresh output is moe.complete_task's verification evidence: 'failed runs: 0/10', the b.log and c.log `ℹ tests/pass/fail/skipped` lines, and 'exit: 0'.\n\nThe command, in order:\n1. Checks the diff is exactly the test file. That implies guest-supervisor.py is unchanged (DoD 3).\n2. Archives HEAD with the edited file overlaid.\n3. Runs `npm ci && npm run build` in the snapshot's packages/moe-daemon. local-runner-agents TY1 and local-runner-channel C4-C9 need a built daemon (mem:gotcha-daemon-linux-snapshot-gate).\n4. Runs the bridge file unloaded.\n5. Runs /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh 10 times under 16 burner processes. The script records the burner PIDs and kills only those (global rail: never pattern-kill).\n6. Runs the CI step's 14-file `node --test` list, extracted verbatim from .github/workflows/ci.yml, with every MOE_* var unset (env -i).\n\nReference run on the prototype: 0/10 failed; bridge 91 tests (90 pass, 1 skipped); CI step 741 tests (738 pass, 3 skipped, 0 fail); about 2.5 min. Host load affects only the time.\n\nOn failure, fix the test edit; never weaken an assertion or raise the 5 s bound. Never run npm ci or a build in the shared checkout (project rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs: failed runs 0/10; bridge 91 tests/90 pass/1 skipped; CI 14-file 741 tests/738 pass/0 fail/3 skipped; exit 0.",
+      "startedAt": "2026-11-04T10:01:47.863Z",
+      "completedAt": "2026-11-04T10:04:34.747Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Self-review, the final step. Load the adversarial-self-review skill.\n\nCheck:\n- The bound is real. In a scratch copy of the snapshot, temporarily change the I1 assertion to `assert.equal(running(process.pid), false)`, a live, runnable pid. I1 must FAIL after about 5 s, which proves the poll stops and the assertion still bites. Restore with `git show HEAD:scripts/tests/local-runner-bridge.test.mjs` plus your edit, and `cmp` before the final gate.\n- I3's 16 cases wait only while the pid lingers (normally 0-200 ms each), so its 30_000 ms test timeout still holds. A truly surviving job fails at the first case after 5 s.\n- The positive :490 check, the exit codes ([74, null] and [76, null]) and the observation check are byte-identical.\n- No other line changed: the diff is +5/-2.\n\nIf anything changed, re-run step 2's command before moe.complete_task. Put the bound-check result in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "note": "Bound check: with running(process.pid) I1 FAILED after 5105 ms (poll stops, assertion bites). Restored and cmp-identical. Diff +5/-2.",
+      "startedAt": "2026-11-04T10:04:48.362Z",
+      "completedAt": "2026-11-04T10:04:49.619Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 241.6,
+  "comments": [
+    {
+      "id": "comment-3b4a73519e254df98506446c75cde67d",
+      "author": "architect-cd0ac706",
+      "content": "Filer's follow-up, re-derived at bc4793cf.\n\n1) A cheaper fix than the one in the description already exists in this file.\n   - `const running = pid => alive(pid) && (process.platform !== 'linux' || procState(pid)?.[0] !== 'Z')` is defined at :1145.\n   - It is the zombie-aware probe that :1172 polls for up to 5 s: `for (let waited = 0; waited < 5000 && [...].some(running); waited += 100) await sleep(100)`.\n   - Fix: give I1 (:493) and I3 (:532) the same bounded poll on `running(host.child)` before asserting that it is false.\n   - `running` is a module-scope const, so the earlier tests can use it.\n   - Port the S11 CANNOT_RUN rule only if the poll alone still flakes under bridge-load-repro.sh.\n2) Line corrections:\n   - CANNOT_RUN is at :1224-1227, not :1220-1226.\n   - relay()'s finally block is guest-supervisor.py:559-566 (killpg at :563, reap at :566).\n   - The GUARD comment is :99-104, and the exit-code contract is :19-20.",
+      "timestamp": "2026-11-04T09:19:19.213Z"
+    },
+    {
+      "id": "comment-6f369157bed94617bef21c3d51b7094c",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T10:05:49.461Z",
+      "content": "Landing unlanded (remote) 1 time(s) in a row; attempt attempt-1a2e7b5615714540b7cff217f56fbbc2 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z; target tip: fec9a8427036fef3b6a7f3545aac0a92200e73be; task WORKING."
+    },
+    {
+      "id": "comment-160ce5f01f304e2f9274ae9328d6155a",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-04T10:11:15.501Z",
+      "content": "Landing unlanded (remote) 2 time(s) in a row; attempt attempt-004f6c1bc0e54963b4fbb2b74d91da9d (generation 3); paths: (none reported); rescue ref: refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z; target tip: fec9a8427036fef3b6a7f3545aac0a92200e73be; task WORKING."
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:13:49.972Z",
+  "updatedAt": "2026-11-04T19:20:41.514Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:46:13.844Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T10:20:38.477Z",
+    "wallClockMs": 2064633
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-5772dacf",
+    "worker-a0305b0b",
+    "qa-25f21f0a"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:51:35.329Z",
+  "executionContract": {
+    "intendedBehavior": "I1 and I3 in scripts/tests/local-runner-bridge.test.mjs no longer flake under load. After the bridge supervisor exits, each waits at most 5 s (100 ms steps) for the job pid to stop being `running` (reaped, or a zombie on Linux; the file's existing S9 probe), then asserts it is not running. A job still alive and runnable after 5 s still fails the test. Test-only: no runtime code or error handling changes.",
+    "acceptanceCriteria": [
+      "I1 (:493) and I3 (:532) use `for (let waited = 0; waited < 5000 && running(host.child); waited += 100) await sleep(100);` followed by `assert.equal(running(host.child), false);`.",
+      "bridge-load-repro.sh <snapshot> 10 reports 'failed runs: 0/10', and the bridge file passes unloaded in the snapshot.",
+      "The CI step's 14-file `node --test scripts/tests/local-runner*.test.mjs` list from ci.yml exits 0 in the snapshot with MOE_* unset, and guest-supervisor.py is unchanged."
+    ],
+    "invariants": [
+      "Every other assertion in I1 and I3 is byte-identical (the :490 alive-while-running check, the exit codes, frames and observations).",
+      "The wait is bounded at 5 s per probe, and a runnable survivor still fails.",
+      "scripts/local-runner/guest-supervisor.py and relay() are unchanged."
+    ],
+    "compatibility": [
+      "S9 (:1172), S11's CANNOT_RUN probe and every other test keep their own probes unchanged."
+    ],
+    "reuse": [
+      "`running` and `procState` (local-runner-bridge.test.mjs:1144-1145) and S9's bounded poll (:1172), as suggested in comment-3b4a7351; `sleep` imported at :12."
+    ],
+    "sourceAssumptions": [
+      "local-runner-bridge.test.mjs:443 `alive` = bare kill(pid, 0); :493 and :532 assert alive(host.child) === false; :1144-1145 procState/running; no top-level await in the file.",
+      "guest-supervisor.py:559-566: relay()'s finally killpg()s the job group and reaps only the guard."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && [ \"$(git diff --name-only HEAD)\" = scripts/tests/local-runner-bridge.test.mjs ] && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp scripts/tests/local-runner-bridge.test.mjs \"$S/scripts/tests/\" && cd \"$S\" && X=\"env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin LANG=C.UTF-8\" && (cd packages/moe-daemon && $X sh -c 'npm ci && npm run build' >/dev/null 2>&1) && $X node --test scripts/tests/local-runner-bridge.test.mjs > b.log 2>&1 && $X bash /mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh \"$S\" 10 > l.log 2>&1 && grep -q '^failed runs: 0/10$' l.log && $X node --test $(sed -n 's/^ *run: node --test \\(scripts\\/tests\\/local-runner\\.test\\.mjs .*\\)$/\\1/p' .github/workflows/ci.yml) > c.log 2>&1; E=$?; tail -1 l.log; grep -aE '^ℹ (tests|pass|fail|skipped) ' b.log c.log; echo \"exit: $E\"; exit $E )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Port S11's CANNOT_RUN /proc probe (the description's first idea): not needed. The file's own `running` probe plus S9's 5 s bounded poll covers the zombie and still-exiting windows, and the filer's follow-up (comment-3b4a7351) recommends it. Escalate to CANNOT_RUN only if the 10-run load repro still fails. (2) Reap the job in relay(): rejected. The supervisor's contract is to kill the group, not to reap descendants, and the row forbids touching guest-supervisor.py. (3) Moving procState/running up next to alive: unnecessary, because of TDZ safety (no top-level await; references come after awaits). It would only grow the diff.",
+    "codebaseInsights": "- The same race was fixed for S11 by task-b712ce09 (fb32db90).\n- S9 (:1172), S12 (:1273), :1414 and :1509 already use the `running` + 5 s poll idiom. I1 and I3 were the only `alive(...) === false` asserts left after a supervisor exit.",
+    "risks": "- The load repro runs 16 busy-loop burners on the shared host for about 1-2 min. It kills only its own recorded PIDs; do not substitute any pattern kill.\n- RED is probabilistic: 1 of 8 loaded runs at bc4793cf, per the filer. The deterministic proof that the assertion still bites is step 3's live-pid bound check.\n- The CI step needs the snapshot daemon built, or TY1 and C4-C9 fail for an unrelated reason.",
+    "keyFiles": [
+      "scripts/tests/local-runner-bridge.test.mjs",
+      "scripts/local-runner/guest-supervisor.py",
+      ".github/workflows/ci.yml",
+      "/mnt/d/moe-scratch/hunt-9f3eac6d/mine/bridge-load-repro.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d6e34442856b5803b56319c80b047fbb65bdece5",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:51:35.364Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T10:01:31.511Z",
+  "reviewStartedAt": "2026-11-04T10:15:29.149Z",
+  "verification": {
+    "command": "snapshot from git ls-files: bridge file unloaded, bridge-load-repro.sh 10, CI 14-file node --test",
+    "exitCode": 0,
+    "outputTail": "failed runs: 0/10\nb.log: tests 91 pass 90 fail 0 skipped 1\nc.log: tests 741 pass 738 fail 0 skipped 3\nexit: 0",
+    "reportedAt": "2026-11-04T10:15:29.149Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/local-runner-bridge.test.mjs"
+  ],
+  "completionSummary": "I1 and I3 in local-runner-bridge.test.mjs poll running(host.child) for up to 5 s before asserting it is false. Landing retry: re-verified on a snapshot built from the worktree's tracked files (git ls-files), with the target merged in. Load repro 0/10 failed; bridge file 91 tests (90 pass, 1 skipped); CI 14-file step 741 tests (738 pass, 0 fail, 3 skipped), MOE_* unset. guest-supervisor.py unchanged.",
+  "commits": [
+    {
+      "sha": "676f81f388224af8721f6804add6cb4fabcd1348",
+      "ref": "refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T10:00:38Z",
+      "paths": [],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T10:05:48.424Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-20f59bc955f44875832072dcec91868e ref=refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T100547Z sha=676f81f388224af8721f6804add6cb4fabcd1348 reason=remote"
+    },
+    {
+      "sha": "ec73a3006a46626159a0216e55fd5f992d869486",
+      "ref": "refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T10:06:21Z",
+      "paths": [],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T10:11:14.390Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-20f59bc955f44875832072dcec91868e ref=refs/moe/rescue/task-20f59bc955f44875832072dcec91868e/20261104T101113Z sha=ec73a3006a46626159a0216e55fd5f992d869486 reason=remote"
+    },
+    {
+      "sha": "566778a076dba1ee3ed77d9366f8aee3d938d833",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T10:11:44Z",
+      "paths": [
+        "scripts/tests/local-runner-bridge.test.mjs"
+      ],
+      "recordedBy": "architect-c33f294e",
+      "recordedAt": "2026-11-04T10:16:26.327Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T10:16:24Z",
+    "at": "2026-11-04T10:20:57.921Z"
+  },
+  "landingRetry": null,
+  "completedAt": "2026-11-04T10:20:38.477Z",
+  "reviewCompletedAt": "2026-11-04T10:20:38.477Z",
+  "reviewSummary": "Reviewed completion 566778a0 (on moe/work-2026-10-24, contained in HEAD). Diff is scripts/tests/local-runner-bridge.test.mjs only, +5/-2: I1 and I3 now poll `running(host.child)` up to 5 s in 100 ms steps, then assert `running(host.child) === false`. The :490 alive-while-running check, exit codes and frames are unchanged. `running` is the file's existing zombie-aware probe (:1145), so it is the S9 rule. `git diff` shows scripts/local-runner is untouched (guest-supervisor.py unchanged). Re-ran in a fresh env -i snapshot of HEAD (git archive minus .moe, daemon npm ci + build, outside the shared tree): bridge file unloaded: 91 tests, 90 pass, 0 fail, 1 skipped. bridge-load-repro.sh 10 (16 burners): 'failed runs: 0/10'. CI 14-file `node --test scripts/tests/local-runner*.test.mjs` list from ci.yml, MOE_* unset: exit 0, 741 tests, 738 pass, 0 fail, 3 skipped. Bite check: mutating I1 to poll `running(process.pid)` (live, runnable) fails after ~5 s with AssertionError, so a runnable survivor still fails and the wait is bounded. All 3 DoD items verified. Residual: the race itself is probabilistic, so 0/10 shows no regression, not proof. No burners left; scratch removed.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,215 @@
+{
+  "id": "task-1cb3f280afe14a6d886214ee4feea952",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the dependency auto-unblock returns a still-assigned hold to its parked worker but leaves that worker BLOCKED with the resolved block's lastError (the resource grant path repairs it, 07af3ca5)",
+  "description": "Files: packages/moe-daemon/src/state/dependencyUnblock.ts and packages/moe-daemon/src/state/dependencyUnblock.test.ts. resourceStore.ts changes only if the worker repair is extracted into a shared helper. No open row declares any of these files. I checked the plan files of every non-DONE row at 2026-11-02 20:51Z.\n\nDefect, read at HEAD 3e092cff:\n- A third-party report_blocked on an assigned task keeps the seat and marks the worker BLOCKED with lastError set to the reason (reportBlocked.ts:386-387).\n- When every blockedOnTaskIds target lands, runDependencyUnblock restores the task to blockedFromStatus. While the worker still points at the task, it also restores the task onto that worker (dependencyUnblock.ts:241-253). It writes no worker update, and because assignedWorkerId is passed explicitly, updateTask's prior-owner handling is skipped.\n- The resource grant path repairs the same seat. grantNextLeases flips a BLOCKED owner whose currentTaskId is the task back to READING_CONTEXT, clears lastError and keeps lastActivityAt (resourceStore.ts:552-566). Commit 07af3ca5 added that after task-9f6c9938 showed a WORKING task whose worker still reported BLOCKED.\n- Result:\n  - list_workers and the board show a BLOCKED worker on a WORKING task until that worker's next claim, start_step or complete_step.\n  - Meanwhile runBlockedTimeoutSweep (sweeps.ts:411-460) acts on any worker whose status is BLOCKED. Once that worker's lastActivityAt is older than blockedTimeoutMs, the sweep parks the restored WORKING task to BACKLOG.\n  - A governor's routine unblock_worker on the \"BLOCKED\" seat releases the resumed row.\n- The parity test at dependencyUnblock.test.ts:152 ('a still-assigned hold returns to its parked worker (grantNextLeases parity)') sets the worker BLOCKED but asserts only the task's status and assignee.\n\nReach: a third-party or legacy still-assigned dependency block whose prerequisites land while the seat still points at the task. The display error is certain whenever that happens; the BACKLOG park needs the sweep to run before the seat's next moe call.\n\nOrigin: hunt requested by governor-e6b40560 (msg-5fe3b1537cb04b50964bd0edf07db4c8). 07af3ca5 fixed only the resource path. No row mentions the dependency path's worker state.",
+  "definitionOfDone": [
+    "When runDependencyUnblock restores a task onto its still-assigned worker, and that worker's status is BLOCKED with currentTaskId equal to the task, the worker becomes READING_CONTEXT. Its lastError becomes null, its lastActivityAt stays unchanged, and a WORKER_UNBLOCKED event is written; this is the same rule grantNextLeases applies.",
+    "A worker that is not BLOCKED, that points at another task, or that is DEAD is left untouched. A failed worker write is logged and never undoes the task restore.",
+    "Tests: the parity test at dependencyUnblock.test.ts:152 also asserts the worker's status, lastError and lastActivityAt. A new case shows that after the restore, runBlockedTimeoutSweep run past blockedTimeoutMs leaves the restored task WORKING and assigned. RED first against the unchanged code, with the failing output quoted.",
+    "`cd packages/moe-daemon && npx vitest run src/state/dependencyUnblock.test.ts src/state/resourceStore.lifecycle.test.ts src/tools/reportBlocked.test.ts` exits 0. Run it in the task's worktree or in a git-archive snapshot, never as an in-place build or test in the shared control checkout. Its output is the complete_task evidence.",
+    "Only dependencyUnblock.ts and its test change, plus resourceStore.ts if the repair moves into a shared helper (grant behaviour unchanged, its lifecycle tests pass)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED), in packages/moe-daemon/src/state/dependencyUnblock.test.ts, inside the existing describe that holds blockedRow() and the parity test 'a still-assigned hold returns to its parked worker (grantNextLeases parity)' (~:152). Use the Edit tool only (GLOBAL rail 3).\n\n(a) Extend that parity test.\n- Create the worker with explicit stale fields: lastActivityAt = an ISO time 10 minutes ago, kept in a const; lastError 'waiting on task-p4e4eq'.\n- Before the DONE transition, spy: const updateWorker = vi.spyOn(h.state, 'updateWorker').\n- After the transition:\n  - keep the two task asserts;\n  - expect(h.state.getWorker('worker-parked')).toMatchObject({ status: 'READING_CONTEXT', lastError: null, lastActivityAt, currentTaskId: 'task-1egacy' });\n  - expect(updateWorker).toHaveBeenCalledWith('worker-parked', { status: 'READING_CONTEXT', lastError: null, lastActivityAt }, 'WORKER_UNBLOCKED').\n  This mirrors resourceStore.lifecycle.test.ts 'resumes the quiet parked worker with its %s task'.\n\n(b) New `a restored seat is not timed out by the blocked-timeout sweep`.\n- The same hold, with the worker's lastActivityAt 2 hours ago (past the harness default blockedTimeoutMs of 1 h).\n- Mark the prerequisite DONE through setTaskStatusTool, then run h.state.mutex.runExclusive(() => runBlockedTimeoutSweep(h.state)).\n- The task stays WORKING and assigned to worker-parked. The worker is READING_CONTEXT with currentTaskId 'task-1egacy'.\n- On unchanged code the sweep times the BLOCKED worker out and parks the task to BACKLOG unassigned, which is the RED.\n\n(c) New `seats that are not a parked hold on this row are left untouched`.\n- Snapshot each worker record (structuredClone) before the DONE transition, and assert each one toEqual its snapshot after it:\n  - a CODING owner whose currentTaskId is the row (the task is restored onto it; the worker is unchanged, lastError kept);\n  - a BLOCKED owner whose currentTaskId names another task (the row returns unassigned);\n  - a DEAD owner.\n\n(d) New `a failed worker write is logged and never undoes the restore`.\n- Two parked holds on the same prerequisite.\n- vi.spyOn(h.state, 'updateWorker').mockRejectedValueOnce(new Error('worker write failed')).\n- After the DONE transition, BOTH tasks are WORKING and assigned to their seats (the scan went on). The first seat is still BLOCKED, and the second is READING_CONTEXT.\n\nRED: build a snapshot with ONLY this test file overlaid (step 3's recipe, minus the dependencyUnblock.ts overlay) and run `npx vitest run src/state/dependencyUnblock.test.ts`. (a), (b) and (d) must fail; (c) passes. Quote the failing assertion lines in this step's note (DoD 3).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "note": "RED on snapshot with only the test file overlaid (3 failed | 56 passed): (a) parity: expected status READING_CONTEXT/lastError null, received BLOCKED / 'waiting on task-p4e4eq'. (b) sweep: expected 'BACKLOG' to be 'WORKING'. (d) failed write: expected 'BLOCKED' to be 'READING_CONTEXT' (worker-second). (c) untouched seats passes.",
+      "startedAt": "2026-11-03T02:27:37.627Z",
+      "completedAt": "2026-11-03T02:28:06.279Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement in packages/moe-daemon/src/state/dependencyUnblock.ts, runDependencyUnblock (~:241-258). Use the Edit tool only.\n\nAfter the `await state.updateTask(task.id, {...}, 'TASK_UNBLOCKED')` that restores the row, and only when restoreTo is non-null (a still-assigned hold), repair the seat with the SAME rule grantNextLeases applies (resourceStore.ts:552-566):\n- Re-read the worker: const seat = state.getWorker(restoreTo).\n- If seat?.status === 'BLOCKED' && seat.currentTaskId === task.id, call `await state.updateWorker(seat.id, { status: 'READING_CONTEXT', lastError: null, lastActivityAt: seat.lastActivityAt }, 'WORKER_UNBLOCKED')`.\n- Passing lastActivityAt explicitly keeps presence unchanged: an unblock is not a heartbeat.\n- Any other seat is left untouched, as is the existing restoreTo === null path: not BLOCKED (already progressing), pointing at another task, or DEAD.\n\nError handling: put the worker write in its OWN try/catch, logging `logger.warn({ taskId: task.id, workerId: seat.id, error: err }, 'dependencyUnblock: failed to un-block worker')`. A failed write never undoes the task restore, never skips `unblocked.push` or the chat notice, and never stops the scan of later rows. There is no retry path: the row is no longer BLOCKED, so later scans skip it, and the seat's next moe call refreshes it. Say this in a one-line comment.\n\nAdd a short comment naming the reason: without this, list_workers shows a BLOCKED seat on a WORKING task, and runBlockedTimeoutSweep (sweeps.ts ~:411) times that seat out and parks the resumed row to BACKLOG. Point at grantNextLeases (07af3ca5) for the twin rule.\n\nKeep the inline version. Do not extract a shared helper into resourceStore.ts: the DoD allows that only with grant behaviour unchanged, and two 6-line copies cost less than a cross-module change.\n\nGREEN: rerun the step-1 command with dependencyUnblock.ts overlaid too; every test in the file passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "note": "Added repairParkedSeat helper (own try/catch, WORKER_UNBLOCKED, lastActivityAt preserved) called after a successful still-assigned restore. GREEN: 59/59 in snapshot, tsc clean. Helper form (not inline) keeps runDependencyUnblock under the size limit; still no resourceStore.ts change.",
+      "startedAt": "2026-11-03T02:28:06.864Z",
+      "completedAt": "2026-11-03T02:28:22.900Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it ONCE, fresh, from the task worktree root, as ONE command: the executionContract's checkRefs[0], verbatim.\n\nWhat it does:\n- It builds a git archive HEAD snapshot under mktemp and overlays this task's 2 files, cmp-checked.\n- Then, with nvm node v24.21.0 under env -i, it runs npm ci and tsc --noEmit, then the DoD's exact command: `npx vitest run src/state/dependencyUnblock.test.ts src/state/resourceStore.lifecycle.test.ts src/tools/reportBlocked.test.ts`.\n- resourceStore.lifecycle is the grant twin, unchanged; reportBlocked covers the third-party hold that creates the BLOCKED seat.\nNever run npm in the shared checkout or in the worktree's packages (GLOBAL rail 1).\n\nSubmit the command, exit code and the 'Test Files … Tests …' tail to complete_task.\n\nError handling for a red run:\n- A failure in a file this task did not touch: rerun that file alone in the same snapshot. If it also fails on a snapshot of plain HEAD, comment on the owning task and report_blocked with its id.\n- Never weaken a test.\n- If this row is ever resumed with LANDING-CONFLICT/RETRY, the resume prompt's rule replaces `git archive HEAD` with a copy of the worktree's tracked files. Say so in the evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] fresh: exit 0, Test Files 3 passed, Tests 150 passed, tsc clean.",
+      "startedAt": "2026-11-03T02:28:23.610Z",
+      "completedAt": "2026-11-03T02:28:40.222Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the diff, then complete_task.\n(a) The repair runs only for a still-assigned hold (restoreTo non-null) whose seat is BLOCKED and points at this row. The unassigned seat-freeing path, DEAD owners, other-pointer owners and non-BLOCKED owners write nothing (test c).\n(b) lastActivityAt is passed through unchanged, so presence and the stale-prune timing are not refreshed. lastError becomes null, and status becomes READING_CONTEXT, exactly as grantNextLeases does. The activity event is WORKER_UNBLOCKED.\n(c) Order and isolation: the worker write comes after the task write and in its own try/catch. A throw cannot skip unblocked.push, the chat notice or the next row (test d). Nothing reorders the task write.\n(d) Re-entrancy: updateWorker emits no task transition, so it cannot re-trigger runDependencyUnblock. The scanning WeakSet guard is unaffected.\n(e) The sweep interaction is proven by test (b), not assumed.\n(f) Only the 2 planned files changed; resourceStore.ts is untouched. Both were written with Edit and listed in complete_step.modifiedFiles.\nIf anything changes, rerun step 3's command fresh and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/dependencyUnblock.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts"
+      ],
+      "note": "Self-review: repair only runs when restoreTo is non-null and the seat is BLOCKED and points at this row (test c covers CODING, other-pointer and DEAD). lastActivityAt passes through unchanged. The worker write follows unblocked.push and sits in its own try/catch (test d). updateWorker emits no task transition, so the scan guard is unaffected. resourceStore.ts untouched. No change since the step-3 run, so that output stands.",
+      "startedAt": "2026-11-03T02:28:41.025Z",
+      "completedAt": "2026-11-03T02:28:45.598Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\"; architect hunt row: dependency auto-unblock leaves the restored seat BLOCKED with a stale lastError.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 344.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T21:13:04.415Z",
+  "updatedAt": "2026-11-04T19:20:43.930Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T21:14:26.126Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T02:24:28.823Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T02:37:07.401Z",
+    "wallClockMs": 758578
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-2dc72348",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T02:26:22.148Z",
+  "executionContract": {
+    "intendedBehavior": "When the dependency auto-unblock returns a still-assigned hold to its parked worker, and that worker is BLOCKED and points at the task, the seat is repaired the way the resource grant path repairs it. The worker becomes READING_CONTEXT with lastError null, keeps its lastActivityAt, and a WORKER_UNBLOCKED write is recorded. list_workers then shows the resumed seat correctly, and the blocked-timeout sweep no longer times that seat out and parks its resumed row to BACKLOG. Seats that are not such a hold are untouched. A failed worker write is logged and never undoes the task restore.",
+    "acceptanceCriteria": [
+      "DoD 1: the extended parity test asserts the worker is READING_CONTEXT, lastError null, lastActivityAt unchanged and currentTaskId the task, and that updateWorker was called with those fields and 'WORKER_UNBLOCKED'.",
+      "DoD 2: CODING-with-pointer, BLOCKED-elsewhere and DEAD owners deep-equal their pre-unblock records (test c). With updateWorker rejecting once, both rows are still restored and assigned and the scan continues (test d).",
+      "DoD 3: test (b) runs runBlockedTimeoutSweep past blockedTimeoutMs after the restore and the task stays WORKING and assigned. RED was quoted from a snapshot with only the test file changed.",
+      "DoD 4: checkRefs[0] exits 0. It runs the DoD's exact vitest command (dependencyUnblock, resourceStore.lifecycle, reportBlocked) in a git-archive snapshot after tsc --noEmit.",
+      "DoD 5: only dependencyUnblock.ts and dependencyUnblock.test.ts change."
+    ],
+    "invariants": [
+      "The task restore (status, assignee choice, cleared blocked* fields, TASK_UNBLOCKED event, chat notice) is unchanged.",
+      "grantNextLeases and resourceStore.ts are unchanged.",
+      "Error handling: the worker write is isolated in its own try/catch and logged; the restore and the scan never depend on it.",
+      "No MCP tool contract or stored-state shape changes."
+    ],
+    "compatibility": [
+      "Existing .moe/ worker and task records need no migration; the repair only writes fields a worker already has."
+    ],
+    "approvedScope": [
+      "dependencyUnblock.ts: a seat repair in runDependencyUnblock right after a successful still-assigned restore.",
+      "dependencyUnblock.test.ts: the extended parity test and the three new cases (sweep, untouched seats, failed write)."
+    ],
+    "reuse": [
+      "The exact grantNextLeases seat-repair rule and fields (resourceStore.ts:552-566, commit 07af3ca5) and its test style in resourceStore.lifecycle.test.ts.",
+      "The existing blockedRow() helper, setTaskStatusTool DONE trigger and runBlockedTimeoutSweep import already in dependencyUnblock.test.ts."
+    ],
+    "sourceAssumptions": [
+      "At planning (target 7379c2bc), runDependencyUnblock (dependencyUnblock.ts ~:209-264) computes restoreTo = owner.id only when the owner exists, is not DEAD and its currentTaskId is the task. It then calls updateTask(..., { assignedWorkerId: restoreTo, ... }, 'TASK_UNBLOCKED') inside a try/catch and writes no worker update.",
+      "grantNextLeases repairs a seat when the resumed row is PLANNING/WORKING/REVIEW and the owner is BLOCKED with currentTaskId equal to the row: updateWorker(owner.id, { status: 'READING_CONTEXT', lastError: null, lastActivityAt: owner.lastActivityAt }, 'WORKER_UNBLOCKED') in its own try/catch.",
+      "runBlockedTimeoutSweep (sweeps.ts ~:411) times out every BLOCKED worker whose lastActivityAt is older than state.blockedTimeoutMs (default 3600000 ms) and parks its WORKING task to BACKLOG unassigned.",
+      "ToolTestHarness createWorker accepts status, currentTaskId, lastError and lastActivityAt overrides; state.updateWorker(workerId, updates, event)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/dependencyUnblock.ts packages/moe-daemon/src/state/dependencyUnblock.test.ts; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/dependencyUnblock.test.ts src/state/resourceStore.lifecycle.test.ts src/tools/reportBlocked.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Extracting a shared repairResumedSeat helper into resourceStore.ts: rejected. The DoD allows it, but it touches the grant path and its tests for a 6-line rule. Inline it with a comment pointing at the twin.\n- Retrying the seat repair on later scans: rejected. The restored row leaves the BLOCKED scan, and the seat's next moe call refreshes it. The DoD asks only that a failed write never undoes the restore.",
+    "codebaseInsights": "- runDependencyUnblock runs from the DONE/ARCHIVED transition hook and from the sweep backstop. One change covers both.\n- The worker repair must re-read the seat after the task write, as grantNextLeases does.\n- runBlockedTimeoutSweep keys only on worker.status BLOCKED plus a stale lastActivityAt. Leaving the seat BLOCKED is what lets the sweep park a resumed row.",
+    "risks": "1. Keep lastActivityAt unchanged, or the stale-worker prune timing changes. The test asserts it.\n2. Do not add the repair to the restoreTo === null path; seat-freeing rows have no seat.\n3. Tests must use the harness default blockedTimeoutMs (1 h). Set lastActivityAt 2 h back for the sweep case and 10 min back for the parity case.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/dependencyUnblock.ts",
+      "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "packages/moe-daemon/src/state/sweeps.ts",
+      "packages/moe-daemon/src/state/resourceStore.lifecycle.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78cfa1c16fdbf7bf46be97960388868e852dcbf4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T02:26:22.178Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T02:27:37.627Z",
+  "reviewStartedAt": "2026-11-03T02:28:50.118Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && for f in packages/moe-daemon/src/state/dependencyUnblock.ts packages/moe-daemon/src/state/dependencyUnblock.test.ts; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && cd \"$S/packages/moe-daemon\" && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" sh -c 'npm ci --no-audit --no-fund >/dev/null && npx tsc --noEmit && npx vitest run src/state/dependencyUnblock.test.ts src/state/resourceStore.lifecycle.test.ts src/tools/reportBlocked.test.ts'",
+    "exitCode": 0,
+    "outputTail": "✓ src/tools/reportBlocked.test.ts (63 tests)\n Test Files  3 passed (3)\n      Tests  150 passed (150)",
+    "reportedAt": "2026-11-03T02:28:50.118Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+    "packages/moe-daemon/src/state/dependencyUnblock.ts"
+  ],
+  "completionSummary": "runDependencyUnblock now repairs the seat of a still-assigned hold it restores. When the worker is BLOCKED and points at the task, it becomes READING_CONTEXT with lastError null and its lastActivityAt unchanged, and a WORKER_UNBLOCKED event is written (same rule as grantNextLeases, 07af3ca5). This is done by a new repairParkedSeat helper with its own try/catch, so a failed worker write is logged and never undoes the task restore or stops the scan. Other seats (CODING, pointing elsewhere, DEAD) are untouched. Tests: the parity test now asserts worker state, plus new cases for the blocked-timeout sweep, untouched seats and a failed write. RED on a snapshot with only the test file changed was 3 failed (parity, sweep, failed-write). Only dependencyUnblock.ts and its test changed; resourceStore.ts is unchanged.",
+  "commits": [
+    {
+      "sha": "89400467efe5db621004ecd4bc6211bd6fb88be2",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T02:26:40Z",
+      "paths": [
+        "packages/moe-daemon/src/state/dependencyUnblock.test.ts",
+        "packages/moe-daemon/src/state/dependencyUnblock.ts"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T02:29:51.513Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T02:35:53Z",
+    "at": "2026-11-03T02:37:32.868Z"
+  },
+  "completedAt": "2026-11-03T02:37:07.401Z",
+  "reviewCompletedAt": "2026-11-03T02:37:07.401Z",
+  "reviewSummary": "Reviewed completion 89400467 (on moe/work-2026-10-24, contained in control HEAD; working-tree files identical to HEAD for both paths). Diff +105/-1 across exactly 2 files (dependencyUnblock.ts +25, dependencyUnblock.test.ts +81/-1); resourceStore.ts untouched; well under the 400 LOC cap. DoD 1: new repairParkedSeat() runs after unblocked.push only when restoreTo is non-null; if seat is BLOCKED and currentTaskId===taskId it calls updateWorker(id,{status:'READING_CONTEXT',lastError:null,lastActivityAt:seat.lastActivityAt},'WORKER_UNBLOCKED') — identical rule/fields to grantNextLeases (resourceStore.ts:552-566, 07af3ca5). DoD 2: non-BLOCKED, other-pointer and DEAD seats return early (DEAD also never reaches restoreTo); worker write is in its own try/catch with logger.warn, after the task restore, so a failed write cannot undo it or stop the scan. DoD 3: parity test extended (status/lastError/lastActivityAt/currentTaskId + updateWorker called with exact args and WORKER_UNBLOCKED); new tests for blocked-timeout sweep, untouched seats (structuredClone toEqual), failed write isolated. I reproduced RED myself in a git-archive snapshot of 89400467 with only dependencyUnblock.ts reverted to its parent: 3 failed|56 passed — parity (expected worker match READING_CONTEXT), sweep ('BACKLOG' vs 'WORKING'), failed-write ('BLOCKED' vs 'READING_CONTEXT'); untouched-seats test passes as designed. DoD 4: re-ran task.verification (checkRefs[0]) verbatim in a git-archive snapshot outside the repo: tsc --noEmit clean, vitest dependencyUnblock + resourceStore.lifecycle + reportBlocked = 3 files passed, 150/150 tests, exit 0. DoD 5 satisfied (only the 2 files). Complexity pass (non-blocking): helper-vs-inline is fine; test (d) relies on the scan visiting task-f1rst1 before task-s3cnd1 (Map load order) — ids chosen to pin that, noted in worker handoff; no reject. No weakened/deleted tests.",
+  "requiredCheckAtDone": null
+}

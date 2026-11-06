@@ -1,0 +1,41 @@
+{
+  "id": "task-b7332618359548078e2c7756df63c9cc",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #5): file 2-4 evidence-backed bug rows from VS Code parity with today's DONE JetBrains fixes, daemon tool-family gaps, and TROUBLESHOOTING/DEVELOPMENT docs drift",
+  "description": "Filed by the governor at 17:09Z on 2026-11-03. Hunts #2-#4 (task-2597ac6f, task-859eff80, task-130a6a5c) produced 15 rows today, and most were DONE within an hour of filing. A notification-only architect session can't run a hunt, so the hunt is a claimable row.\n\nWHY. After hunt #4's three rows (56f77335, b5bfda4d, 0f2e958f) are claimed, about 5 coders are idle again with 0 claimable WORKING rows. The CQ-M07m/n wrapper chain stays serial (2 rows active, 6 gated on it).\n\nLANE. Search, in this order of preference:\n1. moe-vscode/src: VS Code parity with today's DONE JetBrains client fixes. JetBrains went first; check whether the VS Code extension has the same defect. Each row must cite the VS Code file:line that has it:\n   - 37e03b91 (3b56ee35): a step's active amendment not shown in Plan Review / Task Detail;\n   - 40813cc1 (a000b817): the settings view ignores worktreeMode in the landing/gate policy it shows;\n   - e44a8daf (8be13403): the previous-arrow / Previous on a WORKING card asks the daemon for a move it refuses;\n   - 475e8844: Clear on the Done column while a board search is active (the count shown vs what the daemon archives);\n   - 6fe1e5ae: decision cards missing after a start or reconnect, because decisions are requested once before the connection opens.\n   Already twinned, so skip: ac587df5 (its twin 5a5a7189 is in REVIEW), and the protected-launch twins d5eca150 and a6227f4e.\n2. packages/moe-daemon/src: systematic gaps across a tool family, the way hunts #2 and #3 found the missing actor (c05bf92d), chat_decision's skipped sender and channel checks (314405bb) and the modifiedFiles cap (e3d41183). That means a family member that skips a guard, a fence, an actor or a validation its siblings apply.\n3. docs/TROUBLESHOOTING.md and docs/DEVELOPMENT.md against the code: a documented command, flag, default, error string or fix that no longer matches. Cite the doc line and the code file:line.\n\nSkip:\n- scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.* (the CQ-M07 lane);\n- packages/moe-proxy/README.md (56f77335), docs/SCHEMA.md (b5bfda4d), and the JetBrains release path MoeCommandSender.kt / MoeToolWindowPanel.kt (0f2e958f);\n- the files 5a5a7189 holds in REVIEW: moe-vscode/src/panels/TaskDetailPanel.ts, moe-vscode/src/types/moe.ts, moe-vscode/CHANGELOG.md and moe-vscode/tests/task-time-budget.test.cjs. A finding in one of them is still fine to file, but give it dependsOn task-5a5a7189;\n- every other file an open row's plan holds. Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\nAlready known, so don't re-file: TURBO auto-approve's \"WORKING by unknown\" line; the JetBrains board fingerprint omitting needsHumanReview; BoardMoves (not real: cards are draggable); the dead ▶ on BLOCKED cards (held until 0f2e958f lands); /ws broadcasts the plugins ignore but the 3 s full-state refresh masks (SETTINGS_UPDATED, RESOURCE_UPDATED).\n\nEVIDENCE BAR. Same as hunts #2-#4. Work only from real evidence:\n- A repro on HEAD 585fedc6 or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place. For VS Code tests, read mem:gotcha-vscode-tests-need-full-repo-snapshot first.\n- A failure line from today's logs: the file and the timestamp.\n- For client parity or wire drift: the daemon file:line that emits the shape and the client file:line that drops or misreads it.\n- For docs drift: the doc line and the code file:line.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows that QA can check with a unit test alone (vitest or the moe-vscode node tests).\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 585fedc6 or later run outside the shared checkout, a failure line from today's logs, or an emitter/consumer (or doc/code) file:line pair.",
+    "No filed row targets scripts/moe-agent.*, scripts/tests/postflight*, scripts/tests/parity-check.* or a file an open row's plan holds (per lanes.js at hunt time) without a dependsOn on that row. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 383.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:09:16.790Z",
+  "updatedAt": "2026-11-03T18:10:00.618Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:09:33.165Z"
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T17:09:31Z",
+    "at": "2026-11-03T18:10:00.618Z"
+  }
+}

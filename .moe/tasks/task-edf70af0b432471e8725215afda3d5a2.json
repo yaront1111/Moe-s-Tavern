@@ -1,0 +1,220 @@
+{
+  "id": "task-edf70af0b432471e8725215afda3d5a2",
+  "epicId": "epic-be924fb8",
+  "title": "chore(deps): fold Dependabot PRs #234-#237 into moe/work-2026-10-24: ws 8.22.0 -> 8.22.1 and @types/node 26.6.5 -> 26.6.6 in packages/moe-daemon and packages/moe-proxy (package.json and package-lock.json only), so the bumps land with PR #230 instead of conflicting with it on main",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 at the human's request: \"fold the dependabot bumps into the work branch\".\n\nWHY\n- Dependabot opened 4 PRs against main on 11-04 at 00:23Z:\n  - #237: ws 8.22.0 -> 8.22.1 in /packages/moe-daemon\n  - #236: ws 8.22.0 -> 8.22.1 in /packages/moe-proxy\n  - #235: @types/node 26.6.5 -> 26.6.6 in /packages/moe-daemon\n  - #234: @types/node 26.6.5 -> 26.6.6 in /packages/moe-proxy\n- main moves only by PR (the human's decision of 11-02). PR #230 carries this branch, 581 commits ahead of main.\n- Merging the Dependabot PRs into main would make PR #230 conflict on the same package.json and lockfile lines. Folding the same bumps in here means they land with PR #230, and Dependabot then closes #234-#237 itself, because the dependency is already up to date.\n\nEXACT CHANGE. Each PR touches only its package's package.json (+1/-1) and package-lock.json (+4/-4). Read them with `gh.exe pr diff <n>` (WSL has only gh.exe).\n- package.json: dependencies.ws \"^8.22.0\" -> \"^8.22.1\"; devDependencies[\"@types/node\"] \"^26.6.5\" -> \"^26.6.6\".\n- package-lock.json:\n  - The root packages[\"\"] spec lines change the same way.\n  - packages[\"node_modules/ws\"] and packages[\"node_modules/@types/node\"] change version, resolved and integrity to exactly the values in the PR diffs. For ws 8.22.1 that is integrity sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==, per #237.\n- The PR diffs are against main, so apply their hunks to this branch's files, which may sit at other line numbers. Use `git apply --3way` on the gh.exe diff, or edit by hand, or run `npm install <pkg>@<ver> --package-lock-only` in each package directory.\n- Whichever method you use, the result must be exactly these lines. Revert any other lockfile churn, such as an npm version re-resolving other packages or changing lockfileVersion.\n- Work only in the task worktree. Never install or build in the shared checkout: its packages/moe-daemon/dist is the live runtime.\n\nOUT OF SCOPE\n- moe-vscode and packages/moe-claude-plugin also declare ws ^8.22.0 and @types/node ^26.6.5. .github/dependabot.yml does not cover them (it covers daemon, proxy, gradle and github-actions), so the human's \"fold the dependabot bumps\" does not include them. Leave them unchanged.\n- No GitHub action on PRs #234-#237: no close, comment or merge. They close themselves when PR #230 merges.\n- No daemon swap. The live daemon picks up ws 8.22.1 at the next governor restage.\n\nRISK. ws 8.22.1's release notes:\n- IPC URL paths are no longer truncated at ':';\n- node's http.websocketMask/Unmask are used when available, instead of bufferutil;\n- Sender.frame() no longer returns empty chunks.\nThe daemon (/ws, /mcp, /runner) and the proxy (ws client) both use ws, so run both packages' tests.",
+  "definitionOfDone": [
+    "packages/moe-daemon and packages/moe-proxy package.json and package-lock.json carry ws ^8.22.1 (8.22.1) and @types/node ^26.6.6 (26.6.6), with the resolved and integrity values from Dependabot PRs #234-#237. `git diff --stat` against the target shows only those 4 files, with no other lockfile churn.",
+    "From the task worktree, `npm ci`, `npm run build` and `npm test` pass in both packages, with fresh results. `npm ls ws @types/node` shows 8.22.1 and 26.6.6 in each package.",
+    "No GitHub action is taken on PRs #234-#237. The completion summary lists them for the human as closing themselves when PR #230 merges."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Apply Dependabot PRs #237 (ws 8.22.0 -> 8.22.1) and #235 (@types/node 26.6.5 -> 26.6.6) to packages/moe-daemon, using ONLY the main session's own Edit tool. Global rail: no npm install or --package-lock-only, no git apply, no sed and no script writes into the tree. Run NO npm command in the worktree or the shared checkout: installs, builds and tests happen only in step 3's /tmp snapshot. Each old string below occurs exactly once in its file at target 9e9e7345. Change nothing else: LF endings, indentation, lockfileVersion 3 and the final newline stay as they are.\npackage.json: line 70 `\"ws\": \"^8.22.0\"` -> `\"ws\": \"^8.22.1\"`; line 73 `\"@types/node\": \"^26.6.5\"` -> `\"@types/node\": \"^26.6.6\"`.\npackage-lock.json:\n(a) the same two replacements in the root packages[\"\"] block (lines 15 and 21);\n(b) under \"node_modules/@types/node\" (lines 840-842), replace `\"version\": \"26.6.5\",` / `\"resolved\": \"https://registry.npmjs.org/@types/node/-/node-26.6.5.tgz\",` / `\"integrity\": \"sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==\",` with `\"version\": \"26.6.6\",` / `\"resolved\": \"https://registry.npmjs.org/@types/node/-/node-26.6.6.tgz\",` / `\"integrity\": \"sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==\",`;\n(c) under \"node_modules/ws\" (lines 2373-2375), replace `\"version\": \"8.22.0\",` / `\"resolved\": \"https://registry.npmjs.org/ws/-/ws-8.22.0.tgz\",` / `\"integrity\": \"sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==\",` with `\"version\": \"8.22.1\",` / `\"resolved\": \"https://registry.npmjs.org/ws/-/ws-8.22.1.tgz\",` / `\"integrity\": \"sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g==\",`.\nMake each three-line block ONE Edit, so that its old_string is unique. Leave engines, peerDependencies and the undici-types ~8.9.0 dependency alone: `npm view` shows those unchanged for both new versions.\nError handling: if an old string is missing or not unique (the target changed these files after planning), stop. Read `gh.exe pr diff 237` and `gh.exe pr diff 235` (read-only) and edit to exactly their + lines. Never substitute an npm-generated lockfile.\nNo test file changes. Epic rail 'regression tests or test updates': this task changes no source. Its regression test is the full daemon suite, which step 3 runs against the new ws.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/package-lock.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/package-lock.json"
+      ],
+      "note": "Applied ws 8.22.1 / @types/node 26.6.6 via Edit; numstat 8/8 + 2/2.",
+      "startedAt": "2026-11-04T15:26:45.722Z",
+      "completedAt": "2026-11-04T15:27:41.332Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Apply Dependabot PRs #236 (ws 8.22.0 -> 8.22.1) and #234 (@types/node 26.6.5 -> 26.6.6) to packages/moe-proxy with the main session's own Edit tool. The rails and the error handling are the same as in step 1; compare with `gh.exe pr diff 236` / `gh.exe pr diff 234` if an anchor misses.\nThe old and new strings are IDENTICAL to step 1's: the proxy lock's ws and @types/node entries are byte-identical to the daemon's. Only the line numbers differ:\n- package.json: line 65 (ws) and line 68 (@types/node);\n- package-lock.json: root spec lines 12 and 18, the @types/node block at 831-833, and the ws block at 2068-2070.\nDo not touch moe-vscode/package*.json or packages/moe-claude-plugin/package*.json. They pin the same old versions, but .github/dependabot.yml does not cover them, so they are out of scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/package-lock.json"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/package-lock.json"
+      ],
+      "note": "Proxy edits applied (numstat 8/8 + 2/2).",
+      "startedAt": "2026-11-04T15:27:44.466Z",
+      "completedAt": "2026-11-04T15:27:49.749Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it ONCE, from the task worktree root: the executionContract checkRef, verbatim. Save the text to a scratch file outside the checkout, then run `bash <file> > <scratch>/gate.log 2>&1; echo EXIT=$?` with the Bash timeout at 600000 ms. The daemon suite prints about 107k lines; the planning dry run took 2 min.\nWhat the command checks:\n(1) DoD 1. `git diff --stat` against the merge-base with moe/work-2026-10-24 must list only the 4 files. The sha256 of `git diff --numstat` plus the sorted -U0 changed lines must equal fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997. That value was derived from the four PR diffs: `(printf '8\\t8\\tpackages/moe-daemon/package-lock.json\\n2\\t2\\tpackages/moe-daemon/package.json\\n8\\t8\\tpackages/moe-proxy/package-lock.json\\n2\\t2\\tpackages/moe-proxy/package.json\\n'; for n in 234 235 236 237; do gh.exe pr diff $n; done | tr -d '\\r' | grep -E '^[-+] ' | LC_ALL=C sort) | sha256sum`. So any extra line, file or churn fails the check.\n(2) DoD 2. This step follows the global rail: npm runs only in a snapshot outside the repo, and the worktree has no node_modules anyway. The command copies the WHOLE tree to `mktemp -d` with `git archive HEAD`, because daemon tests read the root .gitignore, docs/, CLAUDE.md and scripts/. It then copies the 4 files over from the worktree. Under env -i (no MOE_* variables, no Windows PATH, the nvm node first), it runs npm ci and npm run build in the daemon, then in the proxy. Both dists therefore exist before the daemon tests, so baselineRun's real-daemon rows run. Finally it runs npm test and `npm ls ws @types/node` in each package; the npm ls versions must be exactly ws@8.22.1 and @types/node@26.6.6.\n(3) It prints both vitest summaries and `GATE-OK <snapshot>`.\nExpected: the planning dry run (2026-11-04, these exact edits on 9e9e7345, from a scratch clone) was green. The daemon had 293 files, 7630 passed | 18 skipped; the proxy had 9 files, 335 passed. The snapshot build regenerates src/generated/initFiles.ts; that is expected and stays in the snapshot (mem:gotcha-npm12-pack-json-node24-test-reporter-tar-snapshot-build). The npm warning that allowScripts blocked esbuild's postinstall is harmless.\nError handling for a red run:\n- Hash mismatch: run `diff <(git diff -U0 $B | grep -E '^[-+] ' | LC_ALL=C sort) <(for n in 234 235 236 237; do gh.exe pr diff $n; done | tr -d '\\r' | grep -E '^[-+] ' | LC_ALL=C sort)` and `git diff --numstat $B`, fix the bytes with Edit, and re-run.\n- npm ci EINTEGRITY, or 'not in sync': a typo in steps 1-2.\n- A failing test: re-run that file alone in the snapshot package with `npx vitest run <file>`. Three are known load flakes: index.version.test.ts, bindHosts.test.ts D-fail and baselineRun.test.ts E2 (mem:gotcha-daemon-linux-snapshot-gate). Check `uptime`, then re-run the whole command once.\n- A failure that reproduces: repeat the snapshot without the overlay. If it fails there too, it is pre-existing at the tip; if not, ws 8.22.1 caused it. Either way, moe.report_blocked with both logs. Do not edit sources or tests, and do not fall back to 8.22.0.\n- A network or registry error: re-run once, then report_blocked.\nSubmit the command text verbatim as complete_task verification.command, with exit 0 and the log tail (the npm ls trees, the 4 summary lines, GATE-OK). Leave the snapshot in place for QA.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate EXIT=0: daemon 293 files / 7630 passed | 18 skipped; proxy 9 files / 335 passed; GATE-OK /tmp/tmp.RI4L510DC1",
+      "startedAt": "2026-11-04T15:27:50.493Z",
+      "completedAt": "2026-11-04T15:30:12.162Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff, then the completion summary.\nChecks:\n(a) Compare `git diff <merge-base>` hunk by hunk with the four PR diffs (`gh.exe pr diff 234`..`237`, read-only). Expect exactly 20 -/+ line pairs, with no reformatting, no lockfileVersion change and no churn in other packages.\n(b) `git status --short` in the worktree shows only the 4 files. No node_modules or dist appeared in the worktree. Nothing changed under the shared checkout's packages/*/dist or node_modules: no npm command ran in either tree.\n(c) moe-vscode and packages/moe-claude-plugin are untouched.\n(d) No GitHub write happened: no gh pr close, comment, review or merge on #234-#237, only read-only `gh.exe pr diff`/`view`.\n(e) A second run is safe: on a re-run the old strings are gone, so stop rather than re-edit, and each gate run takes a fresh mktemp dir.\nCompletion summary for the human:\n- Name PRs #234, #235, #236 and #237 with their titles. Each closes itself when PR #230 merges into main, because Dependabot sees the dependency already up to date. No action is needed on them now.\n- The live daemon (the shared checkout's dist) picks up ws 8.22.1 only at the next governor restage. This task does no daemon swap.\n- Cite the gate's daemon and proxy counts.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-daemon/package-lock.json",
+        "packages/moe-proxy/package.json",
+        "packages/moe-proxy/package-lock.json"
+      ],
+      "note": "Self-review: git status shows only the 4 files, 20 insertions/20 deletions, numstat and sha256 gate match the PR-derived hash. No npm ran in the worktree or shared checkout; no GitHub write (gh.exe read-only attempt returned nothing; the gate hash already pins the PR bytes). vscode/claude-plugin untouched.",
+      "startedAt": "2026-11-04T15:30:13.027Z",
+      "completedAt": "2026-11-04T15:30:25.647Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 534.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:10:01.205Z",
+  "updatedAt": "2026-11-04T19:20:45.697Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:10:14.283Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T15:35:44.995Z",
+    "wallClockMs": 1530712
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e",
+    "worker-a0305b0b",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T15:25:41.425Z",
+  "executionContract": {
+    "intendedBehavior": "packages/moe-daemon and packages/moe-proxy depend on ws ^8.22.1 (locked 8.22.1) and @types/node ^26.6.6 (locked 26.6.6). The resolved and integrity values are exactly those of Dependabot PRs #234-#237, and the changed lines are byte-for-byte the PRs' 20 -/+ line pairs. The bumps land on moe/work-2026-10-24 with PR #230, and Dependabot then closes #234-#237 on its own. No other file, package or behavior changes.",
+    "acceptanceCriteria": [
+      "Against the merge-base with moe/work-2026-10-24, git diff --numstat is exactly 8/8 for packages/moe-daemon/package-lock.json and 2/2 for packages/moe-daemon/package.json, and the same for moe-proxy. The changed lines equal the union of the -/+ lines in the PR #234-#237 diffs, so the gate hash is fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997.",
+      "In a /tmp git-archive snapshot of the worktree's bytes, npm ci, npm run build and npm test pass in both packages with fresh results. npm ls ws @types/node shows only ws@8.22.1 and @types/node@26.6.6 in each package.",
+      "No GitHub write on PRs #234-#237. The completion summary names them as closing themselves when PR #230 merges."
+    ],
+    "invariants": [
+      "No npm install, ci, build, test or clean runs in the shared checkout /mnt/d/projexts/moes or in the task worktree. Every npm command runs in the /tmp snapshot.",
+      "Tracked files are written only with the main session's own Edit tool.",
+      "No GitHub write: gh.exe is used only for read-only pr diff/view.",
+      "No process is killed."
+    ],
+    "compatibility": [
+      "lockfileVersion 3 and every other lockfile byte stay unchanged. engines, peerDependencies and undici-types ~8.9.0 stay as well: the registry metadata of ws@8.22.1 and @types/node@26.6.6 matches the old versions on those fields.",
+      "No change to source, tests, MCP tool contracts or .moe/ state files.",
+      "moe-vscode and packages/moe-claude-plugin keep ws ^8.22.0 and @types/node ^26.6.5, because .github/dependabot.yml does not cover them."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/package.json: only the spec strings of dependencies.ws and devDependencies[\"@types/node\"]",
+      "packages/moe-daemon/package-lock.json: packages[\"\"].dependencies.ws, packages[\"\"].devDependencies[\"@types/node\"], and the version/resolved/integrity of packages[\"node_modules/ws\"] and packages[\"node_modules/@types/node\"]",
+      "packages/moe-proxy/package.json and packages/moe-proxy/package-lock.json: the same fields"
+    ],
+    "reuse": [
+      "Dependabot's own hunks (gh.exe pr diff 234-237) are the source of truth for every byte. No npm install --package-lock-only, because npm 12.2.0 could re-resolve or reformat other entries.",
+      "The existing daemon and proxy suites are the regression coverage for the ws bump: the /ws, /mcp and /runner servers, and the proxy client with its reconnects."
+    ],
+    "sourceAssumptions": [
+      "At target 9e9e7345, packages/moe-daemon/package-lock.json (blob 415a80834), packages/moe-proxy/package-lock.json (blob 7fa34e414) and packages/moe-daemon/package.json (612cb428f) are identical to origin/main's, which is the PRs' base. packages/moe-proxy/package.json (497bf2e37) differs from main's 5e8f66ec7 elsewhere, but its ws and @types/node lines (65 and 68) are the same text.",
+      "Each Edit anchor occurs exactly once per file. No nested ws or @types/node entry exists in either lock.",
+      "npm view on 2026-11-04: ws@8.22.1 dist.integrity sha512-oyL6OPYme/CmiFvNuGzeoxCJ4nOrZE2O1FwM9MWM1AsGri6nLXB2pg+lNA8aLeXMSav0J6eIVS1j6vUPzUtK9g== and @types/node@26.6.6 sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==, both equal to the PR diffs.",
+      "Both locks list @rolldown/binding-linux-x64-gnu 1.2.15, so a Linux npm ci installs the native binding and vitest starts.",
+      "Planning dry run on 2026-11-04: the exact checkRef, run from a scratch clone of 9e9e7345 with these exact edits, exited 0 in 2 min. Daemon: 293 files, 7630 passed | 18 skipped. Proxy: 9 files, 335 passed."
+    ],
+    "checkRefs": [
+      "set -euo pipefail; cd \"$(git rev-parse --show-toplevel)\"; B=${GATE_BASE:-$(git merge-base HEAD moe/work-2026-10-24)}; git diff --stat $B; [ \"$( (git diff --numstat $B; git diff -U0 --no-color $B|grep -E '^[-+] '|LC_ALL=C sort)|sha256sum|cut -c1-64)\" = fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997 ]; S=$(mktemp -d); git archive HEAD|tar -x -C $S; for f in packages/moe-{daemon,proxy}/package{,-lock}.json; do cp $f $S/$f; done; env -i HOME=$HOME PATH=$(dirname \"$(command -v node)\"):/usr/bin:/bin S=$S bash -euo pipefail -c 'for p in daemon proxy; do cd $S/packages/moe-$p; npm ci --no-audit --no-fund; npm run build; done; for p in daemon proxy; do cd $S/packages/moe-$p; npm test 2>&1|tee $S/$p.log; L=$(npm ls ws @types/node); echo \"$L\"; [ \"$(echo \"$L\"|grep -oE \" (ws|@types/node)@[^ ]+\"|sort -u|tr -d \"\\n\")\" = \" @types/node@26.6.6 ws@8.22.1\" ]; done; sed \"s/\\x1b\\[[0-9;]*m//g\" $S/*.log|grep -aE \"^ +(Test Files|Tests) \"; echo GATE-OK $S'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. `npm install ws@8.22.1 @types/node@26.6.6 --package-lock-only` per package. Rejected: it is a shell write into tracked files, and the global rail requires the Edit tool so that a TOOL witness exists. npm 12.2.0 may also re-resolve other entries, which the task forbids.\n2. `git apply --3way` of the gh.exe diffs. Rejected: also a shell write. A plain sequential apply also fails: the #234 and #236 hunks for the proxy package.json overlap in context.\n3. Hand edits with Edit. Chosen: 20 line pairs, deterministic, and the gate pins the exact bytes.\n4. npm ci, build and test in place in the worktree. Rejected: the global rail requires a snapshot outside the repo. The worktree also has no node_modules (MOE_WORKTREE_DEPS_MISSING), and /mnt/d is slow. The snapshot carries the worktree's own bytes, which is what the DoD's 'from the task worktree' asks for.",
+    "codebaseInsights": "- The daemon suite needs the whole tree in the snapshot: it reads the root .gitignore, docs/, CLAUDE.md and scripts/.\n- Build both dists before the daemon tests (mem:gotcha-daemon-linux-snapshot-gate).\n- The proxy's pretest rebuilds its own dist.\n- The daemon prebuild in a git-archive snapshot regenerates src/generated/initFiles.ts and logs 'no git history'. This is harmless and stays in the snapshot.\n- Under env -i, npm ls prints an ASCII tree ('+--', '`--'). The gate's regex keys on the space before the name, so it handles both tree styles.\n- vitest colours its summary even into a pipe, so the gate strips ANSI codes first.\n- QA re-run: the control checkout carries uncommitted board diffs, so use a clean clone detached at the landed squash commit C. Run the same command there with GATE_BASE=C~1.\n- No other open task declares these 4 paths (scan on 2026-11-04).",
+    "risks": "- ws 8.22.1 makes three changes: IPC URL paths are no longer cut at ':'; it uses node's http.websocketMask/Unmask instead of bufferutil; and Sender.frame() no longer returns empty chunks. The daemon (/ws, /mcp, /runner) and the proxy client both use ws, so both full suites are the gate. The dry run was green.\n- The full daemon suite has known flakes under host load.\n- The npm registry must be reachable.\n- isEpicFinal is the order fallback of the rolling Stability & Hardening epic (300+ rows). The gate is therefore the full suites of the two packages changed (a shared dependency means full regression), not a whole-epic sweep.\n- If the target changes these files before the claim, an anchor misses or the hash fails. In that case, diff against the PRs and re-apply exactly their lines.",
+    "keyFiles": [
+      "packages/moe-daemon/package.json",
+      "packages/moe-daemon/package-lock.json",
+      "packages/moe-proxy/package.json",
+      "packages/moe-proxy/package-lock.json",
+      ".github/dependabot.yml (covers only daemon, proxy, gradle and github-actions)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9e9e7345d3479a61318c1a2c2584e3a10d68178f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T15:25:41.455Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T15:31:50Z",
+    "at": "2026-11-04T15:36:13.152Z"
+  },
+  "workStartedAt": "2026-11-04T15:26:45.722Z",
+  "reviewStartedAt": "2026-11-04T15:30:35.415Z",
+  "verification": {
+    "command": "bash /tmp/edf70af0-gate/gate.sh  # = executionContract checkRef verbatim (set -euo pipefail; cd \"$(git rev-parse --show-toplevel)\"; B=${GATE_BASE:-$(git merge-base HEAD moe/work-2026-10-24)}; git diff --stat $B; sha256 of numstat+sorted -U0 lines == fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997; git archive snapshot + 4-file overlay; npm ci, build, test, npm ls in daemon and proxy under env -i)",
+    "exitCode": 0,
+    "outputTail": "moe-proxy@0.8.0\n+-- @types/node@26.6.6\n+-- @types/ws@8.18.2\n+-- vitest@5.0.5\n`-- ws@8.22.1\n Test Files  293 passed (293)\n      Tests  7630 passed | 18 skipped (7648)\n Test Files  9 passed (9)\n      Tests  335 passed (335)\nGATE-OK /tmp/tmp.RI4L510DC1",
+    "reportedAt": "2026-11-04T15:30:35.415Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/package.json",
+    "packages/moe-daemon/package-lock.json",
+    "packages/moe-proxy/package.json",
+    "packages/moe-proxy/package-lock.json"
+  ],
+  "completionSummary": "Folded Dependabot bumps into the work branch: ws ^8.22.0 -> ^8.22.1 (locked 8.22.1) and @types/node ^26.6.5 -> ^26.6.6 (locked 26.6.6) in packages/moe-daemon and packages/moe-proxy (package.json + package-lock.json only; 20 -/+ line pairs, resolved/integrity as in the PRs; gate hash fdb4dad0... matches). Gate (snapshot /tmp/tmp.RI4L510DC1): npm ci + build + test pass in both; daemon 293 files, 7630 passed | 18 skipped; proxy 9 files, 335 passed; npm ls shows only ws@8.22.1 and @types/node@26.6.6. moe-vscode and moe-claude-plugin untouched (outside dependabot.yml). No GitHub action taken: Dependabot PRs #234 (@types/node, proxy), #235 (@types/node, daemon), #236 (ws, proxy), #237 (ws, daemon) will close themselves when PR #230 merges into main; nothing for the human to do now. The live daemon picks up ws 8.22.1 only at the next governor restage; no daemon swap here.",
+  "commits": [
+    {
+      "sha": "342423a3066a4cfea068cc555a7c784610a32eeb",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T15:25:49Z",
+      "paths": [
+        "packages/moe-daemon/package-lock.json",
+        "packages/moe-daemon/package.json",
+        "packages/moe-proxy/package-lock.json",
+        "packages/moe-proxy/package.json"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T15:31:36.608Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T15:35:44.995Z",
+  "reviewCompletedAt": "2026-11-04T15:35:44.995Z",
+  "reviewSummary": "Reviewed completion 342423a3 (on moe/work-2026-10-24, pushed; recorded in task.commits). Diff is 4 files, +20/-20 (numstat 8/8 and 2/2 in each package); well under the 400 LOC cap.\n\nDoD 1: I derived the sha256 from the live PR #234-#237 diffs (gh.exe pr diff, read-only) and from the landed commit (342423a3^..342423a3). Both are fdb4dad0cc6c0f593638140413605532f9e56214bbaa5e5d5a85d411bddb6997, so the changed lines are byte-for-byte the PRs' 20 -/+ pairs. `npm view` confirms ws@8.22.1 integrity sha512-oyL6OPYm...K9g== and @types/node@26.6.6 integrity sha512-MzQj+8Kx...aog==, both matching the lockfiles. The commit touches only packages/moe-{daemon,proxy}/package{,-lock}.json, so moe-vscode and moe-claude-plugin are untouched.\n\nDoD 2: I re-ran the task's gate (/tmp/edf70af0-gate/gate.sh, the checkRef verbatim) from a clean clone at 342423a3 in /tmp, with GATE_BASE=342423a3^. Result: EXIT=0 and GATE-OK. npm ci, npm run build and npm test passed in both packages, with no npm command in the shared checkout. Daemon: 293 files, 7630 passed | 18 skipped. Proxy: 9 files, 335 passed. `npm ls` shows only ws@8.22.1 and @types/node@26.6.6 in each package. Counts match the worker's run.\n\nNote: my first run from the control checkout failed the hash check. The gate's `git diff $B` compares against the working tree, which has dirty .moe/ files there. That is an artifact of where I ran it, not a defect in the commit. The clean-clone run is the valid one.\n\nDoD 3: `gh.exe pr view` on #234-#237 shows only Dependabot's own 2026-11-04T00:23Z comments (missing-label notice), and there is no worker comment, review or close. The worker's completionSummary names the four PRs as closing themselves when PR #230 merges. The live daemon picks up ws 8.22.1 only at the next governor restage.\n\nComplexity pass: nothing to cut. Dependency-only change with no source or test edits.",
+  "requiredCheckAtDone": null
+}

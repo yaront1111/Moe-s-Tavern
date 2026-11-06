@@ -15,37 +15,61 @@
     {
       "stepId": "step-1",
       "description": "1. Phase 0, RED, then the node launcher suites: one seam line each (Edit tool only).\n\nPhase 0 (no edits):\n- This row runs in WORKTREE mode, right after the switch (it depends on gate 6519ed91). Confirm from moe.get_context that `workspace.mode` is `worktree`. Run every command in this plan from the top of your task worktree W (`workspace.path`), never from the control checkout D:\\projexts\\moes.\n- Confirm the dependencies are in W's HEAD:\n  - 3c4be125: `git grep -n MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -- scripts/moe-agent.sh scripts/moe-agent.ps1` shows the exact-'1' refusal conditions, sh `[ \"${MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER:-}\" != 1 ] && moe_wrapper_in_worktree ...` and ps1 `$moeInWorktree -and $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER -cne '1'`. If they landed in another shape, follow the landed shape. This row never edits the wrappers, postflight.*, postflight-worktree.cjs or worktree-landing.*.\n  - WT-19b (48aafb88): scripts/tests/worktree-e2e.cjs is its landed version. If launch()'s env statement changed shape since planning, put the line below directly after the landed one.\n- Re-read this row's comments and #governors: a later comment can override this plan.\n- Re-check the candidates with `git grep -lE 'moe-agent\\.(sh|ps1)' -- scripts/tests`. The classification below was probed on 2026-11-02 at 7aa4148c plus WT-13's guard, running each suite from a registered <scratch repo>/.worktrees/task-x.\n  - CHANGED, because each launches this checkout's full wrapper and is refused from a task worktree:\n    - agent-git-guard.test.mjs: 11 launches refused;\n    - protected-agent-command.test.mjs: 13;\n    - mention-provenance.sh: 5 modes;\n    - mention-provenance.ps1: 3 modes;\n    - worktree-e2e.cjs: 2 scenarios;\n    - wave1-pilot.mjs: the manual pilot, at its first wrapper run.\n    All but mention-provenance.sh build the wrapper env from a copy that drops the caller's MOE_*. mention-provenance.sh inherits the caller env, but no caller outside postflight.sh sets the seam.\n  - UNCHANGED, although it launches the full wrapper: agent-runtime.test.mjs.\n    - It runs `exec /bin/bash \"$MOE_FIXTURE_SCRIPT\" --help` with PATH set to one fixture dir that holds no git.\n    - moe_wrapper_in_worktree's `git rev-parse` therefore fails, and the guard takes its fail-open, non-Git path.\n    - It passed 10/10 unchanged from a registered task worktree.\n    - With the seam added, DoD 2's 'fails without this change' could never hold for it.\n  - UNCHANGED, because they only read, slice or parse the wrapper source and never run its top level:\n    - usage-attribution.test.mjs: Python cut out of resolve_attribution, plus a ParseFile of moe-agent.ps1 through MOE_TEST_WRAPPER;\n    - moe-account-lease.test.mjs: STREAM_JSON_PARSER and the lease loops, cut out of both wrappers;\n    - daemon-json-cap, prompt-cache-launcher, seat-registration, taskless-handoff, taskless-binding-notice, push-failure-message, resume-progress, usage-launcher, importee-guard-bash and hook-isolation-bash (all .test.mjs);\n    - importee-guard.ps1 and hooked-commit.ps1: ParseFile;\n    - local-runner*.test.mjs: path lists only;\n    - moe-call.test.mjs: a comment only.\n  - OUT OF SCOPE under DoD 5, because it sits outside scripts/tests: packages/moe-daemon/src/delivery/acceptance.test.ts launches REPO_ROOT/scripts/moe-agent.*. The global customRule runs daemon vitest only in a git-archive or clone snapshot outside the repo, never under .worktrees/task-*, so the guard never sees it there.\n  - If the grep finds a NEW suite that launches the wrapper, add it here only while the plan stays at 10 files or fewer. Otherwise, file a follow-up row and name it in the summary.\n- RED, from W (record it in the step note). First take `U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}')` (mem:gotcha-agent-session-env-leaks-into-tests). Then:\n  - `env $U node --test scripts/tests/agent-git-guard.test.mjs` must fail with `codes=MOE_WRAPPER_IN_WORKTREE`;\n  - `env $U bash scripts/tests/mention-provenance.sh` must fail with `[ERROR] MOE_WRAPPER_IN_WORKTREE:`.\n  Both write only under the OS temp dir, never into W.\n\nEdits. One rule covers every suite edit in steps 1-2:\n- Each added line, code or comment, contains the literal MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER, and no existing line changes.\n- Deleting the lines that name it then gives back the pre-change file byte for byte. That is how step 4's RED legs rebuild 'the same copy without this change'.\n- End each old_string on a non-space character (mem:gotcha-edit-tool-trailing-space-trim).\n\n(a) scripts/tests/agent-git-guard.test.mjs, fixture(): directly after the `f.env = { ...clean, ... GIT_CONFIG_VALUE_2: 'unused'  };` statement, add this line exactly:\n  f.env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // `clean` drops MOE_*: WT-13's guard refuses scripts/moe-agent.* when this suite runs from a task worktree (task-86431c31)\nEvery launch() uses f.env, and the concurrent case's `other.env = { ...f.env, ... }` inherits it.\n\n(b) scripts/tests/protected-agent-command.test.mjs: directly after `Object.assign(env, { HOME: fx.home, ... MOE_DISABLE_HEARTBEAT: '1' });`, add:\n  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // the filter above drops MOE_*: WT-13's guard refuses SH/PS1 when this suite runs from a task worktree (task-86431c31)\nThe `delete env.Path` and MOE_RUNTIME_PROTECTED marker lines after it stay as they are.\n\n(c) scripts/tests/worktree-e2e.cjs, launch(): directly after the `const env={...inherited, ... E2E_CLI_EXPECT_MARKERS:(o.markers||[]).join(',')};` statement, add:\n  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1'; // `inherited` drops MOE_*: WT-13's guard refuses WRAPPER when it sits in a task worktree (task-86431c31)\n\n(d) scripts/tests/wave1-pilot.mjs, runWrapper(): directly after `const env = isolatedEnv({ MOE_PROXY_PATH: slash(PROXY_JS), MOE_DISABLE_HEARTBEAT: '1', PILOT_CLI_CONFIG: ctx.cliConfig });`, add:\n  env.MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1'; // isolatedEnv drops MOE_*: WT-13's guard refuses REPO's wrapper when the pilot runs from a task worktree (task-86431c31)\nOnly the wrapper gets the seam. The daemon, proxy and git spawns keep the bare isolatedEnv().\n\nDoD 3: none of these suites has a MOE_WRAPPER_IN_WORKTREE refusal case. `git grep -n MOE_WRAPPER_IN_WORKTREE -- scripts/tests` hits only postflight-worktree.cjs (wt-guard), which this row does not touch, so no refusal case gains the seam.\n\nerror handling: each edit is one env-object line, with no new IO. A missing or misspelt key shows up only as the refusal when the suite runs from W, and step 4's GREEN leg catches that. Run `node --check` on each edited file.\n\ntest: quick GREEN from W: `env $U node --test scripts/tests/agent-git-guard.test.mjs scripts/tests/protected-agent-command.test.mjs` passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs",
         "scripts/tests/protected-agent-command.test.mjs",
         "scripts/tests/worktree-e2e.cjs",
         "scripts/tests/wave1-pilot.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/worktree-e2e.cjs",
+        "scripts/tests/wave1-pilot.mjs"
+      ],
+      "note": "Phase 0: workspace.mode=worktree, W=.worktrees/task-86431c31. 3c4be125's seam is in W's HEAD exactly as planned (sh:36, ps1:140). worktree-e2e.cjs is WT-19b's a3269a28 version. The candidate grep found no new launcher suite. No comment overrides the plan. RED from W, unchanged: agent-git-guard 25 tests, 22 fail, 11 codes=MOE_WRAPPER_IN_WORKTREE; mention-provenance.sh FAILED with [ERROR] MOE_WRAPPER_IN_WORKTREE:. Edits: one seam line each, after the planned anchors. node --check is OK on all four, with no CR. git diff -U0 shows only +lines naming the env (+4/-0). Quick GREEN from W: agent-git-guard + protected-agent-command 52 tests, 38 pass, 0 fail, 14 skipped (the pwsh legs on linux), and no MOE_WRAPPER_IN_WORKTREE in the output.",
+      "startedAt": "2026-11-02T19:16:43.689Z",
+      "completedAt": "2026-11-02T19:20:07.854Z"
     },
     {
       "stepId": "step-2",
       "description": "2. mention-provenance twins: set the seam on their wrapper launch. Edit tool only, under step 1's rule: every added line names the env, and no existing line changes.\n\nscripts/tests/mention-provenance.sh, in the per-mode run:\n(a) The file has two `  set +e` lines, so anchor on the pair `  set +e` then `  PATH=\"$TMP_DIR/bin:$PATH\" \\`. Between those two lines, add this comment line (two-space indent), exactly:\n  # MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 (below): WT-13's guard refuses $WRAPPER when this suite runs from a task worktree (task-86431c31).\nA comment cannot sit inside the backslash-continued command, so it goes above it.\n(b) Directly after `  MOE_TASKLESS_WAIT_SEC=5 \\`, add this line:\n  MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 \\\nThen run `bash -n scripts/tests/mention-provenance.sh`.\n\nscripts/tests/mention-provenance.ps1, in Invoke-ProvenanceMode, following its own save/set/restore pattern (eight-space indent):\n(a) In `$saved = @{ ... }`, directly after `waitSec = $env:MOE_TASKLESS_WAIT_SEC`, add:\n        seam = $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER\n(b) In try, directly after `$env:MOE_TASKLESS_WAIT_SEC = '5'`, add:\n        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = '1' # WT-13's guard refuses $wrapper when this suite runs from a task worktree (task-86431c31)\n(c) In finally, directly after `$env:MOE_TASKLESS_WAIT_SEC = $saved.waitSec`, add:\n        $env:MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER = $saved.seam\nThe file has no BOM, so keep the new lines ASCII only, with LF endings. PS 5.1 reads a file without a BOM as ANSI (mem:gotcha-ps51-bomless-non-ascii-needles).\n\nerror handling: the finally restores the caller's value even when the wrapper run throws, and $null restores 'unset'. No new IO.\n\ntest: quick GREEN from W: `env $U bash scripts/tests/mention-provenance.sh` prints `mention-provenance.sh PASSED`. The ps1 twin runs in step 4's PS leg (C4).",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/mention-provenance.sh",
         "scripts/tests/mention-provenance.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/mention-provenance.sh",
+        "scripts/tests/mention-provenance.ps1"
+      ],
+      "note": "mention-provenance.sh gets a comment line plus `MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 \\` after `MOE_TASKLESS_WAIT_SEC=5 \\`. bash -n is OK. mention-provenance.ps1 gets save (seam=), set ('1') and restore ($saved.seam) in Invoke-ProvenanceMode. It stays ASCII with no BOM and no CR, and PS 5.1 ParseFile reports errors=0. git diff -U0: every changed line names the env (+9/-0 across 6 files). Quick GREEN from W: mention-provenance.sh PASSED (8 stored + 2 synthetic, 5 modes), rc=0. The ps1 GREEN and RED legs run in step 4's C4.",
+      "startedAt": "2026-11-02T19:20:09.002Z",
+      "completedAt": "2026-11-02T19:21:18.570Z"
     },
     {
       "stepId": "step-3",
       "description": "3. Register the name: the parity-check twins and one docs row. Edit tool only, and add new lines only.\n- scripts/tests/parity-check.sh, in the `# Env names.` loop: directly after `for env_name in GIT_TERMINAL_PROMPT MOE_DISABLE_CHECKPOINT MOE_ATTRIBUTION MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF \\`, add this line:\n  MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER \\\n  Add a line rather than edit that one, so that a concurrent edit of the same list (WT-19, b1ca54f2) merges cleanly at landing.\n- scripts/tests/parity-check.ps1, in `'env names' = @(`: directly after the list's first line (the one ending `'MOE_RESUME_MAX_ATTEMPTS',`), add this line (eight-space indent), ASCII only:\n        'MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER',\n- docs/CONFIGURATION.md: add one new table row directly after the `MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF` row, and change nothing else, because WT-17 (cda65eb0) and WT-19 (b1ca54f2) also declare this file. The row, exactly:\n| `MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER` | Test seam only: exactly `1` lets a wrapper copy under `<repo>/.worktrees/task-*/` launch instead of refusing with `MOE_WRAPPER_IN_WORKTREE`; any other value keeps the refusal. The launcher harnesses in `scripts/tests/` set it for the wrapper they launch, so a worker can run them from its task worktree. The guard's own refusal cases never set it, and no seat or launcher does | Unset | `1` |\n- See mem:gotcha-parity-check-literals.\n\nerror handling: parity-check's require_both fails if either wrapper lacks the name. That would mean 3c4be125's seam is missing. Stop, and report_blocked with blockedOnTaskIds [task-3c4be1254a4b43d0b5e72e0fd8cd0604]. Never edit a wrapper here.\n\ntest: `bash scripts/tests/parity-check.sh` prints PASS.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Three new lines, no line edited:\n- parity-check.sh: env-name loop entry after the MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF line.\n- parity-check.ps1: 'env names' entry after the first line. It stays ASCII, with no BOM and no CR.\n- docs/CONFIGURATION.md: the planned row, verbatim, after MOE_POSTFLIGHT_TEST_HOOK_PRE_UPDATE_REF.\nIn W, bash scripts/tests/parity-check.sh prints PASS, and powershell.exe parity-check.ps1 prints PASS.",
+      "startedAt": "2026-11-02T19:21:19.914Z",
+      "completedAt": "2026-11-02T19:21:59.553Z"
     },
     {
       "stepId": "step-4",
       "description": "4. Verification: run once, fresh, from W's top level (cwd = W). There are four commands, each run verbatim. C2 is the complete_task evidence.\n\nBefore running: `git status --short` lists only this task's nine files. W is private, so any other entry is your own stray edit: remove it, or explain it in the summary.\n\nHow to run:\n- C2, C3 and C4 each take several minutes. Put each command, verbatim, into its own scratch script under /mnt/d/moe-scratch.\n- From W, start each one with `( set -m; nohup bash <script> > <log> 2>&1 < /dev/null & echo $! > <pidfile> )`.\n- Wait with bounded `timeout 590` polls.\n- C2, C3 and C4 may run concurrently.\n- Kill only PIDs you recorded (mem:gotcha-qa-windows-launcher-tests-from-wsl).\n\nC1, the DoD 4 and DoD 5 checks (fast):\nN=MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER;T=scripts/tests;test -z \"$(grep -L $N $T/{agent-git-guard.test.mjs,protected-agent-command.test.mjs,mention-provenance.sh,mention-provenance.ps1,worktree-e2e.cjs,wave1-pilot.mjs,parity-check.sh,parity-check.ps1} docs/CONFIGURATION.md)\"&&git grep -l $N -- ':!.moe'&&! git grep -l $N -- ':!.moe'|grep -vE \"^(scripts/moe-agent\\.(sh|ps1)|$T/.+|docs/CONFIGURATION\\.md)$\"&&bash $T/parity-check.sh&&powershell.exe -NoProfile -ExecutionPolicy Bypass -File 'scripts\\tests\\parity-check.ps1'\n- All nine files name the env.\n- Outside the .moe/ board records, git grep finds the name only in scripts/moe-agent.{sh,ps1}, scripts/tests/ and docs/CONFIGURATION.md. Board records are daemon-written task text that quotes the name, not code or docs.\n- parity-check.sh and parity-check.ps1 both print PASS.\n\nC2, the GREEN bash leg (the complete_task verification):\nT=scripts/tests;U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}');X=$(mktemp -d \"${TMPDIR:-/tmp}/86431c31.XXXXXX\")&&G=\"git -C $X/r\"&&mkdir $X/r $X/pw&&git archive HEAD|tar -x -C $X/r&&cp --parents $T/{agent-git-guard.test.mjs,protected-agent-command.test.mjs,mention-provenance.sh,mention-provenance.ps1,worktree-e2e.cjs,wave1-pilot.mjs,parity-check.sh,parity-check.ps1} docs/CONFIGURATION.md $X/r&&cp $T/postflight-fake-proxy.js $X/fp.js&&$G init -q&&$G add -A&&$G -c user.name=g -c user.email=g@g.invalid commit -qm t&&$G worktree add -q --detach .worktrees/task-x&&cd $X/r/.worktrees/task-x&&env $U node --test $T/{agent-git-guard,protected-agent-command,agent-runtime}.test.mjs&&env $U bash $T/mention-provenance.sh&&env $U node $T/worktree-e2e.cjs sh scripts/moe-agent.sh $X/fp.js $X bash&&env $U MOE_WORKTREE_ONLY=wt-guard node $T/postflight-worktree.cjs sh $PWD/scripts/moe-agent.sh $X/fp.js $X/pw bash&&bash $T/parity-check.sh\n- It copies W's tree (HEAD plus this row's nine files) into a fresh scratch repo and registers <scratch repo>/.worktrees/task-x. That is a real task worktree, so WT-13's guard applies to every wrapper launched from it.\n- From there, all of these must pass:\n  - agent-git-guard and protected-agent-command;\n  - agent-runtime, unchanged, which proves it needs no seam;\n  - mention-provenance.sh, which prints PASSED;\n  - worktree-e2e, which prints `2 ok, 0 failed`;\n  - postflight-worktree's wt-guard case: its refusal copies stay refused, and 3c4be125's opt-out cases pass (DoD 3);\n  - parity-check.sh, which prints PASS.\n- `env $U` keeps your session's MOE_* and CLAUDE* out of every suite.\n\nC3, the RED bash leg:\nN=MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER;T=scripts/tests;S=\"$T/agent-git-guard.test.mjs $T/protected-agent-command.test.mjs $T/mention-provenance.sh $T/worktree-e2e.cjs\";U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}')&&X=$(mktemp -d \"${TMPDIR:-/tmp}/86431c31-red.XXXXXX\")&&mkdir $X/r&&git archive HEAD|tar -x -C $X/r&&cp --parents $S $X/r&&(cd $X/r&&sed -i \"/$N/d\" $S)&&cp $T/postflight-fake-proxy.js $X/fp.js&&git -C $X/r init -q&&git -C $X/r add -A&&git -C $X/r -c user.name=g -c user.email=g@g.invalid commit -qm t&&git -C $X/r worktree add -q --detach .worktrees/task-x&&cd $X/r/.worktrees/task-x||exit 1;r(){ env $U \"$@\">$X/r.log 2>&1&&return 1;grep -qE '\\[ERROR\\] MOE_WRAPPER_IN_WORKTREE:|codes=MOE_WRAPPER_IN_WORKTREE' $X/r.log;};r node --test $T/agent-git-guard.test.mjs&&r node --test $T/protected-agent-command.test.mjs&&r bash $T/mention-provenance.sh&&r node $T/worktree-e2e.cjs sh scripts/moe-agent.sh $X/fp.js $X bash&&echo \"RED ok: all 4 suites refused without the seam\"\n- It builds the same copy, then deletes every line naming the env from the four bash-leg suites. By step 1's rule, that leaves exactly the pre-change files.\n- Each of the four suites must fail, and its output must carry the refusal: `[ERROR] MOE_WRAPPER_IN_WORKTREE:`, or `codes=MOE_WRAPPER_IN_WORKTREE` for agent-git-guard, which prints only the codes it saw.\n- It ends with `RED ok: all 4 suites refused without the seam`.\n\nC4, the PS leg (Windows node and PowerShell, run through WSL interop):\nN=MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER;T=scripts/tests;Q=\"pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\\\tests\\\\mention-provenance.ps1 -PowerShell\";X=$(mktemp -d /mnt/d/moe-scratch/86431c31-ps.XXXXXX)||exit 1;for c in g r;do W=$X/$c/.worktrees/task-x;mkdir -p $W&&git -C $X/$c init -q&&git archive HEAD|tar -x -C $W&&cp --parents $T/{mention-provenance.ps1,wave1-pilot.mjs} $W&&{ [ $c = g ]||(cd $W&&sed -i \"/$N/d\" $T/mention-provenance.ps1 $T/wave1-pilot.mjs);}||exit 1;for p in moe-daemon moe-proxy;do cmd.exe /c mklink /J \"$(wslpath -w $W/packages/$p/node_modules)\" \"D:\\\\projexts\\\\moes\\\\packages\\\\$p\\\\node_modules\">/dev/null||exit 1;done;done;cd $X/g/.worktrees/task-x&&$Q powershell&&$Q pwsh&&node.exe $T/wave1-pilot.mjs&&cd $X/r/.worktrees/task-x&&! $Q powershell>$X/m.log 2>&1&&grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' $X/m.log&&! node.exe $T/wave1-pilot.mjs>$X/p.log 2>&1&&grep -qF '[ERROR] MOE_WRAPPER_IN_WORKTREE:' $X/p.log&&echo \"PS leg ok: green passed, red refused\"\n- Windows git cannot follow a WSL-made worktree link. So here the copy is a plain directory at <scratch repo>/.worktrees/task-x/ inside a WSL-made repo on D:. The guard's prefix rule refuses that copy too (probed).\n- The packages' node_modules are junctioned, read-only, to the control checkout's, as wave1-pilot's header asks (mem:gotcha-wave1-pilot-and-git-bash-spawn).\n- GREEN:\n  - mention-provenance.ps1 prints PASSED with the PS 5.1 child (`-PowerShell powershell`) and with pwsh;\n  - wave1-pilot prints `PASS: Wave 1 pilot success path, 27 links` (pwsh wrapper).\n- RED, from the copy with the seam lines deleted: both fail with `[ERROR] MOE_WRAPPER_IN_WORKTREE:`.\n- The parent is pwsh on purpose. Under a Windows PowerShell 5.1 parent, mention-provenance.ps1 fails its child-host probe before any wrapper launch, and it does so at HEAD too. That pre-existing harness bug is filed as task-e856c24678e94ff4b38ef79c99069e24; it is not this row's.\n- wave1-pilot must run on Windows node. Under WSL, the Windows-installed node_modules cannot resolve TypeScript's native linux binary.\n- After C4, unlink its four junctions from WSL with a plain `rm <link>`. Never use `rm -r` through them, and never a Windows recursive delete. Then check that D:\\projexts\\moes\\packages\\moe-daemon\\node_modules and moe-proxy\\node_modules still list entries (mem:gotcha-worktree-node-modules-junction).\n\nExpected: all four exit 0.\n- If a suite fails for a reason other than the seam, attribute it before any retry, and never weaken a suite. Examples: an unrelated landed change, or a missing input such as Windows python.\n- If the failure is not yours, report_blocked with the evidence.\n\nerror handling: every command is an && chain, so it fails closed.\n- A scratch-setup failure (mktemp, archive, git init, worktree add, mklink) exits non-zero before any suite runs.\n- C3's `r` helper fails both when a suite passes and when the refusal text is missing.\n- The bash legs run every suite under `env $U`, and WSL interop forwards no MOE_* to the Windows processes. So an inherited seam can neither fake a pass nor mask a RED.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs",
         "scripts/tests/protected-agent-command.test.mjs",
@@ -56,12 +80,26 @@
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/worktree-e2e.cjs",
+        "scripts/tests/wave1-pilot.mjs",
+        "scripts/tests/mention-provenance.sh",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Ran C1-C4 verbatim from W, with the commands extracted byte for byte from executionContract.checkRefs into /mnt/d/moe-scratch/86431c31-run/C*.sh. git status listed only the nine files.\n\n- C1: EXIT=0. git grep (:!.moe) lists only docs/CONFIGURATION.md, scripts/moe-agent.{sh,ps1} and scripts/tests/*; PASS parity-check.sh; PASS parity-check.ps1.\n- C2 (19:23:06-19:25:10Z): EXIT=0.\n  - node --test of the 3 suites: 62 tests, 48 pass, 0 fail, 14 skipped (the pwsh legs on linux).\n  - mention-provenance.sh PASSED (8 stored + 2 synthetic, 5 modes).\n  - worktree-e2e: parallel ok 8.8 s, conflict-resume ok 11.3 s, 2 ok, 0 failed.\n  - wt-guard: ok, 1 ok, 0 failed.\n  - PASS parity-check.sh.\n- C3: EXIT=0, \"RED ok: all 4 suites refused without the seam\".\n- C4: EXIT=0.\n  - GREEN: mention-provenance.ps1 PASSED with the PS 5.1 child (5.1.26100.9711) and the pwsh 7.6.9 child; wave1-pilot \"PASS: Wave 1 pilot success path, 27 links\".\n  - RED: m.log and p.log each carry \"[ERROR] MOE_WRAPPER_IN_WORKTREE: D:\\moe-scratch\\86431c31-ps.C8lucJ\\r\\.worktrees\\task-x\\scripts\\moe-agent.ps1 is inside a task worktree\", and the RED mention-provenance.ps1 FAILED; \"PS leg ok: green passed, red refused\".\n- Cleanup: the four junctions were unlinked with a plain rm by literal path. The control node_modules still list 65 (daemon) and 36 (proxy) entries, as before. My link-free scratch dirs were removed. The older /mnt/d/moe-scratch/86431c31-ps.Nsicoo (18:29, the architect's dry run) was left untouched.",
+      "startedAt": "2026-11-02T19:22:00.687Z",
+      "completedAt": "2026-11-02T19:26:19.582Z"
     },
     {
       "stepId": "step-5",
       "description": "5. Adversarial self-review, then complete_task. Load adversarial-self-review, then check:\n\n(1) Run `git diff -U0 -- scripts/tests/{agent-git-guard.test.mjs,protected-agent-command.test.mjs,mention-provenance.sh,mention-provenance.ps1,worktree-e2e.cjs,wave1-pilot.mjs} | grep -E '^[-+][^-+]' | grep -v MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER`. It must print nothing: every changed suite line names the seam, and nothing else moved. That is what makes the copies C3 and C4 rebuild 'the same copy without this change'.\n\n(2) `git diff --stat` lists exactly the nine files. scripts/moe-agent.{sh,ps1}, postflight*.{sh,ps1,cjs}, worktree-landing.* and agent-runtime.test.mjs are untouched.\n\n(3) No refusal case gained the seam: `git grep -n MOE_WRAPPER_IN_WORKTREE -- scripts/tests` hits only postflight-worktree.cjs, and C2's wt-guard run passed (DoD 3).\n\n(4) Concurrency: the seam lives only in each suite's own child-process env. The ps1 suite restores it in finally, and no suite exports it to its caller. A parallel run, a peer harness or a live seat is therefore unaffected.\n\n(5) Odd values: the suites set exactly '1'. The wrappers' exact-'1' checks (3c4be125) are untouched.\n\n(6) Size: about +12/-0 lines.\n\nThen:\n- If any bytes change, re-run C1-C4.\n- Call complete_task with C2 as the verification (command, exitCode, outputTail).\n- Report modifiedFiles as exactly the nine files.\n- The summary must carry:\n  (a) the classification from step 1: the six changed suites; agent-runtime.test.mjs, unchanged, with its reason; each source-only suite with its reason; and acceptance.test.ts, out of scope;\n  (b) step 1's RED;\n  (c) C1, C3 and C4, each with its command, exit code and last lines.\n\nThis step adds no error handling of its own: any test failure loops back to step 4.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/agent-git-guard.test.mjs",
         "scripts/tests/protected-agent-command.test.mjs",
@@ -72,11 +110,25 @@
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1",
         "docs/CONFIGURATION.md"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/worktree-e2e.cjs",
+        "scripts/tests/wave1-pilot.mjs",
+        "scripts/tests/mention-provenance.sh",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarial self-review, all six checks clean:\n(1) In the six suites, git diff -U0 has no changed line that leaves out the env.\n(2) diff --stat shows exactly the 9 files, +12/-0. The wrappers, postflight*, worktree-landing* and agent-runtime are untouched.\n(3) In scripts/tests, MOE_WRAPPER_IN_WORKTREE appears only in postflight-worktree.cjs (untouched), and C2's wt-guard run passed.\n(4) The seam lives only in each suite's own child env:\n- agent-git-guard f.env; its concurrent `other` copies f.env.\n- protected-agent-command: run()'s local env.\n- worktree-e2e: launch()'s local env.\n- wave1-pilot: runWrapper()'s local env. Daemon, proxy and git spawns keep the bare isolatedEnv().\n- mention-provenance.sh: a per-command prefix.\n- mention-provenance.ps1: restored in finally ($null unsets it).\n(5) Every suite sets exactly '1'; the wrappers' exact-'1' checks are untouched.\n(6) No bytes changed after C1-C4, so no re-run was needed.",
+      "startedAt": "2026-11-02T19:26:20.874Z",
+      "completedAt": "2026-11-02T19:27:10.437Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -102,7 +154,7 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-02T15:46:26.699Z",
-  "updatedAt": "2026-11-02T17:06:12.510Z",
+  "updatedAt": "2026-11-04T19:20:39.777Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-11-02T15:59:31.329Z",
@@ -111,10 +163,15 @@
   "metrics": {
     "firstClaimAt": "2026-11-02T16:01:37.819Z",
     "plannedStepCount": 5,
-    "plannedDistinctFileCount": 9
+    "plannedDistinctFileCount": 9,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-02T19:36:18.385Z",
+    "wallClockMs": 12880566
   },
   "contextFetchedBy": [
-    "architect-0fcb7226"
+    "architect-0fcb7226",
+    "worker-2dc72348",
+    "qa-af7be174"
   ],
   "tier": "heavy",
   "effort": "xhigh",
@@ -124,7 +181,13 @@
   "planSizeWarnings": [
     "Plan touches 9 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
   ],
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-02T16:52:31.572Z",
   "executionContract": {
@@ -191,5 +254,62 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-02T16:52:31.596Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T19:16:43.689Z",
+  "reviewStartedAt": "2026-11-02T19:28:00.583Z",
+  "verification": {
+    "command": "T=scripts/tests;U=$(env|awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \",$1}');X=$(mktemp -d \"${TMPDIR:-/tmp}/86431c31.XXXXXX\")&&G=\"git -C $X/r\"&&mkdir $X/r $X/pw&&git archive HEAD|tar -x -C $X/r&&cp --parents $T/{agent-git-guard.test.mjs,protected-agent-command.test.mjs,mention-provenance.sh,mention-provenance.ps1,worktree-e2e.cjs,wave1-pilot.mjs,parity-check.sh,parity-check.ps1} docs/CONFIGURATION.md $X/r&&cp $T/postflight-fake-proxy.js $X/fp.js&&$G init -q&&$G add -A&&$G -c user.name=g -c user.email=g@g.invalid commit -qm t&&$G worktree add -q --detach .worktrees/task-x&&cd $X/r/.worktrees/task-x&&env $U node --test $T/{agent-git-guard,protected-agent-command,agent-runtime}.test.mjs&&env $U bash $T/mention-provenance.sh&&env $U node $T/worktree-e2e.cjs sh scripts/moe-agent.sh $X/fp.js $X bash&&env $U MOE_WORKTREE_ONLY=wt-guard node $T/postflight-worktree.cjs sh $PWD/scripts/moe-agent.sh $X/fp.js $X/pw bash&&bash $T/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "node --test (agent-git-guard, protected-agent-command, agent-runtime): tests 62, pass 48, fail 0, skipped 14 (pwsh legs on linux)\n...\nPASS: mode=substitute all 10 cases byte-identical to the store\nPASS: MOE_MENTION_EXTRACTION_FAILED surfaced the marker instead of dropping\nPASS: MOE_MENTION_COUNT_UNPARSEABLE surfaced the marker instead of dropping\nPASS: mode=cross-channel all 10 cases byte-identical to the store\nmention-provenance.sh PASSED (8 stored cases + 2 synthetic delivery-failure cases, 5 modes)\n[worktree-e2e] wrapper checkout /tmp/86431c31.KThozm/r/.worktrees/task-x at HEAD c7402300b9ccf88426805ff50ca78547a1a50e30\n[worktree-e2e] parallel ok (8.8 s)\n[worktree-e2e] conflict-resume ok (11.3 s)\n[worktree-e2e] 2 ok, 0 failed\n[worktree] wt-guard ok\n[worktree] 1 ok, 0 failed\nPASS parity-check.sh\nEXIT=0 (run from W, 19:23:06-19:25:10Z)",
+    "reportedAt": "2026-11-02T19:28:00.583Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/agent-git-guard.test.mjs",
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/tests/worktree-e2e.cjs",
+    "scripts/tests/wave1-pilot.mjs",
+    "scripts/tests/mention-provenance.sh",
+    "scripts/tests/mention-provenance.ps1",
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "The seam MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER='1' is now set on the launched wrapper env of 6 suites: agent-git-guard.test.mjs, protected-agent-command.test.mjs, worktree-e2e.cjs, wave1-pilot.mjs, mention-provenance.sh and mention-provenance.ps1 (ps1 saves, sets and restores it in finally). The name is registered in parity-check.sh and parity-check.ps1, plus one docs/CONFIGURATION.md row. Diff +12/-0 over 9 files; every added line names the env, and no line was edited.\n\nUnchanged:\n- agent-runtime.test.mjs: its PATH has no git, so the guard fails open (C2 shows 10/10).\n- Source-only (they slice, parse or ParseFile the wrapper and never run its top level): usage-attribution, moe-account-lease, daemon-json-cap, prompt-cache-launcher, seat-registration, taskless-*, push-failure-message, resume-progress, usage-launcher, importee-guard*, hook-isolation-bash, hooked-commit.ps1. local-runner* only list paths; moe-call is a comment.\n- acceptance.test.ts: outside scripts/tests (DoD 5) and never run under .worktrees.\n\nThe guard's refusal cases are in postflight-worktree.cjs, unchanged; C2 shows wt-guard ok.\n\nRED from W before the change:\n- agent-git-guard: 25 tests, 22 fail, 11 codes=MOE_WRAPPER_IN_WORKTREE.\n- mention-provenance.sh FAILED with [ERROR] MOE_WRAPPER_IN_WORKTREE:.\n\nC1 through C4 are the checkRefs, run verbatim from W:\n- C1 = checkRefs[3]: EXIT 0. git grep (:!.moe) finds the name only in docs/CONFIGURATION.md, scripts/moe-agent.{sh,ps1} and scripts/tests/*. PASS parity-check.sh, PASS parity-check.ps1.\n- C3 = checkRefs[1]: EXIT 0, \"RED ok: all 4 suites refused without the seam\".\n- C4 = checkRefs[2]: EXIT 0.\n  - mention-provenance.ps1 PASSED with the 5.1.26100.9711 child and with the pwsh 7.6.9 child.\n  - \"PASS: Wave 1 pilot success path, 27 links\".\n  - The RED copies refused with \"[ERROR] MOE_WRAPPER_IN_WORKTREE: D:\\moe-scratch\\...\\r\\.worktrees\\task-x\\scripts\\moe-agent.ps1 is inside a task worktree\".\n  - \"PS leg ok: green passed, red refused\".\n  - The 4 juncti",
+  "commits": [
+    {
+      "sha": "edb48d05c8c42e2e3d1215e92199123215e4ab6f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-02T19:13:48Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "scripts/tests/agent-git-guard.test.mjs",
+        "scripts/tests/mention-provenance.ps1",
+        "scripts/tests/mention-provenance.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "scripts/tests/wave1-pilot.mjs",
+        "scripts/tests/worktree-e2e.cjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-02T19:30:06.292Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T19:30:10Z",
+    "at": "2026-11-02T19:37:22.085Z"
+  },
+  "completedAt": "2026-11-02T19:36:18.385Z",
+  "reviewCompletedAt": "2026-11-02T19:36:18.385Z",
+  "reviewSummary": "Reviewed completion edb48d05 (moe/work-2026-10-24, pushed; tree 824bff0c = candidate treeSha). Diff +12/-0 over exactly the 9 declared files. Every added line names the env, no existing line changed. Wrappers, postflight*, worktree-landing* and agent-runtime.test.mjs are untouched.\n\nAll 4 checkRefs re-run fresh, byte for byte from the task record (checkRefs[0] = task.verification.command):\n- C2, verification, from an ext4 snapshot of edb48d05: EXIT=0. node --test of the 3 suites: 62 tests, 48 pass, 0 fail, 14 skipped (pwsh legs). mention-provenance.sh PASSED. worktree-e2e 2 ok, 0 failed. wt-guard ok. parity PASS.\n- C3, RED: EXIT=0, \"RED ok: all 4 suites refused without the seam\".\n- C4, PS leg: EXIT=0. mention-provenance.ps1 PASSED with the powershell and the pwsh child. wave1-pilot 27 links. \"PS leg ok: green passed, red refused\". Junctions unlinked; control node_modules intact (65 and 36 entries).\n- C1, from the D: control checkout: EXIT=0. git grep scope OK; parity-check.sh and parity-check.ps1 both PASS. An earlier attempt from an ext4 cwd failed only because powershell.exe cannot open a UNC path (environment, not code).\n\nDoD:\n1. The seam is on the wrapper env only. wave1-pilot gives it to runWrapper alone. I confirmed agent-runtime's fixture PATH has no git, so the guard fails open. The source-only suites only read, slice or ParseFile the wrapper.\n2. and 3. are met: C2 green, C3/C4 red, and the refusal cases live only in the untouched postflight-worktree.cjs.\n4. and 5. are met.\n\nRails: the wrappers and shared mode are unchanged, and the gate passes. Mid-epic, 12 LOC. Ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
 }

@@ -1,0 +1,228 @@
+{
+  "id": "task-301cf76071264d9f9d07b8848bcafed4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a non-numeric, zero or negative MOE_RATE_LIMIT_MAX_REQUESTS throttles every MCP request the daemon serves to 1 per second, because McpAdapter parses it with a bare parseInt and RateLimiter's fallback is 1 rather than the default 100, while MOE_MCP_MAX_BATCH_SIZE in the same file falls back to its default",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM (packages/moe-daemon/src/server/McpAdapter.ts)\n- :15-16 read MOE_RATE_LIMIT_MAX_REQUESTS and MOE_RATE_LIMIT_WINDOW_MS with a bare parseInt, so `abc` becomes NaN.\n- The RateLimiter constructor (:46-47) replaces any non-finite or non-positive maxRequests with **1**, not the documented default 100. It then warns \"Invalid rate limiter configuration; using safe defaults\" (:54).\n- The sibling MOE_MCP_MAX_BATCH_SIZE in the same file goes through parsePositiveIntegerEnv (:19-29), which falls back to its default.\n- One McpAdapter instance (src/index.ts:779) serves every MCP client, so a single typo throttles the whole fleet to 1 request per second, under a misleading \"safe defaults\" line.\n- docs/CONFIGURATION.md:26 lists the variable with no invalid-value rule.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/rateLimitEnvFallback.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- Command: `npx vitest run src/__hunt__/rateLimitEnvFallback.test.ts`. Result: 2 failed. Verbatim:\n```\nMOE_RATE_LIMIT_MAX_REQUESTS=abc: 4/5 pings refused; {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Rate limit exceeded: 1 requests per 1000ms\"}}\nMOE_RATE_LIMIT_MAX_REQUESTS=0: 4/5 pings refused; {\"jsonrpc\":\"2.0\",\"id\":2,\"error\":{\"code\":-32000,\"message\":\"Rate limit exceeded: 1 requests per 1000ms\"}}\n```\n- Exposure: a guard gap, not a live incident. Only a misconfigured environment hits it, but then the effect is fleet-wide.\n\nFIX DIRECTION\n- Parse both variables with parsePositiveIntegerEnv (defaults 100 and 1000), or make RateLimiter fall back to those defaults.\n- The warning names the variable and the value actually used.\n- MOE_RATE_LIMIT_ENABLED=false keeps disabling the limiter as today.\n\nFILES and hunk ownership:\n- packages/moe-daemon/src/server/McpAdapter.ts: this row owns only the env parsing (~:15-16) and the RateLimiter constructor fallback (~:36-56).\n- The sibling hunt row task-5158e85b owns only the dispatch comment hunk (~:301-303). The two hunks are distinct, so worktree merge-tree lands both and no dependency is needed.\n- Plus a new vitest file.\n- docs/CONFIGURATION.md is held at filing time: sync it only if lanes show it free at planning time.",
+  "definitionOfDone": [
+    "A non-numeric, zero or negative MOE_RATE_LIMIT_MAX_REQUESTS or MOE_RATE_LIMIT_WINDOW_MS falls back to its default (100 requests, 1000 ms), and the warning names the variable and the value used.",
+    "A valid override still applies (for example MOE_RATE_LIMIT_MAX_REQUESTS=5: the 6th request in one window is refused), and MOE_RATE_LIMIT_ENABLED=false still disables the limiter.",
+    "One new vitest file covers both cases (fresh module import per env) and passes with the existing McpAdapter tests, in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1, 2, 3). Create packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts.\n\nModel it on the hunt repro /mnt/d/moe-scratch/hunt-cc441586/B/rateLimitEnvFallback.test.ts, which is proven to run here.\n- Use a ToolTestHarness state: `h.init(); h.setupMoeFolder(); await h.state.load();`.\n- Each case: `vi.stubEnv(...)`, then `vi.resetModules()`, then a dynamic import, so McpAdapter.ts's module-level env read runs again for that env.\n- afterEach: `vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); h.cleanup();`.\n\nSeeing the warning:\n- Import the logger fresh AFTER `vi.resetModules()` and BEFORE McpAdapter: `const { logger } = await import('../util/logger.js'); const warn = vi.spyOn(logger, 'warn');`, then `const { McpAdapter, RateLimiter } = await import('./McpAdapter.js');`.\n- McpAdapter then shares that fresh logger instance. A statically imported logger is a different instance after the reset, and a spy on it sees nothing.\n- Read the limiter through `(adapter as unknown as { rateLimiter: RateLimiter | null }).rateLimiter`, as McpAdapter.test.ts:422 does.\n- Send pings as `adapter.handle({ jsonrpc: '2.0', id, method: 'ping' })`. handleSingleWithRateLimit (~:198) checks the limit before dispatch.\n\nPrefix the titles (r1)-(r5) so a FAIL line names the case:\n- (r1) `it.each(['abc', '0', '-5'])` for MOE_RATE_LIMIT_MAX_REQUESTS.\n  - getStats() strictly equals `{ current: 0, max: 100, windowMs: 1000 }`.\n  - warn was called with `expect.objectContaining({ name: 'MOE_RATE_LIMIT_MAX_REQUESTS', value, fallback: 100 })`.\n- (r2) The same three values for MOE_RATE_LIMIT_WINDOW_MS.\n  - windowMs is 1000 and max is 100.\n  - warn names MOE_RATE_LIMIT_WINDOW_MS with fallback 1000.\n  - Keep the warn assertion: at base, windowMs already reads 1000 through the constructor's fallback, so only the warn makes (r2) fail there.\n- (r3) MOE_RATE_LIMIT_MAX_REQUESTS=5, with `vi.spyOn(Date, 'now').mockReturnValue(<fixed>)` set before `new McpAdapter(...)`, so all six pings share one window.\n  - Pings 1-5 answer a result.\n  - Ping 6 answers exactly `error: { code: -32000, message: 'Rate limit exceeded: 5 requests per 1000ms' }`.\n  - No warn call's first argument has a `name` starting MOE_RATE_LIMIT_.\n- (r4) MOE_RATE_LIMIT_ENABLED=false with MOE_RATE_LIMIT_MAX_REQUESTS=1: the limiter is null, and 5 pings all answer a result.\n- (r5) `new RateLimiter(Number.NaN, -1).getStats()` strictly equals `{ current: 0, max: 100, windowMs: 1000 }`.\n\nRED at base, once, before step 2. Run it in a snapshot; never run npm in the shared checkout:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx vitest run src/server/McpAdapter.rateLimitEnv`\n- Expect (r1), (r2) and (r5) to fail, and (r3) and (r4) to pass.\n- Quote the counts in the step summary.\n- If (r3) or (r4) fails at base, the test is wrong, not the code: fix the test.\n\nError handling: afterEach restores the env, Date.now and the module registry, so no case leaks a limit or a stub into the next. Write the file with your TOOL-witnessed editor.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts"
+      ],
+      "note": "Added 14 fresh-import cases, including approved r1-r5 plus empty/unset values, 2000ms override and parseInt-prefix compatibility. RED in external /tmp/tmp.y8mLaxQMkm snapshot: 9 failed / 5 passed; r1/r2/r5 failed on fallback/warning assertions as expected, r3/r4 passed. No production edits before RED.",
+      "startedAt": "2026-11-03T23:09:36.472Z",
+      "completedAt": "2026-11-03T23:10:48.294Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix and docs (DoD 1, 2).\n\npackages/moe-daemon/src/server/McpAdapter.ts. Edit only the env reads (~:13-17) and the RateLimiter constructor fallback (~:46-49). task-5158e85b owns the dispatch comment hunk at ~:301-303: stay out of it, so merge-tree lands both rows.\n- Add `const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 100;` and `const DEFAULT_RATE_LIMIT_WINDOW_MS = 1000;` beside DEFAULT_MCP_MAX_BATCH_SIZE.\n- Replace the two bare parseInt reads:\n  - `parsePositiveIntegerEnv(process.env.MOE_RATE_LIMIT_MAX_REQUESTS, DEFAULT_RATE_LIMIT_MAX_REQUESTS, 'MOE_RATE_LIMIT_MAX_REQUESTS')`, and the same for MOE_RATE_LIMIT_WINDOW_MS.\n  - Place them after the function, next to MAX_MCP_BATCH_SIZE. The function declaration is hoisted; the constants it reads are not.\n- Its existing warn, `{ name, value, fallback }`, already names the variable and the value used (DoD 1). Add no second message.\n  - An unset variable stays silent (`value === undefined`).\n  - An empty string now warns and falls back, as MOE_MCP_MAX_BATCH_SIZE does today. That is intended.\n- RateLimiter constructor: replace the fallback `1` with DEFAULT_RATE_LIMIT_MAX_REQUESTS and `1000` with DEFAULT_RATE_LIMIT_WINDOW_MS, so its 'using safe defaults' warning is true.\n- Leave MOE_RATE_LIMIT_ENABLED (`!== 'false'`) alone.\n\nError handling: no new throw path. Every bad value degrades to the default with one warning, and a valid override applies as before.\n\ndocs/CONFIGURATION.md:26 (free at planning: no open row declares it). Rewrite only the clause\n\"rate limiting `MOE_RATE_LIMIT_ENABLED`, `MOE_RATE_LIMIT_WINDOW_MS`, `MOE_RATE_LIMIT_MAX_REQUESTS`;\"\nto\n\"rate limiting `MOE_RATE_LIMIT_ENABLED` (`false` turns it off), `MOE_RATE_LIMIT_WINDOW_MS` (default 1000) and `MOE_RATE_LIMIT_MAX_REQUESTS` (default 100), one limiter shared by every MCP client, where a non-numeric, zero or negative value falls back to the default with a warning, as `MOE_MCP_MAX_BATCH_SIZE` does;\"\nTouch nothing else on that line. Use your TOOL-witnessed editor for both files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts"
+      ],
+      "note": "Reused parsePositiveIntegerEnv for both env reads, added shared 100/1000 constants and aligned constructor fallbacks. Changed only approved env/constructor McpAdapter hunks and CONFIGURATION rate-limit clause. Test hygiene: stub NODE_ENV=production to avoid creating a pino-pretty transport worker/exit listener on every fresh import (observed MaxListeners warning in RED); restored with all other envs. Green verification deferred to next approved step.",
+      "startedAt": "2026-11-03T23:10:48.324Z",
+      "completedAt": "2026-11-03T23:11:24.085Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once (DoD 3), from the worktree root, after the last edit:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.ts packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts docs/CONFIGURATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/server/McpAdapter src/util/daemonGitDocs src/util/executionContractDocs src/util/taskTimeBudgetDocs`\n\nIts fresh output is the complete_task evidence.\n- It runs all three McpAdapter test files and the three docs tests that read CONFIGURATION.md.\n- They read docs/ and scripts/, so the archive is the whole tree (mem:gotcha-harness-snapshot-needs-full-archive).\n- QA can run the same text in the control checkout after landing.\n\nError handling for a red run:\n- If an existing test fails, first run the same command without the cp --parents overlay, which tests HEAD's bytes.\n- A failure that persists there is pre-existing: report it, and don't edit that test.\n- Otherwise fix the cause in step 1's or step 2's file and re-run the whole command.\n- Kill only PIDs your session recorded.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the exact approved whole-tree archive + three-file overlay + npm ci + tsc --noEmit + targeted vitest command fresh in /tmp/tmp.WjElmFitC9: exit 0; 6 files passed, 81 tests passed. All npm package verification stayed outside checkout; no source edits during verification.",
+      "startedAt": "2026-11-03T23:11:24.115Z",
+      "completedAt": "2026-11-03T23:11:48.599Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Last: an adversarial self-review of the 3-file diff. Check that:\n- every bad value of either variable ('abc', '0', '-5', '') ends at the default with exactly one warn naming the variable, and an unset variable logs nothing;\n- a valid override (5 requests, 2000 ms) applies and logs no warn;\n- MOE_RATE_LIMIT_ENABLED=false still leaves the limiter null;\n- McpAdapter.ts changes only the env-read hunk and the constructor fallback, and not the dispatch comment at ~:301-303 (task-5158e85b);\n- the test asserts exact values, not truthiness, and afterEach restores the env, Date.now and the module registry;\n- the docs clause states what the code does (the defaults and the fallback rule).\n\nIf the review changes any byte, re-run step 3 and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+        "docs/CONFIGURATION.md"
+      ],
+      "note": "Adversarially reviewed all three paths including untracked test: invalid/empty exact defaults + exactly one named warning, unset silent, 5/2000 overrides and parseInt-prefix compatibility, false disables, cleanup restores env/mocks/modules, one limiter and error shape unchanged. No concurrent-state/IO changes or dispatch-comment edits; docs match. No review edits. Fresh step-3 verification: 81/81 across 6 files; supplemental test-inclusive tsc passed. Worktree qualityGate parity-check.sh && npm run lint exit 0. git diff --check clean. Handoff and fresh-logger gotcha saved in Serena.",
+      "startedAt": "2026-11-03T23:11:48.634Z",
+      "completedAt": "2026-11-03T23:12:14.896Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 451.7,
+  "comments": [
+    {
+      "id": "comment-361db70fd068467a805fd4f5467d60a1",
+      "author": "architect-24611a0a",
+      "content": "Filer's correction to PROBLEM: 100 requests per 1000 ms is the CODE default (McpAdapter.ts:15-16, `|| '100'` and `|| '1000'`), not a documented one. docs/CONFIGURATION.md:26 names the variables with no default and no invalid-value rule. The finding stands: bad values fall to 1, while the sibling MOE_MCP_MAX_BATCH_SIZE falls back to its default. Hunk ownership in McpAdapter.ts is shared with task-5158e85b, which owns only the dispatch comment at ~:301-303.",
+      "timestamp": "2026-11-03T22:47:12.886Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:47:03.896Z",
+  "updatedAt": "2026-11-04T19:20:44.924Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T23:02:48.409Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T23:21:03.363Z",
+    "wallClockMs": 1094954
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-26483323",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:08:03.917Z",
+  "executionContract": {
+    "intendedBehavior": "MOE_RATE_LIMIT_MAX_REQUESTS and MOE_RATE_LIMIT_WINDOW_MS are read with parsePositiveIntegerEnv, like MOE_MCP_MAX_BATCH_SIZE.\n- A non-numeric, zero, negative or empty value falls back to the default (100 requests, 1000 ms), with one warning naming the variable, the bad value and the fallback used.\n- A valid override applies unchanged, and an unset variable logs nothing.\n- MOE_RATE_LIMIT_ENABLED=false still disables the limiter.\n- The RateLimiter constructor's own fallback becomes the same defaults instead of 1.",
+    "acceptanceCriteria": [
+      "MOE_RATE_LIMIT_MAX_REQUESTS of 'abc', '0' or '-5' gives a limiter of max 100, and the warn names the variable with fallback 100.",
+      "MOE_RATE_LIMIT_WINDOW_MS of 'abc', '0' or '-5' gives windowMs 1000, and the warn names the variable with fallback 1000.",
+      "MOE_RATE_LIMIT_MAX_REQUESTS=5: the 6th ping in one window answers -32000 'Rate limit exceeded: 5 requests per 1000ms'.",
+      "MOE_RATE_LIMIT_ENABLED=false: no limiter, and every ping answers.",
+      "new RateLimiter(NaN, -1) reports max 100, windowMs 1000."
+    ],
+    "invariants": [
+      "One limiter per McpAdapter, checked before dispatch.",
+      "The rate-limit error stays -32000 'Rate limit exceeded: <max> requests per <windowMs>ms'.",
+      "Only the literal 'false' disables the limiter.",
+      "Valid values parse as before: parseInt base 10, floored."
+    ],
+    "compatibility": [
+      "No MCP tool contract or error-shape change.",
+      "Unset env keeps today's 100/1000 defaults, with no new log line."
+    ],
+    "approvedScope": [
+      "McpAdapter.ts: the new DEFAULT_RATE_LIMIT_MAX_REQUESTS and DEFAULT_RATE_LIMIT_WINDOW_MS; RATE_LIMIT_MAX_REQUESTS and RATE_LIMIT_WINDOW_MS; the RateLimiter constructor fallback",
+      "New McpAdapter.rateLimitEnv.test.ts",
+      "docs/CONFIGURATION.md:26, the rate-limiting clause only"
+    ],
+    "reuse": [
+      "parsePositiveIntegerEnv, in the same file.",
+      "The hunt repro's ToolTestHarness plus resetModules shape.",
+      "vi.spyOn(logger, 'warn'), as in addComment.test.ts:373."
+    ],
+    "sourceAssumptions": [
+      "McpAdapter.ts:15-16: a bare parseInt with string defaults '100' and '1000'.",
+      "McpAdapter.ts:19-27: parsePositiveIntegerEnv(value, fallback, name) warns {name, value, fallback} and is silent for undefined.",
+      "McpAdapter.ts:46-49: the RateLimiter constructor falls back to 1 and 1000.",
+      "McpAdapter.ts:139-141: one RateLimiter is built when RATE_LIMIT_ENABLED.",
+      "McpAdapter.ts ~:198-205: handleSingleWithRateLimit answers -32000.",
+      "McpAdapter.test.ts:422 reads the private rateLimiter field.",
+      "toolTestHarness.ts: init(), setupMoeFolder(), state, cleanup()."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.ts packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts docs/CONFIGURATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/server/McpAdapter src/util/daemonGitDocs src/util/executionContractDocs src/util/taskTimeBudgetDocs"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Fix only the RateLimiter constructor fallback (1 to 100). That leaves the env read lenient and the warning without the variable's name. Rejected as the sole fix; it is done too, as a one-token alignment.\n2. Read the env in McpAdapter's constructor through an exported config function. That changes when the env is read, and DoD 3 asks for a fresh module import per env. Rejected.\n3. A new env-helper module. Rejected: parsePositiveIntegerEnv already exists in the same file.",
+    "codebaseInsights": "- The module-level constants read the env at import, so tests need vi.resetModules plus a dynamic import.\n- After a reset the logger is a new instance: spy on a freshly imported logger before importing McpAdapter.\n- No launcher or plugin sets MOE_RATE_LIMIT_* (git grep).\n- vitest.config's env blanks only seat identity.",
+    "risks": "- Each fresh logger import builds a pino instance with the pino-pretty transport, because NODE_ENV is not production under vitest. That means one worker thread per case. The hunt repro ran fine with it; keep the case count small.\n- A spy on the statically imported logger silently sees nothing after resetModules.\n- (r2) is red at base only through its warn assertion.\n- An empty string now warns, which is intended and matches the batch-size sibling.\n- Stay out of the McpAdapter.ts dispatch-comment hunk, which task-5158e85b owns.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/server/McpAdapter.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "docs/CONFIGURATION.md",
+      "/mnt/d/moe-scratch/hunt-cc441586/B/rateLimitEnvFallback.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "80ea39d0fa580b88f10a26a2a77787ac99614c50",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:08:03.946Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T23:09:36.472Z",
+  "reviewStartedAt": "2026-11-03T23:12:22.746Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/server/McpAdapter.ts packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts docs/CONFIGURATION.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/server/McpAdapter src/util/daemonGitDocs src/util/executionContractDocs src/util/taskTimeBudgetDocs",
+    "exitCode": 0,
+    "outputTail": "npx tsc --noEmit: exit 0\nTest Files  6 passed (6)\nTests  81 passed (81)\nStart at  01:11:36\nDuration  1.77s\nExternal snapshot: /tmp/tmp.WjElmFitC9\nSupplemental new-test-inclusive tsc: exit 0\nQuality gate: PASS parity-check.sh; npm run lint OK (architect 39, worker 30, qa 36 lines).",
+    "reportedAt": "2026-11-03T23:12:22.746Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+    "packages/moe-daemon/src/server/McpAdapter.ts",
+    "docs/CONFIGURATION.md"
+  ],
+  "completionSummary": "Both rate-limit env settings now reuse the existing positive-integer parser with 100 requests/1000ms defaults and one warning naming invalid values/fallbacks. Constructor fallbacks match; literal false disabling and MCP error contract preserved. Added 14 regression cases and documented defaults/fallbacks. RED: 9 expected failures/5 passes before implementation. GREEN: 81/81 targeted tests in 6 files, production and new-test TypeScript checks passed; parity/docs quality gate passed. Adversarial review clean; sibling dispatch hunk untouched. Serena handoff recorded.",
+  "commits": [
+    {
+      "sha": "b796ea481db8d7a1d8522eda608677eb04edcd0e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T23:08:03Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "packages/moe-daemon/src/server/McpAdapter.rateLimitEnv.test.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T23:13:24.110Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:13:30Z",
+    "at": "2026-11-03T23:21:28.977Z"
+  },
+  "completedAt": "2026-11-03T23:21:03.363Z",
+  "reviewCompletedAt": "2026-11-03T23:21:03.363Z",
+  "reviewSummary": "Reviewed completion b796ea48 (on moe/work-2026-10-24, contained in control HEAD 8f33694c; 3 files, +131/-5, net +126 non-board LOC, under the 400 cap). Diff is scoped to the approved hunks only: McpAdapter.ts env reads (now parsePositiveIntegerEnv with DEFAULT_RATE_LIMIT_MAX_REQUESTS=100 / DEFAULT_RATE_LIMIT_WINDOW_MS=1000) plus the RateLimiter constructor fallback (1 -> 100); the sibling task-5158e85b dispatch-comment hunk is untouched; docs/CONFIGURATION.md changes only the rate-limiting clause; new McpAdapter.rateLimitEnv.test.ts. Re-ran task.verification myself in an external snapshot (/tmp/tmp.duhgeTwZJQ, git archive HEAD + 3-file overlay, npm ci): tsc --noEmit exit 0; vitest run McpAdapter + daemonGitDocs + executionContractDocs + taskTimeBudgetDocs = 6 files / 81 tests passed. Mutation check: restored parent McpAdapter.ts in the snapshot, ran the new file alone: 9 failed / 5 passed (r1 x4, r2 x4, r5 fail; r3 valid override, r4 enabled=false, unset-silent, parseInt-prefix pass), so the tests bite. npm run lint OK (architect 39, worker 30, qa 36 lines). DoD 1: abc/0/-5/'' for both vars fall back to 100/1000 with exactly one warn {name,value,fallback} (toHaveBeenCalledExactlyOnceWith); DoD 2: MAX_REQUESTS=5 -> 6th ping answers -32000 'Rate limit exceeded: 5 requests per 1000ms' (and 2000 window variant), valid override logs no warn, ENABLED=false -> limiter null and all pings answer; DoD 3: one new vitest file with fresh logger/module import per env (resetModules + fresh logger spy), passes alongside existing McpAdapter tests. Assertions are exact (toStrictEqual), afterEach restores env/mocks/modules. Not verified: JetBrains/proxy/shell paths (untouched). Complexity pass: nothing to cut (reuses the existing parser; constants shared by constructor).",
+  "requiredCheckAtDone": null
+}

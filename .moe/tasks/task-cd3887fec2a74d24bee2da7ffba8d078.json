@@ -1,0 +1,277 @@
+{
+  "id": "task-cd3887fec2a74d24bee2da7ffba8d078",
+  "epicId": "epic-be924fb8",
+  "title": "bug: both launchers export MOE_USAGE_RECEIPT_FILE into the agent CLI's environment, so any process the CLI spawns (a test, a helper, a fixture run) can append to the seat's live launch receipt; scope the variable to the wrapper's own usage writes (wrapper-side twin of task-03418dc2, both launchers)",
+  "description": "Hunt #18 (task-1c736204) held this item back until the open launcher rows land.\n\nProblem: task-03418dc2 found that prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs run the usage stream helper with the seat's inherited MOE_USAGE_RECEIPT_FILE. Their fixture codex/claude usage therefore went into 48 live launch receipts: 248 fake rows charged to 28 tasks between 10-24 and 11-03, and usage-report shows codex usage in Claude-only launches. 03418dc2 fixes the test side. The root exposure is in the launchers: they export MOE_USAGE_RECEIPT_FILE into the environment the agent CLI inherits, at scripts/moe-agent.sh :884/:891 and moe-agent.ps1 :1251-1252 (line numbers at 3cd256eb). So any child of the CLI can write to the live receipt.\n\nFix direction: only the wrapper's own usage writes should see the receipt path. Either pass the path explicitly to the wrapper's helper calls and unset it in the CLI's environment, or clear it for the CLI launch alone. Keep the parity-check twins in step (codes, env names), and keep the receipt that the wrapper's own usage-session/usage-receipt calls produce byte-for-byte unchanged.\n\nSequencing: this row depends on 3416b309 (both launchers, in REVIEW) and 62ec51f1 (moe-agent.ps1, WORKING), which hold the same files. d861f3de, the third row the hunter named, is already DONE. Re-anchor every line number on the landed launchers.\n\nNote: the 48 polluted historical receipts under logs/moe-usage stay as they are, by the governor's decision (#governors msg-3c3dd428). Rewriting logs loses provenance, so usage-report totals for 10-24 to 11-03 include about 248 fixture rows.",
+  "definitionOfDone": [
+    "Under both launchers, the agent CLI's environment no longer carries MOE_USAGE_RECEIPT_FILE. A launcher test pins it for each twin: a child of the CLI sees it unset, while the wrapper's own usage writes still reach the receipt.",
+    "The receipt that one launch's own usage calls produce is unchanged, shown by a before/after run of the same launch in the postflight harness. parity-check.sh and parity-check.ps1 pass.",
+    "The verification quotes the harness results for both twins, and bash -n plus the PowerShell parser check pass on the edited launchers."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "moe-agent.sh: keep the usage receipt pair out of every exported environment and hand it only to the wrapper's own usage helper calls (lines at 500e3f29; re-anchor by text if bbd7ad2d/1dfec7a4/6b3ab9d8 or 62ec51f1's rework moved them).\n(a) start_moe_usage_receipt() (:869-895) exports nothing. Its first line becomes `unset MOE_USAGE_RECEIPT_FILE MOE_USAGE_CONTEXT_JSON USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT` (this also drops an inherited export). Add `supplied=\"\"` to the existing `local` list and build the python context with `if ! supplied=$(...)`, so the test still sees the substitution's status. usage-session.mjs gets it as a one-command prefix: `prepared=$(MOE_USAGE_CONTEXT_JSON=\"$supplied\" \"$NODE_CMD\" \"$SCRIPT_DIR/usage-session.mjs\" \"$PROJECT\" 2>/dev/null) || prepared=\"\"`. Delete `export MOE_USAGE_CONTEXT_JSON` and the two `unset MOE_USAGE_CONTEXT_JSON` in the failure branches. Error handling stays fail-open: both failure branches still print `[usage] MOE_USAGE_REPORT_UNAVAILABLE` and `return 0`. On success, set the UNEXPORTED shell variables `USAGE_RECEIPT_FILE=\"$receipt_file\" USAGE_RECEIPT_CONTEXT=\"$receipt_context\"`, then run `MOE_USAGE_RECEIPT_FILE=\"$USAGE_RECEIPT_FILE\" MOE_USAGE_CONTEXT_JSON=\"$USAGE_RECEIPT_CONTEXT\" \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" usage-start \"$provider\" >/dev/null || true`.\n(b) Each stream helper gets the same pair as an inline per-command prefix, `MOE_USAGE_RECEIPT_FILE=\"${USAGE_RECEIPT_FILE:-}\" MOE_USAGE_CONTEXT_JSON=\"${USAGE_RECEIPT_CONTEXT:-}\"`, placed directly before `\"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\"` in: the codex exec pipeline (:11408, after the existing MOE_TOOL_WRITES_FILE..MOE_SERENA_PROJECT_ROOT prefixes); and both claude print pipelines (:12044 and :12057, the `| \"$NODE_CMD\" \"$PROMPT_CACHE_HELPER\" claude-stream |` element). Do NOT add a shell function for this: prompt-cache-launcher.test.mjs runs the codex pipeline line alone (`            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\` -> `            set -e`), so a new function would be undefined there. An empty value acts like today's unset for the writer (usage-receipt.mjs:79 `if (!file) return`; readContext('') -> {}), so the rows stay byte-identical.\n(c) The main-loop top (:9921-9922) keeps its comment; its unset line also names USAGE_RECEIPT_FILE USAGE_RECEIPT_CONTEXT.\n(d) A comment above start_moe_usage_receipt() says why. task-03418dc2 found fixture usage from processes the CLI starts in 48 live receipts. So no agent CLI, nothing the CLI starts, and no other wrapper child (the post-flight quality gate included) may see the pair. Name the twin, Invoke-MoeUsageHelper in moe-agent.ps1. Extend the codex block's 'The helper alone gets the TOOL-witness env' comment so it also names the receipt pair.\nKeep these test anchors byte-identical: `start_moe_usage_receipt() {`, `# End usage receipt helpers.`, `        LAUNCH_SKIPPED=false`, `            start_moe_usage_receipt codex headless`, `            agent_git_exec \"$COMMAND_BIN\" \"${COMMAND_ARGV[@]}\" \\`, `            set -e`. Keep the main-loop `{ ... exit }` group, and `bash -n` must pass. Edit only with the Edit tool, in W (mem:gotcha-wrapper-slice-tests-execute-text).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "moe-agent.sh (+20/-14): start_moe_usage_receipt no longer exports anything. It unsets the MOE_ pair plus USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT, builds the context into a local `supplied`, hands it to usage-session.mjs as a one-command prefix, stores the result in unexported shell vars, and gives usage-start the pair as a prefix. The codex-stream and both claude-stream pipelines get the inline MOE_USAGE_* prefixes (no new function). The loop-top unset also names the shell vars, the why-comment sits above the function, and the codex TOOL-witness comment is extended. All anchors are unchanged. bash -n OK; usage-launcher + prompt-cache-launcher on WSL node: 40/38 pass/0 fail/2 skip (= baseline).",
+      "startedAt": "2026-11-04T11:44:17.913Z",
+      "completedAt": "2026-11-04T11:48:05.042Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "moe-agent.ps1 twin: keep the pair in script scope, and set it in `$env:` only around the wrapper's own helper calls. A native process copies the environment when it starts, so the CLI, the heartbeat job and every later child never see it (lines at 500e3f29; re-anchor by text).\n(a) Start-MoeUsageReceipt (:1235-1261). On entry, clear `$env:MOE_USAGE_RECEIPT_FILE`, `$env:MOE_USAGE_CONTEXT_JSON`, `$script:MoeUsageReceiptFile` and `$script:MoeUsageContextJson`. `$env:MOE_USAGE_CONTEXT_JSON` holds the supplied @{...} JSON only for the usage-session.mjs call. On success, set `$script:MoeUsageReceiptFile = [string]$usageSession.file` and `$script:MoeUsageContextJson = $usageSession.context | ConvertTo-Json -Compress` (exactly today's values), then run usage-start through Invoke-MoeUsageHelper. The catch clears both script variables and keeps `Write-Warning 'MOE_USAGE_REPORT_UNAVAILABLE'`, so error handling stays fail-open. The finally clears both `$env:` names, then restores `$global:LASTEXITCODE` as today.\n(b) Add `function Invoke-MoeUsageHelper([scriptblock]$Call)` after Start-MoeUsageReceipt and before `# End usage receipt helpers.` (usage-launcher.test.mjs runs that block as its preamble). It sets both `$env:` names from the script variables, runs `& $Call`, and clears both in `finally`. Add a comment giving the why and the twin (the sh helper calls' MOE_USAGE_* prefixes).\n(c) In the `$parseStreamJson` \"result\" branch (:11449), wrap the existing `$line | & node $promptCacheHelper claude-stream | Select-Object -Skip 1 | ForEach-Object { Write-Host $_ }` in `Invoke-MoeUsageHelper { ... }`. The scriptblock reads `$line` and `$promptCacheHelper` through dynamic scope.\n(d) In the claude launch `finally` (:11493), test `$script:MoeUsageReceiptFile` instead of `$env:MOE_USAGE_RECEIPT_FILE`. Run the `'' | & node $promptCacheHelper claude-stream | Out-Null` fallback through Invoke-MoeUsageHelper, inside the existing try/catch.\n(e) In the codex exec `ForEach-Object -Begin` (:10885-10901), after the TOOL-witness lines, add `if ($script:MoeUsageReceiptFile) { $psi.EnvironmentVariables['MOE_USAGE_RECEIPT_FILE'] = $script:MoeUsageReceiptFile; $psi.EnvironmentVariables['MOE_USAGE_CONTEXT_JSON'] = $script:MoeUsageContextJson }`. Put no `else` anywhere in this block: two tests cut it at the first `            } else {` after the codex exec line, and a deeper-indented one matches too.\n(f) At the main-loop top (:9699-9701), also reset both script variables to `$null`.\nKeep byte-identical: `function Start-MoeUsageReceipt`, `# End usage receipt helpers.`, `            $parseStreamJson = {`, `            # Usage receipt launch boundary.`, `                Start-MoeUsageReceipt 'codex' 'headless'`, the codex `                & {` line and its `Invoke-MoeGuardedCommand @CommandArgs @codexSeatArgs @codexExecOverrides exec --json -C \"$script:cliRoot\" @codexSandboxArgs \"$shortPrompt\"` line, and the `Remove-MoeAgentGitGuard` tail. Add no new MOE_* code or env name (parity). Keep the UTF-8 BOM, and ParseFile must report 0 errors.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "moe-agent.ps1 (+35/-8): Start-MoeUsageReceipt now keeps the pair in $script:MoeUsageReceiptFile/$script:MoeUsageContextJson, cleared on entry and in the catch. $env:MOE_USAGE_CONTEXT_JSON holds the supplied JSON only for usage-session.mjs. usage-start runs through the new Invoke-MoeUsageHelper, and the finally clears both $env names and then restores LASTEXITCODE. Invoke-MoeUsageHelper([scriptblock]$Call), with a why/twin comment, sits before `# End usage receipt helpers.`. The $parseStreamJson result branch and the claude finally fallback (which now tests $script:MoeUsageReceiptFile) go through it. The codex -Begin block adds both $psi entries in a one-line if, with no else. The loop top resets the script vars. All anchors are unchanged. ParseFile 0 errors, BOM ef bb bf. Windows node.exe usage-launcher + prompt-cache-launcher: 126/126 pass (= baseline).",
+      "startedAt": "2026-11-04T11:48:09.514Z",
+      "completedAt": "2026-11-04T11:51:22.456Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "scripts/tests/usage-launcher.test.mjs: pin the scope for each twin. Engines are /bin/bash under Linux node, and powershell.exe, pwsh.exe and Git Bash under Windows node. Write the test first and prove it RED (below).\n(a) Add a fake-provider prelude. It writes `<MOE_TEST_DIR>/cli-env.json` = `{receipt: process.env.MOE_USAGE_RECEIPT_FILE ?? null, context: process.env.MOE_USAGE_CONTEXT_JSON ?? null}`. Then it runs a CHILD, `spawnSync(process.execPath, [path.join(process.env.MOE_TEST_SCRIPTS, 'prompt-cache.mjs'), 'usage-start', '<provider>'], {stdio: 'ignore'})`. That child is the task-03418dc2 path: a fixture usage helper appending to whatever receipt it inherits. Prepend the prelude to the fake sources of 'real Claude launch' and 'real Codex launch' (both withResult arms). Assert cli-env.json is `{receipt: null, context: null}`. The existing `receipts.length === 2` assertion (pending + reported/missing, one launchId) then proves both halves: the child appended nothing, and the wrapper's own writes still landed.\n(b) Add a new per-engine test, 'interactive Claude launch keeps the receipt from the CLI and its child'. It uses the claude cut with no print args (sh `PRINT_ARGS=()`, ps1 `$usePrintMode=$false` and `$printArgs=@()`), the same prelude, and exitCode 23. Assert CHILD_EXIT=23, cli-env.json both null, and exactly one receipt row, with coverage 'pending' and launchMode 'interactive'.\n(c) In 'usage metadata is fresh for each task and resume', after the first start, print what a child of the wrapper would inherit and assert both values are empty. ps1: `$env:MOE_USAGE_RECEIPT_FILE` and `$env:MOE_USAGE_CONTEXT_JSON`. sh: a single-quoted `\"$NODE_CMD\" -e` probe printing both. This pins that the post-flight gate and every other wrapper child inherit nothing.\nKeep run(), between(), guard() and every anchor unchanged. RED proof: a scratch copy holding the base launchers (`git show <base>:scripts/moe-agent.{sh,ps1}`) fails (a)-(c) on every engine, because cli-env.json carries the receipt path and the receipt has 3 rows. Quote that in complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-launcher.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-launcher.test.mjs"
+      ],
+      "note": "usage-launcher.test.mjs:\n- (a) cliPrelude(provider) is prepended to the fake claude/codex CLIs. It writes cli-env.json and spawns `prompt-cache.mjs usage-start <provider>` as the CLI's child. Both real-launch arms assert cli-env = {receipt:null, context:null} next to the existing 2-row/one-launchId checks. The claude body/fake moved into claudeLaunch(ext, print) and claudeFake(withResult), with the same anchors.\n- (b) New per-engine test 'interactive Claude launch keeps the receipt from the CLI and its child': CHILD_EXIT=23, cli-env null, 1 pending row, launchMode interactive.\n- (c) The 'fresh' test probes CHILD_ENV after the first start (ps1 $env, sh a node -e child) and asserts it is empty.\nGREEN: WSL node 10/10; Windows node.exe 30/30 (powershell.exe, pwsh.exe, Git Bash).\nRED (scratch /mnt/d/moe-scratch/cd38-red.FCTBqs = this test + 500e3f29 launchers): WSL 6/10 fail; Windows 18/30 fail (6 per engine: fresh, interactive, 2 claude, 2 codex), cli-env carries the receipt path and context. With the env asserts removed, the base gives 3 rows instead of 2 (2 instead of 1 interactive), so the child appended.",
+      "startedAt": "2026-11-04T11:51:27.080Z",
+      "completedAt": "2026-11-04T11:54:57.191Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Postflight harness twins, scripts/tests/postflight-vm-route.sh and postflight-vm-route.ps1. Add a check right after the T-legacy row: in sh after its task/worker identity check (:125-126), and in ps1 after 'record lacks task and worker identity' (:797). In order:\n1. Print one line, `[vm route] T-legacy usage receipt: <rows>`. <rows> is the JSONL lines of the launch's one receipt file under `<project>/logs/moe-usage/`, each `timestamp` value replaced by `<ts>` and the launchId by `<launch>`, joined by ` | `. Nothing else is masked, so a before/after diff of this line is the DoD's 'receipt unchanged' evidence.\n2. Assert: exactly one `*.jsonl` file; exactly 2 rows; coverage `pending` then `missing`; one shared non-null launchId; provider `claude`, taskId `task-postflight`, workerId `worker-vmr`, role `worker`, launchMode `headless`. Each failure names its mismatch.\n3. Assert the CLI record's env (sh `$REC`, ps1 `$rec`) holds neither key, checking MOE_USAGE_RECEIPT_FILE first. Fail with exactly `the CLI env carries <KEY>` (sh `vmr_fail T-legacy`, ps1 `Stop-Vmr $r`).\nIn sh, write the check as one `\"$NODE\" -e '...' \"$REC\" \"$PROJECT/logs/moe-usage\"` with single-quoted JS, as the file already does. In ps1, use PowerShell (Get-ChildItem, [IO.File]::ReadAllLines, ConvertFrom-Json, -replace) or a .cjs written to $tempRoot like rec.cjs. Never pass a double-quoted multi-line `node -e` from ps1: PS 5.1 mangles it in native argv.\nAlso fix the sh mask comment. Its last bullet (:103) names 'MOE_USAGE_CONTEXT_JSON launchId, the usage receipt file', which no longer reach the CLI. Measure two T-legacy runs with the uuid `.replace` removed (scratch copy). If the records then match, delete that `.replace` and its bullet. If they don't, keep it and name the value that still differs. The ps1 'Per-run masks only' comment stays.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "postflight-vm-route twins:\n- After the T-legacy identity check, each prints `[vm route] T-legacy usage receipt: <rows>` with only timestamp and launchId masked, joined by ' | '.\n- Each then asserts: 1 jsonl file; 2 rows, pending then missing; one shared launchId; provider/taskId/workerId/role/launchMode as planned.\n- Last, each asserts the CLI record's env lacks MOE_USAGE_RECEIPT_FILE, then MOE_USAGE_CONTEXT_JSON, failing with `the CLI env carries <KEY>`. sh does this in one single-quoted node -e whose reason goes to stderr then vmr_fail T-legacy; ps1 uses Get-ChildItem/ReadAllLines/ConvertFrom-Json and Stop-Vmr.\nMask measurement: a scratch copy (/mnt/d/moe-scratch/cd38-mask.fkLkRM) with the sh uuid `.replace` removed passed the whole harness on the edited launchers (EXIT=0, T-legacy2 and every T-row diff clean). So the replace and its bullet are deleted, and a comment names why. The ps1 'Per-run masks only' comment stays.\nDev runs on the edited bytes: postflight-vm-route.sh PASS (EXIT=0) and postflight-vm-route.ps1 on PS 5.1 PASS. Both print the receipt line. bash -n and ParseFile are clean.",
+      "startedAt": "2026-11-04T11:55:00.818Z",
+      "completedAt": "2026-11-04T12:10:38.600Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verification: run this ONE chain fresh from W, C1 && C2 && C3 && C4a && C4b. These are the five executionContract.checkRefs, in that order.\n- C1: bash -n; ParseFile reports 0 errors; the BOM is ef bb bf; parity-check.sh and parity-check.ps1 pass; importee-guard.ps1 (PS 5.1) passes, since it AST-loads $parseStreamJson.\n- C2: usage-launcher plus prompt-cache-launcher, on WSL node and on Windows node.exe. Base 500e3f29 gave 40 tests / 38 pass / 0 fail / 2 skipped, and 126 / 126 / 0 / 0. Expect +1 interactive test per engine.\n- C3: postflight-vm-route.sh, and postflight-vm-route.ps1 on PS 5.1 and pwsh 7, on the edited bytes. Logs go to /mnt/d/moe-scratch/cd38-vmr.\n- C4a: the same twins (sh, PS 5.1) on a scratch copy that pairs this task's harness with the BASE launchers (merge-base with moe/work-2026-10-24; set BASE_REV=<completion>^ when re-running from a landed tree). C4b: each base run prints the same `T-legacy usage receipt` line as C3 (before/after: the receipt is unchanged) and fails only at `the CLI env carries MOE_USAGE_RECEIPT_FILE` (RED).\nIn complete_task, quote: the receipt lines (before and after, sh and ps1); each engine's PASS line; the RED lines; both TAP totals; C1's PASS lines. The ps1 runs take about 5 min each: run them detached and poll (mem:gotcha-qa-ps1-postflight-from-wsl). If any suite fails, re-run it on a base snapshot before blaming this change (mem:gotcha-launcher-ps1-rows-from-wsl).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the full chain C1 && C2 && C3 && C4a && C4b fresh from W (script /mnt/d/moe-scratch/cd38-chain.sh, holding the five checkRefs verbatim): CHAIN_EXIT=0.\n- C1: bash -n, ParseFile 0 errors, BOM efbbbf, PASS parity-check.sh, PASS parity-check.ps1, importee-guard.ps1: 53 passed, 0 failed.\n- C2: WSL node 41 tests / 39 pass / 0 fail / 2 skipped; Windows node.exe 129/129/0/0 (base 40/38/2 and 126/126; +1 interactive test per engine).\n- C3: PASS postflight-vm-route.sh, PASS postflight-vm-route.ps1 on PS 5.1 and on pwsh 7.\n- C4a: base=500e3f29, snapshot /mnt/d/moe-scratch/cd38-base.ioBpn4.\n- C4b: \"sh: receipt unchanged before/after; base launcher RED\" and \"51: receipt unchanged before/after; base launcher RED\". Both base logs end with \"VM ROUTE FAILED (T-legacy): the CLI env carries MOE_USAGE_RECEIPT_FILE\". The receipt line is identical across after-sh, before-sh, after-51, before-51 and after-7 (sha256 prefix dd436c1ef9d597c9).\n- Project qualityGate (parity-check.sh && npm run lint): rc 0.\nLogs: /mnt/d/moe-scratch/cd38-vmr/{after,before}-*.log and /mnt/d/moe-scratch/cd38-chain.out.",
+      "startedAt": "2026-11-04T12:11:25.031Z",
+      "completedAt": "2026-11-04T12:28:25.591Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this task's diff only, before complete_task.\n- Grep both launchers for every usage-session / usage-start / claude-stream / codex-stream call. Each one gets the pair: an sh prefix, Invoke-MoeUsageHelper, or the $psi entries. sh must have no `export MOE_USAGE_` left, and ps1 no `$env:MOE_USAGE_RECEIPT_FILE = [string]`.\n- Look for any moment when the pair is in an environment while a CLI, Start-HeartbeatSidecar, the account sign-in probe or the post-flight gate starts. There must be none.\n- Disabled (MOE_USAGE_REPORTING=off) or failed setup: both values empty, nothing written, and the launch proceeds unchanged (error handling stays fail-open).\n- Hot reload: sh exec and the ps1 in-process supervisor both keep env. The loop-top resets must leave nothing stale.\n- CHILD_EXIT=23 rows and the `$global:LASTEXITCODE` restore still hold.\n- PS 5.1 dynamic scope of $line inside Invoke-MoeUsageHelper's scriptblock: the ps1 'records cumulative usage' row proves it on 5.1 and 7.\n- Every anchor listed in steps 1-2 is still byte-identical (grep each one). No `} else {` was added inside the ps1 codex -Begin block.\n- The net change stays under 400 non-board LOC. Then complete_task with the step 5 evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/usage-launcher.test.mjs",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/postflight-vm-route.ps1"
+      ],
+      "note": "Adversarial self-review of this task's diff (5 files, +144/-47, net 97). Step 6 itself edited nothing; the list is the task's whole set.\n- Every usage-session/usage-start/claude-stream/codex-stream call gets the pair. sh: 4 prefixed calls plus the usage-session context prefix. ps1: usage-start and both claude-stream calls go through Invoke-MoeUsageHelper; codex-stream gets the $psi entries. No `export MOE_USAGE_` and no `$env:MOE_USAGE_RECEIPT_FILE = [string]` remain.\n- ps1 $env holds the pair only inside Invoke-MoeUsageHelper and around usage-session.mjs. Start-HeartbeatSidecar, the CLI, the account sign-in probe and the post-flight gate all start with it clear. sh exports nothing.\n- Disabled and failed setup: both values stay empty and the launch proceeds. Pinned by 'disabled reporting' and 'setup failure' on all 4 engines.\n- Hot reload: sh exec drops unexported vars; ps1's new script scope plus the loop-top reset leaves nothing stale.\n- CHILD_EXIT=23 and SAVED_EXIT=23 hold. $line dynamic scope is proven by 'records cumulative usage' on PS 5.1 and 7.\n- Anchors from steps 1-2 checked by count against 500e3f29: all unchanged. The codex -Begin block gained 2 lines and no else.\nTheoretical only: (1) In ps1, while the claude result line is parsed, the process env briefly holds the pair as the helper starts. The CLI and heartbeat job are already running and the wrapper starts nothing else then. (2) sh now also unsets an inherited USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT, names nothing else uses.",
+      "startedAt": "2026-11-04T12:28:26.558Z",
+      "completedAt": "2026-11-04T12:28:59.600Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Of its dependencies, task-3416b309 is DONE. task-62ec51f1 (CQ-M07n) has landed as ac3e5afb and is in QA, so plan against those landed bytes. dependsOn stays, so WORKING claims wait for 62ec51f1 to reach DONE. If QA rejects 62ec51f1, re-read its rework before claiming. Placement: bbd7ad2d, 1dfec7a4 and 6b3ab9d8 also edit scripts/moe-agent.ps1. Keep this row's ps1 change to where MOE_USAGE_RECEIPT_FILE is exported and consumed, and mirror it in moe-agent.sh (both launchers). The human can drag it back to veto.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3416b309111740aa800b0e03bcb836e8",
+    "task-62ec51f179494706a39045154d07e544"
+  ],
+  "priority": "LOW",
+  "order": 505.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:06:21.135Z",
+  "updatedAt": "2026-11-04T19:20:45.453Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T10:56:57.567Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T10:57:11.313Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-04T12:54:32.723Z",
+    "wallClockMs": 7041410
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T11:23:55.643Z",
+  "executionContract": {
+    "intendedBehavior": "Both launchers keep the launch's usage receipt path and context (MOE_USAGE_RECEIPT_FILE, MOE_USAGE_CONTEXT_JSON) out of every environment they leave set. So the agent CLI, anything the CLI starts (a test, a helper, a fixture run) and every other wrapper child (the post-flight quality gate included) never inherit them. Only the wrapper's own usage helper calls receive them, per command: usage-session.mjs gets the context, and prompt-cache.mjs usage-start, claude-stream and codex-stream get both. The receipt rows those helpers write are unchanged.",
+    "acceptanceCriteria": [
+      "Under moe-agent.sh and moe-agent.ps1, the agent CLI's environment carries neither MOE_USAGE_RECEIPT_FILE nor MOE_USAGE_CONTEXT_JSON, for claude print, claude interactive and codex exec launches. A child of the CLI running prompt-cache.mjs usage-start appends nothing to the live receipt (usage-launcher.test.mjs, every engine).",
+      "The wrapper's own pending, reported and missing rows still reach the receipt with one shared launchId (usage-launcher.test.mjs).",
+      "After start_moe_usage_receipt / Start-MoeUsageReceipt returns, the wrapper's own environment holds neither variable.",
+      "postflight-vm-route.sh and postflight-vm-route.ps1 print the T-legacy receipt line, and it is identical on the base and the edited launchers. Their new check fails on the base launchers at 'the CLI env carries MOE_USAGE_RECEIPT_FILE' and passes on the edited ones.",
+      "bash -n, ParseFile 0 errors, parity-check.sh and parity-check.ps1 all pass."
+    ],
+    "invariants": [
+      "Receipt rows written by the wrapper's helpers are byte-identical to today's, apart from the per-run timestamp and launchId",
+      "Usage reporting stays fail-open: any failure prints MOE_USAGE_REPORT_UNAVAILABLE and the launch proceeds; MOE_USAGE_REPORTING=off writes nothing",
+      "An inherited MOE_USAGE_RECEIPT_FILE / MOE_USAGE_CONTEXT_JSON is still cleared before every launch",
+      "No new MOE_* code, banner or env name; sh/ps1 parity is unchanged",
+      "CLI exit codes and the $global:LASTEXITCODE handling are unchanged",
+      "The test anchor lines named in steps 1-2 stay byte-identical; there is no `} else {` inside the ps1 codex -Begin block",
+      "moe-agent.ps1 keeps its UTF-8 BOM; the moe-agent.sh main-loop group stays intact"
+    ],
+    "compatibility": [
+      "usage-report.mjs and analyze-usage.mjs read the same version-1 receipt shape",
+      "The 48 polluted historical receipts under logs/moe-usage stay untouched (governor decision, #governors msg-3c3dd428)",
+      "Interactive launches still get their pending marker; VM-route seats, which start no usage receipt, are unchanged"
+    ],
+    "approvedScope": [
+      "moe-agent.sh: start_moe_usage_receipt and its comment; the main-loop top unset; the usage-start, codex-stream and claude-stream helper invocations (prefixes only); the codex block's TOOL-witness comment",
+      "moe-agent.ps1: Start-MoeUsageReceipt; the new Invoke-MoeUsageHelper; the $parseStreamJson result-branch call; the claude launch finally fallback; the codex exec ForEach-Object -Begin $psi env; the main-loop top reset",
+      "scripts/tests/usage-launcher.test.mjs: the fake-provider prelude and its assertions, one interactive Claude test per engine, and the env-after-start check",
+      "scripts/tests/postflight-vm-route.{sh,ps1}: the T-legacy receipt and CLI-env check; the sh mask comment, plus its uuid replace only if the measurement shows it is dead"
+    ],
+    "reuse": [
+      "sh: the per-command env-prefix pattern that already scopes the TOOL-witness env (MOE_TOOL_WRITES_FILE .. MOE_SERENA_PROJECT_ROOT) to the stream helper",
+      "ps1: the $psi.EnvironmentVariables pattern of the codex witness env, and the set-around-the-call shape of Set-MoeAccountEnv / Restore-MoeAccountEnv",
+      "Tests: usage-launcher.test.mjs run(), between() and guard(); postflight-vm-route's CLI record plus vmr_fail / Stop-Vmr"
+    ],
+    "sourceAssumptions": [
+      "scripts/usage-receipt.mjs:71-79 createUsageReceiptWriter reads env.MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON; append() returns early when the file is falsy; readContext falls back to {} for '' or unset",
+      "scripts/usage-session.mjs:11 reads MOE_USAGE_CONTEXT_JSON and prints {file, context}; scripts/prompt-cache.mjs:12-16 builds the writer from process.env for usage-start, claude-stream and codex-stream",
+      "moe-agent.sh @500e3f29: start_moe_usage_receipt :869-895 exports both names (:884, :891); main-loop top unset :9922; codex-stream pipeline :11408; claude-stream pipelines :12044 and :12057; agent_git_exec :9503 is the CLI launch subshell",
+      "moe-agent.ps1 @500e3f29: Start-MoeUsageReceipt :1235-1261 sets $env: (:1243, :1251-1252); loop top :9700-9701; codex $psi :10885-10901; $parseStreamJson result branch :11449; claude finally fallback :11493",
+      "Nothing else reads either variable (grep of scripts/, scripts/mods, packages/*/src and docs): no mod, statusline, proxy or daemon consumer, and no doc tells the CLI it has them",
+      "postflight-vm-route.{sh,ps1} T-legacy is one full-wrapper worker claude headless launch in a fresh project; the fake CLI records {cli, argv, cwd, env}; the fake proxy's attempt is attempt-postflight with runnerId = workerId, so receipt rows are stable except timestamp and launchId"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass\" && bash -n scripts/moe-agent.sh && $P -Command \"\\$e=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w scripts/moe-agent.ps1)',[ref]\\$null,[ref]\\$e);exit \\$e.Count\" && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ] && env $E bash scripts/tests/parity-check.sh && $P -File \"$(wslpath -w scripts/tests/parity-check.ps1)\" && $P -File \"$(wslpath -w scripts/tests/importee-guard.ps1)\" && echo C1-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && env $E node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && env $E \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && echo C2-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && mkdir -p \"$L\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && V=\"$(wslpath -w scripts/tests/postflight-vm-route.ps1)\" && $T bash scripts/tests/postflight-vm-route.sh > \"$L/after-sh.log\" 2>&1 && $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-51.log\" 2>&1 && $T pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-7.log\" 2>&1 && for t in sh 51 7; do tr -d '\\0\\r' < \"$L/after-$t.log\" | grep -E '^(\\[vm route\\] T-legacy usage receipt: |PASS postflight-vm-route)'; done && echo C3-OK",
+      "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && B=$(mktemp -d /mnt/d/moe-scratch/cd38-base.XXXXXX) && mkdir -p \"$B/packages/moe-daemon/src/state\" && cp -r scripts \"$B/\" && cp packages/moe-daemon/src/state/validators.ts \"$B/packages/moe-daemon/src/state/\" && R=${BASE_REV:-$(git merge-base HEAD refs/heads/moe/work-2026-10-24)} && git show \"$R:scripts/moe-agent.sh\" > \"$B/scripts/moe-agent.sh\" && git show \"$R:scripts/moe-agent.ps1\" > \"$B/scripts/moe-agent.ps1\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && { $T bash \"$B/scripts/tests/postflight-vm-route.sh\" > \"$L/before-sh.log\" 2>&1; $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$B/scripts/tests/postflight-vm-route.ps1\")\" > \"$L/before-51.log\" 2>&1; true; } && echo \"C4a-OK base=$R snapshot=$B\"",
+      "L=/mnt/d/moe-scratch/cd38-vmr && ( k(){ tr -d '\\0\\r' < \"$L/$1-$2.log\" | grep '^\\[vm route\\] T-legacy usage receipt: '; }; for t in sh 51; do [ -n \"$(k after $t)\" ] && [ \"$(k before $t)\" = \"$(k after $t)\" ] && tr -d '\\0\\r' < \"$L/before-$t.log\" | grep -q 'the CLI env carries MOE_USAGE_RECEIPT_FILE' && echo \"$t: receipt unchanged before/after; base launcher RED\" || exit 1; done ) && echo C4b-OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Unset the pair only in the CLI launch funnel (sh agent_git_exec, ps1 Invoke-MoeGuardedCommand). Rejected. ps1 parses the claude result line while the CLI is still running, so clearing the process env for the CLI's lifetime would blank the claude-stream helper's receipt. In sh the pair would stay exported for the post-flight quality gate and every other wrapper child, and a gate running Moe's usage tests would pollute the receipt exactly as the CLI's child does.\n2. Pass the receipt path on helper argv (--receipt-file). Rejected. It changes the prompt-cache.mjs and usage-session.mjs CLI contracts and their tests, and usage-session.mjs deliberately takes its JSON context through env so PS 5.1 never round-trips JSON quotes through native argv.\n3. Chosen: unexported shell or script-scope storage, plus per-call env for the wrapper's own helpers. It is symmetric across the twins, covers the CLI, its children and every other wrapper child, and keeps helper inputs identical.\nMOE_USAGE_CONTEXT_JSON is scoped too. Only the writer and usage-session use it, nothing in the CLI subtree reads it, and both names are always set and cleared together.\nWhere to show DoD 2: a new arm in postflight.{sh,ps1} was rejected for size. postflight-vm-route's T-legacy already runs one full-wrapper claude headless launch in a fresh project, with a fake CLI that records its env, and both twins run from postflight.{sh,ps1}. That keeps the plan at 5 files (no 6-file heavy floor).\nNo docs change. No doc names these variables as visible to the CLI, and the receipt format is unchanged.",
+    "codebaseInsights": "- Node suites execute text slices of the wrappers. Anchors to keep: usage-launcher (sh `start_moe_usage_receipt() {`..`# End usage receipt helpers.`, `        LAUNCH_SKIPPED=false`..the `fi` before AGENT_GIT_GUARD_ROOT, `            start_moe_usage_receipt codex headless`..`            set -e`; ps1 the Start block, `            $parseStreamJson = {`, `            # Usage receipt launch boundary.`..the Remove-MoeAgentGitGuard tail, `                Start-MoeUsageReceipt 'codex' 'headless'`..`            } else {`). prompt-cache-launcher (sh codex pipeline line alone; ps1 `                & {`..first `            } else {`, which runs the $psi block with no Start-MoeUsageReceipt). importee-guard.ps1 AST-loads $parseStreamJson but sends no result event.\n- prompt-cache.mjs usage-start/claude-stream/codex-stream all build the writer from process.env, so a per-call env is all they need.\n- Baseline at 500e3f29: C1 green (parity sh+ps1, importee-guard 53/0) in 23 s. C2: WSL node 40 tests / 38 pass / 2 skipped; Windows node.exe 126/126/0 skipped, in 37 s.\n- postflight-vm-route.ps1 took about 4-5 min per engine on 11-04 (62ec51f1's vmr-merged logs). Its T-legacy runs only after the VM sections, so the base run in C4a reaches the RED only after those pass.",
+    "risks": "- ps1: the scriptblock passed to Invoke-MoeUsageHelper must see the caller's $line via dynamic scope; the ps1 'records cumulative usage' row on 5.1 and 7 proves it.\n- ps1: a `} else {` inside the codex -Begin block truncates two test slices.\n- ps1: under PS 5.1, ProcessStartInfo.EnvironmentVariables is a case-insensitive StringDictionary. That is the same as the existing witness-env lines, and node on Windows reads env case-insensitively.\n- sh: a helper function instead of inline prefixes breaks prompt-cache-launcher's codex slice.\n- WSL: scrub MOE_*/CLAUDE*/FAKE_* for every harness run (the seat env leaks into nested wrappers). Run ps1 harnesses from a /mnt/d cwd, never /tmp. Detach and poll long runs.\n- 62ec51f1 is still in REVIEW: dependsOn holds the WORKING claim until it is DONE. If QA reopened it, re-read its rework. bbd7ad2d, 1dfec7a4 and 6b3ab9d8 also edit moe-agent.ps1, so re-anchor every line by text.\n- The historical polluted receipts stay as they are (governor decision); usage-report totals for 10-24..11-03 still include about 248 fixture rows.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      "scripts/usage-receipt.mjs",
+      "scripts/usage-session.mjs",
+      "scripts/prompt-cache.mjs",
+      "scripts/tests/usage-launcher.test.mjs",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-vm-route.ps1",
+      "scripts/tests/importee-guard.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "500e3f29e6ad30438376ce6f702093b85c95cb11",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T11:23:55.680Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T12:32:09Z",
+    "at": "2026-11-04T12:55:15.754Z"
+  },
+  "workStartedAt": "2026-11-04T11:44:17.913Z",
+  "reviewStartedAt": "2026-11-04T12:30:58.011Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && P=\"env $E powershell.exe -NoProfile -ExecutionPolicy Bypass\" && bash -n scripts/moe-agent.sh && $P -Command \"\\$e=\\$null;[void][Management.Automation.Language.Parser]::ParseFile('$(wslpath -w scripts/moe-agent.ps1)',[ref]\\$null,[ref]\\$e);exit \\$e.Count\" && [ \"$(head -c3 scripts/moe-agent.ps1 | od -An -tx1 | tr -d ' \\n')\" = efbbbf ] && env $E bash scripts/tests/parity-check.sh && $P -File \"$(wslpath -w scripts/tests/parity-check.ps1)\" && $P -File \"$(wslpath -w scripts/tests/importee-guard.ps1)\" && echo C1-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && env $E node --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && env $E \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/usage-launcher.test.mjs scripts/tests/prompt-cache-launcher.test.mjs && echo C2-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && mkdir -p \"$L\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && V=\"$(wslpath -w scripts/tests/postflight-vm-route.ps1)\" && $T bash scripts/tests/postflight-vm-route.sh > \"$L/after-sh.log\" 2>&1 && $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-51.log\" 2>&1 && $T pwsh.exe -NoProfile -ExecutionPolicy Bypass -File \"$V\" > \"$L/after-7.log\" 2>&1 && for t in sh 51 7; do tr -d '\\0\\r' < \"$L/after-$t.log\" | grep -E '^(\\[vm route\\] T-legacy usage receipt: |PASS postflight-vm-route)'; done && echo C3-OK && cd \"$(git rev-parse --show-toplevel)\" && E=$(env | grep -oE '^(MOE_|CLAUDE|FAKE_)[A-Za-z0-9_]*' | sed 's/^/-u /') && L=/mnt/d/moe-scratch/cd38-vmr && B=$(mktemp -d /mnt/d/moe-scratch/cd38-base.XXXXXX) && mkdir -p \"$B/packages/moe-daemon/src/state\" && cp -r scripts \"$B/\" && cp packages/moe-daemon/src/state/validators.ts \"$B/packages/moe-daemon/src/state/\" && R=${BASE_REV:-$(git merge-base HEAD refs/heads/moe/work-2026-10-24)} && git show \"$R:scripts/moe-agent.sh\" > \"$B/scripts/moe-agent.sh\" && git show \"$R:scripts/moe-agent.ps1\" > \"$B/scripts/moe-agent.ps1\" && T=\"env $E MOE_POSTFLIGHT_TIMEOUT_SEC=360 WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC\" && { $T bash \"$B/scripts/tests/postflight-vm-route.sh\" > \"$L/before-sh.log\" 2>&1; $T powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$B/scripts/tests/postflight-vm-route.ps1\")\" > \"$L/before-51.log\" 2>&1; true; } && echo \"C4a-OK base=$R snapshot=$B\" && L=/mnt/d/moe-scratch/cd38-vmr && ( k(){ tr -d '\\0\\r' < \"$L/$1-$2.log\" | grep '^\\[vm route\\] T-legacy usage receipt: '; }; for t in sh 51; do [ -n \"$(k after $t)\" ] && [ \"$(k before $t)\" = \"$(k after $t)\" ] && tr -d '\\0\\r' < \"$L/before-$t.log\" | grep -q 'the CLI env carries MOE_USAGE_RECEIPT_FILE' && echo \"$t: receipt unchanged before/after; base launcher RED\" || exit 1; done ) && echo C4b-OK",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nPASS parity-check.ps1\nimportee-guard.ps1: 53 passed, 0 failed\nC1-OK   (bash -n ok; ParseFile 0 errors; ps1 BOM efbbbf)\n[WSL node] ℹ tests 41 ℹ pass 39 ℹ fail 0 ℹ skipped 2\n[Windows node.exe] ℹ tests 129 ℹ pass 129 ℹ fail 0 ℹ skipped 0\nC2-OK\n[vm route] T-legacy usage receipt: {\"version\":1,\"timestamp\":\"<ts>\",\"provider\":\"claude\",\"taskId\":\"task-postflight\",\"workerId\":\"worker-vmr\",\"role\":\"worker\",\"attemptId\":\"attempt-postflight\",\"launchId\":\"<launch>\",...,\"launchMode\":\"headless\",...,\"coverage\":\"pending\",...} | {...same launchId <launch>...,\"coverage\":\"missing\",\"outcome\":\"unknown\",...}\nPASS postflight-vm-route.sh\n[vm route] T-legacy usage receipt: (identical line)\nPASS postflight-vm-route.ps1   (Windows PowerShell 5.1)\n[vm route] T-legacy usage receipt: (identical line)\nPASS postflight-vm-route.ps1   (pwsh 7)\nC3-OK\nC4a-OK base=500e3f29e6ad30438376ce6f702093b85c95cb11 snapshot=/mnt/d/moe-scratch/cd38-base.ioBpn4\nsh: receipt unchanged before/after; base launcher RED\n51: receipt unchanged before/after; base launcher RED\nC4b-OK\nCHAIN_EXIT=0\n(the receipt line is byte-identical in all 5 logs: before-sh, before-51, after-sh, after-51, after-7; base logs end 'VM ROUTE FAILED (T-legacy): the CLI env carries MOE_USAGE_RECEIPT_FILE'. Full output: /mnt/d/moe-scratch/cd38-chain.out, 14:27 local, after the last edit at 14:05. QA re-run from the landed tree: BASE_REV=<completion>^)",
+    "reportedAt": "2026-11-04T12:30:58.011Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/moe-agent.ps1",
+    "scripts/tests/usage-launcher.test.mjs",
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/tests/postflight-vm-route.ps1"
+  ],
+  "completionSummary": "The usage receipt pair (MOE_USAGE_RECEIPT_FILE, MOE_USAGE_CONTEXT_JSON) is no longer exported. Only the wrapper's own usage helpers get it, per call. 5 files, +144/-47, net 97.\n- moe-agent.sh: start_moe_usage_receipt keeps the pair in UNEXPORTED USAGE_RECEIPT_FILE/USAGE_RECEIPT_CONTEXT. It passes inline MOE_USAGE_* prefixes to usage-start, codex-stream and both claude-stream pipelines; usage-session.mjs gets only the context. The loop-top unset clears all four.\n- moe-agent.ps1: $script:MoeUsageReceiptFile/$script:MoeUsageContextJson. The new Invoke-MoeUsageHelper sets $env: around a single call and clears it in finally. It wraps usage-start, the claude result branch and the claude finally fallback. The codex -Begin block gets the pair via $psi.EnvironmentVariables (no else; anchors byte-identical). BOM kept.\n- usage-launcher.test.mjs: the fake CLI records its env and spawns prompt-cache.mjs usage-start as its own child. The headless claude/codex tests assert the CLI env has neither key, with still exactly 2 rows. A new interactive-claude test per engine. A CHILD_ENV probe in 'fresh'.\n- postflight-vm-route.{sh,ps1} T-legacy: print the masked receipt, assert pending+missing with one launchId and identity fields, and fail 'the CLI env carries <KEY>' on the base. The sh uuid mask in vmr_normalized is removed: measured unneeded once the pair left the CLI env.\nRED on 500e3f29 launchers: WSL 6/10 fail, Windows 18/30 (6 per engine on PS 5.1, pwsh 7 and Git Bash). Without the env asserts the base writes 3 rows instead of 2 (interactive: 2 instead of 1).\nGREEN: C1 parity sh+ps1 PASS, importee-guard 53/0, bash -n + ParseFile 0, BOM. C2 WSL 41/39/0/2skip and Windows 129/129. C3 vm-route PASS sh, PS 5.1 and pwsh 7. C4b: the receipt is unchanged before/after for sh and 5.1, and the base is RED. qualityGate (parity-check.sh && npm run lint) rc 0.",
+  "commits": [
+    {
+      "sha": "4c7d6464b92acac046e5933d546f6b9ade17c3e0",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T11:42:47Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.ps1",
+        "scripts/tests/postflight-vm-route.sh",
+        "scripts/tests/usage-launcher.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T12:31:52.624Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T12:54:32.723Z",
+  "reviewCompletedAt": "2026-11-04T12:54:32.723Z",
+  "reviewSummary": "Reviewed completion 4c7d6464 (pushed; on moe/work-2026-10-24 and origin). 5 files, +144/-47, net 97, all in approvedScope.\n\nRe-ran task.verification verbatim (scratch dirs renamed to /mnt/d/moe-scratch/qa-cd38/*) from a clean clone at 4c7d6464, BASE_REV=7f83a3cd: CHAIN_EXIT=0.\n- C1: bash -n, ParseFile 0, BOM, parity-check sh+ps1 PASS, importee-guard 53/0.\n- C2: WSL 41/39/0/2skip; Windows node.exe 129/129.\n- C3: vm-route PASS on sh, PS 5.1 and pwsh 7.\n- C4b: both base runs fail with 'the CLI env carries MOE_USAGE_RECEIPT_FILE'. The receipt line is byte-identical in all 5 logs (sha256 d6ab75cb21c8d2d3).\n- qualityGate rc 0.\n\nOwn checks:\n- usage-launcher with the base launchers is RED, 6/10 on WSL.\n- A mutant that drops the sh codex-stream prefix fails both codex tests, so the wrapper's own writes are pinned.\n\nDoD:\n1. Neither launcher exports the pair. sh uses unexported shell vars plus inline prefixes on all 4 helper calls (no set -a). ps1 keeps it in $script: scope; Invoke-MoeUsageHelper sets $env: around one call, and the codex $psi carries it. Pinned per engine by the CLI-child tests, the new interactive test and the CHILD_ENV probe.\n2. The receipt is unchanged before/after; parity passes.\n3. Results for both twins are quoted.\n\nFail-open and the LASTEXITCODE restore are kept, and the loop-top resets cover both vars. No other consumer reads the pair. The test refactor is equivalent. ponytail: nothing to cut.",
+  "requiredCheckAtDone": null
+}

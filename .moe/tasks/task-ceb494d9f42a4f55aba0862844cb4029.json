@@ -1,0 +1,227 @@
+{
+  "id": "task-ceb494d9f42a4f55aba0862844cb4029",
+  "epicId": "epic-be924fb8",
+  "title": "bug: grantNextLeases passes over a worktree completion's queued git-land lease, because complete_task already cleared the task's assignee",
+  "description": "Filed by the governor on 2026-11-03 from a live stall of WT-19 (task-b1ca54f2), the worktree epic's final task.\n\nPROBLEM. A worktree completion takes the git-land-<target> lease at L3, after moe.complete_task has moved the row to REVIEW and cleared assignedWorkerId. If another landing holds the lease, the wrapper queues (acquire_resource, then wait_for_resource). On release, grantNextLeases (packages/moe-daemon/src/state/resourceStore.ts, the pass-over at ~line 449) skips every entry whose task fails heldByLiveSeat (~line 83). heldByLiveSeat returns false for any unassigned task. So the queued completion is never granted:\n- it waits out its own wait_for_resource (up to 10 min per wait);\n- later landings acquire directly past it;\n- under steady traffic it can exhaust MOE_LAND_LEASE_WAIT_SEC (default 1800) and fail as MOE_COMMIT_FAILED_LAND_LEASE, the unlanded route back to a worker.\n\nEVIDENCE. From .moe/activity.log, 2026-11-03, git-land-moe-work-2026-10-24:\n- 13:54:56Z RESOURCE_ACQUIRED task-1765335a (worker-ed0f6a9e).\n- 13:55:17Z RESOURCE_QUEUED task-b1ca54f2 (worker-8cf0816c). WT-19 is REVIEW with no assignee: complete_task ran at 13:54:54Z.\n- 13:55:24Z RESOURCE_RELEASED task-1765335a. No grant follows.\n- 13:57:37Z RESOURCE_ACQUIRED task-13ff6bb4 (direct, past the queued WT-19).\n- 13:58:01Z RESOURCE_RELEASED task-13ff6bb4. Still no grant.\n- At 14:04Z, list_resources showed holders [] and queue [task-b1ca54f2, position 1]. The wrapper was still parked in wait_for_resource.\n\nFIX DIRECTION (verify against the code first).\n- A queue entry is held for grant purposes when either:\n  - the task's assignee is a live seat bound to it (as today); or\n  - the entry's own workerId is a registered, non-DEAD seat that owns the task's open execution attempt in `finalizing`. That is the post-complete_task landing window, the one moe.finalize_attempt closes.\n- Keep the pass-over for rows nobody can use, so resourceStore.unheld.test.ts stays meaningful.\n- Assumption to check: which attempt-store accessor exposes an attempt's status and its owning worker.\n\nFiles expected: packages/moe-daemon/src/state/resourceStore.ts plus a test (a resourceStore*.test.ts file or a new one). Not held by any open row at filing time.",
+  "definitionOfDone": [
+    "When a task in REVIEW has an open finalizing attempt owned by a live seat, and that seat's git-land queue entry comes up, grantNextLeases grants it as capacity frees and logs RESOURCE_GRANTED. A regression test replays the 13:55Z sequence: A holds the lease; B completes, so it is unassigned with a finalizing attempt, and queues; A releases; B is granted.",
+    "Rows no live seat can use are still passed over: unassigned with no finalizing attempt, a DEAD or deregistered requester, or an attempt owned by another seat. The existing resourceStore tests (unheld, lifecycle, deregister, durability) stay green.",
+    "The daemon's resourceStore test files and its full npm test pass in a git archive or clone snapshot outside the shared checkout (global rail), with error handling for a missing or unreadable attempt record that falls back to today's pass-over."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD red first: create packages/moe-daemon/src/state/resourceStore.landing.test.ts, the 13:55Z regression test (DoD 1). Model it on resourceStore.unheld.test.ts (ToolTestHarness; setupMoeFolder({ schemaVersion: 6 }); createEpic; a loadState() that runs h.state.load() and then mocks postToGeneral/postToRoleChannel/postSystemMessage) and on waitForResource.test.ts (copy its waitFor poll helper, and an afterEach that clears the timer, unsubscribes, resolves and deletes every activeResourceWaiters entry before clearEmitter/restoreAllMocks/cleanup, so no parked waiter leaks). RID = 'git-land-moe-work-2026-10-24'. Fixture: task-a WORKING assigned worker-a (CODING, currentTaskId task-a); task-b WORKING assigned worker-b (CODING, currentTaskId task-b) with implementationPlan [{ stepId: 'step-1', description: 'x', status: 'COMPLETED', affectedFiles: [] }]. Test: after load, openAttempt(h.state, { taskId: 'task-b', workerId: 'worker-b', runnerId: 'runner-b', workspace: h.testDir }) as the claim does; A acquires RID (granted: true); B completes through the REAL tool, completeTaskTool(h.state).handler({ taskId: 'task-b', workerId: 'worker-b', verification: { command: 'npm test', exitCode: 0 } }, h.state); assert the shape it leaves: task-b { status: 'REVIEW', assignedWorkerId: null }, currentAttempt(h.state, 'task-b') { phase: 'finalizing', workerId: 'worker-b' }, worker-b { status: 'IDLE', currentTaskId: null }. B queues: acquireResource returns { granted: false, position: 1 }; park waitForResourceTool(h.state).handler({ resourceId: RID, taskId: 'task-b', workerId: 'worker-b', timeoutMs: 5000 }, h.state) and waitFor(() => activeResourceWaiters.has('worker-b')); spy appendActivity; A releases (releaseResource({ resourceId: RID, workerId: 'worker-a' })). Assert: result.granted as [taskId, workerId] pairs equals [['task-b', 'worker-b']]; the persisted .moe/resources/<RID>.json has holders ['task-b'] and queue []; appendActivity was called with ('RESOURCE_GRANTED', { resourceId: RID, taskId: 'task-b', workerId: 'worker-b' }); the parked waiter resolves granted: true with lease.taskId 'task-b'. Run it against the UNMODIFIED resourceStore.ts and confirm it fails at the granted assertion (architect dry run on d5f52d0e: expected [] to deeply equal [ [ 'task-b', 'worker-b' ] ]). Where to run tests (global rail): never in the shared checkout, and the task worktree has no node_modules. Build ONE scratch snapshot outside the repo (S=$(mktemp -d); git archive HEAD | tar -x -C \"$S\"; cd \"$S/packages/moe-daemon\"; env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" npm ci), copy your edited files into it, and run npx vitest run src/state/resourceStore.landing.test.ts there.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts"
+      ],
+      "note": "Created resourceStore.landing.test.ts with the 13:55Z replay (A holds git-land; B completes via the real completeTaskTool -> REVIEW, unassigned, finalizing attempt, IDLE seat; B queues + parks wait_for_resource; A releases). Ran in a scratch snapshot (/tmp/tmp.qFnhUWxzUt, git archive HEAD + npm ci) against the UNMODIFIED resourceStore.ts: fails at the granted assertion, \"expected [] to deeply equal [ [ 'task-b', 'worker-b' ] ]\", with the preconditions (REVIEW/unassigned, finalizing attempt, IDLE seat, queue position 1) all passing first.",
+      "startedAt": "2026-11-03T14:19:35.219Z",
+      "completedAt": "2026-11-03T14:20:26.273Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix with error handling in packages/moe-daemon/src/state/resourceStore.ts. (1) import { currentAttempt } from './attemptStore.js' (state to state; attemptStore imports nothing from resourceStore, so no cycle). (2) heldByLiveSeat(state, task, requesterId: string): keep the assignee branch exactly as today (assignee set and its worker record missing, or not DEAD with currentTaskId === task.id, returns true); in every other case return landingSeatHoldsTask(state, task, requesterId). It is an OR, so a DEAD or elsewhere-bound assignee also falls through. (3) New private landingSeatHoldsTask(state, task, requesterId), the post-complete_task landing window: const seat = state.getWorker(requesterId); return false when the record is missing (a deregistered requester: unlike the assignee branch, no record is NOT granted) or DEAD. This seat lookup runs BEFORE the attempt comparison, so an entry with a blank workerId can never match a malformed attempt's missing workerId. Then try { const attempt = currentAttempt(state, task.id); return attempt?.phase === 'finalizing' && attempt.workerId === requesterId; } catch (error) { logger.warn({ taskId: task.id, workerId: requesterId, error }, 'grantNextLeases: attempt record unreadable; passing the queue entry over'); return false; }. A missing attempt is null, so false: today's pass-over. Do NOT require seat.currentTaskId === task.id (complete_task leaves the seat IDLE with currentTaskId null, completeTask.ts touchWorker) and do NOT filter on task status (isResourceTaskEligible already does). (4) grantNextLeases call site (~line 449): heldByLiveSeat(state, task, next.workerId). (5) Update the three comments that describe the pass-over (file header ~18-24, heldByLiveSeat's JSDoc, the block above passedOver ~435-439): a row also counts as held while the entry's own registered, non-DEAD seat owns the task's finalizing attempt (complete_task cleared the assignee; the worktree wrapper takes git-land at L3 inside that window, which moe.finalize_attempt closes). Leave acquireResource, releaseResource, releaseDeregisteredClaims, reapResources, restoreUnheldTask and resumeResourceHolder unchanged: a granted REVIEW row is not BLOCKED, so resumeResourceHolder only posts the green grant line and repairs no seat. Re-run step 1's test in the snapshot: it must pass now.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.ts"
+      ],
+      "note": "resourceStore.ts: imported currentAttempt from ./attemptStore.js; heldByLiveSeat(state, task, requesterId) keeps the assignee branch as-is and otherwise returns the new private landingSeatHoldsTask (registered non-DEAD seat for the entry's workerId, checked BEFORE the attempt comparison, owning the task's open attempt in finalizing; try/catch around currentAttempt logs logger.warn and passes over); grantNextLeases passes next.workerId. Updated the file header, heldByLiveSeat JSDoc and the passedOver block comment. acquireResource/releaseResource/releaseDeregisteredClaims/reapResources/restoreUnheldTask/resumeResourceHolder untouched. In the snapshot: tsc --noEmit exit 0; the step-1 replay test now passes; the five existing resourceStore*.test.ts files stay green (6 files / 69 tests).",
+      "startedAt": "2026-11-03T14:20:28.165Z",
+      "completedAt": "2026-11-03T14:20:57.291Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the pass-over and error-handling test cases (DoD 2 and 3) to resourceStore.landing.test.ts as one it.each table, 'passes over a landing row no live seat can use (%s) and grants the live waiter behind it'. Seeds: 'no attempt' (legacy row); 'closed attempt' (finalize_attempt already ran); 'running attempt' (open but not finalizing); 'DEAD requester'; 'deregistered requester' (no worker record for the entry's workerId, its attempt finalizing); 'another seat's attempt' (finalizing attempt owned by a live worker-x, entry by worker-r); 'malformed record' (hand-written .moe/attempts/attempt-bad.json { id: 'attempt-bad', taskId: 'task-r', phase: 'finalizing', generation: 'x' } with no workerId, written BEFORE load; mkdir the attempts dir first); 'unreadable record' (a valid finalizing attempt owned by the requester, plus vi.spyOn(h.state.attempts, 'values').mockImplementationOnce(() => { throw new Error('unreadable attempt record'); }) right before the release). Each case: task-r REVIEW unassigned; worker-r IDLE (DEAD for that seed); task-live WORKING assigned worker-live (CODING, currentTaskId task-live); queue holder task-a first, then task-r by its requester, then task-live; capture task-r's persisted queue entry; release A. Assert releaseResource resolves (no throw), result.granted taskIds equal ['task-live'], and the persisted queue equals [the captured task-r entry] (same requestedAt: it keeps its age). Seeding trap (mem:decision-finalizing-attempt-close-paths, TEST FIXTURE TRAP): create task-r unassigned on disk before load and open/phase attempts after load with openAttempt/setAttemptPhase; never fake a mismatch by clearing a seat through updateTask, which closes running attempts and lets the 'running attempt' case pass vacuously. Architect dry run: all 8 seeds pass with the fix; removing the DEAD check turns 'DEAD requester' red, and turning the catch into a rethrow turns 'unreadable record' red. Leave the existing resourceStore*.test.ts files untouched.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts"
+      ],
+      "note": "Added the it.each table (8 seeds) to resourceStore.landing.test.ts: no attempt, closed attempt, running attempt, DEAD requester, deregistered requester, another seat's attempt, malformed record (hand-written attempt-bad.json with no workerId, loaded raw by loadEntities), unreadable record (attempts.values() throws once, logger.warn asserted exactly once). Each seeds task-r REVIEW/unassigned plus a live waiter task-live behind it, asserts the release resolves, only task-live is granted, and task-r's persisted queue entry is unchanged (same requestedAt). Attempts are seeded after load via openAttempt/setAttemptPhase; fixtures assert the seeded state (open phase, worker record) so no case passes vacuously. Snapshot results: tt.json typecheck exit 0; resourceStore*.test.ts 6 files / 77 tests green (landing = 9). Mutants in the snapshot copy of resourceStore.ts, each turning only its intended case red: drop DEAD check -> 'DEAD requester'; drop missing-record check -> 'deregistered requester'; drop workerId equality -> \"another seat's attempt\" + 'malformed record'; drop finalizing check -> 'running attempt'; rethrow in catch -> 'unreadable record'. Snapshot copy restored byte-identical.",
+      "startedAt": "2026-11-03T14:20:59.183Z",
+      "completedAt": "2026-11-03T14:22:34.553Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate. Run it ONCE, fresh, from the task worktree after steps 1-3. Its output is the complete_task verification evidence, and QA re-runs it: cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/resourceStore.ts packages/moe-daemon/src/state/resourceStore.landing.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/resourceStore.landing.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/state/resourceStore > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }' . It archives HEAD and overlays exactly the two owned files. It typechecks src and the new test (tt.json, because the package tsconfig excludes tests: mem:convention-daemon-full-suite-gate-checkref). It then runs the six src/state/resourceStore*.test.ts files and the full daemon npm test (vitest run), all outside the shared checkout (global rail). The architect dry-ran this exact command on d5f52d0e plus the planned change: resourceStore 6 files / 78 tests, full suite 237 files / 7038 passed / 24 skipped, exit 0. Never pass TMPDIR into the env -i. A temp root longer than about 60 chars pushes tsx's IPC pipe past the 108-byte unix-socket limit (listen EINVAL in healthHost, bindHosts and acceptance) and truncates doctor.test.ts's worktree path: 7 false failures in the architect's first dry run. The default /tmp is right. If any other file fails, re-run it alone in the same snapshot, and report it rather than skip it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's step-4 gate command verbatim, once, fresh, in a git-archive snapshot outside the repo (HEAD + the two owned files overlaid): npm ci, tsc --noEmit, tsc -p tt.json, vitest run src/state/resourceStore, then npm test. Result, exit 0: resourceStore 6 files / 77 tests passed; full suite 237 files passed, 7060 tests passed, 24 skipped. No file needed a re-run. The count differs from the plan's dry run (78 resourceStore tests) only because my table has 8 seeds plus the replay (9 landing tests); no DoD item names a count.",
+      "startedAt": "2026-11-03T14:22:35.441Z",
+      "completedAt": "2026-11-03T14:23:40.857Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review, final step: load the adversarial-self-review skill and read your diff (resourceStore.ts and the new test) as an attacker. (a) Concurrency: grantNextLeases runs under state.mutex from release, the reaper and deregister; a granted entry leaves the queue in the same pass, so it cannot be granted twice. (b) Inputs: an entry with a blank or 'human' workerId (report_blocked's fallback) must stop at the missing-record check. (c) The residual risk you accept, which you name in the completion summary: a hard-crashed landing seat that never deregisters (record not DEAD, attempt still finalizing) now gets the lease when its entry comes up. That is bounded by maxLeaseMs (git-land: 7200000), and a governor can drop it with release_resource force: the same trade the assignee branch already makes. Confirm release_land_lease (scripts/moe-agent.sh ~7680, twin Release-MoeLandLease) drops the queue entry on every normal exit, so only a hard crash leaves one. (d) The assignee branch is unchanged (a missing assignee record is still granted). (e) No MCP tool shape, schema or .moe/ file format changed (epic rails). Fix what you find; if you change code, re-run the step-4 gate and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts"
+      ],
+      "note": "Adversarial self-review of resourceStore.ts + resourceStore.landing.test.ts. (a) Concurrency: grantNextLeases runs under state.mutex from release/reaper/deregister; a granted entry leaves resource.queue and is persisted in the same pass, so it cannot be granted twice. (b) Inputs: a blank or 'human' workerId has no worker record and stops at landingSeatHoldsTask's missing-record check, which runs before the attempt comparison; a malformed attempt (no workerId) cannot match; an unreadable attempt read logs logger.warn and passes over. (c) Accepted residual risk: a hard-crashed landing seat that never deregisters (record not DEAD, attempt still finalizing) now gets the lease when its entry comes up, bounded by maxLeaseMs (git-land 7200000) and droppable by a governor with release_resource force, the same trade the assignee branch makes. Confirmed release_land_lease (moe-agent.sh 7684, twin Release-MoeLandLease) is idempotent and runs on the landed path (7804), in take_unlanded_route (7723) and as one retry in the exit trap (292), so only a hard crash leaves a queue entry. Also accepted: a stale queue entry for a different resource, queued by the same seat on the same task before it completed, would now be granted in the finalizing window; also bounded by maxLeaseMs. (d) Assignee branch textually unchanged (a missing assignee record is still granted). (e) No MCP tool shape, schema or .moe/ format changed. Self-review fix: the it.each callback was ~65 lines, over the 50-line bar; split into seedDisk/seedAttempt/expectSeeded helpers (test-only). Re-ran the step-4 gate fresh after that edit: exit 0; resourceStore 6 files / 77 tests; full suite 237 files, 7060 passed, 24 skipped.",
+      "startedAt": "2026-11-03T14:23:41.783Z",
+      "completedAt": "2026-11-03T14:25:26.547Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 363.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T14:04:49.282Z",
+  "updatedAt": "2026-11-04T19:20:44.124Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T14:04:59.017Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T14:29:01.999Z",
+    "wallClockMs": 1442982
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-8cf0816c",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T14:18:37.198Z",
+  "executionContract": {
+    "intendedBehavior": "grantNextLeases grants a queued resource entry whose task is unassigned when the entry's own seat is registered, non-DEAD and owns the task's open execution attempt in phase finalizing. That is the post-complete_task landing window in which the worktree wrapper takes git-land-<target> (L3). The grant logs RESOURCE_GRANTED and wakes the seat's parked wait_for_resource. Every other row no live seat holds is still passed over, keeping its queue entry and its age. A missing or unreadable attempt record falls back to that pass-over, with a logger.warn for an unreadable one.",
+    "acceptanceCriteria": [
+      "Replaying 13:55Z (A holds the lease; B completes through complete_task, so it is unassigned with a finalizing attempt, and queues; A releases), B is granted, RESOURCE_GRANTED is logged for B, and B's parked wait_for_resource resolves granted.",
+      "Passed over, with the slot going to the next live waiter and the entry kept unchanged: no attempt, a closed attempt, a running attempt, a DEAD requester, a deregistered requester, and an attempt owned by another seat.",
+      "A malformed attempt record, or an attempt read that throws, never throws out of grantNextLeases and falls back to the pass-over.",
+      "The existing resourceStore tests (unheld, lifecycle, deregister, durability, base) pass unchanged, and the daemon's full npm test passes in a snapshot outside the shared checkout."
+    ],
+    "invariants": [
+      "The assignee branch of heldByLiveSeat is unchanged: a missing assignee record is still granted; a DEAD assignee, or one bound to another task, is held only through the landing rule",
+      "A landing grant requires an existing, non-DEAD worker record for the entry's workerId, and only a finalizing attempt owned by that exact workerId",
+      "acquireResource, releaseResource, releaseDeregisteredClaims, reapResources, restoreUnheldTask and resumeResourceHolder are unchanged",
+      "A passed-over entry keeps its requestedAt and queue position"
+    ],
+    "compatibility": [
+      "No MCP tool input/output shape changes (epic rail)",
+      "Existing .moe/resources/*.json and .moe/attempts/*.json read as before; rows without attempt records behave exactly as today"
+    ],
+    "approvedScope": [
+      "resourceStore.ts: heldByLiveSeat gains a requesterId parameter; a new private helper (landingSeatHoldsTask or similar); grantNextLeases passes next.workerId; comment updates elsewhere in the file",
+      "resourceStore.landing.test.ts: a new test file"
+    ],
+    "reuse": [
+      "currentAttempt (state/attemptStore.ts) for the attempt read, instead of util/claimEligibility.ts finalizingAttemptsByTask",
+      "The existing pass-over machinery (the passedOver set, restoreUnheldTask), unchanged",
+      "ToolTestHarness, completeTaskTool and waitForResourceTool in the test, following resourceStore.unheld.test.ts and waitForResource.test.ts"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/state/resourceStore.ts:83 heldByLiveSeat(state, task) returns false for every unassigned task; its only caller is grantNextLeases at :449",
+      "packages/moe-daemon/src/state/attemptStore.ts:154 currentAttempt(state, taskId) returns the task's highest-generation open attempt (running|finalizing|reconciling) as a detached copy, or null; ExecutionAttempt carries workerId and phase (types/schema.ts:1330)",
+      "packages/moe-daemon/src/tools/completeTask.ts:271-301 sets the open attempt to finalizing BEFORE the WORKING-to-REVIEW updateTask that clears assignedWorkerId, then touchWorker sets the seat IDLE with currentTaskId null",
+      "packages/moe-daemon/src/tools/waitForResource.ts:144-151 resolves a parked waiter on a RESOURCE_UPDATED whose holders contain its taskId",
+      "scripts/moe-agent.sh land_lease_rpc (~7621) acquires, waits and releases git-land with workerId=$WORKER_ID and taskId=$LAND_TASK_ID"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/resourceStore.ts packages/moe-daemon/src/state/resourceStore.landing.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/resourceStore.landing.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/state/resourceStore > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Chosen: OR a landing rule into heldByLiveSeat, keyed on the queue entry's own workerId owning the task's finalizing attempt (the governor's fix direction). (2) util/claimEligibility.ts finalizingAttemptsByTask (a validated index): rejected. It is util-layer, and it copies and indexes every attempt of every task per call. currentAttempt from the same state layer reads one task, and the registered-seat check plus exact workerId equality already reject malformed records. (3) Grant any unassigned row whose requester is a live seat, with no attempt check: rejected, because it reintroduces idle leases for released rows and undoes 9ca72836. (4) Require an active wait_for_resource waiter: rejected. It is a state-to-tools layer violation, and it races across the wrapper's acquire/wait round trips. (5) Make acquireResource's direct grant respect older passed-over entries: out of scope. With this fix the landing is granted at release, so the jump-past window (13:57:37Z) closes for this case.",
+    "codebaseInsights": "complete_task (completeTask.ts:271-301) sets the open attempt to finalizing BEFORE the WORKING-to-REVIEW updateTask that clears assignedWorkerId, then touchWorker(..., { status: 'IDLE', currentTaskId: null }). While the attempt is finalizing, every other seat's claim is refused or skips the row (claimEligibility.ts foreignFinalizingAttempt), and the worker's own next claim is refused, so the requester cannot be bound to another task. The worktree wrapper's L3 lease calls (moe-agent.sh land_lease_rpc ~7621) send workerId=$WORKER_ID and taskId=$LAND_TASK_ID, so the queue entry's workerId equals the attempt's workerId. wait_for_resource resolves on a RESOURCE_UPDATED whose holders include its taskId (waitForResource.ts:144-151), so the grant alone un-parks the wrapper. assertWorkerOwns is a no-op on unassigned rows, which is why acquire and wait still work after complete_task. Architect dry run in a scratch snapshot of d5f52d0e: the real complete_task runs in ToolTestHarness with one COMPLETED step plus an openAttempt; the replay test fails on HEAD and passes with the planned change; the existing resource suites stay green.",
+    "risks": "A hard-crashed landing seat that never deregisters: its stale queue entry now gets the lease, bounded by maxLeaseMs (2h for git-land). That is the same trade the assignee branch makes, and graceful exits release the entry (release_land_lease). Test fixture trap for attempt/assignee mismatches (mem:decision-finalizing-attempt-close-paths). A long TMPDIR inside env -i breaks 4 unrelated suite files (unix-socket path limit). Do not touch acquireResource's direct path, restoreUnheldTask or resumeResourceHolder. Keep the assignee branch's rule that a missing record is granted; the landing rule's 'a missing record is NOT granted' differs on purpose (DoD 2: deregistered requester).",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/resourceStore.ts",
+      "packages/moe-daemon/src/state/attemptStore.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/tools/waitForResource.ts",
+      "packages/moe-daemon/src/state/resourceStore.unheld.test.ts",
+      "packages/moe-daemon/src/tools/waitForResource.test.ts",
+      "scripts/moe-agent.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "cc998cad009e06a90b7234935c4219232c8f0fdd",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T14:18:37.226Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T14:19:35.219Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T14:27:02Z",
+    "at": "2026-11-03T14:29:22.999Z"
+  },
+  "reviewStartedAt": "2026-11-03T14:26:03.869Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/state/resourceStore.ts packages/moe-daemon/src/state/resourceStore.landing.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/state/resourceStore.landing.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/state/resourceStore > ../r.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../r.log; [ $r = 0 ]; } && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "tsc --noEmit ok; tsc -p tt.json ok\n Test Files  6 passed (6)\n      Tests  77 passed (77)\n Test Files  237 passed (237)\n      Tests  7060 passed | 24 skipped (7084)\nGATE_EXIT=0\n\nEpic-final quality gate, run in place in the worktree: `bash scripts/tests/parity-check.sh && npm run lint` -> PASS parity-check.sh; OK architect.md 39/40, worker.md 30/40, qa.md 36/40; exit 0.",
+    "reportedAt": "2026-11-03T14:26:03.869Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/state/resourceStore.landing.test.ts",
+    "packages/moe-daemon/src/state/resourceStore.ts"
+  ],
+  "completionSummary": "Fix for the stalled worktree landing (13:55Z WT-19 sequence). resourceStore.ts: heldByLiveSeat(state, task, requesterId) keeps the assignee branch unchanged, then falls through to a new private landingSeatHoldsTask. It returns true only when the queue entry's own seat has a worker record that is not DEAD and owns the task's open attempt in phase finalizing (the post-complete_task window in which the worktree wrapper takes git-land-<target>; complete_task has already cleared the assignee and left the seat IDLE). The seat lookup runs before the attempt comparison, so a blank or 'human' workerId can never match a malformed attempt. A missing attempt is a pass-over; a throwing or unreadable attempt read is caught, logged with logger.warn and passed over. grantNextLeases passes next.workerId; three comments updated; acquire/release/reap/restore/resume paths untouched. New resourceStore.landing.test.ts: the 13:55Z replay through the real completeTaskTool with a parked wait_for_resource (granted, RESOURCE_GRANTED logged, waiter resolves), plus an 8-seed it.each pass-over table (no attempt, closed, running, DEAD requester, deregistered requester, another seat's attempt, malformed record, unreadable record), each asserting the live waiter behind gets the slot and the entry keeps its requestedAt. Red-first confirmed on unmodified code (expected [] to deeply equal [['task-b','worker-b']]); per-guard mutants each turn only their own seed red. Verification: step-4 gate, exit 0, in a git-archive snapshot outside the shared checkout: resourceStore 6 files/77 tests, full daemon suite 237 files, 7060 passed, 24 skipped; epic-final quality gate (parity-check + lint) exit 0. Accepted residual risk: a hard-crashed landing seat that never deregisters (not DEAD, attempt still finalizing) now gets the lease when its entry comes up, bounded by maxLeaseMs (git-land 2h) and droppable via release_resource force; release_land_lease is idempotent and runs on every normal exit, so only a hard cr",
+  "commits": [
+    {
+      "sha": "946358a8dfbd32b511366755768fd2d36328a89a",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T14:18:47Z",
+      "paths": [
+        "packages/moe-daemon/src/state/resourceStore.landing.test.ts",
+        "packages/moe-daemon/src/state/resourceStore.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T14:26:51.477Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T14:29:01.999Z",
+  "reviewCompletedAt": "2026-11-03T14:29:01.999Z",
+  "reviewSummary": "APPROVED. Completion 946358a8 (moe/work-2026-10-24, pushed; contained in control HEAD): 2 files +247/-8, net 239 (<400); owned files byte-identical to the commit.\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout (env -i, node v24.21.0, npm ci): tsc ok, tsc -p tt.json ok, resourceStore* 6 files/77 tests, full daemon suite 237 files/7060 passed/24 skipped, EXIT=0. Epic-final gate in place: parity-check.sh PASS, npm run lint OK.\nRed-first by me: pre-fix resourceStore.ts in the snapshot makes landing replay (\"expected [] to deeply equal [['task-b','worker-b']]\") and 'unreadable record' fail (2 of 9); with the fix all 9 pass.\nDoD1: replay uses real completeTaskTool (REVIEW, unassigned, finalizing attempt, seat IDLE), real parked wait_for_resource; asserts granted pair, persisted holders/queue, RESOURCE_GRANTED activity, waiter resolves granted. DoD2: 8-seed it.each (no attempt, closed, running, DEAD, deregistered, another seat's attempt, malformed, unreadable): live waiter gets the slot, task-r entry keeps requestedAt; fixtures assert seeded state; existing resourceStore tests untouched and green. DoD3: currentAttempt in try/catch -> logger.warn + pass-over, tested (exactly one warn, no throw).\nInvariants: assignee branch unchanged; worker-record check (missing/DEAD) precedes attempt comparison so blank workerId can't match a malformed attempt; needs phase finalizing and attempt.workerId === entry workerId; acquire/release/reap/restore/resume and MCP/schema shapes untouched; single caller passes next.workerId.\nAccepted residual risk (named by worker): hard-crashed seat that never deregisters still gets the lease; bounded by git-land maxLeaseMs 2h, droppable via release_resource force. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

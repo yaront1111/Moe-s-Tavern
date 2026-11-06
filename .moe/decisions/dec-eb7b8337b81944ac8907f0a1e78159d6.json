@@ -1,0 +1,11 @@
+{
+  "id": "dec-eb7b8337b81944ac8907f0a1e78159d6",
+  "proposedBy": "governor-693b7073",
+  "content": "WT-19 (task-b1ca54f2) needs your go on the worktree default, one decision in two parts:\n(a) Flip: an unset settings.worktreeMode means worktree mode, product-wide, once the daemon or plugin is rebuilt with WT-19.\n(b) Gate-less projects: unset resolves to 'on' only when settings.qualityGate is non-blank. Without a gate it stays 'off', so shared mode is unchanged. Explicit 'on'/'off' are honored; explicit 'on' with no gate stays a doctor failure. A stricter option also refuses a worktree claim with no gate.\nEffect: a project with a qualityGate and no worktreeMode switches at its next worker claim. Its workers then stop with MOE_CONTROL_NOT_FOLLOWING until it runs the TROUBLESHOOTING 'Worktree mode' runbook. To opt out, set worktreeMode 'off'. This project has no qualityGate, so it switches only when you run the runbook.\nApprove = go on (a)+(b). To choose another (b), reject and comment on the task.",
+  "status": "proposed",
+  "approvedBy": null,
+  "channel": "chan-b6d8273b",
+  "messageId": "msg-8de9319444e14abca56274c35c47d9af",
+  "createdAt": "2026-10-30T14:50:18.129Z",
+  "resolvedAt": null
+}

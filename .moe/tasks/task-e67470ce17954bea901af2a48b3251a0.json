@@ -1,0 +1,254 @@
+{
+  "id": "task-e67470ce17954bea901af2a48b3251a0",
+  "epicId": "epic-be924fb8",
+  "title": "bug: submit_plan accepts plan data it then silently truncates or crashes on: steps 51-100 of an accepted plan are dropped by the plan sanitizer (validators.ts keeps 50 while submit_plan allows 100), and planningNotes is neither type-checked nor bounded (a non-string throws an uncoded TypeError, a string keyFiles is stored raw, text over 5000 chars is clipped)",
+  "description": "Filed by the governor from hunt #15's two held plan-intake items (task-928a468d, architect-1dd28c7c, msg-492975dd). They are combined here because both break the same rule in the same handler: a submit_plan input is refused, never truncated or coerced. Re-verified at tip f76c55f3. It waits in BACKLOG on task-87cba58c, which also edits submitPlan.ts. The governor promotes it when 87cba58c is DONE.\n\nPROBLEM 1, the step bound\npackages/moe-daemon/src/tools/submitPlan.ts:352 allows up to 100 steps, and settings.taskSizing.maxSteps validates up to 100. sanitizeImplementationPlan (state/validators.ts:775, `plan.slice(0, 50)`) runs on every task write and keeps only the first 50. So steps 51+ of an accepted plan are silently dropped from memory and disk. It is reachable only with a custom taskSizing.maxSteps above 50; the default refuse line is 12. Evidence: /mnt/d/moe-scratch/hunt-928a468d/B/planStepCap.test.ts, run at d5431577; output in planStepCap.output.txt. A 60-step plan is accepted, and 50 steps are stored, in memory and after a reload.\n\nPROBLEM 2, planningNotes\nsubmitPlan.ts:565-570 copies planningNotes with `.slice(0, 5000)` and `keyFiles?.slice(0, 50)`, with no type checks:\n- A non-string field (for example risks: 42) throws an uncoded TypeError.\n- A string keyFiles is stored as a string, although the schema says string[].\n- A 6000-char note is clipped to 5000 with no error.\nThe sibling executionContract in the same handler refuses an oversized field with INVALID_INPUT, \"nothing is truncated or coerced\". Evidence: B/planningNotesIntake.test.ts, run at d5431577; output in planningNotesIntake.output.txt. Three cases fail; the executionContract control case passes.\n\nFIX DIRECTION\nMake the bounds agree. Either refuse steps above 50 at submit_plan (and cap taskSizing.maxSteps at 50 in its validator), or raise the sanitizer cap to the accepted 100; say which in the plan. Validate planningNotes like executionContract: each text field a string within the limit (refused INVALID_INPUT, never clipped), keyFiles a string[] with bounded length. Error handling is coded INVALID_INPUT throughout. Sync submit_plan's MCP_SERVER.md section and, if the step cap changes, taskSizing in docs/CONFIGURATION.md (ruling msg-71db57ac).\n\nFILES\nsubmitPlan.ts, state/validators.ts, one vitest file, and docs. Gate: that vitest file plus submitPlan.test.ts, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "Every step of an accepted plan is stored. A plan over the effective bound is refused INVALID_INPUT at submit_plan, never truncated later. The hunt planStepCap cases pass, adjusted to whichever bound ships.",
+    "A non-string planningNotes field, a non-array keyFiles and an over-limit note are each refused INVALID_INPUT, nothing clipped or stored raw. The planningNotesIntake cases pass, and the executionContract control is unchanged.",
+    "submit_plan's MCP_SERVER.md section (and CONFIGURATION.md's taskSizing, if its limit changed) state the bounds, and submitPlan.test.ts passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Write tracked files only with the Edit/Write tools (global rail). Port the prototype in /mnt/d/moe-scratch/task-e67470ce/prototype.diff; its gate dry-run was green at 9224de15.\n(a) New file packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts, 9 cases. It ports hunt task-928a468d's B/planStepCap.test.ts and B/planningNotesIntake.test.ts from /mnt/d/moe-scratch/hunt-928a468d/B/.\n- Setup is the hunt's: a CONTROL project with PLANNING rows, and clearAllSpeedModeTimeouts in afterEach.\n- Helper refused(id, call, field): the call rejects with a MoeError whose code is INVALID_INPUT and whose context.field is `field`, and the row is untouched ({status 'PLANNING', steps 0, planningNotes undefined}).\nCases:\n 1. A 60-step plan under taskSizing {warnSteps 60, maxSteps 60}, set through state.updateSettings. Expect success and stepCount 60, metrics.plannedStepCount 60, 60 steps in memory with the last stepId 'step-60', 60 on disk, and 60 after a new StateManager load. This covers both hunt planStepCap cases.\n 2. taskSizing at MAX_PLAN_STEPS: a 100-step plan stores 100. A 101-step plan is refused('steps') and the message contains 'maximum 100 steps allowed'.\n 3. MAX_PLAN_STEPS is 100. sanitizeImplementationPlan keeps 100 of 105 steps. state.updateSettings refuses taskSizing warnSteps 101 and maxSteps 101 with INVALID_INPUT.\n 4. Control, unchanged behavior: executionContract.intendedBehavior of 2001 chars → refused('executionContract.intendedBehavior').\n 5. planningNotes { risks: 42 } → refused('planningNotes.risks'). Today this throws an uncoded TypeError.\n 6. A 6002-char risks → refused('planningNotes.risks'). Today it is clipped to 5000.\n 7. keyFiles cases, each refused:\n   - a bare string → 'planningNotes.keyFiles';\n   - 51 entries → 'planningNotes.keyFiles';\n   - ['ok.ts', 7] and ['ok.ts', ''] → 'planningNotes.keyFiles[1]';\n   - ['x' × 1001] → 'planningNotes.keyFiles[0]'.\n 8. planningNotes 'notes' and ['notes'] → refused('planningNotes'). { risk: 'typo' } → refused('risk'), because rejectUnknownFields names the bare key.\n 9. Notes at the limits are stored byte-for-byte: { approachesConsidered 'line one\\nline two', codebaseInsights '', risks of exactly 5000 chars ending ' END-OF-NOTE', keyFiles of 50 entries } toEqual the stored planningNotes. planningNotes null stores none.\n(b) packages/moe-daemon/src/state/StateManager.test.ts, the B28 case at :2165, which pins the old cap of 50:\n- rename it to 'createTask truncates plan to MAX_PLAN_STEPS steps (B28)';\n- build MAX_PLAN_STEPS + 10 steps and expect MAX_PLAN_STEPS;\n- add `import { MAX_PLAN_STEPS } from './validators.js';` after the submitPlan import (:6).\nNothing else in that file.\nRED, to record in the step note: in a `git archive HEAD | tar -x` snapshot with only the new file overlaid, `npx vitest run src/tools/submitPlan.intakeBounds.test.ts` gives 7 failed | 2 passed. Cases 4 and 9 pass at base, as they should.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts"
+      ],
+      "note": "Wrote the 9-case submitPlan.intakeBounds.test.ts (Write tool, ported from the prototype and hunt B/ cases) and updated StateManager.test.ts B28 (name, length MAX_PLAN_STEPS + 10, expectation, import after the submitPlan import). RED proof in a git-archive snapshot of HEAD with only the new file overlaid (nvm Node 24, npm ci ok): `npx vitest run src/tools/submitPlan.intakeBounds.test.ts` -> Test Files 1 failed, Tests 7 failed | 2 passed (9). Cases 4 (executionContract control) and 9 (notes at limits stored byte-for-byte; null stores none) pass at base, as planned. Snapshot removed.",
+      "startedAt": "2026-11-04T05:58:52.173Z",
+      "completedAt": "2026-11-04T05:59:42.516Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implement. Edit tool only.\n(a) packages/moe-daemon/src/state/validators.ts:\n- Add `export const MAX_PLAN_STEPS = 100;` beside the contract caps, after MAX_REQUIRED_CHECKS (:130). Doc comment: it is the most steps one plan may hold; submit_plan refuses more, taskSizing warnSteps and maxSteps validate up to it, and sanitizeImplementationPlan keeps exactly this many. It is one number, like the step caps in util/planSize; the sanitizer kept 50 while submit_plan accepted 100. It lives here, not in util/planSize, so the plan stays at 5 files and the standard tier.\n- sanitizeImplementationPlan (:775) becomes `plan.slice(0, MAX_PLAN_STEPS)`.\n- The taskSizing validator (:490 and :493): the warnSteps and maxSteps upper bound becomes MAX_PLAN_STEPS. The value stays 100; the two are now tied.\n- Add validatePlanningNotes(value, fieldName = 'planningNotes') beside validateExecutionContract, with exported MAX_PLANNING_NOTE_CHARS = 5000, MAX_PLANNING_KEY_FILES = 50, MAX_PLANNING_KEY_FILE_CHARS = 1000 and a PlanningNotes interface:\n  - undefined or null → undefined;\n  - requirePlainObject, then rejectUnknownFields over the four keys;\n  - each text field through validateStringValue({ maxLength 5000, allowEmpty: true, allowNewlines: true }), skipping null or undefined;\n  - keyFiles not an array → invalidInput('planningNotes.keyFiles', 'must be an array of strings'); more than 50 → 'must contain 50 items or fewer';\n  - each keyFiles entry through validateStringValue({ maxLength 1000 }) at `planningNotes.keyFiles[i]`.\n  No trimming and no path normalization: keyFiles are informational and may be absolute scratch paths.\n(b) packages/moe-daemon/src/tools/submitPlan.ts:\n- Import validatePlanningNotes, MAX_PLAN_STEPS and the three note caps in the existing '../state/validators.js' import block (:6-9).\n- Right after `const measuredContract = validateExecutionContract(...)` (:302), add `const planningNotes = validatePlanningNotes((args as { planningNotes?: unknown } | null)?.planningNotes);`. A bad note is then refused before the Git reads, the mutex and any write.\n- :352-353 becomes `params.steps.length > MAX_PLAN_STEPS` → invalidInput('steps', `maximum ${MAX_PLAN_STEPS} steps allowed`). The message text is unchanged.\n- :571-578 becomes `if (planningNotes) updatePayload.planningNotes = planningNotes;` with no slice. Drop planningNotes from the inner params cast (:329-334).\n- inputSchema: steps `maxItems: MAX_PLAN_STEPS`; the three note strings `maxLength: MAX_PLANNING_NOTE_CHARS`; keyFiles `maxItems: MAX_PLANNING_KEY_FILES`, with items of `maxLength: MAX_PLANNING_KEY_FILE_CHARS`.\nError handling: every new refusal is a coded INVALID_INPUT, raised through invalidInput, requirePlainObject, rejectUnknownFields or validateStringValue, and carries context.field. Each is thrown before any write, and nothing is clipped or coerced. Omitted planningNotes still keeps a stored set, as today.\nGREEN: step 1's file passes 9/9 and B28 passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "note": "validators.ts: MAX_PLAN_STEPS = 100 (after MAX_REQUIRED_CHECKS); sanitizeImplementationPlan and the taskSizing warnSteps/maxSteps upper bound now use it; added MAX_PLANNING_NOTE_CHARS/MAX_PLANNING_KEY_FILES/MAX_PLANNING_KEY_FILE_CHARS, PlanningNotes and validatePlanningNotes (requirePlainObject, rejectUnknownFields, validateStringValue; keyFiles array-of-<=50, entries 1-1000, no trim/normalization). submitPlan.ts: imports; validatePlanningNotes called right after validateExecutionContract (before any I/O/mutex/write); steps bound uses MAX_PLAN_STEPS with unchanged message text; planningNotes payload is the validated object (no slice), dropped from the inner params cast; inputSchema maxItems/maxLength from the constants. Edit tool only. GREEN in a git-archive snapshot with the 4 owned source files overlaid: tsc --noEmit exit 0; vitest on submitPlan.intakeBounds + submitPlan.test + StateManager.test -> 3 files passed, 247 tests passed; intakeBounds 9/9, B28 included. Snapshot removed.",
+      "startedAt": "2026-11-04T05:59:44.073Z",
+      "completedAt": "2026-11-04T06:00:46.859Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: docs/MCP_SERVER.md, inside `### moe.submit_plan` only (governor ruling msg-71db57ac). Edit tool. Use the exact text in the prototype diff.\n- Parameters block: the planningNotes line gains `// texts <=5000 chars; keyFiles <=50 strings of 1-1000 chars`.\n- The 'Step bounds' bullet:\n  - it says max 100 steps (`MAX_PLAN_STEPS`), and that `settings.taskSizing` `warnSteps` and `maxSteps` validate up to the same number;\n  - the sanitizer bounds the step count too, at these same caps (`util/planSize`, `state/validators`), so every step of an accepted plan is stored byte-for-byte;\n  - add one sentence: it used to keep only the first 50 steps.\n- A new 'Planning notes' bullet, directly before 'Enforced rails':\n  - validated like the execution contract, before any I/O or write;\n  - the four keys only: three strings of at most 5000 chars each (empty allowed, newlines kept), and keyFiles as up to 50 strings of 1-1000 chars;\n  - anything else is refused INVALID_INPUT with context.field naming it, and the call writes nothing;\n  - omitted or null writes no notes and keeps a stored set.\nNo docs/CONFIGURATION.md edit: taskSizing's range stays 1-100, and its row states no range. No docs/SCHEMA.md edit: its PlanningNotes table stays true.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "docs/MCP_SERVER.md, Edit tool, exact prototype text, only inside ### moe.submit_plan (336-403): hunks at 367 (planningNotes parameter comment), 382 (Step bounds bullet: MAX_PLAN_STEPS, taskSizing up to the same number, sanitizer bounds the step count, 'used to keep only the first 50'), and the new Planning notes bullet at 378 before Enforced rails. +3/-2. CONFIGURATION.md and SCHEMA.md untouched, as planned.",
+      "startedAt": "2026-11-04T06:00:48.446Z",
+      "completedAt": "2026-11-04T06:01:06.966Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, ONCE, from the task worktree root. Run the checkRef exactly as written; it is also in /mnt/d/moe-scratch/task-e67470ce/checkref.txt.\n- It archives HEAD into a mktemp snapshot and overlays the 5 owned files.\n- It runs npm ci, then `tsc --noEmit`, then a tsc of the new test file through tt.json. Only the new file is type-checked: the package tsconfig excludes tests, and StateManager.test.ts already has a TS2322 at :79.\n- It runs the FULL daemon vitest suite, because state/validators.ts is shared persistence code.\n- It pins the new file at ≥ 9 passing tests.\nNever run npm in the shared checkout (global rail). Never put TMPDIR inside the env -i (mem:convention-daemon-full-suite-gate-checkref).\nExpected tail, from the architect dry-run at 9224de15: 'Test Files  286 passed (286)', 'Tests  7468 passed | 24 skipped (7492)', 'intake pin ok', exit 0. The counts grow if the target has moved.\nSubmit this fresh command, its exit code and the output tail to moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran the plan's checkRef verbatim (from /mnt/d/moe-scratch/task-e67470ce/checkref.txt, identical to the contract's checkRefs entry) from the task worktree root, with TMPDIR set only on the outer bash so the snapshot could be removed afterwards (not inside env -i). Result: exit 0. tsc --noEmit ok, tsc -p tt.json (new test file) ok, full daemon vitest: Test Files 286 passed (286); Tests 7473 passed | 24 skipped (7497); 'intake pin ok' (submitPlan.intakeBounds.test.ts 9 tests). The count is 5 above the dry-run (7468) because the target moved; no failures. Snapshot removed.",
+      "startedAt": "2026-11-04T06:01:07.855Z",
+      "completedAt": "2026-11-04T06:02:07.100Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the whole diff against the merge base. This is the one review step.\n- No accepted input is newly refused except malformed planningNotes: steps up to 100 and taskSizing up to 100 stay accepted (epic rail: no breaking MCP change).\n- Every planningNotes refusal runs before measureRequiredCheckSnapshot, capturePlanSourceBasis and runExclusive, and a refused call writes nothing (the cases check the row).\n- The sanitizer change raises the cap for every writer: createTask, updateTask and the board's UPDATE_TASK. Nothing downstream assumes 50 or fewer: stepsCompleted caps at 500.\n- Null and empty: planningNotes null stores none; '' notes are stored; an empty keyFiles entry is refused.\n- Concurrency: the validation is pure.\n- No added line contains any project.json globalRails.forbiddenPatterns string.\n- Docs change only inside the submit_plan section.\n- B28 changes only its name, its length and its expectation.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts",
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Adversarial self-review of the whole diff (4 modified files +69/-27, plus the new 160-line test). Walked the plan's list: (1) Accepted inputs: nothing newly refused except malformed planningNotes; steps 1-100 and taskSizing 1-100 stay accepted (MAX_PLAN_STEPS = 100 equals both old literals), so no MCP contract narrows. (2) Order: validatePlanningNotes runs right after validateExecutionContract, before measureRequiredCheckSnapshot, capturePlanSourceBasis and runExclusive; the 'refused' helper in all refusal cases asserts the row stays PLANNING with 0 steps and no notes. A bad note on an unknown task now reports INVALID_INPUT before NOT_FOUND, the same order the executionContract already has. (3) The sanitizer raise applies to createTask/updateTask/board UPDATE_TASK; stepsCompleted caps at 500, nothing assumes <=50; recipes do not pass planningNotes (grep). (4) Null/empty: null and undefined store none and omitted keeps a stored set; '' notes are stored (allowEmpty); '' or whitespace-only keyFiles entries and entries with newlines/NUL are refused; {} stores {}. (5) Concurrency: validation is pure, runs before the mutex, shares no state. (6) Forbidden-pattern grep over added lines and the new test: no hits. (7) Docs hunks all inside ### moe.submit_plan. (8) B28 changed only its name, length and expectation. Theoretical only: keyFiles with a newline are refused with 'cannot contain control characters', which the doc's '1-1000 chars' wording does not spell out; acceptable, such a path is not a real file path.",
+      "startedAt": "2026-11-04T06:02:10.102Z",
+      "completedAt": "2026-11-04T06:02:33.141Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG under the human's standing \"move from backlog\" (2026-11-02 21:00Z). The row is governor-filed, its only dependency task-87cba58c reached DONE at 05:47Z 11-04, and it has no plan or reopen. Placement: 87cba58c's c54b063b changed submitPlan.ts (effort floor in the kept-effort branch) and util/routing.ts (resolveLaunch), so re-anchor the description's submitPlan.ts line numbers (:352 step bound, :565-570 planningNotes) at the tip before planning. No other open row edits submitPlan.ts or state/validators.ts.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-87cba58c1835452dab48f6817278e033"
+  ],
+  "priority": "LOW",
+  "order": 473.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:03:43.353Z",
+  "updatedAt": "2026-11-04T19:20:45.147Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T05:47:30.839Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:47:49.758Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:09:58.265Z",
+    "wallClockMs": 1328507
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a408f113",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T05:57:44.498Z",
+  "executionContract": {
+    "intendedBehavior": "moe.submit_plan refuses, with a coded INVALID_INPUT, any input it cannot store exactly, and stores every step of a plan it accepts. The plan sanitizer, submit_plan and the taskSizing validator share one step bound, MAX_PLAN_STEPS = 100. An accepted plan of 51-100 steps is stored whole: in memory, on disk and after a reload. 101 steps are refused before any write. planningNotes is validated like the execution contract, before any I/O or write. It must be an object with only approachesConsidered, codebaseInsights and risks (strings of at most 5000 chars, empty allowed) and keyFiles (at most 50 strings of 1-1000 chars). A wrong type, an unknown key or an over-limit value is refused with context.field naming it. Nothing is clipped, coerced or stored raw.",
+    "acceptanceCriteria": [
+      "Both hunt planStepCap cases pass: a 60-step plan under taskSizing 60 stores 60 steps in memory, on disk and after a reload (DoD 1).",
+      "A 100-step plan is stored whole. A 101-step plan is refused INVALID_INPUT with 'maximum 100 steps allowed', and nothing is written (DoD 1).",
+      "planningNotes: a non-string field, a non-array or over-50 keyFiles, a bad keyFiles entry, an over-limit note, a non-object value or an unknown key is refused INVALID_INPUT with context.field, and nothing is written. Notes at the limits are stored byte-for-byte. The executionContract control is unchanged (DoD 2).",
+      "The MCP_SERVER.md submit_plan section states both bounds. CONFIGURATION.md is not edited, because the taskSizing limit is unchanged. submitPlan.test.ts passes (DoD 3).",
+      "The checkRef exits 0: the full daemon suite, the new test file type-checked, and the new file at ≥ 9 tests."
+    ],
+    "invariants": [
+      "Refusals happen before any write: the task stays PLANNING with its prior plan and notes.",
+      "MAX_PLAN_STEPS is the single step bound for submit_plan, the taskSizing validator and the sanitizer.",
+      "Omitted planningNotes keeps a stored set; null writes none.",
+      "The plan-size gate (taskSizing, CONSTRAINT_VIOLATION) and the existing step-description and step-file caps are unchanged."
+    ],
+    "compatibility": [
+      "Bound direction: the plan raises the sanitizer to the 100 submit_plan already accepts, the description's second option, instead of lowering submit_plan to 50. Every plan and taskSizing value accepted before stays accepted, so no MCP contract narrows (epic rail), and the hunt planStepCap cases pass as written. Lowering to 50 would also have narrowed taskSizing's validated 1-100 range and needed a CONFIGURATION.md edit.",
+      "planningNotes now refuses what it used to clip or coerce: non-object values, unknown keys, non-string fields, notes over 5000 chars, a non-array keyFiles or one over 50 entries, and keyFiles entries that are not 1-1000-char strings. The inputSchema already declared string fields and additionalProperties:false. McpAdapter does not validate schemas, so the handler now enforces them. Valid notes, including empty strings and newlines, are stored exactly as before.",
+      "Stored rows need no migration. Existing plans keep their steps (50 or fewer are stored today), and stored planningNotes are never re-validated on read.",
+      "No other open row edits submitPlan.ts or state/validators.ts (governor placement note)."
+    ],
+    "approvedScope": [
+      "validators.ts: MAX_PLAN_STEPS, MAX_PLANNING_NOTE_CHARS, MAX_PLANNING_KEY_FILES, MAX_PLANNING_KEY_FILE_CHARS, PlanningNotes and validatePlanningNotes; sanitizeImplementationPlan's step cap; the upper bound of taskSizing warnSteps and maxSteps.",
+      "submitPlan.ts: the step-count refusal, the planningNotes validation call and payload, and the inputSchema bounds.",
+      "submitPlan.intakeBounds.test.ts (new); StateManager.test.ts, the B28 case only.",
+      "docs/MCP_SERVER.md ### moe.submit_plan: the Parameters planningNotes comment, the Step bounds bullet, and a new Planning notes bullet."
+    ],
+    "reuse": [
+      "Reuses requirePlainObject, rejectUnknownFields and validateStringValue, the execution contract's own validators.",
+      "The cases port /mnt/d/moe-scratch/hunt-928a468d/B/{planStepCap,planningNotesIntake}.test.ts. The full prototype is /mnt/d/moe-scratch/task-e67470ce/prototype.diff."
+    ],
+    "sourceAssumptions": [
+      "submitPlan.ts:352 refuses more than 100 steps. state/validators.ts:775 sanitizeImplementationPlan slices to 50 on every createTask and updateTask write (taskStore.ts:328 and :495).",
+      "submitPlan.ts:571-578 builds planningNotes with .slice() and no type checks. McpAdapter (server/McpAdapter.ts) does not validate input against inputSchema, so a non-string reaches .slice.",
+      "validators.ts: requirePlainObject (:86); rejectUnknownFields (:93, names the bare key); validateStringValue (:102, with maxLength, allowEmpty and allowNewlines; refuses NUL); validateExecutionContract (:195) is the model. The taskSizing validator (:489-494) bounds warnSteps and maxSteps at 1..100.",
+      "planningNotes has no Task type in types/schema.ts. getContext.ts:427 reads it raw, and the docs/SCHEMA.md 'PlanningNotes' table lists the four fields.",
+      "stepsCompleted is capped at 500 (sanitizeStringIdArray), so 100-step plans fit.",
+      "StateManager.test.ts B28 (:2165) pins createTask's plan cap at 50. StateManager.test.ts already has a TS2322 at :79, so tt.json type-checks only the new test file."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/validators.ts,state/StateManager.test.ts,tools/submitPlan.ts,tools/submitPlan.intakeBounds.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/submitPlan.intakeBounds.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/tools/submitPlan\\.intakeBounds\\.test\\.ts \\((9|[1-9][0-9]) tests\\)\" ../v.log && echo \"intake pin ok\"; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Lower submit_plan and taskSizing to 50 (the description's first option). Rejected: it narrows two accepted input ranges (an epic-rail risk), adjusts the hunt cases and needs a CONFIGURATION.md edit.\n2. Put MAX_PLAN_STEPS in util/planSize.ts beside the other step caps. Rejected: with the required B28 test update it makes 6 files, and the plan size floor then puts the task in the heavy tier. validators.ts already hosts the contract caps.\n3. Change only the literal 50 to 100. Rejected: that keeps two numbers, which is the class of drift planSize.ts documents for step descriptions.\n4. Normalize keyFiles as project-relative paths. Rejected: they are informational; architects list scratch paths and absolute evidence files.\n5. Keep ignoring unknown planningNotes keys. Rejected: the description says to validate like the execution contract, the schema already declares additionalProperties:false, and a typo such as `risk` would otherwise silently drop the note.",
+    "codebaseInsights": "Prototype at 9224de15 in a scratch clone:\n- The first full suite failed exactly 1 test: StateManager.test.ts B28 'createTask truncates plan to 50 steps', fixed in step 1.\n- With B28 updated, the docs text and the new file in place, the exact checkRef gave 286 files and 7468 passed, with 'intake pin ok' (898 chars).\n- At base with the new file only: 7 failed | 2 passed.\n\nThe sanitizer is shared by createTask (taskStore.ts:328) and updateTask (:495), so raising its cap applies to the board path too.\n\nvalidateStringValue refuses NUL even with allowNewlines, matching the contract's text fields.",
+    "risks": "- Global rails: tracked files only through Edit/Write (no shell writes), never run npm in the shared checkout, never pattern-kill processes.\n- TMPDIR trap: no TMPDIR inside env -i.\n- Don't move MAX_PLAN_STEPS into util/planSize.ts: it would add a 6th file and floor the tier to heavy.\n- The tests interpolate MAX_PLAN_STEPS into a test name, which is fine, but keep the count pin at ≥ 9.\n- QA may ask why CONFIGURATION.md is untouched: its taskSizing row states no range, and the 1-100 limit is unchanged.",
+    "keyFiles": [
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/state/StateManager.test.ts",
+      "docs/MCP_SERVER.md",
+      "/mnt/d/moe-scratch/task-e67470ce/prototype.diff",
+      "/mnt/d/moe-scratch/hunt-928a468d/B/planningNotesIntake.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "05f4240fbee9ee3636ef131ca88ec1a5427c5b3b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T05:57:44.525Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:58:52.173Z",
+  "reviewStartedAt": "2026-11-04T06:02:49.463Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/{state/validators.ts,state/StateManager.test.ts,tools/submitPlan.ts,tools/submitPlan.intakeBounds.test.ts} docs/MCP_SERVER.md \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/submitPlan.intakeBounds.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/tools/submitPlan\\.intakeBounds\\.test\\.ts \\((9|[1-9][0-9]) tests\\)\" ../v.log && echo \"intake pin ok\"; }'",
+    "exitCode": 0,
+    "outputTail": " Test Files  286 passed (286)\n      Tests  7473 passed | 24 skipped (7497)\nintake pin ok\n(exit=0; tsc --noEmit and tsc -p tt.json on the new test file also exit 0. Qualitygate also run: bash scripts/tests/parity-check.sh -> PASS, npm run lint -> OK, both exit 0.)",
+    "reportedAt": "2026-11-04T06:02:49.463Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+    "packages/moe-daemon/src/state/StateManager.test.ts",
+    "packages/moe-daemon/src/state/validators.ts",
+    "packages/moe-daemon/src/tools/submitPlan.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "submit_plan now refuses what it cannot store whole, and stores every step of a plan it accepts. One bound, MAX_PLAN_STEPS = 100 (state/validators.ts), is shared by submit_plan's step refusal, the taskSizing warnSteps/maxSteps validator and sanitizeImplementationPlan, which used to keep only 50, so steps 51-100 of an accepted plan were dropped. A 101-step plan is still refused INVALID_INPUT 'maximum 100 steps allowed'. New validatePlanningNotes (requirePlainObject, rejectUnknownFields, validateStringValue; keyFiles an array of <=50 strings of 1-1000 chars) runs right after validateExecutionContract, before any Git read, mutex or write: a non-string field, non-array or over-50 keyFiles, bad entry, over-5000 note, non-object value or unknown key is refused INVALID_INPUT with context.field, never clipped or coerced. Valid notes (empty strings, newlines) are stored byte-for-byte; omitted keeps a stored set, null writes none. inputSchema maxItems/maxLength mirror the bounds. Tests: new submitPlan.intakeBounds.test.ts (9 cases, ported from hunt task-928a468d; RED at base 7 failed|2 passed, GREEN 9/9) and StateManager B28 now pins MAX_PLAN_STEPS. docs/MCP_SERVER.md ### moe.submit_plan states both bounds; CONFIGURATION.md untouched (taskSizing range stays 1-100). Full daemon suite in a git-archive snapshot: 286 files, 7473 passed, 24 skipped, exit 0.",
+  "commits": [
+    {
+      "sha": "2a1c5a36f97a54f91cf946cfb3406d1f4bed34e4",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T05:57:57Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/state/StateManager.test.ts",
+        "packages/moe-daemon/src/state/validators.ts",
+        "packages/moe-daemon/src/tools/submitPlan.intakeBounds.test.ts",
+        "packages/moe-daemon/src/tools/submitPlan.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:04:01.623Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:07:48Z",
+    "at": "2026-11-04T06:10:26.914Z"
+  },
+  "completedAt": "2026-11-04T06:09:58.265Z",
+  "reviewCompletedAt": "2026-11-04T06:09:58.265Z",
+  "reviewSummary": "APPROVED. Reviewed completion 2a1c5a36 (git show; in control HEAD on moe/work-2026-10-24; recorded in task.commits). 5 files, +229/-27 = 202 net LOC, under cap. Scope = approvedScope (CONFIGURATION.md untouched as planned).\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout: npm ci ok, tsc --noEmit 0, tsc -p tt.json 0, full daemon vitest 287 files / 7484 passed | 24 skipped, 'intake pin ok', exit 0.\nDoD 1: MAX_PLAN_STEPS=100 is the one bound for sanitizeImplementationPlan (was 50), submit_plan's refusal (message unchanged, INVALID_INPUT field 'steps') and taskSizing warnSteps/maxSteps. Tests: 60 steps stored in memory/disk/reload; 100 stored; 101 refused, row untouched; sanitizer keeps 100 of 105; taskSizing 101 refused; B28 pins MAX_PLAN_STEPS.\nDoD 2: validatePlanningNotes runs right after validateExecutionContract, before Git reads, mutex and any write. Refusals tested with context.field: non-string, >5000 note, bare-string/51-entry/bad-entry/1001-char keyFiles, non-object, array, unknown key. Limits stored byte-for-byte; null stores none; omitted keeps stored set; executionContract control unchanged.\nDoD 3: MCP_SERVER.md states both bounds (Parameters comment, Step bounds, new Planning notes bullet); submitPlan.test.ts passes in the full suite.\nAdversarial: validation is pure, before the mutex; no other caller passes planningNotes outside the documented shape; no stored-row migration; raising the sanitizer to 100 narrows nothing. No tests deleted or weakened. Notes, not defects: bad planningNotes on an unknown task now gives INVALID_INPUT before NOT_FOUND (same as executionContract); schema maxItems/maxLength are docs only (McpAdapter does not validate schemas). Not re-run: worker's qualityGate (parity-check.sh, npm run lint); diff touches no scripts or role docs.",
+  "requiredCheckAtDone": null
+}

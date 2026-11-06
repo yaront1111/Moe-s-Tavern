@@ -1,0 +1,240 @@
+{
+  "id": "task-e76f32a065f84d2cbe9a9774dfc9365a",
+  "epicId": "epic-be924fb8",
+  "title": "test: postflight-fake-proxy.js's get_commit_scope still models the old orphan rule (any caller that is not the assignee counts as an active peer), with no finalizing-holder exemption, so a completion scenario with no assignee would get peersActive true where the daemon now says false",
+  "description": "Reported by architect-24611a0a from planning task-7d3428d1 (msg-c788a9d9, 21:02Z on 2026-11-03). The governor re-checked it at tip ac3ea38f. It is fake-vs-daemon drift: no current postflight scenario is affected, because the fake's default assignee is the caller. But a drifted fake is how seat-registration's 'gone' case passed falsely, see task-6b8fb0ee.\n\nPROBLEM. task-7d3428d1 changes the daemon's get_commit_scope: the completing seat holding the finalizing attempt is no longer counted as an orphan peer of its own completion landing, since complete_task has already cleared the assignee. The postflight fake proxy still applies the old rule, so a future scenario that completes with no assignee (e.g. FAKE_SCOPE_ASSIGNEE=none) would get peersActive true from the fake where the real daemon answers false.\n\nEVIDENCE: scripts/tests/postflight-fake-proxy.js:795 (at ac3ea38f), `const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId;`, feeding activePeerIds at :796.\n\nWHY BACKLOG. The fake must copy the rule 7d3428d1 actually lands, which is in REVIEW now. The governor promotes this row when 7d3428d1 is DONE. The CQ-M07 lane's open rows (n3, n) don't list this file today. Check lanes.js before planning.\n\nFIX DIRECTION. Mirror the landed exemption in the fake's get_commit_scope, then add one postflight scenario, or a direct fake-proxy unit check, where a completion with no assignee and a finalizing caller yields peersActive false.",
+  "definitionOfDone": [
+    "postflight-fake-proxy.js's get_commit_scope applies the same finalizing-holder exemption task-7d3428d1 landed in the daemon. A completion call whose caller holds the finalizing attempt, with no assignee, reports peersActive false.",
+    "A scenario or unit check pins that case, and the postflight harness rows that use the fake still pass on the platforms the plan names (bash postflight.sh, plus the .ps1 sibling if the ps1 path uses get_commit_scope)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development; read mem:decision-get-commit-scope-finalizing-holder-not-orphan). With your Edit tool (never a shell write: the rail wants a TOOL witness), append the block below at the END of scripts/tests/postflight-owner-scope.test.mjs, after the last existing test. Change no existing line. Keep the four title prefixes verbatim: the RED gate greps `✖ (f1) ` and `✖ (f4) `.\n\n```js\n// The orphan rule's finalizing-holder exemption, as getCommitScope.ts landed it in\n// task-7d3428d1: complete_task clears the assignee before the holder's own landing.\n// seedAttempt writes one .moe/attempts record, by default a well-formed finalizing hold on TASK_ID.\nfunction seedAttempt(dir, file, fields) {\n    fs.mkdirSync(path.join(dir, '.moe', 'attempts'), { recursive: true });\n    fs.writeFileSync(path.join(dir, '.moe', 'attempts', file), JSON.stringify({ taskId: TASK_ID, phase: 'finalizing', generation: 1, ...fields }));\n}\nconst COMPLETION_KNOBS = { FAKE_SCOPE_ASSIGNEE: 'none', FAKE_TASK_STATUS: 'REVIEW' };\nconst UNASSIGNED_COMPLETION = { ...LEGACY, status: 'REVIEW', assignedWorkerId: null, assigneeAlive: false, assigneeProtected: false };\n\ntest('(f1) a completion call by the holder of the finalizing attempt is not an orphan peer', (t) => {\n    const dir = makeProject(t);\n    seedAttempt(dir, 'attempt-mine.json', { id: 'attempt-mine', workerId: 'architect-x' });\n    assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), UNASSIGNED_COMPLETION);\n    assert.deepStrictEqual(scope(dir, { ...COMPLETION_KNOBS, FAKE_SCOPE_FINALIZING: 'computed' }), {\n        ...UNASSIGNED_COMPLETION, finalizingAttempt: { attemptId: 'attempt-mine', workerId: 'architect-x', generation: 1 },\n    });\n});\n\ntest('(f2) a caller that does not hold the finalizing attempt stays an orphan peer', (t) => {\n    const dir = makeProject(t);\n    seedAttempt(dir, 'attempt-done.json', { id: 'attempt-done', workerId: 'worker-done' });\n    assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), { ...UNASSIGNED_COMPLETION, activePeerIds: ['architect-x'], peersActive: true });\n});\n\ntest('(f3) a hold on another task, or a record that is not a well-formed hold, exempts nobody', (t) => {\n    for (const fields of [{ taskId: 'task-other' }, { phase: 'running' }, { generation: 0 }, { generation: '1' }, { generation: 1.5 }, { id: ' ' }]) {\n        const dir = makeProject(t);\n        seedAttempt(dir, 'attempt-x.json', { id: 'attempt-x', workerId: 'architect-x', ...fields });\n        assert.deepStrictEqual(scope(dir, COMPLETION_KNOBS), { ...UNASSIGNED_COMPLETION, activePeerIds: ['architect-x'], peersActive: true }, JSON.stringify(fields));\n    }\n});\n\ntest('(f4) the exempt holder still counts a real live peer', (t) => {\n    const dir = makeProject(t);\n    seedAttempt(dir, 'attempt-mine.json', { id: 'attempt-mine', workerId: 'architect-x' });\n    assert.deepStrictEqual(scope(dir, { ...COMPLETION_KNOBS, FAKE_SCOPE_PEERS_ACTIVE: '1' }), {\n        ...UNASSIGNED_COMPLETION, livePeerIds: ['worker-peer'], activePeerIds: ['worker-peer'], peersActive: true,\n    });\n});\n```\n\nWhat each case pins:\n- (f1) is DoD 1. A completion call (FAKE_TASK_STATUS=REVIEW, phase postflight) on an unassigned task, whose caller holds the task's finalizing attempt, answers activePeerIds [] and peersActive false. This holds with FAKE_SCOPE_FINALIZING unset (finalizingAttempt stays omitted) and with 'computed' (it names the caller).\n- (f2) a non-holder stays an orphan.\n- (f3) a hold on another task, or a record isHoldingFinalizingAttempt rejects, exempts nobody.\n- (f4) the exempt holder still counts a real live peer.\n\nThen run the RED gate (the second checkRef) from the worktree root. It must print RED-AT-BASE: `ℹ fail 2`, with exactly (f1) and (f4) failing against 5592bcc0's fake. The architect's dry run gave tests 17, pass 15, fail 2. (f2) and (f3) pass at base on purpose: they kill over-broad exemptions. In the architect's mutant run, exempting on any finalizing attempt failed (f2), and dropping the taskId, generation or id check failed (f3).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "note": "Appended (f1)-(f4). RED gate: tests 17, pass 15, fail 2 ((f1),(f4)) -> RED-AT-BASE.",
+      "startedAt": "2026-11-03T22:20:51.791Z",
+      "completedAt": "2026-11-03T22:21:21.768Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix goes in scripts/tests/postflight-fake-proxy.js, inside `case 'get_commit_scope'` only (about :678-821). Use your Edit tool. This is the ONE fixture both harnesses copy (mem:gotcha-postflight-fake-proxy-twins-diverged), so there is no other copy to update. Three edits:\n\n(a) The FAKE_SCOPE_ASSIGNEE doc, :710-712. Replace these three comment lines:\n- `A caller that is not the assignee joins`\n- `activePeerIds and makes peersActive true,`\n- `as the daemon's orphan rule does.`\nwith these six, each with the same `    //` plus 32-space prefix:\n- `A caller that is neither the assignee nor the holder`\n- `of the task's finalizing attempt (read from`\n- `.moe/attempts, whatever FAKE_SCOPE_FINALIZING`\n- `serves) joins activePeerIds and makes peersActive`\n- `true, as the daemon's orphan rule does since`\n- `task-7d3428d1.`\nThe GREEN gate greps `neither the assignee nor the holder` on ONE line, and checks that `A caller that is not the assignee joins` is gone.\n\n(b) The finalizing scan, :756-774:\n- Delete `let finalizingAttempt = null;`, the `if (finalizingMode !== null) {` line and that block's closing `}`.\n- Dedent the scan by 2 spaces, from `const nonBlank` through `const named = ...`, and keep those lines otherwise byte-identical.\n- Replace its two-line `// isHoldingFinalizingAttempt...` comment with these four lines:\n  `// The task's finalizing attempt, read from .moe/attempts in every`\n  `// FAKE_SCOPE_FINALIZING mode: the orphan rule below exempts its holder.`\n  `// isHoldingFinalizingAttempt: phase finalizing, non-blank id/workerId,`\n  `// safe-integer generation >= 1; the highest generation wins.`\n- Below `const named = ...`, put `let finalizingAttempt = null;` and then the two existing `if (finalizingMode === 'computed') ...` and `if (finalizingMode === 'malformed') ...` lines, dedented and otherwise unchanged. The served field then behaves exactly as before in every mode.\n\n(c) The orphan rule at :795 becomes `const orphanCaller = Boolean(args.workerId) && args.workerId !== assignedWorkerId && named?.workerId !== args.workerId;`. This mirrors getCommitScope.ts:241 from 395172f0. When nothing holds the task, `named` is null, so `named?.workerId` is undefined and exempts nobody. Leave `Boolean(args.workerId)`, the knobs, livePeerIds, alwaysInclude and every reply field alone.\n\nError handling: the scan keeps its error handling unchanged. A missing .moe/attempts gives an empty list (the try/catch around readdirSync). An unreadable or malformed record is skipped (the per-file try/catch and the predicate). So the scan, now run on every call, cannot throw, and a project without attempts answers byte-for-byte as before. The 13 existing tests must pass unchanged.\n\nCheck:\n- `node --check scripts/tests/postflight-fake-proxy.js`.\n- `node --test scripts/tests/postflight-owner-scope.test.mjs` must give `ℹ tests 17` and `ℹ pass 17`.\n- `git status --porcelain` must list exactly these two files.\n\nThe architect applied this exact edit to a scratch copy: 17/17 passed. With the patched fake, the owner-guard rows finalizing, finalizing-own, unassigned and sequential passed on sh (4/4). Only finalizing-own and sequential change their answer.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "Applied doc, hoisted scan, orphanCaller edits. node --check ok; owner-scope tests 17/17; git status lists exactly the two files.",
+      "startedAt": "2026-11-03T22:21:22.725Z",
+      "completedAt": "2026-11-03T22:21:47.938Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE (see mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap and mem:gotcha-qa-ps1-postflight-from-wsl).\n\n(1) The RED gate (second checkRef) takes seconds and must still print RED-AT-BASE. It runs your test file against 5592bcc0's fake, so the fix does not affect it.\n\n(2) The GREEN gate is the first checkRef, run verbatim, and it is complete_task's verification. It:\n- greps the fake's doc;\n- snapshots `git archive HEAD` under /mnt/d/moe-scratch, with your two files overlaid and cmp-checked;\n- runs the unit file and parity-check.sh;\n- runs the FULL bash postflight.sh, with the MOE_*/CLAUDE* env scrubbed;\n- runs the FULL postflight.ps1 under Windows PowerShell 5.1. The ps1 sibling is required because moe-agent.ps1 reads get_commit_scope.peersActive (:4245), and both harnesses run postflight-owner-guard.cjs.\n\nThe GREEN gate takes about 60-80 min, so never run it in the foreground:\n- From the worktree root, write /mnt/d/moe-scratch/run-e76f32a0.sh, a scratch file outside the checkout where a heredoc is fine. It holds `( <the exact GREEN command> )` and then `echo \"EXIT=$?\"`.\n- Start it with `( set -m; setsid nohup bash /mnt/d/moe-scratch/run-e76f32a0.sh > /mnt/d/moe-scratch/run-e76f32a0.log 2>&1 & echo $! > /mnt/d/moe-scratch/run-e76f32a0.pid )`.\n- Wait in foreground calls with a 600000 ms Bash timeout: `timeout 570 tail --pid=\"$(cat /mnt/d/moe-scratch/run-e76f32a0.pid)\" -f /dev/null; grep -a '^EXIT=' /mnt/d/moe-scratch/run-e76f32a0.log`. Repeat until EXIT= appears.\n- Do not end your turn while it runs.\n- Never kill by name or pattern (rail). A Windows leg cannot be stopped from WSL, so let it finish.\n\nEvidence for complete_task:\n- command: the GREEN checkRef text;\n- exitCode: the EXIT value, which must be 0;\n- outputTail: the output of `grep -aE 'ℹ (tests|pass|fail) |PASS |^EXIT=' <log> | tr -d '\\r'`. It shows the unit counts and the PASS lines for parity-check, the frozen and owner guard suites, postflight.sh and postflight.ps1.\n\nError handling for a red run:\n(i) A timeout (`wrapper exited with 124`, or a stalled leg under fleet load) is environmental. Re-run the whole GREEN command once, with the same text.\n(ii) Otherwise, find the first failing row (`grep -anE 'FAIL|failed|✖' <log> | head`). Re-run just that row in a second snapshot whose fake is 5592bcc0's (`git show 5592bcc0fb660da933ffbc8b96269e7657d5f5a1:scripts/tests/postflight-fake-proxy.js`):\n- owner-guard rows: MOE_OWNER_GUARD_ONLY=<case> with `node scripts/tests/postflight-owner-guard.cjs sh|ps1 <wrapper> <fake> <tmp> <engine>`, as postflight.sh:1258 and postflight.ps1:1238 call it;\n- frozen rows: MOE_FROZEN_TEST_ONLY=<mode>;\n- lettered scenarios: a trimmed scratch harness (mem:convention-postflight-scratch-harness).\nIf the row fails the same way on the base fake, it is not this change. Never weaken, skip or edit any harness, row or other file. Post the row, both excerpts and the snapshot paths in #general, then call moe.report_blocked with that evidence. If it fails only with the new fake, it is this task's bug: fix the fake (never the rows), re-run step 2's checks, then the RED and GREEN gates.\n\nAfter capturing the evidence, remove the printed `Verification snapshot:` dir and the run-e76f32a0.* files, by exact path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "RED-AT-BASE printed (tests 17, pass 15, fail 2: f1,f4). GREEN gate re-run after a dead detached run: EXIT=0; unit 17/17, parity, postflight.sh and postflight.ps1 PASS; owner-guard finalizing-own and sequential ok in both legs.",
+      "startedAt": "2026-11-03T22:21:49.107Z",
+      "completedAt": "2026-11-04T06:51:51.693Z",
+      "amendments": [
+        {
+          "amendmentId": "amend-1",
+          "description": "Verification, run ONCE (see mem:gotcha-qa-full-postflight-sh-runtime-and-summary-cap and mem:gotcha-qa-ps1-postflight-from-wsl).\n\n(1) The RED gate (second checkRef) takes seconds and must still print RED-AT-BASE. It runs your test file against 5592bcc0's fake, so the fix does not affect it.\n\n(2) The GREEN gate is the first checkRef, run verbatim, and it is complete_task's verification. It:\n- greps the fake's doc;\n- snapshots `git archive HEAD` under /mnt/d/moe-scratch, with your two files overlaid and cmp-checked;\n- runs the unit file and parity-check.sh;\n- runs the FULL bash postflight.sh, with the MOE_*/CLAUDE* env scrubbed;\n- runs the FULL postflight.ps1 under Windows PowerShell 5.1. The ps1 sibling is required because moe-agent.ps1 reads get_commit_scope.peersActive (:4245), and both harnesses run postflight-owner-guard.cjs.\n\nThe GREEN gate takes about 60-80 min, so never run it in the foreground:\n- From the worktree root, write /mnt/d/moe-scratch/run-e76f32a0.sh, a scratch file outside the checkout where a heredoc is fine. Line 1 is `echo $$ > /mnt/d/moe-scratch/run-e76f32a0.pid`, so the runner records its OWN pid. Then comes `( <the exact GREEN command> )`, then `echo \"EXIT=$?\"`.\n- Start it with `( set -m; setsid nohup bash /mnt/d/moe-scratch/run-e76f32a0.sh > /mnt/d/moe-scratch/run-e76f32a0.log 2>&1 & )`. Never record `$!` here: under set -m, setsid forks, so `$!` is a parent that exits at once.\n- Wait in foreground calls with a 600000 ms Bash timeout: `timeout 570 tail --pid=\"$(cat /mnt/d/moe-scratch/run-e76f32a0.pid)\" -f /dev/null; grep -a '^EXIT=' /mnt/d/moe-scratch/run-e76f32a0.log`. Repeat until EXIT= appears.\n- If you already started the run with the earlier `echo $! > ….pid` recipe, do NOT restart it. That pid file names the dead setsid parent, so `tail --pid` returns at once. Wait on the log instead, repeated: `timeout 570 bash -c 'until grep -aq \"^EXIT=\" /mnt/d/moe-scratch/run-e76f32a0.log; do timeout 20 tail -f /dev/null; done'`.\n- Do not end your turn while it runs.\n- Never kill by name or pattern (rail). A Windows leg cannot be stopped from WSL, so let it finish.\n\nEvidence for complete_task:\n- command: the GREEN checkRef text;\n- exitCode: the EXIT value, which must be 0;\n- outputTail: the output of `grep -aE 'ℹ (tests|pass|fail) |PASS |^EXIT=' <log> | tr -d '\\r'`. It shows the unit counts and the PASS lines for parity-check, the frozen and owner guard suites, postflight.sh and postflight.ps1.\n\nError handling for a red run:\n(i) A timeout (`wrapper exited with 124`, or a stalled leg under fleet load) is environmental. Re-run the whole GREEN command once, with the same text.\n(ii) Otherwise, find the first failing row (`grep -anE 'FAIL|failed|✖' <log> | head`). Re-run just that row in a second snapshot whose fake is 5592bcc0's (`git show 5592bcc0fb660da933ffbc8b96269e7657d5f5a1:scripts/tests/postflight-fake-proxy.js`):\n- owner-guard rows: MOE_OWNER_GUARD_ONLY=<case> with `node scripts/tests/postflight-owner-guard.cjs sh|ps1 <wrapper> <fake> <tmp> <engine>`, as postflight.sh:1258 and postflight.ps1:1238 call it;\n- frozen rows: MOE_FROZEN_TEST_ONLY=<mode>;\n- lettered scenarios: a trimmed scratch harness (mem:convention-postflight-scratch-harness).\nIf the row fails the same way on the base fake, it is not this change. Never weaken, skip or edit any harness, row or other file. Post the row, both excerpts and the snapshot paths in #general, then call moe.report_blocked with that evidence. If it fails only with the new fake, it is this task's bug: fix the fake (never the rows), re-run step 2's checks, then the RED and GREEN gates.\n\nAfter capturing the evidence, remove the printed `Verification snapshot:` dir and the run-e76f32a0.* files, by exact path.",
+          "reason": "The step's detach recipe recorded `$!` after `setsid` under `set -m`. setsid forks there, so `$!` names a parent that exits at once, and `tail --pid` never waited (the architect checked: `$!` dead, runner alive). Now the runner records its own pid. A run you already started keeps going; do not restart it, wait on the log as described.",
+          "amendedBy": "architect-74d9e1c7",
+          "amendedAt": "2026-11-03T22:44:46.932Z"
+        }
+      ],
+      "activeAmendmentId": "amend-1"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`, read as an attacker. Fix any finding, then re-run step 3's gates in full before complete_task: the evidence must come from the final bytes.\n\n(1) Scope: exactly 2 files. The fake's hunks are only:\n- the FAKE_SCOPE_ASSIGNEE doc lines;\n- the hoisted scan (dedent, the new comment, the finalizingAttempt lines moved below it);\n- the orphanCaller line.\nThe test file only gains the appended block. Nothing changes in postflight.sh/.ps1, postflight-owner-guard.cjs, .github/workflows/ci.yml or the daemon.\n\n(2) It is an exact mirror of getCommitScope.ts:234-242:\n- only the holder of THIS task's well-formed finalizing hold is exempt;\n- an absent or empty workerId is never an orphan;\n- livePeerIds is unchanged, and peersActive is still activePeerIds.length > 0;\n- the exemption does not depend on FAKE_SCOPE_FINALIZING: with the knob unset it still applies and still omits the field.\n\n(3) The serving modes are unchanged: unset omits finalizingAttempt, 'null' serves null whatever the records say, and 'malformed' serves the corrupt value. The 13 old tests pass unchanged.\n\n(4) Concurrency and huge input: the fake only reads .moe/attempts. A missing dir, a BOM, garbage JSON or thousands of records cannot throw: there is one readdir per call and a per-file try/catch.\n\n(5) Rows whose answer flips: owner-guard finalizing-own and sequential now get peersActive false. Neither asserts it. Confirm that both passed in BOTH legs of your GREEN log ('[owner guard] finalizing-own', '[owner guard] sequential', 'PASS owner guard scenarios').\n\n(6) The tests discriminate: on a scratch copy, re-run one mutant. Exempting on `!named` must fail (f2).\n\nThen call moe.complete_task with step 3's evidence, and quote the RED-AT-BASE output in the summary. Out of scope, do not fix: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs (it has not since 9a9b46d8). Say so in the completion summary for the governor.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "note": "Self-review of the diff: 2 files only. The fake's hunks are the doc lines, the hoisted scan and the orphanCaller line. It mirrors getCommitScope.ts:241. Mutant (orphanCaller exempts on !named) fails (f2), 16 pass and 1 fail. RED-AT-BASE re-printed. GREEN log (EXIT=0) shows owner guard finalizing-own and sequential in both legs, and the snapshot files cmp-match HEAD. Out of scope: ci.yml does not run postflight-owner-scope.test.mjs.",
+      "startedAt": "2026-11-04T06:53:59.935Z",
+      "completedAt": "2026-11-04T06:54:03.346Z"
+    }
+  ],
+  "planRevision": 2,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 21:04Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Its only dependsOn, task-7d3428d1, reached DONE at 21:02:55Z (landing 395172f0). Mirror the exemption exactly as 395172f0 landed it in getCommitScope.ts. Placement (worktree mode): keep the edit inside postflight-fake-proxy.js's get_commit_scope handler (about :780-800). Run lanes.js first: 1ccae85c (Bash VM taskless skip) may add scenarios to the same harness.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-7d3428d14903430c92325cfcb56ac3f5"
+  ],
+  "priority": "LOW",
+  "order": 439.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T21:02:55.403Z",
+  "updatedAt": "2026-11-04T19:20:44.818Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T21:03:54.168Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:19:33.768Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:25:23.840Z",
+    "wallClockMs": 39950072
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-8cf0816c",
+    "worker-5772dacf",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:18:24.475Z",
+  "executionContract": {
+    "intendedBehavior": "The postflight fake proxy's get_commit_scope applies getCommitScope.ts's orphan rule as 395172f0 landed it. A caller joins activePeerIds, and so makes peersActive true, only when it is neither the task's assignee nor the holder of the task's finalizing attempt. That holder is the well-formed hold isHoldingFinalizingAttempt accepts, read from .moe/attempts on every call, whatever FAKE_SCOPE_FINALIZING serves. So a completion call (phase postflight, status REVIEW) on an unassigned task, whose caller holds that task's finalizing attempt, answers activePeerIds [] and peersActive false, as the daemon does.",
+    "acceptanceCriteria": [
+      "DoD 1: the fake answers livePeerIds [], activePeerIds [] and peersActive false when FAKE_SCOPE_ASSIGNEE=none, FAKE_TASK_STATUS=REVIEW, and a .moe/attempts record {taskId: task-postflight, phase: finalizing, generation >= 1, workerId: <caller>} exists. This holds with FAKE_SCOPE_FINALIZING unset (the field is omitted) and with 'computed' (the field names the caller). Test (f1) pins it.",
+      "DoD 2: tests (f1)-(f4) in postflight-owner-scope.test.mjs pin it, and against 5592bcc0's fake exactly (f1) and (f4) fail (RED-AT-BASE). From one snapshot of the final bytes (the GREEN checkRef, exit 0), the full bash postflight.sh and the full postflight.ps1 under Windows PowerShell 5.1 both print their PASS line."
+    ],
+    "invariants": [
+      "These stay orphan peers ((f2), (f3)): a caller that does not hold the attempt, a holder of another task's attempt, and a record that isHoldingFinalizingAttempt rejects (phase, generation, blank id).",
+      "For the exempt holder, a real live peer still counts ((f4)). livePeerIds and alwaysInclude are unchanged.",
+      "FAKE_SCOPE_FINALIZING only shapes the served finalizingAttempt field, exactly as before: unset omits it, null serves null, and malformed serves the corrupt value. The 13 existing tests pass unchanged.",
+      "The scan never throws: a missing attempts dir, or an unreadable or malformed record, is skipped."
+    ],
+    "compatibility": [
+      "Every existing postflight.sh and postflight.ps1 row passes unchanged. Only owner-guard finalizing-own and sequential see peersActive flip from true to false, and neither asserts it. The architect ran both, plus finalizing and unassigned, with the patched fake on sh: 4/4 PASS."
+    ],
+    "approvedScope": [
+      "postflight-fake-proxy.js, case 'get_commit_scope' only: the FAKE_SCOPE_ASSIGNEE doc lines, the finalizing-attempt scan (hoisted out of the knob's if-block), and the orphanCaller line.",
+      "postflight-owner-scope.test.mjs: one appended block (seedAttempt, COMPLETION_KNOBS, UNASSIGNED_COMPLETION, tests (f1)-(f4))."
+    ],
+    "reuse": [
+      "The holder comes from the fake's existing .moe/attempts scan (the FAKE_SCOPE_FINALIZING 'computed' selection). No new selection code is written.",
+      "The test file's makeProject, scope and LEGACY helpers."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts:234-242 (395172f0): finalizing = finalizingAttemptsByTask(state).get(task.id); orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller.",
+      "packages/moe-daemon/src/util/claimEligibility.ts:163-191: isHoldingFinalizingAttempt requires phase finalizing, a non-blank id, taskId and workerId, and a safe-integer generation >= 1, and the highest generation wins. The fake's scan at postflight-fake-proxy.js:760-771 already mirrors it.",
+      "Both harnesses copy the ONE fixture scripts/tests/postflight-fake-proxy.js (parity-check.sh:315-343), and both run postflight-owner-guard.cjs (postflight.sh:1258, postflight.ps1:1238). Wrappers read peersActive at moe-agent.sh:4605 and moe-agent.ps1:4245."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && grep -qF 'neither the assignee nor the holder' scripts/tests/postflight-fake-proxy.js && ! grep -qF 'A caller that is not the assignee joins' scripts/tests/postflight-fake-proxy.js && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e76f32a0.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight-owner-scope.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && node --test scripts/tests/postflight-owner-scope.test.mjs && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=240 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=240 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && R=$(mktemp -d) && mkdir -p \"$R/scripts/tests\" && git show 5592bcc0fb660da933ffbc8b96269e7657d5f5a1:scripts/tests/postflight-fake-proxy.js > \"$R/scripts/tests/postflight-fake-proxy.js\" && cp scripts/tests/postflight-owner-scope.test.mjs \"$R/scripts/tests/\" && (cd \"$R\" && NO_COLOR=1 node --test --test-reporter=spec scripts/tests/postflight-owner-scope.test.mjs > out.txt 2>&1; grep -aE '^ℹ (tests|pass|fail) |^✖ \\(f' out.txt; grep -aqx 'ℹ fail 2' out.txt && grep -aqF '✖ (f1) ' out.txt && grep -aqF '✖ (f4) ' out.txt && echo RED-AT-BASE); E=$?; rm -rf -- \"$R\"; [ $E = 0 ]"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Key the exemption on the served finalizingAttempt field. Rejected: most scenarios leave FAKE_SCOPE_FINALIZING unset, so they would keep the old rule, which is exactly the drift this row removes. The daemon computes the hold from state whatever it serves, and the knob only shapes the field. (2) Pin it with a new postflight.sh scenario. Rejected: that harness is hot (1ccae85c may add rows to it), and it gives 20+ min feedback. The direct fake unit check pins the answer in seconds, and both full harnesses still run as the regression gate. (3) Also mirror the daemon's caller typing (typeof string and non-empty, vs Boolean(args.workerId)). Out of scope: wrappers always send strings, and the governor asked for the exemption only. (4) Wire postflight-owner-scope.test.mjs into ci.yml. Out of scope: the DoD fixes the deliverable, and the gap is flagged for the governor.",
+    "codebaseInsights": "The fake already selects the task's finalizing hold exactly as claimEligibility.ts isHoldingFinalizingAttempt and finalizingAttemptsByTask do (postflight-fake-proxy.js:757-774), but only inside `if (finalizingMode !== null)`. The fix hoists that scan and adds the holder clause to the orphan rule at :795.\n\nAn answer changes only for a caller that is not the assignee (FAKE_SCOPE_ASSIGNEE=none or another id) AND holds a well-formed finalizing attempt for the same task. Today that means two owner-guard rows:\n- 'finalizing-own': architect-og holds attempt-mine;\n- 'sequential': worker-live's attempt-postflight, flipped to finalizing by OG_FINALIZE.\nNeither asserts peersActive. OWNED is ASSERTED via filesModified, and peer-staged.txt is PREEXISTING.\n\nWrappers read only peersActive from this answer (moe-agent.sh:4605, moe-agent.ps1:4245). The owner guard reads assigneeProtected and finalizingAttempt, which are unchanged.\n\nArchitect dry runs:\n- RED on 5592bcc0's fake: 17 tests, (f1) and (f4) fail.\n- GREEN: 17/17.\n- Six mutants, each killed: !named by (f2); knob-gated and no-exemption by (f1)+(f4); dropping the taskId, generation or id check by (f3).\n- Owner-guard finalizing, finalizing-own, unassigned and sequential on sh with the patched fake: 4/4 PASS.\n- The GREEN prefix (snapshot, overlay, unit, parity) ran clean, and the exact RED text exits 1 before the tests exist.",
+    "risks": "Long gate: the full postflight.sh takes about 20-30 min and the full postflight.ps1 under PS 5.1 about 12-45 min, run sequentially. Expect 60-80 min under fleet load. Run it detached and poll. Never run it in the foreground (10 min tool cap), and never end the turn mid-run.\n\nEnvironment noise:\n- the seat's MOE_*/CLAUDE* env leaking into the bash leg (the command scrubs it);\n- powershell.exe from a /tmp cwd (the snapshot sits on /mnt/d to avoid it);\n- wrapper timeouts under load (MOE_POSTFLIGHT_TIMEOUT_SEC=240; re-run once).\nA row that fails the same way with 5592bcc0's fake is pre-existing: report it, never patch around it.\n\nThe checkRef is 962 chars, under the 1000 cap, so do not lengthen it.\n\nisEpicFinal is only the highest-order fallback in this open-ended bug bucket, where new defect rows keep landing after it. It is not a hardening task. The DoD's two full harnesses are the full regression for the one affected surface (scripts/tests).",
+    "keyFiles": [
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-owner-scope.test.mjs",
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "scripts/tests/postflight-owner-guard.cjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "cbae60700324951a00c65eae299c1dbbdac114c8",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:18:24.506Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:20:51.791Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T06:55:05Z",
+    "at": "2026-11-04T08:25:58.866Z"
+  },
+  "commits": [
+    {
+      "sha": "2d75b3931bdaa424460263b7b8c71671159436ba",
+      "ref": "refs/heads/moe/task/task-e76f32a065f84d2cbe9a9774dfc9365a",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T22:18:33Z",
+      "paths": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T23:41:47.828Z",
+      "treeId": "da12209da5b3fcc6ea7bf446bff68a5b3ebc935e",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "9d5c8924be83ec83938a1012a8ddb511c652f646",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T06:52:49Z",
+      "paths": [
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-owner-scope.test.mjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T06:54:59.896Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-owner-scope.test.mjs",
+    "scripts/tests/postflight-fake-proxy.js"
+  ],
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-04T06:54:12.623Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && grep -qF 'neither the assignee nor the holder' scripts/tests/postflight-fake-proxy.js && ! grep -qF 'A caller that is not the assignee joins' scripts/tests/postflight-fake-proxy.js && mkdir -p /mnt/d/moe-scratch && S=$(mktemp -d /mnt/d/moe-scratch/v-e76f32a0.XXXXXX) && git archive HEAD | tar -x -C \"$S\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight-owner-scope.test.mjs; do cp \"$f\" \"$S/$f\" && cmp \"$f\" \"$S/$f\" || exit 1; done && printf 'Verification snapshot: %s\\n' \"$S\" && cd \"$S\" && node --test scripts/tests/postflight-owner-scope.test.mjs && bash scripts/tests/parity-check.sh && env $(env | awk -F= '/^(MOE_|CLAUDE)/{printf \"-u %s \", $1}') MOE_POSTFLIGHT_TIMEOUT_SEC=240 bash scripts/tests/postflight.sh && WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC MOE_POSTFLIGHT_TIMEOUT_SEC=240 powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"$(wslpath -w \"$S/scripts/tests/postflight.ps1\")\"",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 17\nℹ pass 17\nℹ fail 0\nPASS parity-check.sh\nPASS frozen candidate scenarios: 106\n[owner guard] finalizing-own\n[owner guard] sequential\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 12\nPASS postflight-vm-route.sh\nPASS postflight.sh\nPASS frozen candidate scenarios: 106\n[owner guard] finalizing-own\n[owner guard] sequential\nPASS owner guard scenarios: 16\nPASS migration landing scenarios: 11\nPASS postflight-vm-route.ps1\nPASS postflight.ps1\nEXIT=0",
+    "reportedAt": "2026-11-04T06:54:12.623Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The postflight fake's get_commit_scope now applies the finalizing-holder exemption task-7d3428d1 landed in the daemon (getCommitScope.ts:241). A caller joins activePeerIds only when it is neither the assignee nor the holder of this task's well-formed finalizing attempt. The attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING if-block, so the exemption applies in every mode while the served finalizingAttempt field behaves as before. The FAKE_SCOPE_ASSIGNEE doc lines are updated.\n\nTests (f1)-(f4) are appended to postflight-owner-scope.test.mjs:\n- (f1) holder, no assignee: activePeerIds [] and peersActive false, with FAKE_SCOPE_FINALIZING unset and 'computed'.\n- (f2) a non-holder stays an orphan peer.\n- (f3) a hold on another task, or a record isHoldingFinalizingAttempt rejects, exempts nobody.\n- (f4) the exempt holder still counts a real live peer.\n\nRED-AT-BASE (tests against 5592bcc0's fake): tests 17, pass 15, fail 2, failing (f1) and (f4); the gate printed RED-AT-BASE.\nGREEN: unit tests 17/17, parity-check, and the full bash postflight.sh and postflight.ps1 (PS 5.1) both print PASS, EXIT=0. Owner guard rows finalizing-own and sequential pass in both legs.\nMutant: exempting on !named fails (f2).\n\nOut of scope, for the governor: .github/workflows/ci.yml does not run postflight-owner-scope.test.mjs, and has not since 9a9b46d8.",
+  "completedAt": "2026-11-04T08:25:23.840Z",
+  "reviewCompletedAt": "2026-11-04T08:25:23.840Z",
+  "reviewSummary": "Reviewed completion 9d5c8924 (on moe/work-2026-10-24, contained in HEAD; +66/-22, 2 files, net 44 LOC, under the cap). Diff read against getCommitScope.ts:241 (395172f0): the fake's orphanCaller now also requires named?.workerId !== args.workerId. The .moe/attempts scan is hoisted out of the FAKE_SCOPE_FINALIZING block, so the exemption holds in every mode while the served finalizingAttempt (unset omits, null, computed, malformed) is unchanged. The scan keeps its try/catch, so it cannot throw. Scope matches approvedScope: only get_commit_scope's doc lines, scan and orphanCaller, plus the appended (f1)-(f4); no existing test line changed.\nRe-ran verification.command verbatim from a fresh git archive HEAD snapshot (files cmp-matched): EXIT=0. Unit file 17/17 pass; parity-check.sh PASS; full postflight.sh PASS (frozen 106, owner guard 16, migration 12, vm-route PASS); full postflight.ps1 under Windows PowerShell 5.1 PASS (frozen 106, owner guard 16, migration 11, vm-route PASS). Owner-guard finalizing-own and sequential ran and passed in both legs.\nRED-AT-BASE re-run against 5592bcc0's fake: tests 17, pass 15, fail 2, exactly (f1) and (f4) fail; gate printed RED-AT-BASE. My own mutant (orphanCaller exempts on !named) is killed by (f2): pass 16, fail 1.\nDoD 1 (holder, no assignee: peersActive false) and DoD 2 (f1)-(f4) plus both harnesses verified. Scratch removed. Not verified: ci.yml does not run postflight-owner-scope.test.mjs (out of scope, already flagged by worker for the governor). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

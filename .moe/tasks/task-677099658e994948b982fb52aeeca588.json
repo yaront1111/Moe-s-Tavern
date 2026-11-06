@@ -1,0 +1,197 @@
+{
+  "id": "task-677099658e994948b982fb52aeeca588",
+  "epicId": "epic-be924fb8",
+  "title": "bug: create_team's name+role idempotency looks up the untrimmed name but stores the trimmed one, so a space-padded --team value mints a new same-named team on every seat launch instead of returning the existing team",
+  "description": "Filed by defect hunt #9 (task-66961b32), lane: daemon team tool family. All paths are under packages/moe-daemon/ unless noted.\n\nPROBLEM\n- The contract, src/tools/createTeam.ts:11: \"Create a team or return existing team with same name+role (idempotent)\".\n- The lookup uses the raw name: createTeam.ts:57-58 calls state.getTeamByNameAndRole(params.name, ...).\n- The store saves the trimmed name: state.createTeam calls validateTeamName (src/state/validators.ts:651-655, trim: true).\n- So \"Coders \" never matches the \"Coders\" team it created, and every call creates another team with the same name and role.\n- Who calls it: the wrappers, on every seat launch and before each claim while the seat is unjoined. They pass --team verbatim: scripts/moe-agent.sh:408-409 sets TEAM=\"$2\", and :2110-2115 sends json.dumps({'name': TEAM}). TOOL_AUDIENCE is [] (src/tools/index.ts:227), so only wrappers and governors call it.\n- Impact: with a padded value, each launch creates and joins its own \"Coders\" team. The fleet splits into one-seat teams and claim_next_task's team sharing is lost; per scripts/moe-agent.sh:2141-2144, a seat without a shared team skips every epic a live worker holds.\n\nEVIDENCE (HEAD 39bec237, run in a git-archive snapshot outside the shared checkout)\n- Repro: /mnt/d/moe-scratch/hunt-66961b32/A/zzHuntA_createTeamTrim.test.ts, with its output in .out.txt beside it. The architect re-ran it in /tmp/hunt-6696-snap (verify-architect.txt). Tests 2 failed (2):\n  - two create_team {name:'Coders '} calls: received sameId false, secondCreated true, teams [\"Coders|null\",\"Coders|null\"];\n  - create_team {name:' Gov', role:'governor'} after {name:'Gov', role:'governor'}: received created true, sameId false.\n\nFIX DIRECTION\n- Normalize the name once before the lookup, e.g. `const name = validateTeamName(params.name)`, and use that value for both getTeamByNameAndRole and state.createTeam.\n- Keep missingRequired for an absent name, and keep the existing INVALID_INPUT for a bad type or a name that is blank after trim.\n\nFILES\n- src/tools/createTeam.ts\n- src/tools/createTeam.test.ts",
+  "definitionOfDone": [
+    "In src/tools/createTeam.test.ts, two create_team {name:'Coders '} calls return the same team id. The second returns created: false, state.teams.size is 1, and the stored name is 'Coders'.",
+    "In src/tools/createTeam.test.ts, create_team {name:' Gov', role:'governor'} after {name:'Gov', role:'governor'} returns created: false and the first team's id, while a roleless create with the same trimmed name still creates a separate team.",
+    "`cd packages/moe-daemon && npx vitest run src/tools/createTeam.test.ts src/tools/joinTeam.deadMembers.test.ts` passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the tests first. In packages/moe-daemon/src/tools/createTeam.test.ts, add a new describe block, 'create_team trims the name before its idempotency lookup'. Reuse the file's ToolTestHarness setup (h.init, h.setupMoeFolder, await h.state.load) and call createTeamTool(h.state).handler(args, h.state). Edit with your own editing tool, never a shell write.\n\nUse these three cases, with the '(tN) ' title prefixes exactly:\n- (t1) Call create_team {name:'Coders '}, then {name:'Coders '} again, then {name:'  Coders'}. Assert in ONE toEqual over an array: first created true, second and third created false, both later ids equal the first id, the stored team.name is exactly 'Coders', and h.state.teams.size is 1.\n- (t2) Call {name:'Gov', role:'governor'}, then {name:' Gov', role:'governor'}, then a roleless {name:' Gov '}.\n  - The second call returns created false with the first id.\n  - The roleless call returns created true, with a different id, role null and name 'Gov'.\n  - teams.size is 2. This pins the createTeam.ts:50-55 rule that a null-role create never adopts a role-bound team.\n- (t3) Test test-level error handling: refusals are unchanged and write nothing. {name:'   '} and {name:42} each reject with toMatchObject({codeName:'INVALID_INPUT'}), {name:''} rejects with codeName 'MISSING_REQUIRED', and h.state.teams.size is still 0.\n\nRun `npx vitest run src/tools/createTeam.test.ts` in a snapshot before the fix. t1 and t2 must fail and t3 must pass; the architect dry-ran exactly this: 2 failed | 1 passed. Keep the four existing cases unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.test.ts"
+      ],
+      "note": "Added t1-t3; against base source t1,t2 fail and t3 passes (2 failed | 5 passed).",
+      "startedAt": "2026-11-03T20:10:30.102Z",
+      "completedAt": "2026-11-03T20:10:56.103Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix packages/moe-daemon/src/tools/createTeam.ts, editing with your own editing tool.\n\n- Add `import { validateTeamName } from '../state/validators.js';`. It is the exact normalizer the store applies, through teamStore createTeam -> validateCreateTeamInput (src/state/validators.ts:651-655 and :686-695: trim plus string, empty, control-character and 200-char checks).\n- Directly after the maxSize check and before the idempotency lookup, compute `const name = validateTeamName(params.name);`. Use `name` in BOTH getTeamByNameAndRole branches (:57-58) and in state.createTeam({ name, role, maxSize }).\n- Add a short comment above it: the store trims the name, so the lookup must compare the same normalized value; otherwise 'Coders ' never matches the 'Coders' team it created and every wrapper launch mints a duplicate.\n\nError handling:\n- Keep `if (!params.name) throw missingRequired('name')` first, and keep the role and maxSize checks in their current order, so a payload with several errors reports the same first refusal as today.\n- validateTeamName throws INVALID_INPUT for a non-string, a name that is blank after trim, a control character or more than 200 chars. Those are the same refusals state.createTeam already raised; they now fire before the lookup, and nothing is written on any refusal.\n\nChange nothing else: not the workerId strip, the response shape {team, created}, getTeamByNameAndRole in teamStore.ts, the /ws CREATE_TEAM handler or any docs. The tool description already promises the idempotency.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ],
+      "note": "Normalize via validateTeamName after the maxSize check; used in both lookups and createTeam.",
+      "startedAt": "2026-11-03T20:10:57.061Z",
+      "completedAt": "2026-11-03T20:11:00.248Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once, then do one adversarial self-review.\n\nVerification: run this exact gate command from the task worktree (it also works verbatim in the control checkout after landing). It archives HEAD into a mktemp snapshot outside the checkout, overlays the two owned files, and typechecks both the source and the test file:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTeam.ts packages/moe-daemon/src/tools/createTeam.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createTeam.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/createTeam.test.ts src/tools/joinTeam.deadMembers.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'\n\nExpect exit 0, 'Test Files 2 passed (2)' and 'Tests 14 passed (14)' (11 before, plus 3). The architect dry-ran the command at a028ec65, getting 11 passed in about 6 s, and dry-ran the fix plus these cases in a scratch copy, getting 14 passed. Never run npm ci, build or test in the shared checkout itself. Do not pass TMPDIR inside the env -i (`mem:convention-daemon-full-suite-gate-checkref`).\n\nError handling for a red run: on a tsc error or a FAIL line, fix the owned file and re-run the same command. Do not edit any other file.\n\nSelf-review: \n- Concurrency: create_team is not a blocking tool, so the state mutex serializes two identical calls; the second finds the first's team.\n- Inputs: null, empty, whitespace-only, numeric and over-long names (t3 pins them).\n- Assumptions: every stored team name is already trimmed, because the store always trimmed, so no migration is needed.\n- The diff is exactly 2 files.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate exit 0: tsc src+test clean, 2 files / 14 tests passed. Self-review done; diff = 2 files.",
+      "startedAt": "2026-11-03T20:11:01.280Z",
+      "completedAt": "2026-11-03T20:11:18.805Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 415.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:58:54.137Z",
+  "updatedAt": "2026-11-04T19:20:44.593Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:00:08.205Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-03T20:13:42.508Z",
+    "wallClockMs": 814303
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-2dc72348",
+    "qa-93f9625e"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:03:40.134Z",
+  "executionContract": {
+    "intendedBehavior": "moe.create_team normalizes the team name once with validateTeamName (the store's own trim and validation) before its name+role idempotency lookup. A space-padded name then returns the existing team with created:false instead of minting a duplicate. Every refusal (MISSING_REQUIRED for an absent or empty name, INVALID_INPUT for a bad role, maxSize or name) keeps its code, and nothing is written on a refusal.",
+    "acceptanceCriteria": [
+      "Two create_team {name:'Coders '} calls return the same team id; the second has created:false, teams.size is 1, and the stored name is 'Coders'.",
+      "create_team {name:' Gov', role:'governor'} after {name:'Gov', role:'governor'} returns created:false with the first id, while a roleless {name:' Gov '} still creates a separate team.",
+      "The createTeam.test.ts and joinTeam.deadMembers.test.ts gate passes in a snapshot outside the shared checkout."
+    ],
+    "invariants": [
+      "A null-role create never adopts a role-bound team with the same name (createTeam.ts:50-55).",
+      "Stored team names stay exactly what validateTeamName returns.",
+      "No team is created or written on any refusal."
+    ],
+    "compatibility": [
+      "The response shape {team, created} is unchanged; the refusal codes MISSING_REQUIRED and INVALID_INPUT are unchanged.",
+      "The wrappers' create_team calls (scripts/moe-agent.sh:2110-2115) need no change.",
+      "Existing .moe/teams records are unaffected: every stored name was already trimmed by the store."
+    ],
+    "approvedScope": [
+      "createTeamTool handler in packages/moe-daemon/src/tools/createTeam.ts (name normalization before the lookup, plus one import)",
+      "New (t1)-(t3) cases in packages/moe-daemon/src/tools/createTeam.test.ts"
+    ],
+    "reuse": [
+      "validateTeamName (packages/moe-daemon/src/state/validators.ts), the same normalizer state.createTeam applies through validateCreateTeamInput."
+    ],
+    "sourceAssumptions": [
+      "createTeam.ts:56-58 looks up getTeamByNameAndRole(params.name, ...) with the raw name.",
+      "teamStore.ts:31-36 getTeamByNameAndRole compares team.name === name exactly.",
+      "validators.ts:651-655 validateTeamName uses trim:true with maxLength 200; validators.ts:686-695 validateCreateTeamInput applies it on create."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTeam.ts packages/moe-daemon/src/tools/createTeam.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createTeam.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/createTeam.test.ts src/tools/joinTeam.deadMembers.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": [
+      "Trimming inside teamStore.getTeamByNameAndRole was rejected: it changes a shared lookup and hides the mismatch rather than fixing the caller.",
+      "An inline params.name.trim() was rejected: it duplicates validateTeamName and would drift from the store's control-character and length rules.",
+      "Trimming --team in the wrappers was rejected: every caller would need it, while the daemon owns the idempotency contract."
+    ],
+    "codebaseInsights": "The store already trims through validateCreateTeamInput, and only the tool's lookup compares the raw value. Calling the same validator earlier fixes the mismatch and keeps every refusal identical, only earlier. The architect dry-ran red at base (t1 and t2 fail, t3 passes) and green with the fix (14/14) in a scratch snapshot.",
+    "risks": [
+      "The order of refusals: keep missingRequired first and the role and maxSize checks before the normalization, so a payload with several errors reports the same first error.",
+      "Do not touch /ws CREATE_TEAM (WebSocketServer.ts:837, which no client sends) or docs; the description already promises idempotency."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/createTeam.ts",
+      "packages/moe-daemon/src/tools/createTeam.test.ts",
+      "packages/moe-daemon/src/state/validators.ts",
+      "packages/moe-daemon/src/state/teamStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "5592bcc0fb660da933ffbc8b96269e7657d5f5a1",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:03:40.171Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T20:10:30.102Z",
+  "reviewStartedAt": "2026-11-03T20:11:24.241Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/createTeam.ts packages/moe-daemon/src/tools/createTeam.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/createTeam.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/createTeam.test.ts src/tools/joinTeam.deadMembers.test.ts > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "Test Files  2 passed (2)\n      Tests  14 passed (14)\nEXIT=0",
+    "reportedAt": "2026-11-03T20:11:24.241Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/createTeam.test.ts",
+    "packages/moe-daemon/src/tools/createTeam.ts"
+  ],
+  "completionSummary": "create_team now normalizes the name once with validateTeamName (the store's own trim/validation) after the role/maxSize checks and before the name+role idempotency lookup, using it for both lookups and state.createTeam. A space-padded name returns the existing team with created:false. Added t1-t3 in createTeam.test.ts (red on base: t1,t2 fail, t3 passes; green with fix). Refusal codes unchanged; nothing written on refusal.",
+  "commits": [
+    {
+      "sha": "677d051a573ae7396ce11a4a92e0490eeb1dc02f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T20:03:40Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/createTeam.test.ts",
+        "packages/moe-daemon/src/tools/createTeam.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T20:12:33.383Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:12:40Z",
+    "at": "2026-11-03T20:14:09.176Z"
+  },
+  "completedAt": "2026-11-03T20:13:42.508Z",
+  "reviewCompletedAt": "2026-11-03T20:13:42.508Z",
+  "reviewSummary": "Reviewed completion 677d051a (recorded kind=completion, on moe/work-2026-10-24 and contained in control HEAD). Diff is 2 files, +66/-3 (net 63), well under the 400 cap.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the shared checkout: tsc --noEmit, the test-file tsc, and vitest on createTeam.test.ts + joinTeam.deadMembers.test.ts all pass, exit 0 (Test Files 2 passed, Tests 14 passed).\n\nMutant check: I put the pre-fix createTeam.ts (677d051a^) back into the snapshot. Result: 2 failed | 5 passed. (t1) and (t2) fail and (t3) plus the 4 existing cases stay green, so the new tests detect the bug.\n\nDoD 1: (t1) makes three calls ('Coders ', 'Coders ', '  Coders'). It asserts created [true,false,false], the same ids, stored name 'Coders' and teams.size 1.\nDoD 2: (t2) shows ' Gov'+governor returns created:false with the first id. A roleless ' Gov ' creates a separate team with role null and name 'Gov', and size is 2. The null-role invariant holds.\nDoD 3: the gate command is green as above.\n\nSource review: createTeam.ts now calls validateTeamName(params.name) after the missingRequired, role and maxSize checks and before the lookup. The same value is used in both getTeamByNameAndRole branches and in state.createTeam. Refusal order and codes are unchanged. (t3) pins INVALID_INPUT for '   ' and 42, MISSING_REQUIRED for '', and teams.size 0 (nothing written). The response shape is unchanged. No existing tests were deleted or weakened, and scope matches approvedScope.\n\nComplexity pass: nothing to cut; the one-line normalization reuses the store's own validator.",
+  "requiredCheckAtDone": null
+}

@@ -1,5 +1,5 @@
 ---
-# moe-generated: sha=8826b404fe9c
+# moe-generated: sha=2faf05c2f1ef
 name: moe-epic-breakdown
 description: Use when an architect is turning an epic into a set of tasks (moe.create_task), before planning any single one. Covers where to cut the seams, how to size and order tasks, what each task's Definition of Done must carry, and the mandatory final integration-and-hardening task. Distinct from moe-planning, which plans the steps inside one task.
 when_to_use: Architect facing an epic with no tasks yet, or an epic whose remaining work needs re-slicing. Run this before moe.create_task; run moe-planning later, per task.
@@ -76,7 +76,8 @@ When any cap above is exceeded, split with **SPIDR** — unless a project or epi
 - Producers before consumers. If task B imports what task A creates, A gets the lower `order`.
 - Declare hard build-order dependencies structurally: `moe.create_task { dependsOn: ["task-…"] }`. A `dependsOn` task is withheld from WORKING-status claims until every target is DONE/ARCHIVED (planning proceeds regardless; missing/deleted ids count as satisfied; a mis-declared list is fixed via `moe.set_task_dependencies`). Still say *why* in B's `description` — the field gates, the prose explains.
 - Prefer orderings where the first 2–3 tasks are genuinely independent — that's what lets a fleet parallelize at all.
-- **File-disjoint tasks are the only ones parallel-claimable.** Overlapping `affectedFiles` across WORKING tasks surface as claim-time `fileCollision` warnings. Cut so concurrent-track tasks touch disjoint files; when two tasks must touch the same file, that's a sequencing decision (`order`), not something to talk workers through.
+- **In shared-checkout mode, file-disjoint tasks are the only ones parallel-claimable.** Overlapping `affectedFiles` across WORKING tasks surface as claim-time `fileCollision` warnings. Cut so concurrent-track tasks touch disjoint files; when two tasks must touch the same file, that's a sequencing decision (`order`), not something to talk workers through.
+- **In worktree mode, a shared file is not a dependency.** Worktree mode is on when the control checkout's HEAD is exactly `refs/heads/moe/control` (`git rev-parse --symbolic-full-name HEAD`). Each WORKING task then works in its own worktree on its own branch and lands as one merge onto the target, so non-overlapping hunks in one file merge on their own. A true conflict lands nothing: the bytes are parked on a rescue ref and the task goes back to a worker, never overwritten or auto-resolved. So give task A a `dependsOn` on task B only when B produces something A names (a symbol, tool, setting, or file B creates), never for a shared existing file alone. The claim-time `fileCollision` warning still fires there and is no reason to chain.
 - Tasks land in `BACKLOG` and are human-gated into `PLANNING`; ordering is advice to the human and to the governor, not a lock.
 
 ## What every task must carry
@@ -98,6 +99,8 @@ Skip the pair for trivial slices (config, docs, mechanical renames) — two clai
 ## End the epic with an integration-and-hardening task
 
 Always create one, at the highest `order`, unless the epic is 1–2 tasks total. It exists because verification is concentrated, not smeared — see `moe-planning`'s "Where the gate goes". Mid-epic tasks prove their own slice with focused tests and move on; this task is where the epic actually gets gated.
+
+Designate it with `moe.update_epic { epicId, finalTaskId }` right after `moe.create_task` returns its id: `order` is a per-column sort position that board drags and new rows rewrite, so it cannot name the final task on its own. If the epic later grows past that task (a new closing task replaces it, or work is re-sliced after it), re-designate with `moe.update_epic` and the new id, so `get_context` `isEpicFinal` and the quality gate follow the real closing task.
 
 Its DoD covers what no individual slice could see:
 

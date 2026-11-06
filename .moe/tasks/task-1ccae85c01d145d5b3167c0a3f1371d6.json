@@ -1,0 +1,214 @@
+{
+  "id": "task-1ccae85c01d145d5b3167c0a3f1371d6",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: Bash VM taskless skip prints a second misleading idle reason",
+  "description": "QA hand-forward comment-87cd53fd (M07m3 af8ca2bb): with verified-local and routed mentions but no task, moe-agent.sh prints reason=vm-route then reason=idle ('nothing to answer') from MOE_SKIP_LAUNCH. Confirmed in the launch chain; no host CLI actually runs.\nUnify the diagnostic without changing legacy launches; add an assertion to VR-reload/taskless rows. Separate from M07m's approved capacity/credential/job-retry scope; dependency serializes the overlapping wrapper and harness edits.",
+  "definitionOfDone": [
+    "A verified-local taskless iteration emits one accurate no-launch reason even with routed mentions, and never invokes a host CLI.",
+    "Legacy taskless diagnostics and launch behavior remain unchanged; focused wrapper rows plus parity pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (DoD 1, 2), in scripts/tests/postflight-vm-route.sh. Line numbers are approximate; anchor on the quoted text.\n\nAdd a helper next to vmr_fail: `vmr_one_reason ROW REASON`. It fails the row unless $OUT holds exactly one `MOE_TASKLESS_NO_LAUNCH reason=` line, and that line starts `MOE_TASKLESS_NO_LAUNCH reason=REASON role=`. Count with `grep -c ... || true`, so a zero count stays set -e-safe.\n\n(a) Today's path. After the T_ROWS loop (~:135), with legacy readiness (\"$LEGACY\" - -):\n- T-taskless-idle, FAKE_CLAIM_MODE=idle: exit 0, no $REC, `vmr_one_reason T-taskless-idle idle`.\n- T-taskless-mention, FAKE_CLAIM_MODE=idle FAKE_MENTION=1: `vmr_launched` (the notification-only CLI still runs, and its claim is unmarked) and zero MOE_TASKLESS_NO_LAUNCH lines.\n- Add both rows to the `[vm route] ok today's path` line.\n\n(b) vmj_rows (~:263). Mode `taskless` expects the seats ['seat-start','seat-stop'], as `shared` does: the gate starts the VM, no seat-job runs, and the exit trap stops it. Leave every other check unchanged: no host CLI ($REC), no token, claims marked vm, seat-start before the first claim, and the last seat row before deregister_worker.\n\n(c) Seat-job block. After VR-sigint and before the `[seat job] VR-reload` echo (~:480), with VMR_ARGS=(--no-loop --poll-interval 0) set explicitly:\n- VR-taskless, \"$READY\" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1: exit 0, `vmr_one_reason VR-taskless vm-route`, `vmj_rows taskless`.\n- VR-taskless-teamless, the same plus FAKE_JOIN_FULL=1: exit 1 with exactly one MOE_SEAT_UNREGISTERED (the one-shot teamless tail, by design), reason vm-route, `vmj_rows taskless`.\n- VR-taskless-idle, FAKE_CLAIM_MODE=idle only: exit 0, reason idle (the legacy rule already skipped: nothing to answer), `vmj_rows taskless`.\n\n(d) VR-reload (~:489). Keep every check, and add one: the count of `MOE_TASKLESS_NO_LAUNCH reason=` lines equals the count of `MOE_TASKLESS_NO_LAUNCH reason=vm-route ` lines.\n\n(e) Name the new rows in the `[seat job] PASS` line (~:497).\n\nOn the current wrapper, VR-taskless, VR-taskless-teamless and the VR-reload count are RED (vm-route, then an idle or teamless line). T-taskless-* and VR-taskless-idle are guards that pass before and after the fix. Error handling in the rows: every failed check goes through vmr_fail, which dumps $OUT. Edit the file with your session's TOOL-witnessed editor (Edit/Write, apply_patch or Serena), then run bash -n on it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Added vmr_one_reason, T-taskless-idle/mention, vmj_rows taskless mode, VR-taskless/-teamless/-idle, VR-reload count assertion. bash -n OK.",
+      "startedAt": "2026-11-03T22:17:43.813Z",
+      "completedAt": "2026-11-03T22:18:40.253Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix (DoD 1, 2) in scripts/moe-agent.sh. Change only the single taskless launch decision and its no-launch chain:\n- At `MOE_SKIP_LAUNCH=false` (~:11034), also reset `VM_TASKLESS_SKIP=false`. The flag resets every iteration, before anything reads it.\n- In the VM-route block (~:11045-11048), keep the condition and `MOE_SKIP_LAUNCH=true; LAUNCH_PROBE=false`, add `VM_TASKLESS_SKIP=true`, and delete the block's echo.\n- In `if [ \"$MOE_SKIP_LAUNCH\" = true ]` (~:11070), make the first branch `if [ \"$VM_TASKLESS_SKIP\" = true ]; then`. It echoes the vm-route line, moved byte-identical: `MOE_TASKLESS_NO_LAUNCH reason=vm-route role=$ROLE worker=$WORKER_ID - a verified-local seat runs no agent CLI on the host, and a taskless session has no VM job.` The existing claim-failed, teamless and idle branches follow unchanged as elif/else.\n- Add one short comment: each skipped iteration prints one reason. vm-route comes first because only the route stopped a launch the legacy rules allow: a routed mention, a claim-failed or teamless seat with mentions, or the unparseable-claim fallback. When the legacy rule skipped first, its reason stands.\n\nKeep unchanged:\n- the legacy first block, including the MOE_LAUNCH_PROBE echo (task-cc4213c0 covers the carried-over outage);\n- the post-launch classification (~:11923);\n- the team-join code near ~:2571;\n- moe-agent.ps1, the M07n/M07n3 twin (advisory comment-32161fb0 on task-62ec51f1).\n\nThe flag is a plain shell variable: not exported and not MOE_-prefixed. parity-check compares MOE_* code families, and the T-* rows byte-compare the CLI env.\n\nError handling: this adds no failure path. Under set -e the flag is assigned before it is read, and a VM_ROUTE=false iteration never sets it, so every legacy line stays byte-identical.\n\nEdit your worktree copy with your TOOL-witnessed editor, then run `bash -n scripts/moe-agent.sh`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "VM_TASKLESS_SKIP flag; vm-route echo moved byte-identical to first branch of the no-launch chain. bash -n OK.",
+      "startedAt": "2026-11-03T22:18:41.188Z",
+      "completedAt": "2026-11-03T22:19:00.764Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify once (DoD 2), from the task worktree root, after the last edit:\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh'`\n\nIts fresh output is the complete_task evidence.\n- The harness can pass the 600 s foreground cap. Run it in the background with job control, writing to a log, and poll for the EXIT line, per mem:gotcha-qa-session-env-and-signals-leak-into-harness. VR-sigint and the VE-wait rows send SIGINT, so check that SigIgn bit 0x2 is clear.\n- Don't edit moe-agent.sh while the run is live (mem:gotcha-editing-wrapper-while-harness-runs).\n- Kill only PIDs your session recorded, never by name.\n- A full postflight.sh run is not required. The DoD asks for the focused rows plus parity, the T-taskless rows pin the legacy taskless lines, and the qualityGate (parity + lint) runs at landing.\n\nError handling for a red run: read the failing row's dumped output, fix that cause in step 1's or step 2's file, and re-run the whole command. Never weaken a row.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Gate green (bash -n, parity PASS, postflight-vm-route PASS, EXIT=0; SigIgn 0x4, job control). First run was red on VR-taskless-teamless: a seat whose team join fails reads no chat (wrapper comment 'While the join fails the seat reads no chat'), so it has no routed mention, the legacy teamless rule skips first, and the single accurate line is reason=teamless, not vm-route as the plan assumed. Row corrected to expect teamless once (still exactly one line, no host CLI, seat start/stop rows).",
+      "startedAt": "2026-11-03T22:19:01.865Z",
+      "completedAt": "2026-11-03T22:28:27.689Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Last: an adversarial self-review of the two-file diff against the task branch base.\n- Enumerate every reachable VM-route taskless case and its single line. These print vm-route: a mention, a mention on a teamless seat, a mention after a failed claim, and the unparseable-claim fallback. No mention prints the legacy reason, once.\n- A carried-over launch outage still prints MOE_LAUNCH_PROBE. That case belongs to task-cc4213c0, not this row.\n- VM_ROUTE implies AUTO_CLAIM and a worker or QA role, because the gate refuses everything else. A governor or a --no-auto-claim seat never reaches the flag.\n- The flag resets every iteration, and each `continue` path re-enters at the loop top.\n- Legacy output, the vm-route text and the T-* masked CLI env are byte-identical.\n- No new MOE_* name exists, and parity passes.\n- The new rows fail on HEAD's wrapper, and no existing assertion was relaxed.\n\nIf the review changes any byte, re-run step 3 and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of the two-file diff, no byte changed after the green gate. Cases: routed mention on a joined seat -> VM block -> one vm-route line (VR-taskless, VR-reload); no mention -> legacy skip first -> one idle line (VR-taskless-idle); teamless/join-failed seat reads no chat so legacy teamless skips first, one teamless line (VR-taskless-teamless); claim-failed with mentions and unparseable-claim fallback reach the VM block and print vm-route via the flag. VM_ROUTE implies AUTO_CLAIM and worker/QA role, flag is a plain unexported non-MOE_ variable reset at the decision each iteration; VM_ROUTE=false never sets it, so legacy lines are byte-identical (T-taskless-idle/mention pin them). Carried-over launch outage still prints MOE_LAUNCH_PROBE (task-cc4213c0). No existing assertion relaxed. Deviation: plan/acceptance expected reason=vm-route for VR-taskless-teamless, but a join-failed seat reads no chat so it cannot have a mention; the row expects the accurate single reason=teamless.",
+      "startedAt": "2026-11-03T22:28:28.769Z",
+      "completedAt": "2026-11-03T22:28:33.994Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 20:44Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). This row was worker-filed, and its only dependsOn, CQ-M07m 828e7d21, reached DONE at 20:43:17Z (landing 5592bcc0). Placement (worktree mode, no new edge): keep the edit inside moe-agent.sh's VM-route taskless/skip branch. Open row 6b8fb0ee also edits moe-agent.sh, but only the team-join match at :2571, so don't reflow code near it.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-828e7d21602e4cf2a0f242e024db7dea"
+  ],
+  "priority": "LOW",
+  "order": 238.5,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:52:12.386Z",
+  "updatedAt": "2026-11-04T19:20:41.416Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T20:43:51.548Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:27:43.047Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:40:06.393Z",
+    "wallClockMs": 4343346
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-ed0f6a9e",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:15:24.291Z",
+  "executionContract": {
+    "intendedBehavior": "On a verified-local (VM-route) taskless iteration, scripts/moe-agent.sh prints exactly one MOE_TASKLESS_NO_LAUNCH line and runs no host CLI.\n- reason=vm-route when only the route stopped a launch the legacy rules allow: a routed mention, a claim-failed or teamless seat with mentions, or the unparseable-claim fallback.\n- The legacy reason (idle, claim-failed or teamless), once, when the legacy rule already skipped.\nLegacy (non-VM) taskless diagnostics and launches are unchanged.",
+    "acceptanceCriteria": [
+      "VR-taskless and VR-taskless-teamless print exactly one line, reason=vm-route, run no host CLI, and show seat rows seat-start then seat-stop.",
+      "VR-taskless-idle prints exactly one reason=idle line; VR-reload prints only vm-route reason lines.",
+      "T-taskless-idle prints one reason=idle line with no CLI; T-taskless-mention launches the notification-only CLI and prints no MOE_TASKLESS_NO_LAUNCH line."
+    ],
+    "invariants": [
+      "Exactly one MOE_TASKLESS_NO_LAUNCH line per skipped iteration.",
+      "A VM_ROUTE=false iteration never sets VM_TASKLESS_SKIP, so the legacy chain and its lines are byte-identical.",
+      "The vm-route line text is unchanged.",
+      "No new exported or MOE_-prefixed name, and no change to the CLI argv or env."
+    ],
+    "compatibility": [
+      "Legacy idle, claim-failed and teamless lines, MOE_LAUNCH_PROBE and launch-outage handling are unchanged.",
+      "moe-agent.ps1 is untouched; the M07n/M07n3 rows own the twin."
+    ],
+    "approvedScope": [
+      "VM_TASKLESS_SKIP: a new per-iteration shell flag in the single taskless launch decision",
+      "The first branch of the MOE_SKIP_LAUNCH no-launch chain",
+      "Harness: the vmr_one_reason helper, vmj_rows mode taskless, rows T-taskless-idle, T-taskless-mention, VR-taskless, VR-taskless-teamless and VR-taskless-idle, and the VR-reload count assertion"
+    ],
+    "reuse": [
+      "The existing vm-route line, the vmr_run, vmr_launched, vmj_rows and vmr_fail helpers, and the fake-proxy knobs; nothing new in the fixture."
+    ],
+    "sourceAssumptions": [
+      "moe-agent.sh ~:11034-11048: the decision block sets MOE_SKIP_LAUNCH, and its VM block echoes reason=vm-route.",
+      "moe-agent.sh ~:11070-11077: the no-launch chain prints claim-failed, teamless or idle.",
+      "moe-agent.sh ~:11953: outage entry requires VM_ROUTE != true.",
+      "The verified-local gate refuses --no-auto-claim (MOE_VERIFIED_LOCAL_NO_AUTO_CLAIM) before VM_ROUTE=true.",
+      "postflight-fake-proxy.js: FAKE_CLAIM_MODE=idle, FAKE_MENTION=1 and FAKE_JOIN_FULL=1.",
+      "postflight-vm-route.sh ~:263: the vmj_rows seat expectation."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. Guard the chain's second echo vs. move the vm-route echo into the chain. Chose the move: one if/elif prints every no-launch reason.\n2. Let vm-route always win on the VM route. Rejected: with nothing to answer, the legacy rule skips first, and idle is both accurate and today's output (pinned by VR-taskless-idle).\n3. Also fix the MOE_LAUNCH_PROBE line from hand-forward comment-87cd53fd (a). Rejected: since M07m (:11953), a VM route never enters an outage. The line now appears only when a legacy outage carries into a verified-local iteration, which needs a mid-run readiness flip fixture and an outage behavior change. That is filed as task-cc4213c0 (it depends on this row).\n4. Fix the ps1 twin here. Rejected: the M07n3/M07n rows are in flight on moe-agent.ps1. Advisory comment-32161fb0 on task-62ec51f1.",
+    "codebaseInsights": "- The readiness gate sets VM_ROUTE per iteration. It refuses --no-auto-claim and non-claude/codex CLIs first, so VM_ROUTE=true implies AUTO_CLAIM and a worker or QA role.\n- The existing VR-reload run (FAKE_CLAIM_MODE=idle FAKE_MENTION=1) already reproduces the bug: vm-route, then idle.\n- parity-check compares only the MOE_COMMIT_/ATTR_/CHECKPOINT_/ATTRIBUTION_/ACCOUNT_/WORKTREE_/LAND_/CONTROL_/BOARD_/PUSH_/MIGRATION_ families plus fixed prose, so a plain flag is parity-neutral.\n- No docs name MOE_TASKLESS_NO_LAUNCH.\n- The EXIT trap always runs seat_vm_stop, then deregister_worker, so vmj_rows' ordering check holds on the teamless exit 1.",
+    "risks": "- Harness environment: run it under env -i with nvm Node 24, and launch the background run with job control (the SIGINT rows).\n- Do not edit the wrapper mid-run.\n- VR-reload switches VMR_ARGS to --loop, so put the new one-shot rows before it and set VMR_ARGS explicitly.\n- The teamless one-shot exits 1 by design (MOE_SEAT_UNREGISTERED).\n- The T-* rows byte-compare the CLI env: never export the flag.\n- The worktree wrapper is edited in place with a TOOL-witnessed editor; no temp+mv.",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "f159784eaa0801762f6a617e47dcade1fb83c753",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:15:24.325Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:17:43.813Z",
+  "reviewStartedAt": "2026-11-03T22:28:49.341Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight-vm-route.sh'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n[vm route] ok today's path (legacy x2, observe, unreadable, refuse, unknown, fail, 2 malformed, taskless idle and mention)\n[seat job] VR-taskless: one accurate no-launch reason, no host CLI\n[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle, reload\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] ok G1-G7 and G8\nPASS postflight-vm-route.sh\nEXIT=0",
+    "reportedAt": "2026-11-03T22:28:49.341Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/postflight-vm-route.sh",
+    "scripts/moe-agent.sh"
+  ],
+  "completionSummary": "A verified-local taskless iteration in scripts/moe-agent.sh now prints exactly one MOE_TASKLESS_NO_LAUNCH line and still never invokes a host CLI. The VM-route block sets a per-iteration plain flag VM_TASKLESS_SKIP (reset beside MOE_SKIP_LAUNCH=false, unexported, not MOE_-prefixed) instead of echoing. The unchanged vm-route line is the first branch of the no-launch chain, so claim-failed, teamless and idle follow only when a legacy rule skipped first. VM_ROUTE=false never sets the flag, so legacy lines are byte-identical.\n\nHarness (postflight-vm-route.sh) additions:\n- vmr_one_reason helper.\n- T-taskless-idle: one reason=idle line, no CLI.\n- T-taskless-mention: launches the CLI, prints no no-launch line.\n- vmj_rows taskless mode: seat-start then seat-stop.\n- VR-taskless: one vm-route line.\n- VR-taskless-idle: one idle line.\n- VR-taskless-teamless: one teamless line.\n- VR-reload: every reason line is vm-route.\n\nDeviation from plan and acceptance criterion: VR-taskless-teamless expects reason=teamless, not vm-route. A seat whose join fails reads no chat (SEAT_REGISTERED false), so it has no routed mention and the legacy teamless rule skips first; the first gate run proved it, and the single accurate line is teamless. See mem:gotcha-teamless-seat-reads-no-chat-no-mentions.\n\nNot covered: the carried-over launch outage that still prints MOE_LAUNCH_PROBE (task-cc4213c0) and the ps1 twin (M07n/M07n3). I did not run the new rows against HEAD's wrapper to prove them red.",
+  "commits": [
+    {
+      "sha": "3586957fa94abf27e885075de127bab6ad395acd",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-ed0f6a9e@2026-11-03T22:15:51Z",
+      "paths": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-ed0f6a9e",
+      "recordedAt": "2026-11-03T22:29:59.767Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T21:27:41Z",
+    "at": "2026-11-03T23:09:05.855Z"
+  },
+  "completedAt": "2026-11-03T22:40:06.393Z",
+  "reviewCompletedAt": "2026-11-03T22:40:06.393Z",
+  "reviewSummary": "Reviewed landed completion 3586957f (on moe/work-2026-10-24; worktree files byte-identical). +43/-7, only the 2 declared files; ps1 untouched.\n\nRe-ran task.verification on a git-archive snapshot of 3586957f outside the repo (env -i, Node 24, job control, SigIgn 0x5): bash -n, parity-check PASS, postflight-vm-route PASS, EXIT=0, including the new T-taskless rows and '[seat job] PASS ... taskless, taskless-teamless, taskless-idle, reload'.\n\nMutant check (worker skipped it): the committed harness against the PRE-fix wrapper (3586957f^) turns VR-taskless red with the exact defect, vm-route then idle, 'saw 2'. T-taskless-idle and T-taskless-mention pass on both wrappers, so legacy taskless output is unchanged.\n\nCode audit: VM_TASKLESS_SKIP is a plain unexported non-MOE_ variable, reset beside MOE_SKIP_LAUNCH=false each iteration, set only in the VM_ROUTE block, read only in the no-launch chain (no other use, no set -u hazard). The vm-route text is byte-identical, now the first branch; claim-failed, teamless and idle follow. VM_ROUTE=false never sets the flag. No argv or env change.\n\nDoD 1 (one accurate reason, no host CLI): VR-taskless, VR-taskless-idle, VR-reload count and vmj_rows taskless (seat-start, seat-stop, no host CLI, no token). DoD 2: legacy lines unchanged; focused rows and parity pass.\n\nAccepted deviation: the criterion expected vm-route for VR-taskless-teamless. I checked moe-agent.sh ~:9965-9975 and :10060: while the join fails SEAT_REGISTERED is false, no chat is read and the mention count stays 0, so the legacy teamless rule skips first. The one accurate line is reason=teamless.\n\nUnverified, not defects: claim-failed or NO_TEAM_MEMBERSHIP-after-join seats with mentions and the unparseable-claim fallback print vm-route by construction but have no fixture. The carried-over outage still prints MOE_LAUNCH_PROBE (task-cc4213c0). The ps1 twin is M07n/M07n3; the PS harness was not run (not in DoD).",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,248 @@
+{
+  "id": "task-55a5a9f9644943b1b13ee3e609a2255f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: request_replan frees the caller's seat but answers nextAction moe.wait_for_task \"pick up a different task\", the in-session claim hint report_blocked's seat-freeing arm dropped in 43f6dd55, so a worker that follows it claims a second task in a session whose pinned attempt identity makes every start_step there fail ATTEMPT_SUPERSEDED",
+  "description": "Found by defect hunt #10 (task-49a2c07f, architect-1dd28c7c) on 2026-11-03. The holder re-ran the repro and re-derived the lines below at HEAD 677d051a.\n\nPROBLEM\n- request_replan (requestReplan.ts:108-111) answers `nextAction: { tool: 'moe.wait_for_task', args: { workerId, statuses: ['WORKING'] }, reason: 'Replan requested; wait for an architect to re-plan or pick up a different task.' }`.\n- By the time it answers, its PLANNING write has already cleared the assignee and closed the attempt (MCP_SERVER.md \"Close on hand-back\").\n- Its seat-freeing sibling refuses that hint on purpose. report_blocked (reportBlocked.ts:485-500, :528):\n  - its comment reads \"A claim hint here contradicts the one-task-per-wrapper contract … Return terminal handoff guidance, never an executable next-task hint\";\n  - it returns nextAction undefined when it frees the seat;\n  - it returns sessionHandoff { action: 'END_SESSION', taskId, workerId, reason } for the seat, never for a governor, and not when the seat's record already names another currentTaskId.\n- That fix is 43f6dd55 (2026-09-10). It never reached request_replan.\n- No role doc or skill mentions request_replan, so this hint is the only next step a worker gets.\n- A wrapper-launched worker that follows it waits, wakes and claims another WORKING task inside the same session. moe-proxy stamps the session's MOE_ATTEMPT_ID/MOE_ATTEMPT_GENERATION onto start_step, and those still name the replanned task's closed attempt, so every start_step there is refused ATTEMPT_SUPERSEDED.\n- Otherwise the seat parks in wait_for_task, which delays the wrapper's exit checkpoint of the replanned task's bytes.\n\nEVIDENCE: repro at HEAD 677d051a, run in a git-archive snapshot outside the checkout\n- Files: /mnt/d/moe-scratch/hunt-49a2c07f/B/zzHuntB_replanHandoff.test.ts, output in R_replanHandoff.out.txt.\n- Command: `cd packages/moe-daemon && NO_COLOR=1 npx vitest run src/tools/zzHuntB_replanHandoff.test.ts`\n- Control (passes): report_blocked by the assignee frees the seat, returns no nextAction and returns sessionHandoff END_SESSION.\n- Fails: request_replan by the assignee gives `- \"nextActionTool\": undefined, + \"nextActionTool\": \"moe.wait_for_task\"` and `- \"sessionHandoff\": \"END_SESSION\", + \"sessionHandoff\": undefined`.\n- Evidence case (passes at HEAD), following the hint:\n  1. wait_for_task returns a claim hint.\n  2. claim_next_task assigns task-b to worker-1.\n  3. start_step on task-b, carrying the pinned task-a identity, is refused with codeName ATTEMPT_SUPERSEDED. The repro runs the default profile, not verified-local.\n- Result: Tests 1 failed | 2 passed (3).\n\nFIX DIRECTION\n- In requestReplan.ts, mirror report_blocked's seat-freeing arm:\n  - return no executable nextAction (no `tool`);\n  - return sessionHandoff { action: 'END_SESSION', taskId, workerId, reason } for the prior assignee, or for the caller when the task had no assignee and the caller is not a governor (resolveWorkerRole);\n  - skip the handoff when that seat's worker record already names another currentTaskId;\n  - reuse report_blocked's reason wording: \"End this session so the wrapper can checkpoint the task it launched. Do not call moe.claim_next_task or moe.wait_for_task inside this session.\"\n- The moe-account-switch mod already honours a top-level END_SESSION for the seat (scripts/CLAUDE.md, Claude account rotation), so no wrapper or mod change is needed.\n- Everything else stays as today: the PLANNING status, the null assignee, priorAttempt, the closed attempt and the #architects line.\n- docs/MCP_SERVER.md: the request_replan Returns block (:2880-2892) documents `nextAction: { tool: \"moe.wait_for_task\", args, reason }` and goes stale. 0adea941 holds that file at filing time, so it is not in this row's files. Add the sync only if lanes.js shows the file free when you plan; otherwise the governor files it.\n\nFILES\n- packages/moe-daemon/src/tools/requestReplan.ts\n- packages/moe-daemon/src/tools/requestReplan.test.ts (new; the tool has no test file of its own)\n- Neither file is held at filing time.\n\nVERIFICATION\nRun vitest in a snapshot or the task worktree, never in the shared checkout: `npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts`.",
+  "definitionOfDone": [
+    "In the new requestReplan.test.ts, an assignee's request_replan returns no nextAction whose tool is moe.wait_for_task or moe.claim_next_task, and returns sessionHandoff.action 'END_SESSION' carrying that taskId and workerId.",
+    "In the same file, a governor's request_replan on an unassigned WORKING task returns no END_SESSION handoff, and neither does a call whose seat's worker record already names another currentTaskId.",
+    "In the same file, the task still ends PLANNING with assignedWorkerId null, priorAttempt set and its attempt closed. `npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts` passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first; this step is RED, which step 4's negative control proves. Follow test-driven-development.\n\nCreate packages/moe-daemon/src/tools/requestReplan.test.ts in your task worktree with the Write tool. The tool has no test file of its own. The architect dry-ran a prototype at tip 8ca8d389: /mnt/d/moe-scratch/plan-55a5a9f9/requestReplan.test.ts. Read it and write the file from it. Do not cp it: a shell copy leaves no TOOL witness.\n\nFixture (ToolTestHarness, as in reportBlocked.test.ts):\n- beforeEach:\n  - vi.stubEnv('MOE_WORKER_ID', '') and vi.stubEnv('MOE_TASK_ID', '');\n  - h.init(), h.setupMoeFolder({ schemaVersion: 6 } as never) and h.createEpic();\n  - task-a and task-b, both WORKING, each with a one-step PENDING plan (order 1 and 2);\n  - worker-1, IDLE;\n  - then await h.state.load().\n- afterEach: await flushActivityLog(h.state), then h.state.clearEmitter(), vi.unstubAllEnvs() and h.cleanup().\n- Helper onTeam(workerId, role): create the worker if it is missing, find or create the team with that role (h.state.createTeam({ name, role })), then h.state.addTeamMember.\n- Helper replan(args) = requestReplanTool(h.state).handler({ taskId: 'task-a', reason, ...args }, h.state).\n\nKeep these title prefixes exactly: step 4 counts the failures.\n\n(r1) The assignee.\n- First claimNextTaskTool(h.state).handler({ workerId: 'worker-1', statuses: ['WORKING'], taskId: 'task-a' }, h.state), which opens an attempt. Then replan({ workerId: 'worker-1' }).\n- res.nextAction is undefined.\n- res.sessionHandoff toMatchObject { action: 'END_SESSION', taskId: 'task-a', workerId: 'worker-1' }, and its reason toContain 'Do not call moe.claim_next_task or moe.wait_for_task'.\n- task-a toMatchObject { status: 'PLANNING', assignedWorkerId: null, priorAttempt: { reason } }, and priorAttempt.implementationPlan has length 1.\n- listAttempts(h.state) (from ../state/attemptStore.js) filtered to task-a is non-empty, and every phase is 'closed'.\n- worker-1 toMatchObject { status: 'IDLE', currentTaskId: null }.\n\n(r2) it.each over [['governor-1', true], ['governor-2', false]]:\n- with true, put the governor on a governor team through onTeam; with false, create the record teamless, so only the id prefix makes it a governor;\n- set status GOVERNING and replan the unassigned task-a as the governor;\n- sessionHandoff is undefined and nextAction is undefined;\n- the governor's status is still GOVERNING;\n- task-a is PLANNING and unassigned.\n\n(r3) A dangling assignment.\n- h.state.updateTask('task-a', { assignedWorkerId: 'worker-1' }), then h.state.updateWorker('worker-1', { currentTaskId: 'task-b', status: 'CODING' }), then replan as worker-1.\n- sessionHandoff is undefined.\n- worker-1 is still { currentTaskId: 'task-b', status: 'CODING' }. At base this is the case that catches the unguarded touch nulling the task-b pointer.\n- task-a is PLANNING and unassigned.\n\n(r4) The row already lost its assignee; the caller is a non-governor. Replan the unassigned task-a as worker-1:\n- END_SESSION addressed to worker-1;\n- nextAction is undefined.\n\nDo not run vitest in the shared checkout (global rail): steps 3 and 4 run it in mktemp snapshots.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.test.ts"
+      ],
+      "note": "New requestReplan.test.ts with 5 cases (r1, r2 x2, r3, r4), from the architect prototype.",
+      "startedAt": "2026-11-03T20:55:41.943Z",
+      "completedAt": "2026-11-03T20:55:55.766Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "GREEN: request_replan gives the freed seat an END_SESSION and drops the claim hint. This is the twin of report_blocked's seat-freeing arm (reportBlocked.ts:367-387 and :485-503) and of fix 43f6dd55.\n\nEdit packages/moe-daemon/src/tools/requestReplan.ts with the Edit tool only. The architect's dry-run diff (+23/-8) is /mnt/d/moe-scratch/plan-55a5a9f9/requestReplan.prototype.diff.\n\n(a) Import: `import { resolveWorkerRole } from '../util/workerRole.js';`.\n\n(b) Replace the unguarded block at :81-86 (\"Worker is done with this task; touchWorker...\") with report_blocked's guard:\n- `const prevAssignee = task.assignedWorkerId;` (`task` is the pre-write snapshot).\n- When it is set, inside the existing try/catch (never block the tool):\n  `const prevWorker = state.getWorker(prevAssignee); if (prevWorker && (prevWorker.currentTaskId === task.id || prevWorker.currentTaskId == null)) await state.touchWorker(prevAssignee, { status: 'IDLE', currentTaskId: null });`\n- Add a one-line comment: a pointer naming a different task means that seat is coding it, and resetting it mid-step is the two-pointer drift report_blocked guards against.\n- Why the guard is needed: updateTask's status-change cascade (taskStore.ts:629-639) already releases a pointer that names this task. Today's unguarded touch is the only write that wipes a dangling seat (case r3).\n\n(c) After the two chat posts, compute the handoff exactly as report_blocked does:\n- `const callerSeat = params.workerId && resolveWorkerRole(state, params.workerId) !== 'governor' ? params.workerId : undefined;`\n- `const seatWorker = prevAssignee || callerSeat;`\n- `const seatTaskId = seatWorker ? state.getWorker(seatWorker)?.currentTaskId : undefined;`\n- `const sessionHandoff = seatWorker && !seatTaskId ? { action: 'END_SESSION', taskId: task.id, workerId: seatWorker, reason: <report_blocked's four sentences, verbatim> } : undefined;`\n- The reason: 'End this session so the wrapper can checkpoint the task it launched. ' + 'Do not call moe.claim_next_task or moe.wait_for_task inside this session. ' + 'A new conversation turn is not a fresh preflight; the next task needs a new wrapper session and baseline. ' + 'If this is an interactive TUI, return control to its operator so the CLI can exit normally.'\n- Comment it as the twin of reportBlocked.ts's sessionHandoff. A governor never holds a task, so its replan must not end the governance TUI. The moe-account-switch mod honours any top-level END_SESSION addressed to its seat on every moe reply (scripts/mods/moe-account-switch/hooks/register.ts:84-92, :284).\n- Use resolveWorkerRole (team role first, then id prefix), never team.role alone, so a teamless governor is excluded too.\n\n(d) In the return object:\n- delete the whole nextAction property (:108-112);\n- add `...(sessionHandoff ? { sessionHandoff } : {})`;\n- append ' Seat freed — this response does not start another task session.' to message.\n\n(e) Append one sentence to the tool description: 'Frees the seat: the reply carries sessionHandoff END_SESSION for it, so end the session; do not claim or wait inside it.'\n\nLeave everything else byte-for-byte:\n- the WORKING-only check and assertWorkerOwns;\n- priorAttempt;\n- the updateTask patch with 'TASK_REOPENED' and the caller as actor;\n- the #general line with parseMentions:false, and the #architects line.\n\nupdateTask's cascade still clears the assignee and closes the attempt on hand-back.\n\nDo not edit docs/MCP_SERVER.md: task-0adea941 holds it. Its request_replan Returns block (:2885-2893) still lists nextAction, and that sync is the governor's follow-up.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Implemented per plan; also synced MCP_SERVER.md request_replan section per governor comment (20:50Z).",
+      "startedAt": "2026-11-03T20:55:56.922Z",
+      "completedAt": "2026-11-03T20:56:20.547Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification (DoD 3). Run this ONCE from the task worktree root after steps 1-2, exactly:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts src/tools/taskMoveActor.test.ts src/tools/echoedReasonNotices.test.ts\n\nWhat it does:\n- Copies HEAD's packages/moe-daemon into a mktemp snapshot and overlays the two files. They are uncommitted in the worktree; for QA after landing they equal HEAD.\n- Runs tsc --noEmit, which type-checks the sources (tsconfig excludes tests).\n- Runs the DoD vitest set, plus the other two unit callers of requestReplanTool (taskMoveActor and echoedReasonNotices).\n- Never runs in the shared checkout (global rail).\n\nThe architect dry-ran it at 8ca8d389 with the prototype: exit 0, 4 files, 74 tests, about 7 s. The e2e caller (src/__e2e__/workstreamComposition.e2e.test.ts) also passed against the prototype.\n\nIts fresh output is complete_task's verification { command, exitCode: 0, outputTail }.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot run: tsc clean, 4 files / 74 tests passed.",
+      "startedAt": "2026-11-03T20:56:21.576Z",
+      "completedAt": "2026-11-03T20:56:41.923Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff. This is the final step: load the adversarial-self-review skill.\n\n(1) Negative control: the new tests must fail on the old code. Run from the worktree root:\n\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\")\" packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/requestReplan.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests \" \"$S/l\"; grep -aqE \"^ +Tests +5 failed \\(5\\)\" \"$S/l\" && echo RED-AT-BASE; }\n\n- Expect 'Tests  5 failed (5)' and RED-AT-BASE: the base source plus only the new test file. The architect's dry run printed exactly that.\n- Quote both lines in the completion summary.\n- Mutate nothing in the worktree (mem:convention-daemon-vitest-mutant-checkref).\n- QA variant after landing: replace the merge-base with <completion sha>^.\n\n(2) No governor, by team role or by id prefix, ever gets END_SESSION (r2). Otherwise the mod would end the governance TUI mid-incident.\n\n(3) A seat whose pointer names another task keeps its pointer and status, and gets no handoff (r3). Never yank a live seat.\n\n(4) A workerId-less (human or plugin) call on an assigned row gets a handoff addressed to the prior assignee. That mirrors report_blocked and is harmless: the mod acts only on a handoff addressed to its own MOE_WORKER_ID.\n\n(5) Concurrency: request_replan is not `blocking`, so McpAdapter runs it under the global state mutex. The post-write getWorker reads are consistent, and a second replan of the same row is refused by the WORKING-only check.\n\n(6) Error handling: the touch stays inside try/catch. A missing worker record means getWorker returns undefined, and the handoff is still sent, as in report_blocked.\n\n(7) Contract: the only removal is nextAction, on purpose (43f6dd55's rule).\n- No daemon test, script, mod or IDE plugin reads request_replan's nextAction: `grep -rn request_replan scripts moe-jetbrains/src/main moe-vscode/src` returns nothing.\n- In the completion summary, note that docs/MCP_SERVER.md :2885-2893 still documents nextAction (held by 0adea941), so the governor can file the sync.\n\n(8) The diff touches only the two planned files: about +23/-8 runtime lines and about 90 test lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/requestReplan.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/requestReplan.ts",
+        "packages/moe-daemon/src/tools/requestReplan.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Negative control at merge-base: \"Tests  5 failed (5)\" + RED-AT-BASE. Governor/dangling-seat/no-nextAction cases covered by r2/r3/r1. No scripts/IDE reads request_replan nextAction (grep empty).",
+      "startedAt": "2026-11-03T20:56:42.991Z",
+      "completedAt": "2026-11-03T20:57:06.018Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 423.7,
+  "comments": [
+    {
+      "id": "comment-9c082ee0516a44c1ae4cf2aaeeb68108",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling, 20:51Z: task-0adea941 is DONE, so docs/MCP_SERVER.md is free. Include this row's one-line MCP_SERVER.md sync (request_replan's Returns block, about :2880-2892) in that tool's own section. Do it even if lanes.js shows task-a024ac57 holding the file: a024ac57 edits only the claim_next_task and wait_for_task sections, and worktree-mode merge-tree lands distinct sections cleanly. Don't defer the sync.",
+      "timestamp": "2026-11-03T20:50:37.696Z"
+    },
+    {
+      "id": "comment-bba442bd20e24adba89387dca71eede2",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T21:28:20.254Z",
+      "content": "Landing unlanded (contention) 1 time(s) in a row; attempt attempt-559c4ae2a17b444585ef56d5e6f84b22 (generation 2); paths: (none reported); rescue ref: refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z; target tip: unknown; task WORKING."
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:41:48.670Z",
+  "updatedAt": "2026-11-04T19:20:44.653Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:45:25.436Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:02:40.834Z",
+    "wallClockMs": 4635398
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-8cf0816c",
+    "worker-26483323",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:52:58.321Z",
+  "executionContract": {
+    "intendedBehavior": "moe.request_replan still moves a WORKING task to PLANNING. The assignee is cleared, the plan is snapshotted into priorAttempt, the attempt is closed on hand-back, and the #general and #architects lines are posted. Because that frees the seat, its reply no longer carries a nextAction: no moe.wait_for_task or moe.claim_next_task hint. Instead it carries sessionHandoff { action: 'END_SESSION', taskId, workerId, reason }, with report_blocked's reason text. It is addressed to the prior assignee, or to a non-governor caller when the row had no assignee. No handoff goes to a governor (by team role or id prefix). No handoff goes when that seat's worker record still names another currentTaskId, and the call leaves that dangling seat's pointer and status untouched.",
+    "acceptanceCriteria": [
+      "An assignee's request_replan returns no nextAction, and returns sessionHandoff.action 'END_SESSION' with that taskId and workerId; its reason says not to call moe.claim_next_task or moe.wait_for_task.",
+      "A governor's request_replan (governor team, or a teamless governor-prefixed id) on an unassigned WORKING task returns no sessionHandoff and leaves the governor's status unchanged.",
+      "When the seat's worker record already names another currentTaskId, request_replan returns no sessionHandoff and leaves that record's currentTaskId and status unchanged.",
+      "The task still ends PLANNING with assignedWorkerId null, priorAttempt set, and its attempt closed.",
+      "A non-governor caller replanning a row that already lost its assignee gets END_SESSION addressed to itself."
+    ],
+    "invariants": [
+      "request_replan never resets a worker record whose currentTaskId names a different task.",
+      "A governor caller never receives an END_SESSION handoff.",
+      "The WORKING-only check, assertWorkerOwns, priorAttempt, the TASK_REOPENED event with the caller as actor, the #general line (parseMentions:false) and the #architects line are unchanged."
+    ],
+    "compatibility": [
+      "The reply drops nextAction on purpose, mirroring report_blocked's 43f6dd55. Every other field is unchanged, and sessionHandoff is additive. No daemon test, script, mod or IDE plugin reads request_replan's nextAction.",
+      "The moe-account-switch mod honours a top-level END_SESSION addressed to its MOE_WORKER_ID on any moe reply (scripts/mods/moe-account-switch/hooks/register.ts:84-92, :284). No wrapper or mod change.",
+      "docs/MCP_SERVER.md's request_replan Returns block (:2885-2893) still documents nextAction. task-0adea941 holds that file, so the doc sync is the governor's follow-up, not this row's."
+    ],
+    "reuse": [
+      "resolveWorkerRole (util/workerRole.ts) for the governor exclusion, exactly as report_blocked uses it.",
+      "report_blocked's handoff reason, copied verbatim with a twin comment. It is not extracted into a shared helper, so reportBlocked.ts stays out of this row."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/tools/requestReplan.ts:81-86 touches the prior assignee unguarded (IDLE plus a null currentTaskId), and :108-112 returns nextAction moe.wait_for_task.",
+      "packages/moe-daemon/src/tools/reportBlocked.ts:385-387 guards the same touch, and :492-503 computes sessionHandoff from prevAssignee || callerSeat (resolveWorkerRole !== 'governor'), reading currentTaskId after the touch.",
+      "packages/moe-daemon/src/state/taskStore.ts updateTask clears assignedWorkerId on a status change (:543-549). It releases the prior owner only when its currentTaskId === taskId (:629-639), and closeAttemptsOnHandBack closes the attempt (:376-400).",
+      "packages/moe-daemon/src/util/workerRole.ts:48 resolveWorkerRole checks the team role first, then the id prefix."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts src/tools/taskMoveActor.test.ts src/tools/echoedReasonNotices.test.ts"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) A shared util/sessionHandoff.ts used by both tools. Rejected for this row: it would pull reportBlocked.ts into scope, beyond the row's FILES list. The string is copied verbatim with a twin comment. (b) Keep a nextAction but point it at ending the session. Rejected: any executable `tool` hint is exactly what 43f6dd55 forbids, and the mod keys on sessionHandoff, not nextAction. (c) Drop the touchWorker entirely, since updateTask's cascade already releases a pointer naming this task. Rejected: the cascade leaves a non-task-bound status (e.g. BLOCKED) as is, while the touch keeps today's IDLE flip. Only the touch's guard changes.",
+    "codebaseInsights": "updateTask's status-change cascade (taskStore.ts:543-549, :629-639) already clears assignedWorkerId and releases the prior owner only when its pointer names this task. closeAttemptsOnHandBack then closes the attempt. request_replan's own unguarded touchWorker (:81-86) then forces IDLE plus a null pointer on any prior assignee. That is the one write that wipes a dangling seat's other-task pointer, and prototype case r3 is RED at base because of it. report_blocked reads currentTaskId AFTER its guarded touch to decide the handoff, and request_replan must do the same; after an unguarded touch the read would always see null. A prototype at 8ca8d389 (+23/-8 runtime, 89 test lines) passed tsc and 74 tests across the four verification files, and 317 tests across the e2e and policy callers. The base is RED 5/5.",
+    "risks": [
+      "The governor exclusion must use resolveWorkerRole, not team.role, or a teamless governor-prefixed seat gets END_SESSION, and the mod ends its TUI.",
+      "Reading the seat's currentTaskId BEFORE the guarded touch would hand END_SESSION to every assignee whose pointer is null. Read it after, as report_blocked does.",
+      "docs/MCP_SERVER.md is held by task-0adea941; editing it collides with that landing. Leave it to the governor's follow-up.",
+      "The negative control's grep keys on 'Tests  5 failed (5)'. Adding or splitting cases changes the count: keep the five cases, or update step 4's expected count to match."
+    ],
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/requestReplan.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/util/workerRole.ts",
+      "packages/moe-daemon/src/tools/reportBlocked.test.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "scripts/mods/moe-account-switch/hooks/register.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8ca8d38951e5279bf01f47578550b18d6ec87088",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:52:58.369Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T20:55:41.943Z",
+  "reviewStartedAt": "2026-11-03T21:30:50.017Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" && cp --parents packages/moe-daemon/src/tools/requestReplan.ts packages/moe-daemon/src/tools/requestReplan.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx vitest run src/tools/requestReplan.test.ts src/tools/reportBlocked.test.ts src/tools/taskMoveActor.test.ts src/tools/echoedReasonNotices.test.ts",
+    "exitCode": 0,
+    "outputTail": "Snapshot built from tracked files of merged worktree using git ls-files -z packages/moe-daemon | tar --null -T - -cf - | tar -x -C \"$S\" instead of git archive HEAD per LANDING-RETRY rule; all other plan command stages unchanged.\nnpx tsc --noEmit: exit 0\n Test Files  4 passed (4)\n      Tests  74 passed (74)\n   Start at  23:30:20\n   Duration  4.46s (tests 64%, transform 31%, import 5%)\nQuality gate: bash scripts/tests/parity-check.sh && npm run lint, exit 0\nPASS parity-check.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-03T21:30:50.017Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/requestReplan.test.ts",
+    "packages/moe-daemon/src/tools/requestReplan.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Landing-retry (contention): no additional edits or git writes required. Existing request_replan END_SESSION/no-nextAction fix, dangling-seat guard, five regression cases, and governor-authorized MCP_SERVER.md sync intact. Fresh verification on merged worktree tracked-file snapshot (git ls-files/tar, not HEAD archive, because target is a pending merge): tsc clean; 4 files / 74 tests passed. Fresh quality gate passed: parity-check.sh and npm run lint. Original completed-step negative control evidence: \"Tests  5 failed (5)\" and RED-AT-BASE. Adversarial review found no new issues; pending merge left to wrapper.",
+  "commits": [
+    {
+      "sha": "3f533ff4d020ce2229ebdcd61c5358fe573c4496",
+      "ref": "refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-03T20:52:57Z",
+      "paths": [],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T21:28:18.947Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-55a5a9f9644943b1b13ee3e609a2255f ref=refs/moe/rescue/task-55a5a9f9644943b1b13ee3e609a2255f/20261103T212819Z sha=3f533ff4d020ce2229ebdcd61c5358fe573c4496 reason=contention"
+    },
+    {
+      "sha": "6272d30824decee4ca25fb96d2f9908a757570af",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-03T21:28:58Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/requestReplan.test.ts",
+        "packages/moe-daemon/src/tools/requestReplan.ts"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-03T21:31:55.771Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:00:19Z",
+    "at": "2026-11-03T22:03:09.765Z"
+  },
+  "landingRetry": null,
+  "completedAt": "2026-11-03T22:02:40.834Z",
+  "reviewCompletedAt": "2026-11-03T22:02:40.834Z",
+  "reviewSummary": "Reviewed completion 6272d308 (on moe/work-2026-10-24, HEAD of moe/control). 3 files, +125/-12, under the 400 LOC cap: requestReplan.ts (+30 runtime), new requestReplan.test.ts (+89), docs/MCP_SERVER.md (6 lines, request_replan section only, per governor ruling 20:50Z).\n\nRe-ran verification myself in a git-archive snapshot of 6272d308 (moe-daemon + scripts) outside the shared checkout: npm ci exit 0, npx tsc --noEmit exit 0, npx vitest run requestReplan + reportBlocked + taskMoveActor + echoedReasonNotices = 4 files, 74 tests passed. Negative control: new test file on the 6272d308^ sources = \"Tests 5 failed (5)\" (r1, r2 x2, r3, r4), so the cases are mutation-resistant.\n\nDoD 1: r1 asserts nextAction undefined, sessionHandoff END_SESSION with task-a/worker-1, reason contains 'Do not call moe.claim_next_task or moe.wait_for_task'.\nDoD 2: r2 covers a governor by team role and by id prefix (no handoff, GOVERNING kept); r3 covers a dangling seat on task-b (no handoff, currentTaskId and CODING untouched).\nDoD 3: r1 asserts PLANNING, assignedWorkerId null, priorAttempt set, closed attempt phases; r4 covers a non-governor caller on a row that already lost its assignee getting END_SESSION for itself.\n\nCode matches report_blocked's seat-freeing arm (reportBlocked.ts:367-387, :485-503): the guarded touchWorker in try/catch, the callerSeat/seatWorker/currentTaskId computation via resolveWorkerRole, and the reason text are identical. WORKING-only check, assertWorkerOwns, priorAttempt, TASK_REOPENED actor, #general/#architects posts unchanged; only nextAction is removed, on purpose. The e2e workstreamComposition call does not read nextAction. No role doc or skill mentions request_replan.\n\nNot re-run: the e2e suite and the quality gate (parity-check + lint); the worker reports the gate passed, and this diff touches no scripts or role docs. Complexity pass: the handoff logic is copied from report_blocked rather than shared, which the plan chose deliberately. No other finding.",
+  "requiredCheckAtDone": null
+}

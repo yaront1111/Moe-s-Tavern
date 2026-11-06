@@ -1,0 +1,224 @@
+{
+  "id": "task-5a5a7189b1c140049246cd6cb691e896",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code prior-handoff card reads from/to/createdAt, but the daemon writes releasedBy/releasedAt/reason, so every card title is just \"#N\" (VS Code twin of the DONE JetBrains fix ac587df5)",
+  "description": "Filed by the governor at 16:50Z on 2026-11-03. This is the VS Code twin that task-ac587df5 (JetBrains, DONE as d5f36e82) marked out of scope. JetBrains went first, and this row brings VS Code to parity. Citations checked at 8a53505e.\n\nPROBLEM. VS Code's Task Detail \"Prior hand-offs\" cards build their title from fields the daemon never writes, so every title reads just \"#1\", \"#2\" and so on. The releaser, the release time and the reason are lost. The test fixture encodes the same wrong shape, so the suite stays green.\n\nEVIDENCE (HEAD 8a53505e).\n- **Daemon:** packages/moe-daemon/src/types/schema.ts:553-571, HandoffNote {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?}, written by tools/releaseTask.ts.\n- **VS Code:**\n  - moe-vscode/src/types/moe.ts:202-210: HandoffNote {from?, to?, createdAt?, ...};\n  - moe-vscode/src/panels/TaskDetailPanel.ts:1310-1314: renderHandoff's title reads h.from, h.to and h.createdAt;\n  - moe-vscode/tests/task-time-budget.test.cjs:224: the richTask fixture uses from/to/createdAt.\n- **Same bug and repro as the JetBrains row:** /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts F3. A real release_task writes the handoff keys `reason, releasedAt, releasedBy, whatIsDone, whatRemains`.\n\nFIX DIRECTION. Mirror the landed JetBrains header exactly (d5f36e82, TaskDetailDialog.kt:917-925):\n- \"#N\";\n- then \" released by <releasedBy>\" when it is set;\n- then \" (<releasedAt>)\" when set;\n- then \": <reason>\" when set.\nEvery value stays HTML-escaped as today. Update the HandoffNote type to the daemon's fields, and fix the fixture to the daemon's shape. Add a test that fails if the title reads from/to/createdAt again, and one showing a note without the new fields still renders \"#N\".\n\nSCOPE. moe-vscode only, with no JetBrains or daemon change. Gates: moe-vscode `npm test` and `npm run compile`, run in the task worktree.",
+  "definitionOfDone": [
+    "VS Code's HandoffNote type and renderHandoff use releasedBy, releasedAt and reason. The card title matches the JetBrains header (d5f36e82): \"#N released by X (time): reason\", each part only when present and HTML-escaped. A note without them still renders \"#N\".",
+    "The task-time-budget fixture uses the daemon's handoff shape, and a test fails if the title reads from/to/createdAt again. moe-vscode `npm test` and `npm run compile` pass. No file outside moe-vscode/ changes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first: edit only moe-vscode/tests/task-time-budget.test.cjs (mem:convention-vscode-renderer-tests). The harness renders the REAL TaskDetailPanel through renderDetail, so do not copy the renderer into the test.\n(a) richTask fixture (~line 224): replace `from: 'worker-<a>', to: 'worker-b', createdAt: at('08:30')` with `releasedBy: 'worker-<a>', releasedAt: at('08:30'), reason: 'context <budget> & \"quota\"'`. Keep whatIsDone/whatRemains/pitfalls/openQuestions as they are.\n(b) In the test 'task detail keeps every live metric, critique, failed DoD item and handoff' (keep this name), expect the title `#1 released by worker-&lt;a&gt; (${at('08:30')}): context &lt;budget&gt; &amp; &quot;quota&quot;`.\n(c) Directly after that test, add a test named exactly 'task detail handoff titles read releasedBy, releasedAt and reason, never from/to/createdAt'. Render makeTask({ priorHandoffs }) with these notes: [{releasedBy:'a'}, {releasedAt:'<ts>'}, {reason:'why'}, {}, {from:'x',to:'y',createdAt:'z'}, {releasedBy:' ',releasedAt:'',reason:'\\t'}, {releasedBy:null,releasedAt:['ts'],reason:{}}, {releasedBy:'b',from:'x',to:'y',createdAt:'z'}]. Collect every `<div class=\"handoff-card-title\">(.*?)</div>` capture and assert.deepEqual them to ['#1 released by a', '#2 (&lt;ts&gt;)', '#3: why', '#4', '#5', '#6', '#7', '#8 released by b']. Put a 2-line comment above it naming the JetBrains header (d5f36e82).\nBoth test names must keep the word 'handoff', because step 3's gate counts failing rows by that word.\nQuick run from the worktree root. The worktree has no node_modules, so read the control checkout's TS6 JS typescript, read-only: `cd moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/task-time-budget.test.cjs`. It must be RED now with exactly `not ok 10` and `not ok 11` (the two rows above) and the other 10 ok.\nReference bytes are the test hunks of /mnt/d/moe-scratch/plan-5a5a7189/fix.diff (sha256 0f958365246bc94c8713e358a8411f34cbe9455e5c7ce7a780c2665ea8a5a4fa). Copy them with Edit and never git apply (rail: tracked files only via Edit/Write).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "note": "RED: quick run shows not ok 10 and 11 (the two handoff rows), the other 10 ok.",
+      "startedAt": "2026-11-03T17:05:37.255Z",
+      "completedAt": "2026-11-03T17:05:57.443Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix the type and the title in moe-vscode/src/types/moe.ts, moe-vscode/src/panels/TaskDetailPanel.ts and moe-vscode/CHANGELOG.md.\n(a) moe.ts HandoffNote (line 202): replace from?/to?/createdAt? with `releasedBy?: string; releasedAt?: string; reason?: string;` and keep the four body fields. Add a one-line doc comment naming HandoffNote in packages/moe-daemon/src/types/schema.ts. With the old keys gone, `npm run compile` fails if anything reads them again. Do not add diskState: it is not shown, and JetBrains omits it too.\n(b) TaskDetailPanel.ts renderHandoff (line 1310): build the title as `#${index}` + part(' released by ', h.releasedBy) + part(' (', h.releasedAt, ')') + part(': ', h.reason). Use a nested helper `const part = (prefix: string, value: unknown, suffix = ''): string => typeof value === 'string' && value.trim() ? prefix + escapeHtml(value) + suffix : '';`. These are exactly the JetBrains header strings (TaskDetailDialog.kt handoffBlocks, d5f36e82), with ONE space before '(' where the old VS Code code had two. Note the parity in a 2-line comment above the function. Leave block() and the card body untouched.\nError handling: renderHandoff runs inside the panel's HTML build, so a throw there would blank the whole Task Detail panel. The typeof guard therefore treats null, arrays, objects, numbers and blank strings as absent and never calls .trim() on a non-string. release_task only ever writes strings (packages/moe-daemon/src/tools/releaseTask.ts), so the guard only matters for hand-edited or corrupt .moe state.\n(c) CHANGELOG.md: append one bullet at the end of [Unreleased] → ### Fixed (the card shipped in 0.8.0): '- Each **Prior hand-offs** card in task detail is titled with who released the task, when and why (`#1 released by <worker> (<time>): <reason>`), as in JetBrains. Before, the title was only `#1`, `#2` and so on.'\nThen re-run step 1's quick command: 12/12 ok. Reference bytes: /mnt/d/moe-scratch/plan-5a5a7189/fix.diff (git apply --check passes against 6029cee3); copy with Edit.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "note": "GREEN: quick run 12/12 ok.",
+      "startedAt": "2026-11-03T17:05:58.188Z",
+      "completedAt": "2026-11-03T17:06:13.684Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate. From the task worktree root, run the first executionContract checkRef verbatim. The same text is saved as /mnt/d/moe-scratch/plan-5a5a7189/checkref-gate.txt (sha256 a11c4a9828eec18b4df1a29d6ca650403e1d7e89f1eb645958fa31c064ff49a1).\nWhat it does: it snapshots the worktree's HEAD plus the three edited source/test files into a fresh /tmp/m5a5.* dir. That is needed because a worktree has no node_modules, the rail forbids npm ci inside the repo tree, and the shared node_modules hold only win32 tsc (mem:gotcha-vscode-gate-from-wsl, mem:gotcha-vscode-tests-need-full-repo-snapshot). There it runs `npm ci`, `npm test` and `npm run compile` under a clean env with nvm node v24.21.0. Then it swaps in the merge-base TaskDetailPanel.ts and requires exactly two failing rows, both naming 'handoff': a RED re-proof that the tests catch a from/to/createdAt reader (mem:convention-vscode-port-mutant-checkref).\nPlanner dry run at 430e4620: exit 0; ℹ tests 696, pass 686, fail 0, skipped 10 (Windows-only rows); RED: not ok 10 and not ok 11. Counts may shift by rows that other landings add. Its fresh output is the complete_task verification evidence.\nError handling for a red run: if npm ci, the tests or compile fail, the command prints the snapshot path and its last 40 log lines and exits 1. Fix the code and rerun. A RED count other than 2 means a test was renamed or is vacuous: fix the test, never the command.\nNever run npm ci or npm install in the worktree or the shared checkout. Afterwards delete the /tmp/m5a5.* dir your run created, by its literal path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef 1 exit 0: tests 696, pass 686, fail 0, skipped 10; compile ok; RED re-proof against the merge-base renderer failed exactly rows 10 and 11 (both 'handoff'). Removed /tmp/m5a5.MfBc.",
+      "startedAt": "2026-11-03T17:06:14.461Z",
+      "completedAt": "2026-11-03T17:06:54.119Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (load the adversarial-self-review skill). From the worktree, run the second checkRef (/mnt/d/moe-scratch/plan-5a5a7189/checkref-scope.txt, sha256 2d580efab34abcfc4588b31a45faedca6941583088abf5bc660ec6337dae9430). It must exit 0 and list exactly moe-vscode/CHANGELOG.md, src/panels/TaskDetailPanel.ts, src/types/moe.ts and tests/task-time-budget.test.cjs (dry run: 4 files, +23/-9). This covers the DoD's 'no file outside moe-vscode/'.\nChecklist:\n- the header strings match TaskDetailDialog.kt handoffBlocks character for character;\n- every interpolated value passes escapeHtml;\n- `grep -n 'h\\.from\\|h\\.to\\b\\|h\\.createdAt' moe-vscode/src/panels/TaskDetailPanel.ts` prints nothing;\n- no added line contains a project.json globalRails.forbiddenPatterns string;\n- the card body sections and the board.js hand-off chip (a count only) are unchanged.\nThe planner ran these mutants against the step 1 tests, and every one was killed: truthiness in place of the typeof+trim guard; trim without typeof (throws on the array note); no escaping; unescaped releasedAt only; the old two-space '  ('; dropping reason; the merge-base renderer.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-vscode/tests/task-time-budget.test.cjs",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "note": "Self-review: scope check exit 0 (4 files, +23/-9, all in moe-vscode/). Header strings match TaskDetailDialog.handoffBlocks (one space before the paren). All values pass escapeHtml. typeof guard means null/array/object/number/blank never throw. No h.from/h.to/h.createdAt readers remain. No forbidden patterns added. Card body and board.js chip untouched. Concurrency: pure string rendering, no shared state.",
+      "startedAt": "2026-11-03T17:06:57.786Z",
+      "completedAt": "2026-11-03T17:07:00.560Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 378.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T16:49:11.162Z",
+  "updatedAt": "2026-11-04T19:20:44.270Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T16:49:16.673Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T17:09:13.453Z",
+    "wallClockMs": 1196780
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-33f67e5b",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:03:14.391Z",
+  "executionContract": {
+    "intendedBehavior": "VS Code Task Detail 'Prior hand-offs' card titles read the daemon's HandoffNote fields and match the JetBrains header from d5f36e82: '#N', then ' released by <releasedBy>', then ' (<releasedAt>)', then ': <reason>'. Each part appears only when its field is a non-blank string, and every value is HTML-escaped. A note with none of them, including a legacy from/to/createdAt-only note, is titled '#N'. Malformed values (null, arrays, objects) never throw.",
+    "acceptanceCriteria": [
+      "A note {releasedBy:'w', releasedAt:'t', reason:'r'} at position 1 renders the card title '#1 released by w (t): r'.",
+      "Each part appears only when its field is a non-blank string. A note without any of them (including from/to/createdAt only) renders '#N', and null/array/object values render '#N' without throwing.",
+      "Every interpolated value goes through the panel's escapeHtml, for example worker-<a> renders as worker-&lt;a&gt;.",
+      "moe-vscode/src/types/moe.ts HandoffNote declares releasedBy/releasedAt/reason and no longer declares from/to/createdAt.",
+      "The task-time-budget richTask fixture uses the daemon's handoff shape. Against the merge-base renderer, exactly the two handoff rows fail.",
+      "moe-vscode npm test and npm run compile pass in a Linux snapshot of the worktree, and no file outside moe-vscode/ changes."
+    ],
+    "invariants": [
+      "Every value interpolated into the card title passes escapeHtml.",
+      "The card body sections (What is done, What remains, Pitfalls, Open questions) render exactly as before.",
+      "No file outside moe-vscode/ changes."
+    ],
+    "compatibility": [
+      "No daemon, wire, JetBrains or .moe/ change. The daemon already writes releasedBy/releasedAt/reason (releaseTask.ts), so existing notes start showing their header as soon as the fix lands.",
+      "A legacy note carrying only from/to/createdAt (a shape the daemon never wrote) renders '#N' and never throws.",
+      "The board.js hand-off chip reads only priorHandoffs.length and is unchanged."
+    ],
+    "approvedScope": [
+      "moe-vscode/src/types/moe.ts: HandoffNote field list only",
+      "moe-vscode/src/panels/TaskDetailPanel.ts: the renderHandoff title only (the block() bodies are unchanged)",
+      "moe-vscode/tests/task-time-budget.test.cjs: the richTask priorHandoffs fixture, the expected title in 'task detail keeps every live metric, critique, failed DoD item and handoff', and one new test 'task detail handoff titles read releasedBy, releasedAt and reason, never from/to/createdAt'",
+      "moe-vscode/CHANGELOG.md: one [Unreleased] ### Fixed bullet"
+    ],
+    "reuse": [
+      "escapeHtml in moe-vscode/src/panels/TaskDetailPanel.ts (it escapes & < > \" ').",
+      "The renderDetail/makeTask harness already in moe-vscode/tests/task-time-budget.test.cjs, which transpiles the real panel into node:vm.",
+      "The JetBrains header format from d5f36e82 (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt handoffBlocks, lines 917-925)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/types/schema.ts:553-571 HandoffNote = {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?}.",
+      "packages/moe-daemon/src/tools/releaseTask.ts:155 and 240-241/293-294 set releasedAt and releasedBy, and set reason only when one is given (a string, capped at 2000 chars).",
+      "moe-vscode/src/panels/TaskDetailPanel.ts:1310-1314 renderHandoff is the only reader of h.from/h.to/h.createdAt in moe-vscode (grep). moe-vscode/src/types/moe.ts:202-210 declares from?/to?/createdAt?.",
+      "moe-vscode/tests/task-time-budget.test.cjs:224 richTask uses from/to/createdAt; line 294 expects '#1 from worker-&lt;a&gt; → worker-b  (…)'."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/m5a5.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && P=src/panels/TaskDetailPanel.ts && for f in src/types/moe.ts $P tests/task-time-budget.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && git -C \"$R\" show \"$B:moe-vscode/$P\" > ../base.ts && ! cmp -s ../base.ts $P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile && { cp ../base.ts src/panels/TaskDetailPanel.ts; node --test --test-reporter=tap tests/task-time-budget.test.cjs > ../red.log 2>&1; true; }' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log && N=$(grep '^not ok' ../red.log) && echo \"RED: $N\" && [ $(grep -c . <<<\"$N\") = 2 ] && ! grep -v handoff <<<\"$N\" )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && X=$({ git diff --name-only \"$B\"; git ls-files -o --exclude-standard; } | grep -v '^moe-vscode/'); [ -z \"$X\" ] || { echo \"outside moe-vscode/: $X\"; exit 1; }; git diff --stat \"$B\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(a) Keep from/to/createdAt as fallbacks for old notes. Rejected: the daemon never wrote those keys, and JetBrains dropped them in d5f36e82. (b) Coerce JSON primitives the way JetBrains MoeJson.getStringOrNull does. Rejected: release_task writes only strings, and the typeof guard is enough to never throw. One accepted divergence: a number or boolean value is dropped in VS Code, while JetBrains would print it. (c) A new test file. Rejected: task-time-budget.test.cjs already owns the real-renderer harness and the fixture the DoD names. (d) A Windows leg in the gate. Not needed: this is pure string rendering with no platform branch, and the Linux snapshot runs the full suite plus compile.",
+    "codebaseInsights": "The tests transpile the real TaskDetailPanel.ts into node:vm and read webview.html (mem:convention-vscode-renderer-tests). The panel imports HandoffNote type-only, so the compile leg is what proves nothing else reads the removed fields. board.js only counts priorHandoffs for its chip. A fresh task worktree has no node_modules: the gate snapshots into /tmp and runs npm ci there, and a quick run uses NODE_PATH into the control checkout's moe-vscode/node_modules (TS6 JS, which works under WSL). The planner dry-ran the full fix and both checkRefs. The reference diff, the check texts and the dry-run output are in /mnt/d/moe-scratch/plan-5a5a7189/.",
+    "risks": "1) Use the new test's name exactly and keep the existing test's name. The gate's RED leg needs exactly 2 failing rows that both contain 'handoff'. 2) One space before '(' (JetBrains), not the old two. 3) Never run npm ci or npm install in the worktree or the shared checkout (rail). 4) For QA: re-run checkRef 1 at the control checkout with MOE_LAND_TARGET=<completion>^, so the merge-base is the pre-fix parent. Check scope with `git diff --name-only <completion>^ <completion>`: the control checkout's daemon-written .moe/ diffs would trip checkRef 2 there.",
+    "keyFiles": [
+      "moe-vscode/src/panels/TaskDetailPanel.ts",
+      "moe-vscode/src/types/moe.ts",
+      "moe-vscode/tests/task-time-budget.test.cjs",
+      "moe-vscode/CHANGELOG.md",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+      "packages/moe-daemon/src/types/schema.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6029cee35ba66e727ad56cbece567614c8793adf",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:03:14.419Z",
+  "approvedPlanRevision": 1,
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T17:07:57Z",
+    "at": "2026-11-03T17:09:41.337Z"
+  },
+  "workStartedAt": "2026-11-03T17:05:37.255Z",
+  "reviewStartedAt": "2026-11-03T17:07:09.359Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/plan-5a5a7189/checkref-gate.txt (executionContract checkRef 1, run from the task worktree root)",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 696\nℹ pass 686\nℹ fail 0\nℹ skipped 10\nRED: not ok 10 - task detail keeps every live metric, critique, failed DoD item and handoff\nnot ok 11 - task detail handoff titles read releasedBy, releasedAt and reason, never from/to/createdAt\nEXIT 0 (npm test and npm run compile passed in the snapshot; checkRef 2 scope check exit 0, 4 files +23/-9, all in moe-vscode/)",
+    "reportedAt": "2026-11-03T17:07:09.359Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/task-time-budget.test.cjs",
+    "moe-vscode/src/types/moe.ts",
+    "moe-vscode/src/panels/TaskDetailPanel.ts",
+    "moe-vscode/CHANGELOG.md"
+  ],
+  "completionSummary": "VS Code Prior hand-offs card titles now read the daemon's HandoffNote fields: '#N released by <releasedBy> (<releasedAt>): <reason>', each part only when a non-blank string and HTML-escaped; notes without them (including legacy from/to/createdAt) render '#N' and never throw. HandoffNote type updated, richTask fixture moved to the daemon shape, new test added, CHANGELOG bullet added. Only moe-vscode/ changed (4 files, +23/-9).",
+  "commits": [
+    {
+      "sha": "585fedc6ea63c12c462c2b0e61a38ca7e9e37f29",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T17:04:57Z",
+      "paths": [
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/src/panels/TaskDetailPanel.ts",
+        "moe-vscode/src/types/moe.ts",
+        "moe-vscode/tests/task-time-budget.test.cjs"
+      ],
+      "recordedBy": "qa-af7be174",
+      "recordedAt": "2026-11-03T17:07:54.095Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "completedAt": "2026-11-03T17:09:13.453Z",
+  "reviewCompletedAt": "2026-11-03T17:09:13.453Z",
+  "reviewSummary": "Reviewed completion 585fedc6 (on moe/work-2026-10-24 and control HEAD; +23/-9 over 4 files, all in moe-vscode/, far under the size cap). Re-ran executionContract checkRef 1 (checkref-gate.txt, sha256 a11c4a98…) at the control checkout with MOE_LAND_TARGET=585fedc6^: exit 0, in a /tmp git-archive snapshot under env -i + nvm node v24.21.0 (npm ci, npm test, npm run compile): tests 696, pass 686, fail 0, skipped 10 (Windows-only). RED re-proof with the merge-base TaskDetailPanel.ts fails exactly 'not ok 10 … handoff' and 'not ok 11 … handoff title …', and nothing else. Re-ran checkRef 2 (scope): nothing outside moe-vscode/. DoD 1: renderHandoff builds '#N' + ' released by X' + ' (time)' + ': reason' through a typeof+trim `part` helper and escapeHtml, matching JetBrains TaskDetailDialog.handoffBlocks (d5f36e82) string for string. The moe.ts HandoffNote declares releasedBy/releasedAt/reason with from/to/createdAt removed, and grep finds no remaining h.from/h.to/h.createdAt reader in moe-vscode/src or media. DoD 2: the richTask fixture moved to the daemon shape, and the expected title is '#1 released by worker-&lt;a&gt; (…): context &lt;budget&gt; &amp; &quot;quota&quot;'. The new test covers each part alone, {}, legacy from/to/createdAt-only, blank strings, and null/array/object values (none throw, all render '#N'), plus a mixed note. Assertions are exact deepEqual on the card titles, so they are mutation-resistant. Card body and the board.js chip are untouched, and the added lines hold no forbidden pattern. CHANGELOG has the one [Unreleased] Fixed bullet. The ponytail pass found nothing to cut. Cleaned up my snapshot /tmp/m5a5.doas by its literal path.",
+  "requiredCheckAtDone": null
+}

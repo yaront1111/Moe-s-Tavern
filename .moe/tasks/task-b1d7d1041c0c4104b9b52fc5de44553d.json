@@ -1,0 +1,259 @@
+{
+  "id": "task-b1d7d1041c0c4104b9b52fc5de44553d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains connect() re-syncs its bundled role docs and skills over newer ones the running daemon wrote, so an older plugin downgrades every seat's instructions on each reconnect",
+  "description": "Observed 2026-11-03 00:40Z (governor). The fleet's .moe/roles/worker.md matches docs/roles/worker.md at 03355c25, the 10-31 plugin build: a diff of 2 lines, the marker header. Against the live daemon's build 7262e53f, or the target tip, the diff is 8 lines. Its mtime is 2026-11-02 19:13Z, the daemon restart at the worktree switch. .moe/skills/moe-qa-loop/SKILL.md dates from 10-31 19:33Z, the plugin install. Seats in worktree mode therefore read pre-worktree docs, for example:\n- worker.md still says \"work in the project root by default (never a .worktrees/ checkout)\";\n- worker.reference.md lacks the \"LANDING rule (worktree mode)\" and Worktree mode sections that 03355c25..tip added.\n\nCause: both writers use the same rule, \"overwrite when the on-disk marker sha differs\":\n- the daemon's writeInitFiles/writeSkillFiles, on every start (packages/moe-daemon/src/index.ts ~:694-700);\n- the plugin's MoeProjectInitializer.syncRoleDocs/syncSkills (writeGeneratedDoc + shouldUpgradeGeneratedDoc, ~:163-196).\nThe plugin runs its sync on every connect(), in MoeProjectService.kt ~:150 via MoeDaemonSupervisor.ensureMoeInitialized ~:628, and in ensureDaemonRunningImpl ~:127. A sha difference is not an order, so the last writer wins. The plugin is rebuilt far less often than the daemon is swapped, so its bundled copy is usually the older one, and each reconnect downgrades the docs the newer daemon just wrote.\n\nThe planner decides the fix. Possible shapes:\n- the plugin skips the doc sync when it attaches to a daemon it did not spawn, or whose /health version differs from its bundled one;\n- the marker carries an orderable version, so neither writer ever downgrades.\nWorkaround until then: rebuild and reinstall the plugin from the current tip. It needs a PyCharm restart, which is the human's call. VS Code has no such sync; grep finds none in moe-vscode/src.",
+  "definitionOfDone": [
+    "Connecting the JetBrains plugin to a running daemon never replaces a .moe/roles or .moe/skills file whose content came from a newer source than the plugin's bundled copy; a fresh project (no .moe/) and an unmarked user-customized file behave exactly as today.",
+    "JUnit tests in moe-jetbrains cover: plugin bundled copy older than on-disk daemon-written copy (kept), plugin copy newer (upgraded per the chosen rule), missing file (created), unmarked file (kept).",
+    "cd moe-jetbrains && ./gradlew test passes (run under the gradle lease per the rails), with the exact command and counts in the completion evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "MoeProjectInitializer: add a create-only mode. Tests first.\n\nThe rule this task ships:\n- On connect, the plugin only creates missing docs. A live daemon rewrote its own docs at its start, and they may be newer than this plugin's bundle.\n- The plugin upgrades stale marked docs only right before it starts the daemon itself (step 2), because that daemon then serves the plugin's bundled docs.\n- The fresh-.moe scaffold, unmarked files and non-markdown assets behave exactly as today.\n\n(a) Tests first, in moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt. Use JUnit 4 and the file's tempDir() helper, and assertEquals on the full file text.\n- I1 `create-only sync keeps a marked doc a newer daemon wrote` (DoD 2: older plugin copy kept). The target holds stampMarker(\"daemon v2 body\"). writeGeneratedDoc(target, stampMarker(\"plugin v1 body\"), upgrade = false) leaves it byte-identical.\n- I2 `upgrade sync replaces an older marked doc` (DoD 2: newer plugin copy upgraded per the rule). The target holds stampMarker(\"v1\"). writeGeneratedDoc(target, stampMarker(\"v2\"), upgrade = true) leaves it equal to stampMarker(\"v2\").\n- I3 `both modes create a missing doc`. For upgrade in false and true, a missing target ends equal to the stamped text.\n- I4 `both modes keep an unmarked doc`. Unmarked user text survives both modes byte-identical.\n- I5 `create-only threads through role docs and every skill file`.\n  - Pre-seed a roles/worker.md marked with a different sha. syncRoleDocs(moeDir, upgrade = false, bundled = mapOf(\"worker.md\" to \"plugin worker\", \"qa.md\" to \"plugin qa\")) keeps it byte-identical and creates roles/qa.md = stampMarker(\"plugin qa\").\n  - syncSkills(moeDir, bundledDir, upgrade = false) keeps a stale-marked moe-planning/SKILL.md and a stale-marked manifest.json byte-identical, and creates a missing cpp/SKILL.md plus its nested templates/CMakeLists.txt.\n  - Then rerun both with upgrade = true on the same tree. worker.md, SKILL.md and manifest.json now equal their bundled stamps, which proves the flag is the only difference.\n\n(b) RED. Add the parameters, but IGNORE `upgrade` for now (today's behavior). Run under the lease: `--tests com.moe.util.MoeProjectInitializerTest`. I1 and I5 must FAIL; record their names.\n\n(c) Implement.\n- writeGeneratedDoc(target, stamped, upgrade: Boolean = true): create when missing. When the file exists, overwrite only if upgrade && shouldUpgradeGeneratedDoc(...).\n- syncRoleDocs(moeDir, upgrade: Boolean = true, bundled: Map<String, String>? = null): use bundled ?: loadBundledRoleDocs().\n- syncSkills(moeDir, bundledDir: File? = null, upgrade: Boolean = true): keep @JvmOverloads. Pass upgrade to the manifest.json/LICENSE writeGeneratedDoc and to syncSkillDir(source, targetDir, upgrade). Non-markdown assets stay create-only.\n- Update the KDocs of writeGeneratedDoc, syncRoleDocs and syncSkills to say why upgrade=false exists.\n- initializeProject and syncAgentContext keep the default upgrade = true, so a fresh scaffold and the explicit Init action are unchanged.\n\n(d) GREEN. Rerun the same focused command; the whole class passes, existing tests unchanged.\n\nGradle: hold the `jetbrains-gradle` lease for every run and release it even on failure (mem:convention-jetbrains-gradle-lease). From the worktree root, use the step-4 command form with `test --tests com.moe.util.MoeProjectInitializerTest --rerun`, and leave the --tests value unquoted (mem:gotcha-jetbrains-gradle-from-wsl). Never pattern-kill a Gradle or Java process (GLOBAL rail 2). Write files with the Edit/Write tools only (GLOBAL rail 3).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt"
+      ],
+      "note": "writeGeneratedDoc/syncRoleDocs/syncSkills/syncSkillDir gain an upgrade flag (default true); upgrade=false is create-only. syncRoleDocs gains a bundled-map seam. RED (upgrade param ignored): `create-only sync keeps a marked doc a newer daemon wrote` and `create-only threads through role docs and every skill file` FAILED, 22 run/2 failed. GREEN: MoeProjectInitializerTest tests=22 failures=0 errors=0 (gradlew.bat test --tests com.moe.util.MoeProjectInitializerTest --rerun under the jetbrains-gradle lease). initializeProject/syncAgentContext unchanged (default upgrade=true).",
+      "startedAt": "2026-11-03T02:19:34.203Z",
+      "completedAt": "2026-11-03T02:22:19.013Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "MoeDaemonSupervisor: the connect path never upgrades. Only this plugin's own daemon start does. Tests first.\n\n(a) Seam: add a new LAST constructor parameter `docSync: (File, Boolean) -> Unit = ::syncBundledDocs`.\n- Put `syncBundledDocs(moeDir, upgrade)` in the companion object, beside ::defaultPortProbe.\n- It calls MoeProjectInitializer.syncRoleDocs(moeDir, upgrade) and MoeProjectInitializer.syncSkills(moeDir, upgrade = upgrade), each in its own try/catch with a debug log, as ensureMoeInitialized does today. A role-doc failure must not skip the skills.\n- Existing callers compile unchanged: MoeProjectService.kt:38 uses named args, and ManagedVmPanel.kt:116 passes two args.\n\n(b) Tests first, in moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt.\n- Give the private supervisor(...) helper a `docSync: (File, Boolean) -> Unit = { _, _ -> }` parameter, passed by name.\n- Record into ONE events list: docSync adds \"sync:$upgrade\", and processStarter adds \"start\".\n- Place the new tests next to the existing spawn tests (after `ensureDaemonRunning does not spawn when daemon is reachable` and after the cooldown test), not at the end of the class. task-fb0ab382 may also add tests to this file.\n- S1 `connecting to an existing .moe only creates missing docs`: on an initializedRoot, ensureMoeInitialized() returns true and events == [\"sync:false\"].\n- S2 `a reachable daemon never gets its docs upgraded` (DoD 1). Reuse the reachable fixture: daemon.json with pid 42 and port 9876, both probes true. Call ensureMoeInitialized() and then ensureDaemonRunning(), which is connect()'s order. events == [\"sync:false\", \"sync:false\"], with 0 starts.\n- S3 `the upgrade runs once, right before this plugin starts its own daemon` (DoD 2: a newer plugin copy is upgraded when the plugin starts the daemon). On an initializedRoot with no daemon.json, ensureDaemonRunning() returns true and events == [\"sync:false\", \"sync:true\", \"start\"]. A second call inside the cooldown returns false and adds only \"sync:false\". End with killSpawnedDaemon().\n- S4 `a refused spawn never upgrades docs`: after setSpawnAttempts(supervisor, 3), ensureDaemonRunning() is false and events == [\"sync:false\"].\n\n(c) RED. First wire the seam like today: on an existing .moe, ensureMoeInitialized calls docSync(moeDir, true), and the spawn path calls nothing. Run `--tests com.moe.services.MoeDaemonSupervisorTest` under the lease. S1 to S4 must FAIL; record their names.\n\n(d) Implement.\n- ensureMoeInitialized(): leave the missing-.moe branch (initializeProject) unchanged. For an existing .moe, call docSync(moeDir, false). Replace the 'Always sync role docs and skills…' comment with the reason: a live daemon rewrote these at its own start and may be newer than this plugin's bundle. Stale copies are upgraded by the daemon at every start, or by the spawn path when this plugin starts the daemon itself.\n- ensureDaemonRunningImpl(): call docSync(File(projectBasePath, \".moe\"), true) exactly once. Place it after `val direct = …`, so the reachable and other-side returns, the cooldown and max-attempt gates, and a protected refusal all skip it. Place it before the `try { val pb = …` that launches the process. Add a one-line comment: this plugin is about to start its own daemon, which serves the plugin's bundled docs.\n- Error handling: a docSync exception logs at debug and never blocks connect or spawn, as today.\n\n(e) GREEN. Rerun the same focused command; the whole class passes.\n\nUse the same lease and command form as step 1.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt"
+      ],
+      "note": "New trailing ctor param docSync: (File, Boolean) -> Unit = ::syncBundledDocs (companion; separate try/catch per role docs and skills). A private syncDocs wrapper also catches any seam exception, so a failure never blocks connect or spawn. ensureMoeInitialized's existing-.moe branch calls syncDocs(moeDir, upgrade=false); ensureDaemonRunningImpl calls syncDocs(.moe, upgrade=true) once, after `val direct = …` (past reachable/other-side/max-attempt/cooldown/protected-refusal returns) and before the launch try. initializeProject branch is unchanged. RED (seam wired as today, docSync(moeDir,true) in ensureMoeInitialized, none on spawn): S1 `connecting to an existing moe dir only creates missing docs`, S2 `a reachable daemon never gets its docs upgraded`, S3 `the upgrade runs once, right before this plugin starts its own daemon`, S4 `a refused spawn never upgrades docs` all FAILED (83 run, 4 failed). GREEN: MoeDaemonSupervisorTest tests=83 failures=0 errors=0. S1 renamed from the plan's \".moe\" because JVM method names cannot contain '.'. MoeProjectService and ManagedVmPanel callers compile unchanged.",
+      "startedAt": "2026-11-03T02:22:20.626Z",
+      "completedAt": "2026-11-03T02:25:28.142Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs: four sentences say the plugin 'force-syncs' docs on connect, which is now false. Change only these lines, with the Edit tool.\n\n- CLAUDE.md line 16. Replace 'they scaffold `.moe/` when missing, force-sync bundled role docs/skills into it on connect, and delete `.moe/daemon.json` when stale.' with 'they scaffold `.moe/` when missing and delete `.moe/daemon.json` when stale. JetBrains also syncs its bundled role docs/skills: on connect it only creates missing files, and it upgrades stale marked copies only right before it starts the daemon itself, so a live daemon\\'s newer copies are never downgraded.'\n- CLAUDE.md line 42. Replace '(they're bundled into the plugin, then force-synced into each project's `.moe/`)' with '(they're bundled into the plugin and its daemon, and the daemon rewrites stale marked copies in each project's `.moe/` at every start)'.\n- docs/ARCHITECTURE.md line 62. Replace the line with: '- Auto-initializes `.moe` on first connect if missing. On an existing `.moe` it only creates missing role docs/skills, and it upgrades stale marked copies only right before it starts the daemon itself (the daemon also rewrites them at every start), so a live daemon\\'s newer docs are never downgraded.'\n- docs/PLUGIN_SPEC.md line 36. Replace the line with: '- Auto-initialize `.moe/` when missing; on connect, create missing role docs/skills only, and upgrade stale marked copies only right before starting the daemon itself'\n\nThe wording may be tightened, but keep the facts. Touch nothing else in these files. WT-18 (task-1b2e6fe3) edits other sections of CLAUDE.md and ARCHITECTURE.md, so keep these hunks to the single lines named here.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PLUGIN_SPEC.md"
+      ],
+      "modifiedFiles": [
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PLUGIN_SPEC.md"
+      ],
+      "note": "Replaced the four 'force-sync on connect' sentences with the plan's wording (CLAUDE.md lines 16 and 42, ARCHITECTURE.md line 62, PLUGIN_SPEC.md line 36). Single-line hunks only; no other mentions of force-sync remain in tracked .md outside .moe/.",
+      "startedAt": "2026-11-03T02:25:30.069Z",
+      "completedAt": "2026-11-03T02:25:52.441Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification. Run it ONCE, fresh, from the task worktree root, holding the `jetbrains-gradle` lease, as ONE command: the executionContract's checkRefs[0], verbatim. Release the lease afterwards, even on failure. It runs:\n- the qualityGate (parity-check.sh and npm run lint);\n- the full JetBrains suite on Windows (`gradlew.bat test --rerun` with GRADLE_OPTS=-Xmx512m; WSL has no JDK);\n- the summed JUnit XML totals, exiting 1 on any failure or error.\nSubmit the command, its exit code and the tail to complete_task, including the 'JUnit totals: tests=N skipped=S failures=0 errors=0' line. DoD 3 wants the exact command and counts. The baseline before this task was 585 tests (task-6fe1e5ae, 2026-11-02); expect about 585 plus the 9 new tests.\n- If a run exits red with a truncated tail, check the Gradle daemon log for the loopback-IPC flake before believing it. Ignore the cosmetic Jansi cleanup OOM line (mem:gotcha-gradle-jetbrains-shared-box).\n- `--rerun` must execute :test, never UP-TO-DATE.\n- Run in the foreground.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] run once, fresh, from the worktree root under the jetbrains-gradle lease (now released): PASS parity-check.sh; lint OK; `> Task :test` executed (not UP-TO-DATE), BUILD SUCCESSFUL; JUnit totals: tests=594 skipped=0 failures=0 errors=0 (585 baseline + 9 new) across 39 XMLs, all stamped 02:26:42Z, after the 02:26:12Z start. EXIT=0.",
+      "startedAt": "2026-11-03T02:26:07.468Z",
+      "completedAt": "2026-11-03T02:27:28.985Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of the whole diff, then complete_task.\n(a) DoD 1: no connect path can overwrite an existing file. ensureMoeInitialized passes upgrade=false. The only upgrade=true call in the supervisor sits after every early return and immediately before the launch. grep the diff for docSync and syncRoleDocs/syncSkills calls and list each call with its flag.\n(b) The fresh-.moe branch (initializeProject) is unchanged. Unmarked files are still never overwritten in either mode. Non-markdown skill assets are still create-only. InitMoeAction and MoeToolWindowPanel still call initializeProject with today's semantics.\n(c) Failure paths: a docSync exception never blocks connect or spawn. A spawn that throws after the upgrade sync leaves the same files as today.\n(d) Concurrency: the upgrade sync runs only inside the spawn path, which is already serialized by the cooldown, the attempt counter and the protected replacementInFlight guard. Two reconnects cannot both upgrade without both spawning.\n(e) Residual window, to state in the completion summary rather than fix here. A daemon in mid-restart looks unreachable, so the plugin may run its upgrade sync just before its own spawn attempt. That is the pre-existing spawn race, now the only remaining downgrade path. The restarted daemon rewrites its own docs at its start.\n(f) Tests are mutation-resistant: assertEquals on full text and on the full events list. RED was recorded in steps 1 and 2.\n(g) All 7 paths were written with Edit/Write and listed in complete_step.modifiedFiles. No VS Code or daemon file changed.\nIf anything changes, rerun step 4's command fresh and submit THAT output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PLUGIN_SPEC.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt"
+      ],
+      "note": "Review only; no edits after the step-4 run. (a) Supervisor sync calls: ensureMoeInitialized existing-.moe -> syncDocs(moeDir, upgrade=false); ensureDaemonRunningImpl -> syncDocs(.moe, upgrade=true) once, after `val direct = …` (past reachable, other-side, max-attempt, cooldown and protected-refusal returns) and before the launch try; syncBundledDocs forwards the flag to syncRoleDocs/syncSkills. No other caller. (b) initializeProject/syncAgentContext keep default upgrade=true; InitMoeAction and MoeToolWindowPanel call initializeProject only for a missing .moe (unchanged). Unmarked files are kept in both modes (I4); non-.md skill assets stay create-only. (c) syncDocs catches any docSync exception (debug log), and syncBundledDocs catches role docs and skills separately, so neither blocks connect or spawn. A spawn that throws after the upgrade leaves the same files as before this task. (d) The upgrade runs only inside the spawn path, gated by cooldown, attempt counter and the protected replacementInFlight guard. (e) Residual: a daemon mid-restart looks unreachable, so the plugin may upgrade just before its own racy spawn attempt; the restarted daemon rewrites its docs at its start. (f) Tests assert full text and full event lists; RED recorded in steps 1 and 2. (g) 7 paths, all via Edit; no moe-vscode/packages changes.",
+      "startedAt": "2026-11-03T02:27:30.572Z",
+      "completedAt": "2026-11-03T02:27:51.641Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 348.7,
+  "comments": [
+    {
+      "id": "comment-c5c9bd3dd711409794d843407327adcf",
+      "author": "governor-e6b40560",
+      "content": "Governor evidence, 07:10Z: the 07:04:17Z daemon restart (swap to the 5c5b3706 build) reproduced the downgrade. Right after the restart, .moe/roles/worker.md was rewritten (mtime 07:04:21Z). Its content matches docs/roles/worker.md at 03355c25, the installed plugin build: 2 diff lines, the marker header. It does not match 5c5b3706, the daemon build that just started: 8 diff lines. So the daemon's start-time writeInitFiles refresh was overwritten seconds later by the plugin's reconnect sync.",
+      "timestamp": "2026-11-03T07:07:14.534Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T00:34:03.097Z",
+  "updatedAt": "2026-11-04T19:20:43.975Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T02:05:37.954Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T02:32:44.027Z",
+    "wallClockMs": 1626073
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-7328a40d"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T02:18:37.701Z",
+  "executionContract": {
+    "intendedBehavior": "Connecting the JetBrains plugin to a project whose .moe/ exists never overwrites an existing role doc or skill file. A live daemon rewrote those at its own start, and they may be newer than the plugin's bundled copy. On connect the plugin only creates missing files. It upgrades stale marked copies only on the path where it starts the daemon itself, right before the launch, because that daemon then serves the plugin's bundled docs. A fresh project (no .moe/) is scaffolded exactly as today. Unmarked (user-customized) files and non-markdown skill assets are never overwritten, as today.",
+    "acceptanceCriteria": [
+      "DoD 1: with a reachable same-project daemon, connect's ensureMoeInitialized() and ensureDaemonRunning() call the doc sync only with upgrade=false (S1, S2). writeGeneratedDoc/syncRoleDocs/syncSkills with upgrade=false never overwrite an existing marked file (I1, I5). The fresh-.moe branch and unmarked files are unchanged (I4; initializeProject untouched).",
+      "DoD 2: MoeProjectInitializerTest covers older plugin copy kept (I1), newer plugin copy upgraded under the chosen rule (I2, I5 with upgrade=true), missing file created (I3, I5) and unmarked file kept (I4). MoeDaemonSupervisorTest proves where each mode runs: S1 and S2 never upgrade, S3 upgrades once right before this plugin's own launch, S4 never upgrades on a refused spawn.",
+      "DoD 3: the checkRefs[0] command exits 0 under the jetbrains-gradle lease: parity-check, lint, gradlew.bat test --rerun, and the JUnit XML totals line with failures=0 errors=0. The completion evidence carries the command and the counts."
+    ],
+    "invariants": [
+      "A missing .moe/ still goes through MoeProjectInitializer.initializeProject unchanged; initializeProject and syncAgentContext keep upgrade = true.",
+      "shouldUpgradeGeneratedDoc and the stamp/marker formats are unchanged, so the plugin and the daemon still agree byte for byte on stamps.",
+      "Unmarked files are never overwritten in either mode. Non-markdown skill assets stay create-only.",
+      "Error handling: a docSync failure is logged and never blocks connect or spawn.",
+      "No daemon, proxy or VS Code file changes; the daemon's writeInitFiles/writeSkillFiles keep their rule."
+    ],
+    "compatibility": [
+      "MoeDaemonSupervisor gains a trailing constructor parameter with a default; MoeProjectService (named args) and ManagedVmPanel (two args) compile unchanged.",
+      "syncSkills keeps @JvmOverloads and its (moeDir) and (moeDir, bundledDir) forms; syncRoleDocs(moeDir) and writeGeneratedDoc(target, stamped) keep working with upgrade defaulting to true."
+    ],
+    "approvedScope": [
+      "MoeProjectInitializer: the upgrade flag on writeGeneratedDoc, syncRoleDocs (plus a bundled-map test seam) and syncSkills/syncSkillDir, and their KDocs.",
+      "MoeDaemonSupervisor: the docSync constructor seam, the companion syncBundledDocs default, ensureMoeInitialized's existing-.moe branch (create-only), and one upgrade call in ensureDaemonRunningImpl's spawn path.",
+      "Tests: I1-I5 in MoeProjectInitializerTest and S1-S4 in MoeDaemonSupervisorTest (plus the helper's docSync parameter).",
+      "Docs: CLAUDE.md lines 16 and 42, docs/ARCHITECTURE.md line 62, docs/PLUGIN_SPEC.md line 36."
+    ],
+    "reuse": [
+      "writeGeneratedDoc/shouldUpgradeGeneratedDoc/stampMarker/stampSkillFile stay the single upgrade rule; only a flag gates the overwrite.",
+      "The constructor-seam pattern of portProbe/processStarter (companion default function), and the existing reachable / cooldown / max-attempt test fixtures and setSpawnAttempts helper."
+    ],
+    "sourceAssumptions": [
+      "At planning (target 7379c2bc), MoeDaemonSupervisor.ensureMoeInitialized() (~:615) calls initializeProject when .moe is missing, and otherwise ALWAYS calls syncRoleDocs(moeDir) and syncSkills(moeDir) (~:630-635). connect() calls it at MoeProjectService.kt:150, and ensureDaemonRunningImpl() calls it again at :127 before any liveness check.",
+      "ensureDaemonRunningImpl(): reachable or other-side returns, then the max-attempt and cooldown gates, then `val direct = …` (protectedCommandOrRefuse may return false), then `try { val pb = …; processStarter(pb) … }`.",
+      "MoeProjectInitializer.writeGeneratedDoc (~:175) creates a missing file and overwrites when the marker shas differ. syncRoleDocs (~:191) reads loadBundledRoleDocs() via PluginManagerCore, which finds nothing in unit tests. syncSkills (~:240, @JvmOverloads, injectable bundledDir) and syncSkillDir (~:266) use it for .md and manifest.json; other assets are create-only.",
+      "The daemon rewrites stale marked role docs and skills at every start (packages/moe-daemon/src/index.ts:737-738, writeInitFiles/writeSkillFiles); unmarked docs whose body matches a shipped version are upgraded too. VS Code has no doc sync."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- An orderable marker (version or timestamp in the stamp) was rejected. It changes the stamp format on both writers, regenerates initFiles.ts and the 1.4 MB skillFiles.ts, needs history at build time (CI checks out shallow), and breaks the 'plugin and daemon stamp byte-identically' invariant. Far over one task's size.\n- Ordering from shipped-sha history was rejected. Role docs have SHIPPED_ROLE_BODY_SHAS only inside the daemon's generated JS, and skills have no history list at all, so the plugin would need a new generated manifest across packages.\n- Comparing /health versions was rejected. Dev builds share one SemVer, so equal versions with different docs would still downgrade.\n- Never upgrading at all (pure create-only) was rejected. It drops DoD 2's 'plugin copy newer: upgraded' case.\n- Chosen: the task description's first shape. Docs follow the daemon that serves the project. The plugin upgrades only when it is the one starting the daemon, and is create-only on connect.",
+    "codebaseInsights": "- connect() calls ensureMoeInitialized() before it knows whether a daemon is live, and ensureDaemonRunningImpl() calls it again first thing. The old unconditional sync therefore ran on every reconnect, including right after a newer daemon restarted, which is the observed 19:13Z downgrade.\n- The daemon rewrites its own bundled docs on every start, so the plugin's upgrade only matters on its own spawn path, where the daemon it launches ships the same docs.\n- The supervisor already injects every effect through constructor lambdas with companion defaults; docSync follows that.\n- Unit tests have no plugin bundle (PluginManagerCore finds nothing), so supervisor tests must use the seam. A real-file assertion through the supervisor would pass vacuously.",
+    "risks": "1. Residual window: a daemon in mid-restart looks unreachable, so the plugin may run its upgrade sync just before its own (pre-existing, racy) spawn attempt. It is narrower than today's every-connect downgrade. Name it in the completion summary.\n2. MOE_DAEMON_COMMAND pointing at another daemon: the plugin upgrades its bundled docs before the launch, and that daemon then rewrites its own at its start. The result is transiently mixed and then correct.\n3. task-fb0ab382 (PLANNING) and task-7faede18 (PLANNING) may also touch MoeDaemonSupervisorTest.kt or MoeDaemonSupervisor.kt. Insert tests beside related ones rather than at the class end, to keep the landing hunks apart.\n4. WT-18 (task-1b2e6fe3, WORKING) edits CLAUDE.md and docs/ARCHITECTURE.md. Keep this task's doc hunks to the named lines.\n5. Gradle: always hold the jetbrains-gradle lease, use --rerun, and never pattern-kill java or gradle processes.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeProjectService.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+      "packages/moe-daemon/src/index.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "78cfa1c16fdbf7bf46be97960388868e852dcbf4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T02:18:37.729Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T02:19:34.203Z",
+  "reviewStartedAt": "2026-11-03T02:28:10.407Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && W=$(wslpath -w \"$PWD\") && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $W\\moe-jetbrains && .\\gradlew.bat test --rerun\" && grep -h -o 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' moe-jetbrains/build/test-results/test/*.xml | awk -F'\"' '{t+=$2; s+=$4; f+=$6; e+=$8} END {print \"JUnit totals: tests=\" t \" skipped=\" s \" failures=\" f \" errors=\" e; exit (f + e > 0)}'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nnpm notice run lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n> Task :compileKotlin UP-TO-DATE\n> Task :compileTestKotlin UP-TO-DATE\n> Task :testClasses UP-TO-DATE\n> Task :prepareTest\n> Task :test\n\nBUILD SUCCESSFUL in 29s\n11 actionable tasks: 2 executed, 9 up-to-date\nJUnit totals: tests=594 skipped=0 failures=0 errors=0\nEXIT=0\n(run from the task worktree root under the jetbrains-gradle lease; 39 TEST-*.xml all stamped 02:26:42Z, after the 02:26:12Z start; compile tasks UP-TO-DATE because the focused GREEN runs had already compiled the final sources)",
+    "reportedAt": "2026-11-03T02:28:10.407Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+    "CLAUDE.md",
+    "docs/ARCHITECTURE.md",
+    "docs/PLUGIN_SPEC.md"
+  ],
+  "completionSummary": "JetBrains connect no longer downgrades role docs/skills that a newer running daemon wrote.\n- MoeProjectInitializer: writeGeneratedDoc/syncRoleDocs/syncSkills/syncSkillDir gain `upgrade: Boolean = true`. upgrade=false is create-only: an existing file is never replaced. syncRoleDocs also gains a `bundled` map test seam. Unmarked files are kept and non-.md skill assets stay create-only, in both modes. initializeProject and syncAgentContext are unchanged (upgrade=true).\n- MoeDaemonSupervisor: new trailing ctor param `docSync: (File, Boolean) -> Unit = ::syncBundledDocs`. The companion catches role-doc and skill failures separately, and a `syncDocs` wrapper catches any seam exception, so a sync failure never blocks connect or spawn. ensureMoeInitialized's existing-.moe branch syncs with upgrade=false. ensureDaemonRunningImpl upgrades once, right before the plugin launches its own daemon: after the reachable, other-side, max-attempt, cooldown and protected-refusal returns. MoeProjectService and ManagedVmPanel compile unchanged.\n- Docs: CLAUDE.md lines 16 and 42, ARCHITECTURE.md line 62 and PLUGIN_SPEC.md line 36 no longer say \"force-sync on connect\".\nTests: MoeProjectInitializerTest I1-I5 (RED: I1 and I5 failed with the flag ignored). MoeDaemonSupervisorTest S1-S4 (RED: all 4 failed with the seam wired as before). Full suite: 594 tests (585 + 9), 0 failures, 0 errors. S1 is named `connecting to an existing moe dir only creates missing docs`, because JVM method names cannot contain '.'.\nResidual windows, not fixed by design:\n- A daemon in mid-restart looks unreachable, so the plugin may upgrade just before its own pre-existing racy spawn attempt. The restarted daemon rewrites its docs at its start.\n- If MOE_DAEMON_COMMAND points at a different daemon build, the plugin upgrades and then that daemon rewrites at its start: briefly mixed, then correct.\nNo daemon, proxy or VS Code files changed.",
+  "commits": [
+    {
+      "sha": "48dd6b8a772d5f3cdfa4b8e946352ed045447e81",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T02:18:38Z",
+      "paths": [
+        "CLAUDE.md",
+        "docs/ARCHITECTURE.md",
+        "docs/PLUGIN_SPEC.md",
+        "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeProjectInitializer.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/services/MoeDaemonSupervisorTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeProjectInitializerTest.kt"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T02:29:17.485Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T02:29:20Z",
+    "at": "2026-11-03T02:33:14.108Z"
+  },
+  "completedAt": "2026-11-03T02:32:44.027Z",
+  "reviewCompletedAt": "2026-11-03T02:32:44.027Z",
+  "reviewSummary": "Reviewed completion 48dd6b8a, which is contained and pushed on origin/moe/work-2026-10-24. 7 files, +215/-30 (net 185); no daemon, proxy or VS Code files.\n\nRe-ran checkRefs[0] verbatim from the control checkout root, holding the jetbrains-gradle lease (released after). HEAD 1b329836 and the working tree are clean against 48dd6b8a for moe-jetbrains, scripts, docs/roles and package.json, so the run used the reviewed bytes. Results: parity PASS, lint OK, compile and `> Task :test` executed, BUILD SUCCESSFUL 33s, JUnit totals tests=594 skipped=0 failures=0 errors=0, EXIT=0. The fresh XMLs show MoeProjectInitializerTest 22/0/0 and MoeDaemonSupervisorTest 83/0/0, with all 9 new testcases present.\n\nDoD1: ensureMoeInitialized's existing-.moe branch syncs with upgrade=false. The single upgrade=true call in ensureDaemonRunningImpl sits after `val direct`, which puts it past the reachable/other-side, max-attempt, cooldown and protected-refusal returns, and before the launch. The missing-.moe initializeProject branch is unchanged. connect() runs ensureMoeInitialized then ensureDaemonRunning, so a reachable daemon only ever gets create-only syncs. The overwrite is gated on `upgrade && shouldUpgradeGeneratedDoc`, the stamps are unchanged, unmarked files are kept and non-.md assets stay create-only. A sync failure is caught and never blocks connect or spawn.\n\nDoD2: I1-I5 and S1-S4 assert full text and full event lists (connect [sync:false]; reachable [sync:false,sync:false] with 0 starts; spawn [sync:false,sync:true,start], with cooldown adding only sync:false; refused spawn [sync:false]).\n\nDoD3: the command and counts above. The docs hunks are single-line and accurate, and the residual windows are disclosed.\n\nNon-blocking notes: the syncDocs catch overlaps the companion's per-sync catches. syncRoleDocs' `bundled` test seam is public and could be internal.",
+  "requiredCheckAtDone": null
+}

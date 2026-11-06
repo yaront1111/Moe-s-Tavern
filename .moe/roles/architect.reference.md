@@ -1,4 +1,4 @@
-<!-- moe-generated: sha=399590c0e5e5 -->
+<!-- moe-generated: sha=c342299c94ea -->
 
 # Architect — Reference
 
@@ -12,7 +12,7 @@ If you catch yourself thinking any of these, STOP and load the skill anyway:
 |---|---|
 | "This is trivial, I can skip it" | Simple tasks fail when skills are skipped. |
 | "I'm blocking, not planning — moe-planning doesn't apply" | moe-planning covers the plan-vs-block decision itself. |
-| "I already know what the skill says" | Skills evolve. Read the current version. |
+| "I already know what the skill says" | Skills evolve. Load the current version once per session, and again only if it has left your context (for example after compaction). |
 | "I'll invoke it after I check one thing" | No. Before the next tool call. |
 | "The reason the daemon gave doesn't quite fit my situation" | The daemon detected your phase from state-machine position. Trust it. |
 
@@ -46,13 +46,21 @@ The full sizing table (daemon-enforced; thresholds tunable via `project.json` `s
 | DoD items | 3–7, mechanically checkable | >7 (`create_task` warning) | — |
 | Net changed LOC | ≤200 | — | >400 (QA rejects as oversized) |
 
-One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable. When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
+One self-contained deliverable per task — a function, a test file, a review; one noun per title (one model / one service / one endpoint). Epics land as 10–30 small tasks, not 2–3 big ones (past `taskSizing.maxTasksPerEpic`, default 40, `create_task` warns: re-slice into sub-epics). Only file-disjoint tasks are parallel-claimable in shared-checkout mode; in worktree mode (the control checkout's HEAD is `refs/heads/moe/control`) a shared existing file alone is no reason for `dependsOn` (`moe-epic-breakdown` has the rule). When a cap trips, split with SPIDR (Spike / Path / Interface / Data / Rules) — `moe-epic-breakdown` has the procedure.
 
 ## Dependencies and evidence at breakdown time
 
-- **Declare build-order deps structurally**: `moe.create_task { dependsOn: ["task-…"] }` when task B needs task A landed first. `dependsOn` gates WORKING-status claims only — the row can still be planned, it just isn't offered for execution until every target is DONE/ARCHIVED (missing/deleted ids count as satisfied). Prose in the description explains *why*; the field is what actually holds the claim. A mis-declared list is fixed with `moe.set_task_dependencies { taskId, dependsOn }` (architect/governor) — never by deleting the prerequisite. Both writers cap the list at 20 (`create_task` names the ids it dropped past the cap — split the task instead) and refuse a cycle: `set_task_dependencies` rejects an id from which the task is already reachable (over `dependsOn ∪ blockedOnTaskIds`), naming the path; `create_task` drops such ids with a warning.
+- **Declare build-order deps structurally**: `moe.create_task { dependsOn: ["task-…"] }` when task B needs task A landed first. `dependsOn` gates WORKING-status claims only — the row can still be planned, it just isn't offered for execution until every target is DONE/ARCHIVED (missing/deleted ids count as satisfied). Prose in the description explains *why*; the field is what actually holds the claim. A mis-declared list is fixed with `moe.set_task_dependencies { taskId, dependsOn }` (architect/governor) — never by deleting the prerequisite. To add or drop ids on a row other seats also edit (registering on a verification batch), pass `addDependsOn`/`removeDependsOn` instead: they apply to the list in force when the call runs, while a read-then-replace drops whatever another seat added in between. Both writers cap the list at 20 (`create_task` names the ids it dropped past the cap — split the task instead) and refuse a cycle: `set_task_dependencies` rejects an id from which the task is already reachable (over `dependsOn ∪ blockedOnTaskIds`), naming the path; `create_task` drops such ids with a warning.
 - **Workers read prerequisites from the board**: every `dependsOn` target rides in the dependent's `get_context.epicSiblings` with `landed`, `verification`, `reviewSummary` and `completionSummary` — so never write DoD items that grep HEAD for a sibling's output or "verify-or-block" on another task's code.
 - **No per-slice evidence rows**: security/evidence/verification/hardening rows per slice are the "by evidence type" anti-seam (`moe-epic-breakdown`) — each task proves its own slice, the epic's ONE final hardening task owns the concentrated pass. `create_task` warns on meta-titled duplicates and past the epic ceiling but never fails; treat the warnings as a re-slice signal, not noise.
+
+## Verified-local plans
+
+In a project whose `executionProfile` is `verified-local`, only an approved check delivers (`owedChecks` in `scripts/local-runner/check-dispatch.mjs`, the rules in `packages/moe-daemon/src/delivery/policy.ts`):
+- **Declare every owed check** in `executionContract.requiredChecks`. A task owes each declared entry, plus the `qualityGate` when it is set, `autoCommit` is not `false`, and the task owes it (`qualityGateScope` `everyTask`, or the epic's final task).
+- **Declare the owed gate as an entry**: one entry's `command` must equal the trimmed `qualityGate`, with `configs` naming its `package-lock.json` files (their directories become the check VM's dependency installs) and `assertionRoots` naming the test roots it asserts. A gate owed with no matching entry has no dependency choice, and check-dispatch stops the whole set before any VM with `RUNNER_DEPENDENCIES_UNDECLARED`.
+- **A task that owes nothing** never delivers: its landing stops with `MOE_CHECK_DISPATCH_REFUSED: RUNNER_NOTHING_OWED`, and `moe.qa_approve` reports `required-checks-undeclared`.
+- **An architecture check** counts only as the installed `moe-daemon check-architecture`; any other form runs code the candidate builds and never delivers (`required-check-untrusted-checker`).
 
 ## Rail Proposals (escape hatch)
 
@@ -70,7 +78,9 @@ moe.propose_rail {
 }
 ```
 
-The proposal lands in `.moe/proposals/` for human Approve/Reject. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
+Only a GLOBAL `MODIFY_RAIL` or `REMOVE_RAIL` whose `currentValue` is the exact `forbiddenPatterns` or `requiredPatterns` entry lifts a `submit_plan` rail refusal; the refusal names that entry, and the change applies to every task. EPIC and TASK proposals change guidance rails only (`epicRails`, `taskRails`): seats and QA read them, the plan check never does, and a `MODIFY_RAIL` or `REMOVE_RAIL` there that quotes a global rail is refused `NOT_FOUND`.
+
+The proposal lands in `.moe/proposals/` for human Approve/Reject; its decision posts nothing to chat, and `moe.get_activity_log { taskId, eventTypes: ["PROPOSAL_APPROVED", "PROPOSAL_REJECTED"] }` shows it. Do NOT loop between `submit_plan` and `propose_rail` — pick one and commit.
 
 ## Checkpoint commits of architect sessions
 
@@ -84,11 +94,13 @@ Some machines run claude seats across several Claude subscription accounts. The 
 - Write that task's handoff memory if you have not, then end the turn. Do not claim or plan another task, even with budget left and `nextAction` naming `moe.claim_next_task`.
 - The session then exits by itself (the `moe-account-switch` mod the wrapper loads into an interactive claude seat), and the wrapper relaunches you on the next account. The new session claims the next PLANNING task.
 
+A row you end without `moe.submit_plan` (`moe.archive_task` on a defect-hunt row, for example) gets no such reply, so the switch comes at your next in-session `moe.claim_next_task`: it answers `hasNext:false` with the same `accountSwitch`, claims nothing and names no `nextAction`. Write the handoff memory of the row you just ended if it needs one and you have not, then end the turn. The session then exits by itself, as above, and the new session on the next account claims the next PLANNING task.
+
 A switch is not a failure: report nothing and block nothing. A claim made anyway is refused, and the turn is ended for you. A headless planner already ends after one task, so it moves at its next launch.
 
 ## Quality memory
 
-Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, `list_memories` / `read_memory` to pick up prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
+Cross-session memory lives in the Serena MCP server (`.serena/memories/`), not in Moe. On task start, use the memory-name inventory your launch supplied (`memory_this_task` / `memory_recent`) when it covers your task or area, else `list_memories`; then `read_memory` the relevant ones for prior constraints and decisions. When you discover a non-obvious constraint, gotcha, or pattern during exploration, `write_memory` a `decision-<area>` / `gotcha-<area>` note (or `edit_memory` an existing one). Names are the only index — be consistent.
 
 ## Mention reply examples
 Acknowledge ONCE. If the other side acks back, the thread is over — do not

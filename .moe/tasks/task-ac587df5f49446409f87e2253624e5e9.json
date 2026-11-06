@@ -1,0 +1,224 @@
+{
+  "id": "task-ac587df5f49446409f87e2253624e5e9",
+  "epicId": "epic-be924fb8",
+  "title": "bug: JetBrains prior-handoff header reads from/to/createdAt, but the daemon writes releasedBy/releasedAt/reason, so every handoff box in Task Detail shows only \"#N\"",
+  "description": "Found by hunt task-2597ac6f (architect-1dd28c7c, finding F4). It was held back only because it shares MoeJson.kt, Models.kt and MoeJsonTest.kt with task-37e03b91. The governor filed it at 15:47Z on 2026-11-03 and accepts the overlap (worktree mode, merge-tree squash). The citations were re-checked at 946358a8.\n\nPROBLEM. Task Detail's \"prior handoffs\" header never shows who released the task, when, or why. Every box reads just \"#1\", \"#2\" and so on. The JetBrains model expects keys the daemon never writes. The unit-test fixture encodes the wrong shape, so the suite stays green against a payload no daemon sends.\n\nEVIDENCE (HEAD 946358a8).\n- **Daemon:**\n  - packages/moe-daemon/src/types/schema.ts:553-571: HandoffNote is {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?};\n  - tools/releaseTask.ts:150-156, 240-241 and 293-294 write it.\n- **JetBrains:**\n  - model/Models.kt:124-132: HandoffNote(from, to, createdAt, ...);\n  - util/MoeJson.kt:512-528: parseHandoffs reads \"from\", \"to\" and \"createdAt\";\n  - toolwindow/TaskDetailDialog.kt:910-918: handoffBlocks builds the header from those three fields;\n  - src/test/kotlin/com/moe/util/MoeJsonTest.kt:419-427: the priorHandoffs fixture uses from/to/createdAt.\n- **Repro:** /mnt/d/moe-scratch/hunt-2597/B/zzHunt2597B.wire.test.ts F3. A real release_task writes the handoff keys `reason, releasedAt, releasedBy, whatIsDone, whatRemains`, never from/to/createdAt (notes.md in the same folder).\n\nFIX DIRECTION.\n- Model and parse releasedBy, releasedAt and reason per schema.ts. Render the header as \"#N released by <releasedBy> (<releasedAt>)\", with the reason when one is present. A note missing them still renders \"#N\" without error.\n- Fix the fixture to the daemon's shape, and add a case that fails if the parser reads from/to/createdAt again.\n- **Out of scope:** the VS Code twin has the same shape bug (moe-vscode/src/types/moe.ts:202-210 HandoffNote, and TaskDetailPanel.ts around 1225). JetBrains goes first; do not edit VS Code in this row.\n\nPLACEMENT (no dependsOn edge).\n- task-37e03b91 (HIGH) edits Models.kt (PlanStep amendments), MoeJson.kt (step parse around 594-605), TaskDetailDialog.kt (step rendering) and MoeJsonTest.kt. task-40813cc1 edits ProjectSettings and parseProjectSettings.\n- Keep this row's edits inside HandoffNote, parseHandoffs and handoffBlocks, and in the existing priorHandoffs fixture and its test method.\n- Rebase on the target tip before landing if either peer has landed.\n- Gradle runs only through cmd.exe gradlew.bat under the jetbrains-gradle lease. Hold the lease only around each run.",
+  "definitionOfDone": [
+    "The JetBrains parser reads releasedBy, releasedAt and reason (schema.ts HandoffNote). Task Detail's handoff header shows the releaser and the release time, plus the reason when present. A note without them still renders \"#N\" without error.",
+    "MoeJsonTest's priorHandoffs fixture uses the daemon's shape (releasedBy/releasedAt/reason), and a test fails if the parser reads from/to/createdAt again. `gradlew.bat test` passes under the jetbrains-gradle lease. moe-vscode is untouched."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: move the two JetBrains test files to the daemon's handoff shape. Use the Edit tool only (global rail). The test sources will not compile until step 2 renames the model fields, so do not run Gradle between steps 1 and 2.\n\nMoeJsonTest.kt:\n(a) In liveTaskJson()'s priorHandoffs entry (lines 418-428 at ef5c7101), replace the three lines\n  \"from\": \"worker-1\",\n  \"to\": \"qa-1\",\n  \"createdAt\": \"2026-09-11T10:09:00.000Z\",\nwith\n  \"releasedBy\": \"worker-1\",\n  \"releasedAt\": \"2026-09-11T10:09:00.000Z\",\n  \"reason\": \"context budget\",\nKeep the four body fields as they are.\n(b) In `live runtime data survives a legacy time budget payload` (:573), replace `assertEquals(\"qa-1\", requireNotNull(task.priorHandoffs).single().to)` with a whole-note equality:\n  assertEquals(com.moe.model.HandoffNote(releasedBy = \"worker-1\", releasedAt = \"2026-09-11T10:09:00.000Z\", reason = \"context budget\", whatIsDone = \"parser\", whatRemains = \"review\", pitfalls = \"two call sites\", openQuestions = \"none\"), requireNotNull(task.priorHandoffs).single())\nUse the FULLY-QUALIFIED name, with no new import line. task-40813cc1 may add model imports in the same block, and two insertions at the same spot conflict in the merge-tree landing.\n(c) Add a new @Test directly after that method, before `a malformed legacy time budget leaves unrelated error handling intact` (:581). Not near :360, where task-37e03b91 inserts its own test. Name it `prior handoffs read the daemon's releasedBy, releasedAt and reason, never from, to or createdAt`.\n  - Its JSON is one task, `{\"id\": \"task-h\", \"priorHandoffs\": [ ... ]}`, with two notes.\n  - Note 1: releasedBy \"worker-1\", releasedAt \"2026-11-03T10:00:00.000Z\", reason \"context budget\", whatIsDone \"parser\", whatRemains \"ui\", plus the decoys from \"decoy-from\", to \"decoy-to\", createdAt \"decoy-created\".\n  - Note 2: legacy keys only: from \"w1\", to \"w2\", createdAt \"2026-09-11T09:30:00Z\", whatIsDone \"legacy only\", whatRemains \"x\".\n  - Expected: listOf(com.moe.model.HandoffNote(releasedBy = \"worker-1\", releasedAt = \"2026-11-03T10:00:00.000Z\", reason = \"context budget\", whatIsDone = \"parser\", whatRemains = \"ui\"), com.moe.model.HandoffNote(whatIsDone = \"legacy only\", whatRemains = \"x\")).\n  - Assert it equals BOTH parseTask(json).priorHandoffs and parseSnapshotTask(json).priorHandoffs. Both parser paths call parseHandoffs (MoeJson.kt:432 and :635).\n  - Data-class equality is what makes this bite. Re-adding from/to/createdAt to the model (they would parse to the decoys) fails it, and so does sourcing releasedBy/releasedAt from from/createdAt. This is DoD 2's 'a test fails if the parser reads from/to/createdAt again'.\n\nTaskTimingPresentationTest.kt (it asserts the old header and must move with it):\n(d) :177, the rich fixture: `\"\\\"priorHandoffs\\\":[{\\\"from\\\":\\\"w1\\\",\\\"to\\\":\\\"w2\\\"}]\"` becomes the same with {\"releasedBy\":\"w1\",\"releasedAt\":\"2026-09-11T09:30:00Z\"}.\n(e) `each supplemental item on its own still yields a populated section` (:304-310): the note's from/to/createdAt become releasedBy \"w1\", releasedAt \"2026-09-11T09:30:00Z\", reason \"context budget\", with the body fields kept. The expected header becomes exactly \"#1 released by w1 (2026-09-11T09:30:00Z): context budget\".\n(f) `handoffs keep their supplied order and number from one` (:329-335): the notes become [{\"releasedBy\":\"a\"},{\"releasedAt\":\"ts\"},{\"reason\":\"why\"},{},{\"from\":\"x\",\"to\":\"y\",\"createdAt\":\"z\"}]. The headers must be exactly [\"#1 released by a\", \"#2 (ts)\", \"#3: why\", \"#4\", \"#5\"]. The last two pin DoD 1's 'a note without them still renders #N without error', legacy keys included.\n(g) `a fully populated task keeps every supplement alongside the KPIs` (:348 and :362): {\"from\":\"w1\"} becomes {\"releasedBy\":\"w1\"}, and the expected value becomes listOf(\"#1 released by w1\").",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt"
+      ],
+      "note": "Updated daemon-shaped fixtures, whole-note equality and decoy regression through both parser paths; updated full/partial/empty/legacy-only header expectations. Gradle explicitly deferred per approved step until model rename in step 2.",
+      "startedAt": "2026-11-03T16:07:27.065Z",
+      "completedAt": "2026-11-03T16:07:49.117Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix: three hunks, each kept clear of the peer rows' hunks in the same files. task-37e03b91 edits Models.kt around 91-120, MoeJson.kt around 24 and 604-630, and TaskDetailDialog.kt around 452-467. task-40813cc1 edits ProjectSettings (Models.kt:47+) and parseProjectSettings (MoeJson.kt:278+).\n(a) Models.kt:124-132 HandoffNote: replace `val from: String? = null, val to: String? = null, val createdAt: String? = null,` with `val releasedBy: String? = null, val releasedAt: String? = null, val reason: String? = null,`. Keep them nullable with null defaults; the four body fields are unchanged. Add a one-line KDoc above the class: it is a release_task hand-off note, keyed as the daemon writes it (HandoffNote in packages/moe-daemon/src/types/schema.ts). DELETE from/to/createdAt outright rather than keeping them alongside:\n  - the daemon has never written them (HandoffNote has had releasedBy/releasedAt/reason since 480dd8a9, 2026-05-15);\n  - all 18 notes on the live board carry releasedBy/releasedAt/reason and none carry from/to/createdAt, so dropping them is backward-compatible with existing .moe/ state;\n  - with them gone, any leftover read is a compile error.\n  Nothing else reads them: TaskCard.kt:155 uses only priorHandoffs.size, and nothing re-serializes the note.\n(b) MoeJson.kt:512-528 parseHandoffs: read `releasedBy`, `releasedAt` and `reason` with getStringOrNull, in place of from, to and createdAt. Error handling stays exactly as lenient as today:\n  - getStringOrNull returns null for a missing, null or non-primitive value (MoeJson.kt:44-52);\n  - a non-object entry is skipped;\n  - a non-array priorHandoffs yields null.\n  So a note without the keys parses to nulls and never throws.\n(c) TaskDetailDialog.kt:910-918 handoffBlocks: the header buildString becomes\n  append(\"#\").append(i + 1)\n  if (!h.releasedBy.isNullOrBlank()) append(\" released by \").append(h.releasedBy)\n  if (!h.releasedAt.isNullOrBlank()) append(\" (\").append(h.releasedAt).append(\")\")\n  if (!h.reason.isNullOrBlank()) append(\": \").append(h.reason)\n  The pieces are independent, like the old code, so a note with none of them renders \"#N\".\n  The reason is free text, capped at 2000 chars by releaseTask.ts:241/294. Swing's TitledBorder constrains its title label to the panel width, so a long reason ends in \"...\". No truncation, whitespace folding or tooltip is added: 0 of the 18 live reasons contain a line break.\n  Leave HandoffBlock, the Swing loop at :616-637 and MoeBundle.properties (held by task-37e03b91) untouched. The literal \" released by \" mirrors the old literal \" from \": the companion is pure and headless, with no bundle lookups.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "modifiedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+      ],
+      "note": "Replaced nonexistent wire fields with releasedBy/releasedAt/reason and documented daemon schema. Reused getStringOrNull and independent isNullOrBlank guarded header fragments; no body or unrelated parsing changes. Fresh Gradle verification follows in the plan's dedicated gate.",
+      "startedAt": "2026-11-03T16:07:49.145Z",
+      "completedAt": "2026-11-03T16:08:06.495Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Gate, run ONCE. Its output is moe.complete_task's verification evidence.\n1. Take the shared lease: moe.acquire_resource { resourceId: \"jetbrains-gradle\", taskId, workerId, note: \"gradlew test --rerun\" } (mem:convention-jetbrains-gradle-lease). If it is queued, moe.report_blocked with that resourceId parks the task and the grant returns it.\n2. Run the executionContract checkRef from inside your worktree. It does the following:\n   - cds to <worktree>/moe-jetbrains (gradlew.bat lives there, not at the repo root; mem:gotcha-gradle-jetbrains-shared-box 2c);\n   - runs Windows `.\\gradlew.bat test --rerun` through cmd.exe, because WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl);\n   - prints the BUILD line and the summed TEST-*.xml counts, and exits with Gradle's code.\n   `--rerun` matters: a plain `test` can be UP-TO-DATE and run zero tests.\n3. Release the lease right after, on failure too.\n\nExpected: BUILD SUCCESSFUL, exit 0, and `xml tests=N skipped=S failures=0 errors=0`, where N is the target's baseline plus 1 (the new MoeJsonTest case). If the exit is red with a truncated tail, check the Gradle daemon log for the loopback IPC flake (same memory, trap 2) and re-run once before believing it.\n\nNothing outside moe-jetbrains changes, so run no npm or vitest. moe-vscode must stay untouched (DoD 2). Its twin bug, moe-vscode/src/types/moe.ts:202-210, is out of scope.\n\nOn placement: get_context says isEpicFinal only through the highest-order fallback on this bucket epic. This plugin-wide suite IS the full regression for the only package touched; there is no cross-package flow to integrate.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "note": "Fresh exact checkRef passed: BUILD SUCCESSFUL in 28s; XML tests=633 skipped=6 failures=0 errors=0 (627 passed). Scoped correction to new test: added epicId required by parseSnapshotTask. First run caught that omitted fixture key; second had unrelated MoeProjectConnectionTest TimeoutException, immediate full retry green. jetbrains-gradle released after every run. Mandatory root qualityGate also freshly passed: parity-check.sh PASS and npm run lint exit 0, role counts 39/30/36.",
+      "startedAt": "2026-11-03T16:08:06.522Z",
+      "completedAt": "2026-11-03T16:11:20.889Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (the one review step), then complete_task with step 3's evidence.\n(1) Scope: `git status --short` and `git diff --stat` show exactly the 5 planned files. Nothing in MoeBundle.properties, moe-vscode or MoeJsonTest's import block, and no untracked file in the worktree.\n(2) Leniency and error handling: the decoy test's legacy-only note and the `{}` and legacy rows in TaskTimingPresentationTest prove a note missing the daemon keys parses to nulls and renders \"#N\" without throwing. getStringOrNull and the non-object skip are unchanged.\n(3) Mutation check. Make a scratch archive copy, never touching the worktree (mem:gotcha-jetbrains-qa-mutants-in-archive-copy):\n   - `git archive HEAD moe-jetbrains | tar -x -C /mnt/d/moe-scratch/ac587df5-mut/repo`, then copy your 5 edited files over it (a scratch dir, so cp is fine there).\n   - Under the jetbrains-gradle lease, run ONE mutant at a time with `.\\gradlew.bat test --tests <Class> --rerun`. The --tests value is unquoted.\n   - Required mutants:\n     - M2: drop the reason append in handoffBlocks. com.moe.toolwindow.TaskTimingPresentationTest must fail.\n     - M3: re-add `val from: String? = null` to HandoffNote and `from = h.getStringOrNull(\"from\")` to parseHandoffs. com.moe.util.MoeJsonTest must fail on the new decoy test.\n   - Optional M1: source releasedBy from \"from\" in parseHandoffs. MoeJsonTest must fail.\n   - Restore each mutant and delete the scratch copy afterwards.\n(4) Concurrency: the edits are pure parse and presentation with no shared state. If task-37e03b91 or task-40813cc1 lands first, landing is a merge-tree squash and these hunks are disjoint from theirs. Only if landing reports a conflict: rebase on the target tip and re-run the gate.\n(5) Would I be embarrassed? The header must never show 'null' or a dangling ' released by ' or ' ()'. Each fragment is guarded by isNullOrBlank.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial review passed: exactly 5 planned files (+56/-20), no bundle/import/VS Code/untracked changes; pure parsing/presentation, no shared mutable state or new resource exits, existing lenient helper and non-object skip preserved, independently guarded blank/null fragments avoid dangling text. Required scratch mutants both killed under individual jetbrains-gradle leases: M2 drop reason -> TaskTimingPresentationTest 22 tests, 2 assertion failures (full and reason-only header); M3 parsed from field -> MoeJsonTest 34 tests, new decoy case fails. Mutants restored byte-identical across all 5 files; scratch repo deleted. Real-tree exact gate remains green: 633 tests, 6 skipped, failures=0/errors=0. Root parity/lint gate passed.",
+      "startedAt": "2026-11-03T16:11:20.917Z",
+      "completedAt": "2026-11-03T16:12:48.938Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 370.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T15:47:05.199Z",
+  "updatedAt": "2026-11-04T19:20:44.188Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T15:57:50.997Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T16:26:16.098Z",
+    "wallClockMs": 1705101
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-fdb2af60",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T16:06:02.367Z",
+  "executionContract": {
+    "intendedBehavior": "The JetBrains plugin models and parses a prior hand-off note the way the daemon writes it (releasedBy, releasedAt, reason; schema.ts HandoffNote). Task Detail's handoff box title reads '#N released by <releasedBy> (<releasedAt>): <reason>', each fragment shown only when present, so a note with none of them still reads '#N'. The never-written from/to/createdAt keys are gone from the model and parser. MoeJsonTest's fixture uses the daemon's shape, and a decoy test fails if the parser reads from/to/createdAt again. moe-vscode is untouched.",
+    "acceptanceCriteria": [
+      "Parsing a note with releasedBy/releasedAt/reason yields HandoffNote(releasedBy, releasedAt, reason, ...body) through both parseTask and the snapshot path. Legacy from/to/createdAt keys present in the same JSON are ignored: data-class equality with no extra fields.",
+      "handoffBlocks headers: full note '#1 released by w1 (2026-09-11T09:30:00Z): context budget'; partial notes '#1 released by a', '#2 (ts)', '#3: why'; empty note '#4'; legacy-only note '#5'.",
+      "`gradlew.bat test --rerun` (the checkRef) exits 0 under the jetbrains-gradle lease with failures=0 errors=0 in the summed TEST-*.xml.",
+      "Mutants: removing the reason append fails TaskTimingPresentationTest; re-adding a parsed `from` field fails the MoeJsonTest decoy test.",
+      "git diff touches only the 5 planned moe-jetbrains files; moe-vscode is unchanged."
+    ],
+    "invariants": [
+      "Parsing stays lenient. A missing, null or wrong-typed key becomes null; a non-object entry is skipped. Nothing throws on a malformed note.",
+      "The header never prints 'null' or an empty ' released by ', ' ()' or ': ' fragment: each fragment is guarded by isNullOrBlank.",
+      "Hunks stay inside HandoffNote, parseHandoffs, handoffBlocks and the named test fixtures and methods, disjoint from task-37e03b91 and task-40813cc1."
+    ],
+    "compatibility": [
+      "Backward-compatible with existing .moe/ state: the daemon has written releasedBy/releasedAt/reason since HandoffNote was introduced (480dd8a9). All 18 handoff notes on the live board use those keys, and none use from/to/createdAt.",
+      "No daemon, MCP or wire change: the plugin only reads task.priorHandoffs.",
+      "TaskCard's handoff badge (TaskCard.kt:155) reads only priorHandoffs.size and is unaffected."
+    ],
+    "approvedScope": [
+      "model/Models.kt HandoffNote: from/to/createdAt replaced by releasedBy/releasedAt/reason, plus a one-line KDoc.",
+      "util/MoeJson.kt parseHandoffs: reads releasedBy/releasedAt/reason.",
+      "toolwindow/TaskDetailDialog.kt companion handoffBlocks: the header buildString only.",
+      "src/test/kotlin/com/moe/util/MoeJsonTest.kt: the liveTaskJson priorHandoffs entry, the :573 assertion, and one new test method after it.",
+      "src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt: the handoff fixtures and header expectations at :177, :304-310, :329-335, :348 and :362."
+    ],
+    "reuse": [
+      "The existing getStringOrNull helper and the existing header buildString pattern (independent guarded appends).",
+      "The existing parseTask / parseSnapshotTask test helpers (MoeJsonTest.kt:361-372) and TaskTimingPresentationTest's task(...) JSON builder."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/types/schema.ts:553-571 HandoffNote = {whatIsDone, whatRemains, pitfalls?, openQuestions?, releasedBy?, releasedAt, reason?, diskState?}. releaseTask.ts:150-156 builds it, and :240-241/:293-294 set releasedBy and reason (reason sliced to 2000 chars).",
+      "moe-jetbrains model/Models.kt:124-132 HandoffNote(from, to, createdAt, whatIsDone, whatRemains, pitfalls, openQuestions). util/MoeJson.kt:512-528 parseHandoffs is called from :432 (snapshot parseTasks) and :635 (parseTask).",
+      "toolwindow/TaskDetailDialog.kt:910-918 handoffBlocks builds HandoffBlock.header. metricsPresentation (:823) is internal and pure, and is tested headlessly by TaskTimingPresentationTest.",
+      "MoeJsonTest.kt:418-428 is the priorHandoffs entry inside liveTaskJson(), and :573 asserts `.to == \"qa-1\"`. TaskTimingPresentationTest.kt:177, 305-310, 329-335, 348 and 362 use from/to/createdAt fixtures and headers."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)/moe-jetbrains\" && L=$(mktemp) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && .\\gradlew.bat test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' build/test-results/test/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; exit $r"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Keep from/to/createdAt beside the new fields as a fallback. Rejected: the daemon never wrote them, and keeping them invites exactly the regression DoD 2 forbids. (2) Put the reason in a body row (a new 'Reason' handoffBlock). Rejected: DoD 1 puts it in the header, it would need a MoeBundle key in a file task-37e03b91 holds, and it would add a 6th file. (3) Truncate or fold the reason in the header, or add a tooltip. Rejected (YAGNI): Swing's TitledBorder already clips its title at the panel width with '...', and 0 of the 18 live reasons contain line breaks. (4) A Gradle dry run during planning. Not done: this seat has no acquire_resource tool for the jetbrains-gradle lease. The edits are spelled out exactly instead, and the worker's gate plus the M2/M3 mutants are the proof.",
+    "codebaseInsights": "TaskDetailDialog's companion metricsPresentation/handoffBlocks is pure and headless (no bundle), tested by TaskTimingPresentationTest through a JSON task(...) builder. MoeJson has two parse paths (snapshot parseTasks :432, single parseTask :635) that share parseHandoffs; the existing tests assert they agree. getStringOrNull is lenient. The live board (.moe/tasks) has 14 tasks with 18 handoff notes, all keyed releasedBy/releasedAt/reason, with reasons of 18-586 chars. Peers in the same files (worktree mode): task-37e03b91 (REVIEW) edits Models.kt ~91-120, MoeJson.kt ~24 and ~604-630, TaskDetailDialog.kt ~452-467, MoeJsonTest.kt with an insert after :360, and MoeBundle.properties. task-40813cc1 (WORKING) edits ProjectSettings/parseProjectSettings and MoeJsonTest settings cases.",
+    "risks": "Merge-tree conflicts with peers: keep the hunks where the steps say, use the FQN com.moe.model.HandoffNote in MoeJsonTest instead of an import, and put the new test after :579, not near :360. Gradle traps: gradlew.bat is in moe-jetbrains/ (not the root); `--rerun` is needed; an IPC flake can turn a good build red; WSL has no JDK, so use cmd.exe; mutants run in an archive copy, never in the worktree. The jetbrains-gradle lease is shared with peers' gates and QA, so release it promptly. Global rails: Edit/Write only for tracked files; no pattern-kill.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/releaseTask.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "ef5c7101ff683691eaa12fb7e9a5a785e659b7f7",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T16:06:02.397Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T16:07:27.065Z",
+  "reviewStartedAt": "2026-11-03T16:12:49.020Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)/moe-jetbrains\" && L=$(mktemp) && cmd.exe /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d $(wslpath -w \"$PWD\") && .\\gradlew.bat test --rerun\" > \"$L\" 2>&1; r=$?; grep -aE \"BUILD (SUCCESSFUL|FAILED)| FAILED$\" \"$L\"; grep -ho 'tests=\"[0-9]*\" skipped=\"[0-9]*\" failures=\"[0-9]*\" errors=\"[0-9]*\"' build/test-results/test/TEST-*.xml | awk -F'\"' '{t+=$2;s+=$4;f+=$6;e+=$8} END {print \"xml tests=\"t\" skipped=\"s\" failures=\"f\" errors=\"e}'; exit $r",
+    "exitCode": 0,
+    "outputTail": "BUILD SUCCESSFUL in 28s\nxml tests=633 skipped=6 failures=0 errors=0",
+    "reportedAt": "2026-11-03T16:12:49.020Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt",
+    "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+    "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt"
+  ],
+  "completionSummary": "Fixed JetBrains prior-handoff model/parser/header to use daemon releasedBy/releasedAt/reason. Updated daemon-shaped fixtures and added decoy equality regression through both parser paths; headers covered for full/partial/empty/legacy-only notes. Only 5 planned files changed (+56/-20); VS Code untouched. Full Gradle gate: 633 tests, 6 skipped, 0 failures/errors (627 passed). Root parity/lint gate passed. Required scratch M2/M3 mutants killed (2 header assertion failures; decoy parser assertion failure), restored and removed. Initial fixture epicId omission corrected; unrelated connection-test timeout cleared on full retry. All leases released; handoff memory saved.",
+  "commits": [
+    {
+      "sha": "d5f36e82d8d7f348c916ab32de636b3aebddc42b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T16:06:10Z",
+      "paths": [
+        "moe-jetbrains/src/main/kotlin/com/moe/model/Models.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/TaskDetailDialog.kt",
+        "moe-jetbrains/src/main/kotlin/com/moe/util/MoeJson.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/toolwindow/TaskTimingPresentationTest.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/MoeJsonTest.kt"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T16:23:41.226Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T16:24:43Z",
+    "at": "2026-11-03T16:26:40.734Z"
+  },
+  "completedAt": "2026-11-03T16:26:16.098Z",
+  "reviewCompletedAt": "2026-11-03T16:26:16.098Z",
+  "reviewSummary": "Reviewed completion d5f36e82 (task.commits completion, pushed, on moe/work-2026-10-24; control checkout HEAD == d5f36e82, moe-jetbrains tree identical and clean). Diff is +56/-20 across exactly the 5 planned moe-jetbrains files (Models.kt, MoeJson.kt, TaskDetailDialog.kt, MoeJsonTest.kt, TaskTimingPresentationTest.kt); moe-vscode, daemon and MoeBundle untouched. DoD 1: HandoffNote now holds releasedBy/releasedAt/reason (matches schema.ts HandoffNote:553-571); parseHandoffs reads them via the lenient getStringOrNull and still skips non-object entries; handoffBlocks header is '#N released by <by> (<at>): <reason>', each fragment guarded by isNullOrBlank, so an empty or legacy-only note renders '#N'. No other reader of from/to/createdAt exists (TaskCard only uses priorHandoffs.size). DoD 2: liveTaskJson fixture moved to the daemon shape and the :573 assertion is a whole-data-class equality; the new decoy test feeds releasedBy plus from/to/createdAt decoys and a legacy-only note, asserted through both parseTask and parseSnapshotTask, so it fails if the parser reads from/to/createdAt again. Header tests pin full, releaser-only, timestamp-only, reason-only, empty and legacy-only notes. Re-ran the exact task.verification command under the jetbrains-gradle lease: BUILD SUCCESSFUL in 31s, exit 0, xml tests=635 skipped=6 failures=0 errors=0. The count is 2 above the worker's 633 because HEAD also carries peer landings. MoeJsonTest 36/0 failures with the new decoy case present, TaskTimingPresentationTest 22/0 failures. Lease released. Root parity/lint gate not re-run because the diff touches no scripts or docs, and the worker reported it green. The worker's scratch M2/M3 mutants are recorded as killed, and I relied on that rather than repeating them. Complexity pass: nothing to cut, 3 one-for-one field swaps plus tests. Size 36 net LOC, well under the 400 cap.",
+  "requiredCheckAtDone": null
+}

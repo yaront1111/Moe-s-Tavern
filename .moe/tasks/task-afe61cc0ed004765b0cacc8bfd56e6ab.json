@@ -1,0 +1,41 @@
+{
+  "id": "task-afe61cc0ed004765b0cacc8bfd56e6ab",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #11): file 2-4 evidence-backed bug rows from the claim-eligibility entry points, the daemon read/query tools, and the sweep and reload paths",
+  "description": "Filed by the governor at 20:23Z on 2026-11-03. It runs in parallel with hunt #10 (task-49a2c07f), which architect-1dd28c7c claimed at 20:15Z, on disjoint lanes.\n\nWHY. At filing time 6 coders are idle and only 1 WORKING row is being coded (CQ-M07n3). The hunt #9 rows cleared fast: 9f34bac5 was planned, coded and QA'd in about 7 minutes. PLANNING holds only 3962d9a0 and hunt #10.\n\nLANE. Search in this order of preference:\n1. The claim-eligibility entry points: packages/moe-daemon/src/tools/{claimNextTask,getNextTask,waitForTask}.ts and src/util/{claimEligibility,claimableStatuses}.ts. Look for a rule (status, role, dependsOn readiness, finalizing hold, BLOCKED handling, priority/order, epic filter, team membership) that one entry point applies and a sibling skips. Examples: get_next_task offering a row claim_next_task would refuse, or wait_for_task waking for a row nobody may claim. Cite both lines and show the difference with a call.\n2. The daemon read/query tools: listMetrics.ts (with src/util/metrics.ts; it has no test file of its own), getActivityLog.ts (with src/state/activityLog.ts, src/util/reverseReader.ts and src/util/LogRotator.ts), searchTasks.ts, listTasks.ts, getPendingQuestions.ts and listWorkers.ts. Look for a filter, limit or pagination cap, ARCHIVED rule, or documented parameter that one query tool honours and a sibling ignores, or that docs/MCP_SERVER.md documents and the code does not implement (or the reverse).\n3. The sweep and reload paths: src/state/sweeps.ts, src/state/FileWatcher.ts, src/state/persistence.ts, src/util/atomicWrite.ts and src/state/massDeletionHeal.ts. Look for an alert that contradicts its documented rule (the governor role doc's blockedAt-age alert and stale-worker watcher), a reload that drops or resets a field, or an alert that double-fires or never fires. Cite today's log lines where they exist.\n\nSkip:\n- Hunt #10's lanes, so the two hunts never file the same finding: the delivery-record tools and stores (finalizeAttempt, recordCheckRun, recordCheckObservation, recordCheckDispatch, recordCommit, reattachAttempt, getCommitScope and the attempt/candidate/checkRun/checkObservation/receipt stores and deliveryProjection), the proposal and rail family (proposeRail, approve/rejectProposal, railChange.ts, util/rails.ts), and the step-lifecycle tools (start_step, complete_step, complete_task, request_replan, report_blocked, qa_approve, qa_reject).\n- Every file an open row holds. At filing time that is scripts/moe-agent.{sh,ps1}, scripts/tests/postflight-vm-route.{sh,ps1}, scripts/tests/postflight-fake-proxy.js, scripts/tests/parity-check.{sh,ps1}, scripts/moe-account-lease.mjs and its test, setTaskStatus.ts and its test (629ddc99, in REVIEW), releaseTask.ts, releaseResource.ts and src/util/claimGuards.ts (0adea941, in REVIEW), and joinTeam.ts, teamStore.ts and joinTeam.deadMembers.test.ts (3962d9a0, being planned).\n- Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n\nAlready known, so don't re-file:\n- Everything filed today (rows created on 2026-11-03), especially the actor family (d981e0b0, 2e3012b9, e977c32b, c05bf92d, 3e1d0c2e, c927e484, 47c42043), the chat family (b2f95099, 61bb5952, 314405bb, 66108835, 3064fd45, 4877ef36), the lease rows (ceb494d9, 9f34bac5), the team rows (67709965, 3962d9a0), set_task_status's role gate (629ddc99) and release force (0adea941).\n- The git-land lease waiter that isn't woken when the lease frees: fixed by ceb494d9, not yet live (the daemon swap is pending with the human).\n- TURBO auto-approve's \"WORKING by unknown\" line; the JetBrains board fingerprint omitting needsHumanReview; isEpicFinal's max-order fallback (msg-bbf4f109); a7d02ec3.\n- Held items: hunt #7 (b), the wrapper's UNKNOWN-status message; hunt #8, the using-git-worktrees skill text and chat_send's whitespace-only content; hunt #9 (b), EpicDetailDialog's ARCHIVED through /ws UPDATE_EPIC.\n- This checkout's local .serena/project.yml ignoring docs/.\n\nEVIDENCE BAR. Same as hunts #2-#10. Work only from real evidence:\n- A repro on HEAD 677d051a or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a family or gate gap: the sibling file:line that applies the check, the member file:line that skips it, and a test or call that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists (in worktree mode a shared file gets a placement note, not an edge). Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 677d051a or later run outside the shared checkout, a failure line from today's logs, or a sibling/member (or doc/code) file:line pair.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a hunt #10 lane. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 419.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:22:12.224Z",
+  "updatedAt": "2026-11-03T21:56:46.445Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:22:50.345Z"
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-74d9e1c7@2026-11-03T20:22:49Z",
+    "at": "2026-11-03T21:56:46.445Z"
+  }
+}

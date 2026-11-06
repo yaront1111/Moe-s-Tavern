@@ -1,0 +1,222 @@
+{
+  "id": "task-c8d6dbd50b734050b8eb05f859d719a4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: release_task without force treats an explicit blank/null workerId as human and releases a live peer between steps",
+  "description": "Found during task-0adea941 QA repair self-review. The proxy injects only absent workerId keys; without force, releaseTask.ts reaches claimGuards.assertReleaseCaller's `if (!caller) return`, so explicit '' or null releases a peer-held row with no IN_PROGRESS step.\nSnapshot /tmp/moe-0adea941-red-BP1LVK contains the repaired force gates plus a scratch '(follow-up)' test in src/tools/releaseForceGate.test.ts: npx vitest run src/tools/releaseForceGate.test.ts -t follow-up (env -i) passed 2 probes proving success:true and task-idle assignee null. Log: packages/nonforce-repro.log.\nKeep this separate from the approved force-only contract: preserve genuine omitted-ID human/board recovery and legitimate own-row releases, refuse malformed supplied IDs before writes, and correct docs/MCP_SERVER.md:2030's stale 'Anyone can call — no ownership check' claim.",
+  "definitionOfDone": [
+    "Without force, explicit blank/null/non-string caller IDs cannot release a peer-held row between steps and refusal writes nothing.",
+    "Absent-ID human/board recovery, valid own-row release, and governor/human force controls remain green.",
+    "release_task documentation accurately describes its ownership checks rather than saying there are none."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, in packages/moe-daemon/src/tools/releaseForceGate.test.ts, with your Edit tool. Reuse its `malformedCallers` list, setup, `releaseTask`, `protectedState` and `snapshot` helpers:\n- task-peer: worker-peer, step-1 IN_PROGRESS.\n- task-idle: worker-peer2, step-1 COMPLETED, step-2 PENDING. This is the 'between steps' row.\nAppend EXACTLY these cases before the final `});` (the RED gate pins `8 failed | 36 passed (44)`):\n```ts\n  // task-c8d6dbd5: without force too, only an omitted workerId is the human/board\n  // path. A supplied '' / null / non-string id bypassed proxy injection, so it is\n  // refused before any read or write instead of being read as the human.\n  it.each(malformedCallers)('(n1) refuses a $label workerId without force before any task read', async ({ workerId }) => {\n    const before = protectedState();\n    const read = vi.spyOn(h.state, 'getTask');\n    const lock = vi.spyOn(h.state, 'runExclusive');\n    const touch = vi.spyOn(h.state, 'touchWorker');\n    const activity = vi.spyOn(h.state, 'appendActivity');\n    for (const taskId of ['task-idle', 'task-peer', 'task-missing']) {\n      await expect(releaseTask({ taskId, workerId, reason: 'not mine' }))\n        .rejects.toMatchObject({ codeName: 'INVALID_INPUT' });\n    }\n    expect(protectedState()).toEqual(before);\n    for (const spy of [read, lock, touch, activity]) expect(spy).not.toHaveBeenCalled();\n  });\n\n  it('(n2) keeps the omitted-workerId release between steps and the holder\\'s own release', async () => {\n    const byHuman = await releaseTask({ taskId: 'task-idle', reason: 'board' });\n    expect(byHuman).toMatchObject({ success: true, previousWorkerId: 'worker-peer2' });\n    expect(h.state.getTask('task-idle')!.assignedWorkerId).toBeNull();\n\n    const byHolder = await releaseTask({ taskId: 'task-peer', workerId: 'worker-peer' });\n    expect(byHolder).toMatchObject({ success: true, previousWorkerId: 'worker-peer' });\n    expect(h.state.getTask('task-peer')!.assignedWorkerId).toBeNull();\n  });\n\n  it('(n3) still refuses a well-formed non-holder id between steps (RELEASE_NOT_ASSIGNEE)', async () => {\n    await expect(releaseTask({ taskId: 'task-idle', workerId: 'worker-1' }))\n      .rejects.toMatchObject({ codeName: 'RELEASE_NOT_ASSIGNEE' });\n    expect(snapshot('task-idle')).toEqual(['WORKING', 'worker-peer2', 'COMPLETED']);\n  });\n```\nDoD map:\n- (n1) is DoD 1, for all 8 malformed shapes: '', null, 0, false, 123, whitespace, {}, []. Every refusal happens before any read, lock or write; task-missing proves it fires before the lookup.\n- (n2) and (n3) are DoD 2, together with the untouched force cases (p5) and (p7).\nThe architect dry-ran this exact block at 395172f0 and got RED `8 failed | 36 passed (44)`:\n- the falsy ids release task-idle today;\n- the truthy ones are refused RELEASE_NOT_ASSIGNEE, not INVALID_INPUT;\n- (n2) and (n3) stay green.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts"
+      ],
+      "note": "Appended (n1) it.each over 8 malformed callers, (n2), (n3) to releaseForceGate.test.ts. RED-at-base is run in step 3.",
+      "startedAt": "2026-11-03T21:13:01.442Z",
+      "completedAt": "2026-11-03T21:13:13.031Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, with your Edit tool.\n(a) packages/moe-daemon/src/tools/releaseTask.ts handler. Insert directly AFTER the 0adea941 force gate (`if (force && params.workerId !== undefined) {...}`) and BEFORE the `// Bounded before use` attemptId check:\n```ts\n      // Without force too, only an omitted workerId is the human/board path: the\n      // proxy injects MOE_WORKER_ID into an absent key only, so a supplied blank or\n      // non-string id bypassed injection. Refuse it before any read or write\n      // rather than read it as the human (assertReleaseCaller skips a falsy caller).\n      if (params.workerId !== undefined && (typeof params.workerId !== 'string' || params.workerId.trim() === '')) {\n        throw invalidInput('workerId', 'must be a non-blank worker id when supplied; a human or the board omits it');\n      }\n```\n`invalidInput` is already imported. The placement after the force gate keeps (p7): force plus a malformed id is still NOT_ALLOWED. The board's RELEASE_TASK (WebSocketServer.ts:740) sends no workerId, and the wrappers' launch_outage_release always sends the seat's WORKER_ID, so neither path changes.\n(b) In the same file's tool `description`, replace `Anyone can call — but NEVER on idle/staleness alone: a quiet worker may be mid-build.` with:\n`Ownership: a caller that supplies workerId may release only the row it holds (RELEASE_NOT_ASSIGNEE otherwise); only an omitted workerId (a human or the board) may release a row another worker holds, and only between steps (STEP_LEASE_HELD while a step is IN_PROGRESS) unless force; a supplied workerId that is blank or not a string is refused INVALID_INPUT. NEVER release on idle/staleness alone: a quiet worker may be mid-build.`\nThe description is a single-quoted string: write no apostrophe. An unescaped `worker's` broke tsc in the dry run, which is why the text says 'a row another worker holds'.\n(c) docs/MCP_SERVER.md, `### moe.release_task` (about :2030). Replace the stale `Anyone can call — no ownership check — but **staleness in `list_workers` is NOT evidence of shutdown**:` with:\n`**Ownership:** a caller that supplies `workerId` may release only the row it holds (`RELEASE_NOT_ASSIGNEE` otherwise); an unassigned row has no holder, so its repair below is open to any well-formed caller. Only an omitted `workerId` is the human/board path, and it may release a row another worker holds only between steps: an IN_PROGRESS step refuses it `STEP_LEASE_HELD` unless `force` is set (a governor or a human only). A supplied `workerId` that is blank or not a string is refused `INVALID_INPUT` before anything is read or written: the proxy injects `MOE_WORKER_ID` into an absent key only, so `\"\"` or `null` is never read as the human. Even an allowed release needs a confirmed reason: **staleness in `list_workers` is NOT evidence of shutdown**:`\nKeep the rest of that paragraph. Edit only the release_task section: open row a024ac57 edits claim_next_task and wait_for_task.\nError handling: the new refusal is a coded INVALID_INPUT thrown before the attemptId bound, the handoff capture (git), the mutex, the task lookup and every write. So a refused call leaves tasks, workers, resources and the activity log byte-identical, which (n1) asserts with spies. claimGuards.ts stays untouched: past this guard the caller is undefined or a non-blank string, the two shapes assertReleaseCaller already handles correctly.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added the workerId shape guard after the force gate in releaseTask.ts, replaced the 'Anyone can call' sentence in the tool description, and rewrote the release_task ownership paragraph in docs/MCP_SERVER.md.",
+      "startedAt": "2026-11-03T21:13:14.887Z",
+      "completedAt": "2026-11-03T21:13:25.414Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once. Never in the shared checkout (rail). Both commands snapshot into a fresh mktemp dir and work the same in your task worktree, uncommitted, and in QA's control checkout after landing. The architect dry-ran both both ways, and GREEN exits 1 on the unfixed tree.\nGREEN, which is complete_task's verification. It runs all 15 test files that drive release_task. `scripts` is archived too, because delivery/acceptance.test.ts launches the real wrapper and exits 127 without it, even at base.\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"before anything is read or written: the proxy injects\" docs/MCP_SERVER.md && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp $T/releaseTask.ts $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/{releaseForceGate,releaseTask,reportBlocked,taskEventActor,governanceFeatures,governancePlaneV2.integration,claimNextTask,claimNextTask.race,echoedReasonNotices,executionProfileAdmission}.test.ts src/server/WebSocketServer.test.ts src/state/resourceStore.deregister.test.ts src/delivery/{acceptance,executionPolicyLifecycle}.test.ts src/__e2e__/executionContract.e2e.test.ts`\nRun it in bash, which brace expansion needs. Expect `Test Files 15 passed (15)` and `Tests 513 passed (513)`.\nRED-AT-BASE:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 395172f08e996b02b91c868a3fb110f384247f80 packages/moe-daemon | tar -x -C $S && cp $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/releaseForceGate.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +8 failed \\| 36 passed \\(44\\)\" $S/l && ! grep -aqF \"> (n2) \" $S/l && ! grep -aqF \"> (n3) \" $S/l && echo RED-AT-BASE; }`\nIt must print RED-AT-BASE.\nError handling for a red run:\n- A failure in a file other than releaseForceGate.test.ts means the new guard rejected a caller that sends '' or null on purpose; read it and report it, never weaken (n1).\n- A tsc error in releaseTask.ts is almost always an apostrophe in the description string.\nQuote both outputs in complete_task's summary.\nThe gate dirs are about 100 MB each. Delete only yours: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/releaseForceGate.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q 'task-c8d6dbd5' \"$f\" && rm -rf -- \"$d\"; done`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN in a snapshot: tsc clean, Test Files 15 passed (15), Tests 513 passed (513). RED-AT-BASE: 8 failed | 36 passed (44), only the (n1) cases failed, printed RED-AT-BASE. No files changed in this step.",
+      "startedAt": "2026-11-03T21:13:27.680Z",
+      "completedAt": "2026-11-03T21:14:31.579Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your `git diff`. Fix any finding, re-run step 3, then call complete_task.\n(1) Scope:\n- releaseTask.ts gains only the guard and the description sentence.\n- MCP_SERVER.md changes only the release_task paragraph.\n- releaseForceGate.test.ts gains only (n1) to (n3).\n- claimGuards.ts is untouched.\n(2) Ordering: force plus a malformed id is still refused NOT_ALLOWED by the 0adea941 gate, so (p7) is green. No force plus a malformed id is INVALID_INPUT. Both are thrown before handoff capture and before the mutex.\n(3) Who still releases:\n- an omitted workerId: the board, a human, moe-call.sh without MOE_WORKER_ID, the DONE/ARCHIVED no-op and the unassigned repair;\n- the holder's own id, even mid-step;\n- a governor or omitted id with force.\nA well-formed non-holder id is still RELEASE_NOT_ASSIGNEE (n3), or STEP_LEASE_HELD mid-step.\n(4) A whitespace-padded real id such as ' worker-1 ' is not blank, so it passes the guard and is judged as an id: not the holder, so it is refused. That matches today's behaviour for any non-holder string.\n(5) Concurrency: the guard reads only the call's own arguments, so there is no race. Would you be embarrassed if `workerId: \"\"` still stripped a peer? (n1)'s spies prove it cannot even read the task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of git diff, no defects found, no edits needed. (1) Scope: releaseTask.ts +9/-1 (guard + description sentence), MCP_SERVER.md one paragraph line, releaseForceGate.test.ts +33 ((n1)-(n3)); claimGuards.ts untouched. (2) Order: guard sits after the force gate, so force+malformed id is still NOT_ALLOWED (p7 green) and no-force+malformed is INVALID_INPUT, both before the attemptId bound, handoff capture and mutex. (3) Releasers unchanged: omitted id (board/human), holder's own id mid-step (n2), governor/omitted with force, DONE/ARCHIVED no-op and unassigned repair (docs 'repair below' matches the handler's unassigned-repair branch); a well-formed non-holder still gets RELEASE_NOT_ASSIGNEE (n3). (4) ' worker-1 ' is non-blank, passes the guard and is judged as an id, refused as non-holder as before. (5) No race: the guard reads only the call's own arguments; the refusal message does not echo the supplied value. Theoretical only: the wrappers' launch_outage_release always sends the seat's WORKER_ID (a real id); a blank WORKER_ID would now get INVALID_INPUT instead of being read as the human, and that path is best-effort (it returns the codeName and never forces).",
+      "startedAt": "2026-11-03T21:14:33.948Z",
+      "completedAt": "2026-11-03T21:15:01.428Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 20:58Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Worker-filed during 0adea941's repair self-review; it has no dependsOn, no plan and no reopen. 0adea941, which held releaseTask.ts and claimGuards.ts, reached DONE at 20:50:04Z, so its files are free. Placement (worktree mode): open row a024ac57 edits MCP_SERVER.md's claim_next_task and wait_for_task sections, so keep this row's doc fix inside the release_task section (around :2030). Reuse 0adea941's key-presence pattern (setTaskStatus.ts:105 style) for the non-force path.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 421.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:39:02.411Z",
+  "updatedAt": "2026-11-04T19:20:44.634Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T20:57:45.753Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:02:08.278Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:03:14.901Z",
+    "wallClockMs": 3666623
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-93f9625e",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:10:15.749Z",
+  "executionContract": {
+    "intendedBehavior": "Without force, moe.release_task treats only an OMITTED workerId as the human/board path. A supplied workerId that is blank, whitespace-only or not a string ('', null, 0, false, 123, {}, []) is refused with INVALID_INPUT before any read or write. Such an id can no longer release a row a peer holds between steps, as it could via assertReleaseCaller's falsy-caller skip. Omitted-id human/board releases, a holder's own release, a well-formed non-holder's RELEASE_NOT_ASSIGNEE/STEP_LEASE_HELD refusals and 0adea941's governor/human force gate are unchanged. The tool description and docs/MCP_SERVER.md describe these ownership checks instead of 'Anyone can call — no ownership check'.",
+    "acceptanceCriteria": [
+      "(n1) For each of 8 malformed workerId values, a release without force of task-idle (held by worker-peer2 between steps), task-peer (mid-step) or a missing task is refused with codeName INVALID_INPUT. getTask, runExclusive, touchWorker and appendActivity are never called, and tasks, workers and resources are unchanged.",
+      "(n2) An omitted workerId releases task-idle between steps (previousWorkerId worker-peer2), and the holder worker-peer releases its own mid-step task-peer.",
+      "(n3) A well-formed non-holder (worker-1) is still refused RELEASE_NOT_ASSIGNEE on task-idle, and the row is unchanged.",
+      "The existing force-gate cases (p1) to (p7) and (r1) to (r5) and every other release_task-driving suite pass: 15 files, 513 tests.",
+      "docs/MCP_SERVER.md's release_task section no longer says 'no ownership check' and contains 'before anything is read or written: the proxy injects'."
+    ],
+    "invariants": [
+      "An omitted workerId behaves exactly as before.",
+      "force plus a malformed id is still refused NOT_ALLOWED by the force gate, which runs first.",
+      "A refusal writes nothing and takes no lock.",
+      "claimGuards.ts is unchanged."
+    ],
+    "compatibility": [
+      "The board (WebSocketServer RELEASE_TASK) and the wrappers' launch_outage_release keep working: they omit workerId or send a real one.",
+      "No schema or record-shape change: workerId stays an optional string, and only malformed values are newly refused."
+    ],
+    "approvedScope": [
+      "releaseTask.ts handler: one workerId shape guard after the force gate",
+      "releaseTask.ts tool description: the ownership sentence replacing 'Anyone can call — but'",
+      "docs/MCP_SERVER.md: the release_task section's ownership paragraph",
+      "releaseForceGate.test.ts: cases (n1) to (n3)"
+    ],
+    "reuse": [
+      "0adea941's key-presence rule (only an absent key is the human) and the existing invalidInput factory. The tests reuse releaseForceGate.test.ts's malformedCallers, setup and spies, as (p7) does."
+    ],
+    "sourceAssumptions": [
+      "claimGuards.ts:291-303: assertReleaseCaller returns early on a falsy caller (`if (!caller) return`).",
+      "releaseTask.ts:145-153: the force gate refuses a supplied non-governor or malformed id with NOT_ALLOWED. releaseTask.ts:199-200 calls assertReleaseCaller and then assertNoLiveLease inside the mutex.",
+      "WebSocketServer.ts:740 delegates the board's RELEASE_TASK to the tool with no workerId.",
+      "docs/MCP_SERVER.md:2030 says 'Anyone can call — no ownership check'."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"before anything is read or written: the proxy injects\" docs/MCP_SERVER.md && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp $T/releaseTask.ts $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/{releaseForceGate,releaseTask,reportBlocked,taskEventActor,governanceFeatures,governancePlaneV2.integration,claimNextTask,claimNextTask.race,echoedReasonNotices,executionProfileAdmission}.test.ts src/server/WebSocketServer.test.ts src/state/resourceStore.deregister.test.ts src/delivery/{acceptance,executionPolicyLifecycle}.test.ts src/__e2e__/executionContract.e2e.test.ts",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 395172f08e996b02b91c868a3fb110f384247f80 packages/moe-daemon | tar -x -C $S && cp $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/releaseForceGate.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +8 failed \\| 36 passed \\(44\\)\" $S/l && ! grep -aqF \"> (n2) \" $S/l && ! grep -aqF \"> (n3) \" $S/l && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three fixes were weighed.\n(1) Chosen: one boundary guard in releaseTask.ts. A supplied workerId that is not a non-blank string is refused INVALID_INPUT before any read or write. This matches the row's \"refuse malformed supplied IDs before writes\" and the key-presence rule 0adea941 uses (setTaskStatus.ts:105 style): only an absent key is the human/board path.\n(2) Rejected: changing claimGuards.assertReleaseCaller to judge '' as a non-holder (RELEASE_NOT_ASSIGNEE). That still lets a malformed id repair an unassigned row and write a non-string `releasedBy`/actor into the handoff and activity log. It also leaves 123/{} refused with odd 'not [object Object]' text.\n(3) Rejected: refusing every non-holder on unassigned rows. That breaks the documented recovery and repair paths.\nThe refusal code is INVALID_INPUT rather than NOT_ALLOWED: the input is malformed, nobody is denied a permission. The force path keeps 0adea941's NOT_ALLOWED.",
+    "codebaseInsights": "assertReleaseCaller's `if (!caller) return` (claimGuards.ts:294) is the hole: '', null, 0 and false skip the holder check. Truthy non-strings were already refused, but as RELEASE_NOT_ASSIGNEE.\nassertNoLiveLease still protects mid-step rows from every non-holder, so the observable bug is limited to rows between steps (task-idle).\nThe board's RELEASE_TASK omits workerId, and the wrappers' launch_outage_release always sends WORKER_ID.\nThe daemon snapshot gate needs `scripts` archived for delivery/acceptance.test.ts, which spawns the real moe-agent.sh. Without it the test exits 127 at base too.\nArchitect dry run at 395172f0:\n- RED: 8 failed | 36 passed (44);\n- GREEN: 15 files, 513/513, tsc clean;\n- both checkRefs passed verbatim, uncommitted and after a simulated landing.",
+    "risks": "The RED pin `8 failed | 36 passed (44)` needs exactly (n1) to (n3); GREEN's 513 needs the 15 files unchanged otherwise.\nRED archives base 395172f0. No other open row touches releaseTask.ts or releaseForceGate.test.ts today.\nThe GREEN command uses bash brace expansion, so run it in bash.\nRun the gates only in their mktemp snapshots: the shared checkout is the live runtime.\nThe description string is single-quoted, so it may contain no apostrophe.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/util/claimGuards.ts",
+      "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+      "packages/moe-daemon/src/server/WebSocketServer.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6ded0c935e82f850493411b41e1b61e6bfc9ca1a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:10:15.780Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T21:13:01.442Z",
+  "reviewStartedAt": "2026-11-03T21:15:56.012Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"before anything is read or written: the proxy injects\" docs/MCP_SERVER.md && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon scripts | tar -x -C $S && cp $T/releaseTask.ts $T/releaseForceGate.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/{releaseForceGate,releaseTask,reportBlocked,taskEventActor,governanceFeatures,governancePlaneV2.integration,claimNextTask,claimNextTask.race,echoedReasonNotices,executionProfileAdmission}.test.ts src/server/WebSocketServer.test.ts src/state/resourceStore.deregister.test.ts src/delivery/{acceptance,executionPolicyLifecycle}.test.ts src/__e2e__/executionContract.e2e.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  15 passed (15)\n      Tests  513 passed (513)\nexit=0",
+    "reportedAt": "2026-11-03T21:15:56.012Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "release_task without force now refuses a supplied workerId that is blank, whitespace-only or not a string ('', null, 0, false, 123, {}, []) with INVALID_INPUT before any read, lock or write; only an omitted workerId is the human/board path. Files: releaseTask.ts (+9/-1: one guard directly after the 0adea941 force gate, and the tool description's 'Anyone can call' sentence replaced by the real ownership rules), docs/MCP_SERVER.md (release_task paragraph only: 'no ownership check' replaced by an Ownership paragraph containing 'before anything is read or written: the proxy injects'), releaseForceGate.test.ts (+33: (n1) x8 malformed ids against task-idle/task-peer/task-missing with spies proving getTask/runExclusive/touchWorker/appendActivity are never called and tasks/workers/resources unchanged; (n2) omitted-id release between steps plus the holder's own mid-step release; (n3) well-formed non-holder still RELEASE_NOT_ASSIGNEE). claimGuards.ts untouched. GREEN (snapshot of HEAD + scripts, the 3 changed files overlaid, outside the repo, run fresh with its own exit code): tsc --noEmit clean, Test Files 15 passed (15), Tests 513 passed (513), exit 0. RED-AT-BASE (base 395172f0 + the new test file): '(n1) ... FAIL' for exactly the 8 malformed ids, 'Tests 8 failed | 36 passed (44)', (n2)/(n3) green, printed RED-AT-BASE. Self-review found no defects; one theoretical note: the wrappers' launch_outage_release always sends the seat's real WORKER_ID, so a blank WORKER_ID there would now be INVALID_INPUT instead of the human path, on a best-effort never-force call. My snapshot dirs under /tmp were removed.",
+  "commits": [
+    {
+      "sha": "b995dd6832f8b567a88906be0c77e045dd857457",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T21:10:18Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/releaseForceGate.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T21:18:22.779Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:00:18Z",
+    "at": "2026-11-03T22:03:54.274Z"
+  },
+  "completedAt": "2026-11-03T22:03:14.901Z",
+  "reviewCompletedAt": "2026-11-03T22:03:14.901Z",
+  "reviewSummary": "APPROVED. Reviewed completion b995dd68 (kind=completion, pushed, on moe/work-2026-10-24; HEAD 6272d308 contains it, and the 3 owned files are byte-identical at HEAD). Diff: 3 files, +42/-2 (net 40 LOC), under the 400 cap. releaseTask.ts +8/-1 (one guard right after the 0adea941 force gate, plus the tool-description ownership sentence); docs/MCP_SERVER.md 1 line (release_task paragraph only); releaseForceGate.test.ts +33 ((n1) x8, (n2), (n3)). claimGuards.ts untouched.\n\nRe-ran verification myself in a git-archive snapshot outside the repo (removed after): task.verification verbatim incl. the docs grep. tsc --noEmit clean; Test Files 15 passed (15), Tests 513 passed (513), exit 0. RED-AT-BASE at 395172f0 with the new test file: exactly the 8 (n1) cases FAIL, 'Tests 8 failed | 36 passed (44)', (n2)/(n3) green, printed RED-AT-BASE. So the tests fail without the fix and pass with it.\n\nDoD: (1) no-force blank/null/non-string workerId is refused INVALID_INPUT before any getTask/runExclusive/touchWorker/appendActivity, for task-idle, task-peer and a missing task, state unchanged ((n1) spies, 8 shapes). (2) Omitted-id release between steps and the holder's own mid-step release (n2), non-holder still RELEASE_NOT_ASSIGNEE (n3); existing force cases (p1)-(p7)/(r1)-(r5) green in the 513. (3) 'Anyone can call — no ownership check' is gone from docs and the tool description, replaced by accurate ownership rules.\n\nAdversarial: guard is after the force gate, so force + malformed id stays NOT_ALLOWED (p7); it reads only its own args (no race) and throws before the mutex and handoff capture. Callers: board RELEASE_TASK (WebSocketServer ~740) sends no workerId; wrappers' launch_outage_release (sh 9072 / ps1 8895) send the real WORKER_ID, never force, so only a blank WORKER_ID there (theoretical) now gets INVALID_INPUT on a best-effort path. Ponytail: nothing to cut. Not exercised: JetBrains/VS Code and wrapper harnesses (untouched).",
+  "requiredCheckAtDone": null
+}

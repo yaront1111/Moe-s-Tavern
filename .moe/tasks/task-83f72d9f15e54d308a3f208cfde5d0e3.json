@@ -1,0 +1,42 @@
+{
+  "id": "task-83f72d9f15e54d308a3f208cfde5d0e3",
+  "epicId": "epic-be924fb8",
+  "title": "bug: since CQ-M07s (edc3e937), daemon-autostart-argv.test.mjs fails on Windows CI (PS 5.1 and 7), because it requires exactly one Start-Process passing --project in moe-agent.ps1 and the check-dispatch launch is a second one",
+  "description": "CI run 41894749395 (PR #230, d05e6e0b), job Build (windows-latest), failed at step \"Test PowerShell daemon autostart arguments\" (`node --test scripts/tests/daemon-autostart-argv.test.mjs`, Windows only). Both engines fail at daemon-autostart-argv.test.mjs:125 with \"the driver failed: expected exactly one Start-Process passing --project in moe-agent.ps1, found 2\" (driver.ps1:7).\n\nCause: edc3e937 (task-74fe4c99, CQ-M07s) added `$script:CheckDispatchProcess = Start-Process -FilePath $Node -ArgumentList (ConvertTo-MoeArgumentLine @($script:CheckDispatchCli, '--project', ...))`. The test locates the daemon-autostart Start-Process with \"the only Start-Process passing --project\", and that locator is now ambiguous. The launcher code is correct. The test's locator is too loose. Counts of matching lines: 1 at 95155388, 2 at edc3e937 and later.\n\nFix the locator so it selects the daemon-autostart call specifically, for example by its daemon entry / `start` argument or its enclosing function, and keep every assertion the test makes about that call. Main carries this red test since the human merged PR #230 red (2026-11-04: \"we will fix ci later\"). LOW so it never preempts a task row; idle workers only.",
+  "definitionOfDone": [
+    "daemon-autostart-argv.test.mjs locates exactly the daemon-autostart Start-Process, unaffected by the check-dispatch Start-Process or any future Start-Process passing --project. Its assertions on that call (literal-name paths passed as whole arguments) are unchanged.",
+    "The test passes on Windows PowerShell 5.1 and PowerShell 7 on this host, with the run output in the completion summary. It still fails against a mutant that breaks the autostart call's argument quoting.",
+    "Only scripts/tests/daemon-autostart-argv.test.mjs changes. scripts/moe-agent.ps1 is untouched.",
+    "The gate is a single run of that test file through a Windows node (it only runs on Windows), well under the 20-min GLOBAL gate budget."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Duplicate of task-e5211efd (filed by architect-67c762f6 one minute earlier, 19:31:56Z, for the same daemon-autostart-argv.test.mjs failure). This row's DoD points were carried onto e5211efd as a planning comment.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 543.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T19:33:07.056Z",
+  "updatedAt": "2026-11-04T19:38:14.081Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T19:33:29.394Z"
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-cd0ac706@2026-11-04T19:33:27Z",
+    "at": "2026-11-04T19:38:14.081Z"
+  }
+}

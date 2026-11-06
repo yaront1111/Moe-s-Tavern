@@ -1,0 +1,219 @@
+{
+  "id": "task-a024ac5782594440ae0ff5495b43d0fb",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's claim_next_task and wait_for_task sections omit the executionRoute parameter and the EXECUTION_ROUTE_REQUIRED refusal, and claim_next_task still documents an \"Epic already has an active worker\" error the code never raises",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. docs/MCP_SERVER.md is held by task-0adea941 (in REVIEW), so this row waits on it. The governor promotes it once 0adea941 is DONE.\n\nPROBLEM AND EVIDENCE (docs/MCP_SERVER.md at 8ca8d389):\n- `### moe.claim_next_task` (:1428) and `### moe.wait_for_task` (:1554) do not document the `executionRoute` input or the EXECUTION_ROUTE_REQUIRED refusal that both tools implement. See the executionRoute handling in tools/claimNextTask.ts and tools/waitForTask.ts.\n- :1546 documents \"`Epic already has an active worker on <status> tasks: <workerId>` - if another worker is active\", an error no code path raises (grep the daemon src).\n\nALSO OWED. Hunt #10's rows 7d3428d1 (get_commit_scope's workerId comment), 55a5a9f9 (request_replan's Returns block, about :2880-2892) and 34e42a0a (the GLOBAL lists propose_rail can reach) were told to include a one-line MCP_SERVER.md sync only if the file was free. Check each row's completion diff, and apply any sync it skipped here.\n\nHOW. Docs only. Edit with the seat's own editor (Claude Edit, or apply_patch on codex exec), never Serena (this checkout's .serena/project.yml ignores docs/). Stay inside the named sections.",
+  "definitionOfDone": [
+    "MCP_SERVER.md's claim_next_task and wait_for_task sections document executionRoute and the EXECUTION_ROUTE_REQUIRED refusal as the code implements them, and the never-raised \"Epic already has an active worker\" error line is removed.",
+    "Any MCP_SERVER.md sync that rows 7d3428d1, 55a5a9f9 or 34e42a0a skipped because the file was held is applied, or the completion summary states that none was owed. The role-doc lint (npm run lint) still passes."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Docs only. Edit `### moe.claim_next_task` in docs/MCP_SERVER.md with your own editor: Claude Edit, or apply_patch on codex exec. Never use Serena (.serena/project.yml ignores docs/), and never a shell write: a write with no TOOL witness gets the path held at landing (mem:gotcha-docs-edit-via-bash-python-no-tool-witness). Work in your task checkout (`git rev-parse --show-toplevel`), never in /mnt/d/projexts/moes (mem:decision-doc-row-checkrefs-worktree-mode). The byte-exact reference for every new line is /mnt/d/moe-scratch/plan-a024/MCP_SERVER.sections.diff (sha256 a94dd0cb86981a18…; it applied cleanly at a3330bce). Copy the text from it or from here. Four edits:\n(A) Parameters block: the `host?: string` line gains a trailing comma (comment column unchanged). Then add this line before `}`:\n  executionRoute?: 'vm'            // only a Moe VM-route wrapper sends it (see \"Execution route\")\n(B) Add one new paragraph, with a blank line on each side, between the `**Execution profile admission:**` paragraph and the `**Runner process identity (optional, both or neither):**` paragraph. It must start with the exact lead-in `**Execution route (optional):** ` because the step-3 check looks for it. Full text (reference diff, added line [3]):\n**Execution route (optional):** `executionRoute` takes one value, `\"vm\"`. Only a wrapper that runs the seat's `WORKING` or `REVIEW` session in a Moe VM (CQ-M07m/n) sends it; every other caller omits it. Any other supplied value (`\"host\"`, `\"VM\"`, `\"\"`, `null`, a number, an object) is refused `-32602` / `INVALID_INPUT` naming `executionRoute`, right after the runner-identity check and before any write. The marker can only refuse, and it is not authentication: it guards against an accidental host run (an older wrapper, a hand-run CLI). A `WORKING` or `REVIEW` task whose execution is strict under **Execution profile admission** (its effective profile is `verified-local`, or, on an own-seat resume, the caller's own open attempt recorded a `verified-local` snapshot) is refused to every claim without `executionRoute: \"vm\"`. An explicit-`taskId` claim, including one with no `workerId` and the own seat's resume, gets a thrown `-32003` / `EXECUTION_ROUTE_REQUIRED` before any write. Its message reads `[EXECUTION_ROUTE_REQUIRED] Task <id> runs under verified-local: only a VM-route seat may claim it in <status> …`, `error.data.codeName` is `EXECUTION_ROUTE_REQUIRED`, and its `context` (`{ taskId, status, executionProfile, requiredRoute }`) stays in the daemon. The ranked pool skips such a row instead. The route check runs after readiness, so the marker never satisfies or skips readiness or any other check: while `verified-local` is not ready, every claim of such a row is refused `EXECUTION_PROFILE_NOT_READY` first, with or without the marker, and `EXECUTION_ROUTE_REQUIRED` can fire only once readiness holds. A marked claim still meets the dependency gate and the finalizing hold. `PLANNING` rows (architects stay on the host) and legacy or observe rows never need the marker, and a marked claim of one is admitted exactly as an unmarked one. The `moe.wait_for_task` hints this tool answers with (no claimable task, or every candidate taken) carry `executionRoute: \"vm\"` in `args` only when the claim sent it, so a seat that follows the hint waits marked; an unmarked claim's hint has no `executionRoute` key.\n(C) Under **Worker Constraint:**, replace the lead line `Only one worker can work on tasks of the same status type per epic at a time:` with the line below, and keep its three bullets:\nFor a claimer in no team (see **No team membership** below), only one worker can work on tasks of the same status type per epic at a time; a team member is not limited by it, and a candidate it rules out is skipped, never an error:\nWhy: the error bullet deleted in (D) was this constraint's only stated outcome. The code skips the candidate (the solo-rule `continue`) and then answers NO_TEAM_MEMBERSHIP or the hasNext:false concurrent-claim hint. It never raises an error.\n(D) Under **Errors:**, delete the bullet `- `Epic already has an active worker on <status> tasks: <workerId>` - if another worker is active`. A grep of the daemon, proxy, plugins and scripts finds nothing that raises it. Then append these two bullets after the `-32003 EXECUTION_PROFILE_NOT_READY` bullet:\n- `-32602 INVALID_INPUT`: `executionRoute` present with any value other than `\"vm\"`. Raised before any write (see **Execution route**).\n- `-32003 EXECUTION_ROUTE_REQUIRED`: an explicit claim without `executionRoute: \"vm\"` of a `WORKING` or `REVIEW` task whose execution is strict, once `verified-local` is ready. Raised before any write; the ranked pool skips such a row instead (see **Execution route**).\nTouch nothing else in the section. In particular, leave the Notes bullets on firstClaimAt and fileCollision alone: task-6cf09180 (peek fix a3330bce, in REVIEW) owns any sync there.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "claim_next_task edits A-D applied via Edit tool.",
+      "startedAt": "2026-11-03T22:15:01.155Z",
+      "completedAt": "2026-11-03T22:15:21.700Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Docs only, with the same editor and checkout rules as step 1. Edit `### moe.wait_for_task` in docs/MCP_SERVER.md. Three edits; their text is reference diff added lines [7]-[10]:\n(E) Parameters block. Anchor the Edit on two lines: `  epicId?: string,      // Optional epic filter` and the `  timeoutMs?: number    // Max wait…` line under it. Another tool's block (~:3071) has the same timeoutMs line, so an old_string holding that line alone is ambiguous. The timeoutMs line becomes:\n  timeoutMs?: number,   // Max wait in ms (default 300000, clamped to 1000–600000)\nThen add this line before `}`:\n  executionRoute?: 'vm' // only a Moe VM-route wrapper sends it; pass the same value to moe.claim_next_task\n(F) Under **Notes:**, insert this bullet directly after the `- **Execution profile admission matches `claim_next_task` too:**` bullet, exactly:\n- **The execution route matches `claim_next_task` too:** `executionRoute` is parsed as `claim_next_task` parses it, and the matcher hands it to the same predicate. Once `verified-local` is ready, a `WORKING` or `REVIEW` row whose execution is strict (the row `claim_next_task` refuses with `EXECUTION_ROUTE_REQUIRED`; see its **Execution route**) matches only a waiter that sent `executionRoute: \"vm\"`. That includes the caller's own held task: an unmarked seat parks, and a marked one wakes at once. The wait never raises `EXECUTION_ROUTE_REQUIRED` itself; it skips the row. Every re-match on `TASK_CREATED`/`TASK_UPDATED` reads the same parsed value, and the `moe.claim_next_task` hint, like the timeout's `moe.wait_for_task` hint, carries `executionRoute: \"vm\"` in `args` only when the wait sent it, so the claim reads the same predicate with the same route.\n(G) Under **Errors:**, append this bullet after `- `[MISSING_REQUIRED] Missing required field: workerId``:\n- `[INVALID_INPUT] Invalid executionRoute: must be 'vm' when present` — `executionRoute` present with any other value (`null`, `\"\"` and `\"VM\"` included); raised after the `statuses` presence check, before every other check and before any waiter is registered\nSource facts: waitForTask.ts calls parseExecutionRoute right after the statuses-presence check, before assertAgentClaimableStatuses, the workerId check, touchWorker and any waiter. findMatchingTask passes the route to executionAdmissionRefusal for both the own-task match and the pool. The claim hint and the timeout hint spread routeArg. executionRoute.test.ts W1-W4 and I2 pin this behavior.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "wait_for_task edits E-G applied via Edit tool.",
+      "startedAt": "2026-11-03T22:15:22.521Z",
+      "completedAt": "2026-11-03T22:15:32.962Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 2, then the one verification run.\n(a) No sync was owed. Rows 7d3428d1 (395172f0), 34e42a0a (6ded0c93) and 55a5a9f9 (6272d308) each landed their own docs/MCP_SERVER.md hunk: get_commit_scope's workerId comment, propose_rail's GLOBAL-lists paragraph, and request_replan's Returns and sessionHandoff text. Re-confirm with two commands, each of which must print 3: `git show --stat --format=%h 395172f0 6ded0c93 6272d308 -- docs/MCP_SERVER.md | grep -c docs/MCP_SERVER.md` and `git show HEAD:docs/MCP_SERVER.md | grep -c -e 'nor the holder of the task' -e 'For `GLOBAL` it is looked up in' -e 'The seat is freed, so the reply carries no'`. 55a5a9f9 was in REVIEW when this was planned; if it has since been reopened and re-landed, check its newest completion instead. Write 'none was owed', with the three shas, in the completion summary.\n(b) From your task checkout's root, run the three checkRefs once, joined with ' && '. The byte-exact command is in /mnt/d/moe-scratch/plan-a024/verification-command.txt (1043 chars).\n[1] is the qualityGate: parity-check plus `npm run lint`, which is DoD 2's lint.\n[2] fails if the error bullet is still in the file. It also fails if either section lacks its `executionRoute?: 'vm'` Parameters line, an EXECUTION_ROUTE_REQUIRED mention, an INVALID_INPUT line naming executionRoute, or its lead-in.\n[3] fails if any byte outside the two sections differs from the merge-base copy (B = merge-base HEAD ${MOE_LAND_TARGET:-HEAD}), or if `git diff --check` finds whitespace errors.\nDry run at a3330bce: the unedited tree exits 1, the edited tree exits 0, and each of seven mutants fails its check. Submit this command and its fresh output as complete_task verification:\ncd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && cd \"$(git rev-parse --show-toplevel)\" && f=docs/MCP_SERVER.md && ! grep -n 'Epic already has an active worker' \"$f\" && awk '/^### /{s=($2==\"moe.claim_next_task\"||$2==\"moe.wait_for_task\")?$2:\"\";next} s==\"\"{next} /^  executionRoute\\?: .vm. +\\/\\//{p[s]=1} /EXECUTION_ROUTE_REQUIRED/{e[s]=1} /INVALID_INPUT/&&/executionRoute/{i[s]=1} /^\\*\\*Execution route \\(optional\\):\\*\\* /||/^- \\*\\*The execution route matches /{l[s]=1} END{split(\"moe.claim_next_task moe.wait_for_task\",k,\" \");b=0;for(j=1;j<=2;j++)if(!p[k[j]]||!e[k[j]]||!i[k[j]]||!l[k[j]]){print \"incomplete: \" k[j] \" param=\" p[k[j]]+0 \" refusal=\" e[k[j]]+0 \" invalid=\" i[k[j]]+0 \" lead=\" l[k[j]]+0;b=1};exit b}' \"$f\" && cd \"$(git rev-parse --show-toplevel)\" && f=docs/MCP_SERVER.md && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && x(){ awk '/^### /{s=($2==\"moe.claim_next_task\"||$2==\"moe.wait_for_task\")} !s'; } && diff <(git show \"$B:$f\" | x) <(x < \"$f\") && git diff --check \"$B\" -- \"$f\"",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Both confirmation commands print 3; verification command exit 0.",
+      "startedAt": "2026-11-03T22:15:33.889Z",
+      "completedAt": "2026-11-03T22:16:11.023Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your one-file diff: `git diff $(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") -- docs/MCP_SERVER.md`. Expect about +11/-4, all inside the two sections. Error handling: trace every documented refusal to the code that raises it, and fix any mismatch.\n(1) INVALID_INPUT: util/claimEligibility.ts parseExecutionRoute calls invalidInput('executionRoute', \"must be 'vm' when present\"). Check where it runs in claimNextTask.ts (after readProcessIdentity, before the project-loaded check and any write) and in waitForTask.ts.\n(2) EXECUTION_ROUTE_REQUIRED: routeRequiredRefusal raises NOT_ALLOWED -32003 with that codeName; check its message and context. executionAdmissionRefusal runs it only after assertExecutionProfileReady, only for strict WORKING/REVIEW rows, and counts the own-attempt verified-local snapshot.\n(3) The explicit path throws (claimNextTask.ts ~:590) and the ranked pool skips (~:648). The hints echo the route at claimNextTask.ts ~:686 and ~:850, and at waitForTask.ts ~:322, ~:399 and ~:451.\n(4) Name the test that pins each claim: executionRoute.test.ts (S1-S6, W1-W4, U, R1-R2, I1-I2) and claimNextTask.routeHint.test.ts (H1-H5).\n(5) No line may say the daemon never runs git; daemonGitDocs.test.ts guards this.\n(6) The Markdown renders: code spans are balanced, the new paragraph has a blank line on each side, and the Parameters lines keep their commas.\n(7) Nothing outside the two sections moved.\nIf anything changes, re-run the step-3 command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: diff +11/-4 in one file; INVALID_INPUT message, EXECUTION_ROUTE_REQUIRED message/context, and parse order (after readProcessIdentity) match claimEligibility.ts and claimNextTask.ts. No 'never runs git' line. Verification unchanged, no re-run needed.",
+      "startedAt": "2026-11-03T22:16:11.904Z",
+      "completedAt": "2026-11-03T22:16:18.889Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 20:51Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). The only dependsOn, task-0adea941, which held docs/MCP_SERVER.md, reached DONE at 20:50:04Z. Placement (worktree mode): edit only the claim_next_task and wait_for_task sections and the :1546 line. Hunt #10's rows 7d3428d1, 55a5a9f9 and 34e42a0a have been told to do their own one-line syncs in their own sections, so DoD 2 is most likely \"none was owed\". Check their completion diffs before closing.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-0adea94188404f9489976f47e18bf383"
+  ],
+  "priority": "LOW",
+  "order": 437.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:40.138Z",
+  "updatedAt": "2026-11-04T19:20:44.796Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T20:50:32.996Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:15:50.946Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:20:32.861Z",
+    "wallClockMs": 3881915
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-2dc72348",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:13:02.454Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md's ### moe.claim_next_task and ### moe.wait_for_task sections document the optional executionRoute input and the EXECUTION_ROUTE_REQUIRED refusal exactly as util/claimEligibility.ts, tools/claimNextTask.ts and tools/waitForTask.ts implement them. The input takes 'vm' only, and any other value is INVALID_INPUT before any write. The never-raised 'Epic already has an active worker' error bullet is gone. Every byte outside those two sections is unchanged. The completion summary states that rows 7d3428d1, 34e42a0a and 55a5a9f9 owed no sync.",
+    "acceptanceCriteria": [
+      "claim_next_task section: a Parameters line `executionRoute?: 'vm'`. A new **Execution route (optional):** paragraph covering: the value rule; who sends it; the refusal of a strict WORKING/REVIEW row (an explicit claim throws -32003 EXECUTION_ROUTE_REQUIRED, the ranked pool skips it); that the check runs after readiness; the PLANNING/legacy/observe exemption; and the wait-hint echo. Two new Errors bullets. The 'Epic already has an active worker' bullet removed.",
+      "wait_for_task section: a Parameters line `executionRoute?: 'vm'`. A Notes bullet: the waiter's route feeds the same predicate (own held task included), the wait skips rather than raises, and the hints echo the route. An Errors bullet for `[INVALID_INPUT] Invalid executionRoute: must be 'vm' when present`.",
+      "DoD 2: the completion summary states that none was owed and cites 395172f0, 6ded0c93 and 6272d308.",
+      "scripts/tests/parity-check.sh and npm run lint pass."
+    ],
+    "invariants": [
+      "Every byte outside the two sections matches the merge-base copy (checkRef 3).",
+      "Only docs/MCP_SERVER.md changes.",
+      "No doc line says the daemon never runs git (daemonGitDocs.test.ts)."
+    ],
+    "compatibility": [
+      "Docs only: no change to any tool schema, wire shape, code or test."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md ### moe.claim_next_task: the Parameters block, a new **Execution route (optional):** paragraph, the Worker Constraint lead line, and the Errors list",
+      "docs/MCP_SERVER.md ### moe.wait_for_task: the Parameters block, one Notes bullet, and the Errors list"
+    ],
+    "reuse": [
+      "/mnt/d/moe-scratch/plan-a024/MCP_SERVER.sections.diff carries every new line, dry-run verified at a3330bce. verification-command.txt beside it is the byte-exact joined command."
+    ],
+    "sourceAssumptions": [
+      "util/claimEligibility.ts parseExecutionRoute: undefined and 'vm' pass. Anything else throws invalidInput('executionRoute', \"must be 'vm' when present\"), so the wire message is [INVALID_INPUT] Invalid executionRoute: must be 'vm' when present.",
+      "util/claimEligibility.ts executionAdmissionRefusal runs assertExecutionProfileReady first (EXECUTION_PROFILE_NOT_READY while verified-local is not ready). A row is strict when its live or snapshot profile is verified-local, or the caller's own open attempt has a verified-local snapshot. Then strict && WORKING|REVIEW && route !== 'vm' gives routeRequiredRefusal: NOT_ALLOWED -32003, codeName EXECUTION_ROUTE_REQUIRED, context { taskId, status, executionProfile, requiredRoute }.",
+      "tools/claimNextTask.ts: parseExecutionRoute runs right after readProcessIdentity. The explicit path throws the admission refusal (~:590) and the ranked pool filters it out (~:648). The no-match (~:686) and concurrent-loss (~:850) wait hints spread routeArg.",
+      "tools/waitForTask.ts: the route is parsed after the statuses-presence check (~:291), before assertAgentClaimableStatuses, the workerId check, touchWorker and any waiter. findMatchingTask passes it for the own-task match (~:156) and for the pool (~:208). The hints spread routeArg (~:322, ~:399, ~:451).",
+      "Nothing raises 'Epic already has an active worker'. The solo rule continues (claimNextTask.ts ~:745-757), and the tail returns noTeamMembershipRefusal or a hasNext:false hint (~:836-853).",
+      "Senders: scripts/moe-agent.sh verified_local_gate (worker|qa seats only, ~:9959) marks every claim (~:9771). moe-agent.ps1 refuses a ready verified-local seat with MOE_VERIFIED_LOCAL_VM_ROUTE_UNAVAILABLE. moe-proxy adds nothing.",
+      "Wire format (docs/MCP_SERVER.md :90-91): -32003, message '[EXECUTION_ROUTE_REQUIRED] …', error.data { tool, codeName }. MoeError.context is never sent.",
+      "Rows 7d3428d1, 34e42a0a and 55a5a9f9 landed their own docs/MCP_SERVER.md hunks in 395172f0, 6ded0c93 and 6272d308."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint",
+      "cd \"$(git rev-parse --show-toplevel)\" && f=docs/MCP_SERVER.md && ! grep -n 'Epic already has an active worker' \"$f\" && awk '/^### /{s=($2==\"moe.claim_next_task\"||$2==\"moe.wait_for_task\")?$2:\"\";next} s==\"\"{next} /^  executionRoute\\?: .vm. +\\/\\//{p[s]=1} /EXECUTION_ROUTE_REQUIRED/{e[s]=1} /INVALID_INPUT/&&/executionRoute/{i[s]=1} /^\\*\\*Execution route \\(optional\\):\\*\\* /||/^- \\*\\*The execution route matches /{l[s]=1} END{split(\"moe.claim_next_task moe.wait_for_task\",k,\" \");b=0;for(j=1;j<=2;j++)if(!p[k[j]]||!e[k[j]]||!i[k[j]]||!l[k[j]]){print \"incomplete: \" k[j] \" param=\" p[k[j]]+0 \" refusal=\" e[k[j]]+0 \" invalid=\" i[k[j]]+0 \" lead=\" l[k[j]]+0;b=1};exit b}' \"$f\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && f=docs/MCP_SERVER.md && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && x(){ awk '/^### /{s=($2==\"moe.claim_next_task\"||$2==\"moe.wait_for_task\")} !s'; } && diff <(git show \"$B:$f\" | x) <(x < \"$f\") && git diff --check \"$B\" -- \"$f\""
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) A daemon doc-sync test (the executionContractDocs.test.ts pattern): rejected. The governor scoped this row to docs only. checkRef [2] is the mechanical regression guard, as on precedent docs row 85529f6c, which QA approved with no test (lint plus a doc check). (2) Replace the deleted error bullet with CLAIM_LOST_RACE (claimGuards.ts claimLostRace, also undocumented): rejected as outside this DoD; it is a separate gap. (3) Leave Worker Constraint alone: rejected. With the error bullet gone, 'Two workers cannot both claim WORKING tasks' reads as an unconditional refusal. One clause on the lead line makes it true.",
+    "codebaseInsights": "The route marker can only refuse, and it is checked after readiness. verified-local is never ready today (docs/baselines/cq-m06/README.md), so every claim of a strict row fails EXECUTION_PROFILE_NOT_READY first, and EXECUTION_ROUTE_REQUIRED is latent until readiness holds. The docs must state this ordering, or a reader will expect the route error today. claim_next_task and wait_for_task share one predicate (util/claimEligibility.ts) by design, as the anti-spin rule, so the wait text says the same predicate applies and the wait skips rather than raises.",
+    "risks": "Anchors: the timeoutMs line in wait_for_task also appears at ~:3071 in another tool, so anchor edit E on the epicId line too (the dry run tripped on this). A concurrent docs row may land in claim_next_task's Notes (task-6cf09180's possible firstClaimAt/fileCollision sync). Worktree merge-tree handles disjoint hunks, so stay on the named lines. QA on the control checkout: checkRef [3] is vacuous there (B = HEAD), so diff <sha>^..<sha> by hand (mem:decision-doc-row-checkrefs-worktree-mode). The file's style is one long line per paragraph; do not re-wrap.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/executionRoute.test.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.routeHint.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "a3330bce16817c794dea2fd9aef3d8de05effd64",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:13:02.484Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:15:01.155Z",
+  "reviewStartedAt": "2026-11-03T22:16:24.012Z",
+  "verification": {
+    "command": "bash /tmp/a024-verify.sh  # byte-exact copy of /mnt/d/moe-scratch/plan-a024/verification-command.txt: cd \"$(git rev-parse --show-toplevel)\" && bash scripts/tests/parity-check.sh && npm run lint && <checkRef 2: no 'Epic already has an active worker', both sections have executionRoute param/refusal/invalid/lead-in> && <checkRef 3: bytes outside the two sections equal merge-base, git diff --check>",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\nnpm notice run lint\nnpm notice run docs:lint\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\nexit=0",
+    "reportedAt": "2026-11-03T22:16:24.012Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "docs/MCP_SERVER.md only (+11/-4, inside the two sections). claim_next_task: executionRoute?: 'vm' Parameters line, new **Execution route (optional):** paragraph (value rule, sender, strict WORKING/REVIEW refusal with explicit-throws/ranked-skips, after-readiness ordering, PLANNING/legacy exemption, hint echo), Worker Constraint lead line scoped to no-team claimers, two new Errors bullets (INVALID_INPUT, EXECUTION_ROUTE_REQUIRED), and the never-raised 'Epic already has an active worker' bullet removed. wait_for_task: executionRoute Parameters line, Notes bullet (same predicate, own held task included, skips not raises, hints echo route), and the [INVALID_INPUT] Invalid executionRoute Errors bullet. DoD 2: none was owed; rows 7d3428d1 (395172f0), 34e42a0a (6ded0c93) and 55a5a9f9 (6272d308) each landed their own MCP_SERVER.md hunk (both confirmation greps print 3). parity-check and npm run lint pass; outside-section bytes identical to merge-base.",
+  "commits": [
+    {
+      "sha": "cbae60700324951a00c65eae299c1dbbdac114c8",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T22:13:26Z",
+      "paths": [
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "qa-af7be174",
+      "recordedAt": "2026-11-03T22:18:07.580Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-1dd28c7c@2026-11-03T21:28:14Z",
+    "at": "2026-11-03T23:06:50.550Z"
+  },
+  "completedAt": "2026-11-03T22:20:32.861Z",
+  "reviewCompletedAt": "2026-11-03T22:20:32.861Z",
+  "reviewSummary": "Reviewed completion cbae6070 (on moe/work-2026-10-24, HEAD of control): one file, docs/MCP_SERVER.md, +11/-4, far under the size cap.\n\nRe-ran the task verification byte-exact (/mnt/d/moe-scratch/plan-a024/verification-command.txt, sha256 matches the worker's /tmp copy): parity-check PASS, npm run lint OK (architect 39, worker 30, qa 36 lines), section-presence awk and no-'Epic already has an active worker' grep pass, exit 0. checkRef 3 is vacuous on control (B=HEAD), so I ran the strip-diff by hand with B=cbae6070^: bytes outside the two sections identical, git diff --check clean. DoD 2 greps both print 3 (395172f0, 6ded0c93, 6272d308 each landed their own hunk, so none was owed). The error string appears nowhere in the repo now.\n\nDoD 1, traced to code: parseExecutionRoute (claimEligibility.ts:116) takes undefined or 'vm' only, and null, '' and 'VM' throw `Invalid executionRoute: must be 'vm' when present` (-32602). It runs right after readProcessIdentity, before the project-loaded check and any write (claimNextTask.ts:451). In wait_for_task it runs after the statuses check and before assertAgentClaimableStatuses, the workerId check and any waiter (waitForTask.ts:291). executionAdmissionRefusal asserts readiness first, then strict && WORKING|REVIEW && route!=='vm' gives NOT_ALLOWED -32003 EXECUTION_ROUTE_REQUIRED, with the own-attempt snapshot counted. The explicit path throws (claimNextTask.ts:590), the ranked pool skips (:648), the own-task match and pool in wait both pass the route, and every hint spreads routeArg. The Worker Constraint rewrite matches the solo-rule `continue` plus noTeamMembershipRefusal tail. No doc line trips daemonGitDocs. Pinning tests exist (executionRoute.test.ts, claimNextTask.routeHint.test.ts).\n\nNot run: the daemon vitest suite, since this is docs only and no code or test changed. Taste only: the new paragraph is one very long line.",
+  "requiredCheckAtDone": null
+}

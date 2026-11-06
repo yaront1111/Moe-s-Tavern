@@ -1,0 +1,226 @@
+{
+  "id": "task-7d3428d14903430c92325cfcb56ac3f5",
+  "epicId": "epic-be924fb8",
+  "title": "bug: get_commit_scope counts the completing seat as an orphan-mode peer of its own completion landing (complete_task has already cleared the assignee), so peersActive is always true there and the default attribution.undeclared 'solo' strands every MEASURED path at a shared-mode completion, even on a one-seat board",
+  "description": "Found by defect hunt #10 (task-49a2c07f, architect-1dd28c7c) on 2026-11-03. The holder re-ran the repro and re-derived every line below at HEAD 677d051a.\n\nPROBLEM\n- getCommitScope.ts:236-237 counts any caller that is not the assignee as a peer: `const orphanCaller = caller !== null && caller !== task.assignedWorkerId; const activePeerIds = orphanCaller ? [...livePeerIds, caller] : [...livePeerIds];`.\n- complete_task's REVIEW write (completeTask.ts:280) goes through taskStore.ts:544-548 (`shouldClearWorker`), which clears assignedWorkerId.\n- The seat's own wrapper lands afterwards, at post-flight. Its commit_scope helper (scripts/moe-agent.sh:4121-4134) calls get_commit_scope with the seat's own workerId.\n- So at every completion landing the caller is \"not the assignee\": activePeerIds is [caller] and peersActive is true, whoever else is live.\n- The wrapper turns that into declared-only. moe-agent.sh:4604 sets `peers_active = bool(scope.get('peersActive'))`, and :4780 commits MEASURED paths only when `undeclared == 'solo' and not peers_active`.\n- Every undeclared changed path then goes to MOE_ATTRIBUTION_UNRESOLVED and task.unattributedPaths, pages #governors (recordCommit.ts:430-431) and is never staged. Typical cases are a shell edit, codegen output or a lockfile.\n- The same seat's checkpoint landing, while it is still assigned, gets peersActive false.\n- The tool already knows the caller owns this landing. getCommitScope.ts:243 computes the task's finalizing attempt (finalizingAttemptsByTask), the same signal the wrapper's owner guard uses to identify the landing owner. The orphan rule ignores it.\n- Broken contract:\n  - docs/CONFIGURATION.md:201: solo commits MEASURED \"only when no other worker is live\".\n  - scripts/CLAUDE.md: \"default 'solo' = no other live worker\".\n- The rule dates from bf3f8fa0 (2026-08-29). Its only pinning test (getCommitScope.test.ts:310) covers an assignee-less BLOCKED recoverer, not the completing seat.\n\nEVIDENCE: repro at HEAD 677d051a, run in a git-archive snapshot outside the checkout\n- Files: /mnt/d/moe-scratch/hunt-49a2c07f/A/zzHuntA_completionOrphan.test.ts, output in zzHuntA_completionOrphan.out.txt.\n- Command: `cd packages/moe-daemon && NO_COLOR=1 npx vitest run src/tools/zzHuntA_completionOrphan.test.ts`\n- Setup: a WORKING task assigned to worker-1 with an open attempt, then complete_task's two writes (setAttemptPhase finalizing, then updateTask status REVIEW), then get_commit_scope {workerId:'worker-1', phase:'postflight'}.\n- The test first confirms assignedWorkerId is null, finalizingAttempt.workerId is 'worker-1' and livePeerIds is [].\n- Failing assertion: `expected { active: [ 'worker-1' ], …(1) } to deeply equal { active: [], peersActive: false }`.\n- Controls that pass:\n  - the same seat's WORKING checkpoint scope gives peersActive false;\n  - a non-holder caller (worker-2) is still an orphan peer.\n- Result: Tests 1 failed | 2 passed (3).\n- A trial of the fix below passed the repro plus getCommitScope.test.ts, 68/68.\n\nFIX DIRECTION\n- In getCommitScope.ts, compute `finalizing` (:243) before the orphan rule, and exempt the caller that holds the task's finalizing attempt: `orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller`. Every other non-assignee caller stays an orphan peer.\n- Name the exemption in the tool description and in the workerId inputSchema description (:119, :124).\n- Out of scope: seats freed by their own transition that have no finalizing attempt, such as submit_plan to AWAITING_APPROVAL or report_blocked's seat-freeing arm.\n- docs/MCP_SERVER.md: the get_commit_scope workerId comment (\"counted in activePeerIds when it is not the assignee\") becomes incomplete. 0adea941 holds that file at filing time, so it is not in this row's files. Add the one-line sync only if lanes.js shows the file free when you plan; otherwise the governor files it.\n\nFILES\n- packages/moe-daemon/src/tools/getCommitScope.ts\n- packages/moe-daemon/src/tools/getCommitScope.test.ts (add cases)\n- Neither file is held at filing time.\n\nVERIFICATION\nRun vitest in a snapshot or the task worktree, never in the shared checkout: `npx vitest run src/tools/getCommitScope.test.ts`.",
+  "definitionOfDone": [
+    "getCommitScope.test.ts gains a case: an open attempt, then setAttemptPhase('finalizing'), then updateTask({status:'REVIEW'}), with no other worker live. get_commit_scope {workerId: <the finalizing holder>} returns activePeerIds [] and peersActive false. The case fails against today's getCommitScope.ts.",
+    "In the same file, a caller that is neither the assignee nor the finalizing holder is still listed in activePeerIds with peersActive true, and the existing BLOCKED-unassigned orphan case (getCommitScope.test.ts:310) passes unchanged.",
+    "`npx vitest run src/tools/getCommitScope.test.ts` passes in full, and the workerId inputSchema description in getCommitScope.ts names the finalizing-holder exemption (grep-checkable)."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first. Append EXACTLY these five cases (titles verbatim; the RED gate pins their count) as one new describe block, just before the final `});` that closes `describe('moe.get_commit_scope')` in packages/moe-daemon/src/tools/getCommitScope.test.ts. Use your Edit tool.\nThe file already imports openAttempt, setAttemptPhase and getCommitScopeTool and defines h, checked(). Leave every existing case untouched, the orphan case at :310 included.\n```ts\n  describe('orphan mode at the completing seat\\'s own landing (task-7d3428d1)', () => {\n    // complete_task's two writes (completeTask.ts): the attempt goes finalizing, then the\n    // REVIEW write clears the seat (taskStore shouldClearWorker). The seat's own wrapper\n    // lands afterwards, so its get_commit_scope call no longer comes from \"the assignee\".\n    beforeEach(async () => {\n      h.setupMoeFolder();\n      h.createEpic();\n      h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-1' });\n      h.createTask({ id: 'task-2', status: 'WORKING', assignedWorkerId: null });\n      const now = Date.now();\n      h.createWorker({ id: 'worker-1', status: 'CODING', currentTaskId: 'task-1', lastActivityAt: new Date(now).toISOString() });\n      h.createWorker({ id: 'worker-3', status: 'IDLE', lastActivityAt: new Date(now - 10 * 60_000).toISOString() });\n      await h.state.load();\n    });\n\n    async function complete(taskId = 'task-1', workerId = 'worker-1') {\n      const attempt = await openAttempt(h.state, { taskId, workerId, runnerId: workerId, workspace: h.testDir });\n      await setAttemptPhase(h.state, attempt.id, 'finalizing');\n      await h.state.updateTask(taskId, { status: 'REVIEW' });\n    }\n\n    it('(o1) the holder of the task\\'s finalizing attempt is not a peer of its own completion landing', async () => {\n      await complete();\n      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });\n      expect(s.assignedWorkerId).toBeNull();\n      expect(s.finalizingAttempt?.workerId).toBe('worker-1');\n      expect({ live: s.livePeerIds, active: s.activePeerIds, peersActive: s.peersActive })\n        .toEqual({ live: [], active: [], peersActive: false });\n    });\n\n    it('(o2) a caller that is neither the assignee nor the finalizing holder is still an orphan-mode peer', async () => {\n      await complete();\n      const s = await checked({ workerId: 'worker-2', phase: 'postflight' });\n      expect(s.activePeerIds).toEqual(['worker-1', 'worker-2']);\n      expect(s.peersActive).toBe(true);\n    });\n\n    it('(o3) a finalizing attempt on another task exempts nobody here', async () => {\n      await complete('task-2');\n      await h.state.updateTask('task-1', { assignedWorkerId: null });\n      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });\n      expect(s.finalizingAttempt).toBeNull();\n      expect(s.activePeerIds).toEqual(['worker-1']);\n      expect(s.peersActive).toBe(true);\n    });\n\n    it('(o4) the exemption hides no other live worker', async () => {\n      await complete();\n      await h.state.touchWorker('worker-3');\n      const s = await checked({ workerId: 'worker-1', phase: 'postflight' });\n      expect(s.livePeerIds).toEqual(['worker-3']);\n      expect(s.activePeerIds).toEqual(['worker-3']);\n      expect(s.peersActive).toBe(true);\n    });\n\n    it('(o5) the tool and workerId descriptions name the finalizing-holder exemption', () => {\n      const tool = getCommitScopeTool(h.state);\n      const props = tool.inputSchema.properties as Record<string, { description: string }>;\n      const phrase = /neither the assignee nor the holder of the task's finalizing attempt/;\n      expect(props.workerId.description).toMatch(phrase);\n      expect(tool.description).toMatch(phrase);\n    });\n  });\n```\nWhat each case guards:\n- (o1) is DoD 1.\n- (o2) is DoD 2. It also kills a mutant that exempts the caller whenever ANY finalizing attempt exists.\n- (o3) kills a mutant that exempts a caller holding a finalizing attempt on another task.\n- (o4) proves the exemption hides no real peer.\n- (o5) is DoD 3's grep-checkable description.\nThe architect dry-ran this exact block. Against today's source it gives `Tests 3 failed | 67 passed (70)`: (o1), (o4) and (o5) fail. Each of the two mutants above fails exactly its one case.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts"
+      ],
+      "note": "Appended the five (o1)-(o5) cases as one describe block at the end of describe('moe.get_commit_scope'); existing cases untouched. RED is verified in step 3.",
+      "startedAt": "2026-11-03T20:53:41.021Z",
+      "completedAt": "2026-11-03T20:54:29.922Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, with your Edit tool.\n(a) packages/moe-daemon/src/tools/getCommitScope.ts, liveness block (about :231-243). Move `const finalizing = finalizingAttemptsByTask(state).get(task.id);`, with its two-line 'finalizing hold' comment, ABOVE the orphan rule. Then make the rule `const orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller;`. Extend the orphan comment: \"The holder of the task's finalizing attempt is exempt: it is the seat landing its own completion, and complete_task's REVIEW write cleared its assignment before its wrapper's post-flight asks.\" Keep the activePeerIds/assignee/assigneeProtected lines as they are.\n(b) Tool description (:119): replace `an orphan-mode caller (workerId not the assignee) is counted in activePeerIds` with `an orphan-mode caller (workerId neither the assignee nor the holder of the task\\'s finalizing attempt) is counted in activePeerIds`.\n(c) workerId inputSchema description (:124): replace `counted in activePeerIds when it is not the assignee.` with `counted in activePeerIds when it is neither the assignee nor the holder of the task\\'s finalizing attempt (the seat landing its own completion after complete_task cleared the assignee).`. Afterwards, `grep -c \"nor the holder of the task\" packages/moe-daemon/src/tools/getCommitScope.ts` must print 2.\n(d) docs/MCP_SERVER.md:719, get_commit_scope Parameters: change the workerId comment's `counted in activePeerIds when it is not the assignee` to `counted in activePeerIds when it is neither the assignee nor the holder of the task's finalizing attempt`. That one line only: it is no vendored doc, so no regen is needed. task-0adea941 (REVIEW, already landed) holds this file, but its hunks sit at :2040 and :2991-3016, so merge-tree takes both.\nError handling: the fix adds no failure path.\n- `finalizing` is the existing per-task Map lookup, undefined when no attempt holds the task. Optional chaining keeps undefined a non-match, so every caller that does not hold THIS task's finalizing attempt keeps today's orphan behaviour, the :310 BLOCKED recoverer included.\n- finalizingAttemptsByTask already skips malformed records (isHoldingFinalizingAttempt), so a corrupt attempt can never exempt anyone.\n- The handler's refusals for a missing taskId, a bad phase or since, and an unknown task are unchanged.\nTouch no other file. In particular, scripts/tests/postflight-fake-proxy.js:795 copies the old rule, and that is a follow-up, not this row.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Moved the finalizing lookup above the orphan rule and exempted the finalizing holder; the tool description and the workerId description both name the exemption (grep count 2); MCP_SERVER.md:719 synced.",
+      "startedAt": "2026-11-03T20:54:31.882Z",
+      "completedAt": "2026-11-03T20:54:56.684Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once. Never in the shared checkout (rail): both commands snapshot `git archive HEAD` into a fresh mktemp dir and overlay your uncommitted files. They work the same in your task worktree and, after landing, in QA's control checkout. The architect dry-ran both, uncommitted and after a simulated landing.\nGREEN, which is complete_task's verification:\n`cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"neither the assignee nor the holder of the task's finalizing attempt\" docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $P/getCommitScope.ts $P/getCommitScope.test.ts $S/$P/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/getCommitScope.test.ts`\nExpect `Tests 70 passed (70)`.\nRED-AT-BASE, DoD 1's \"fails against today's getCommitScope.ts\". Only the test file is overlaid, on the source pinned at 8ca8d389:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $P/getCommitScope.test.ts $S/$P/ && git show 8ca8d38951e5279bf01f47578550b18d6ec87088:$P/getCommitScope.ts > $S/$P/getCommitScope.ts && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/getCommitScope.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +3 failed \\| 67 passed \\(70\\)\" $S/l && grep -aqF \"> (o1) \" $S/l && grep -aqF \"> (o4) \" $S/l && grep -aqF \"> (o5) \" $S/l && echo RED-AT-BASE; }`\nIt must end with RED-AT-BASE and exit 0.\nError handling for a red run: read the FAIL line before changing anything.\n- 'no tests' or a count other than 70 means the five cases drifted from step 1.\n- A failing pre-existing case means the fix leaked beyond the orphan rule.\nQuote both outputs in complete_task's summary.\nEach gate dir is about 106 MB. After recording, delete only yours: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/getCommitScope.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q '(task-7d3428d1)' \"$f\" && rm -rf -- \"$d\"; done`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN: tsc clean, Tests 70 passed (70), exit 0. RED-AT-BASE: Tests 3 failed | 67 passed (70), (o1), (o4) and (o5) fail against 8ca8d389's getCommitScope.ts, printed RED-AT-BASE, exit 0. Both gate snapshot dirs removed by fingerprint.",
+      "startedAt": "2026-11-03T20:54:57.593Z",
+      "completedAt": "2026-11-03T20:55:41.922Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your own diff (`git diff`). Fix any finding, re-run step 3, then call complete_task.\n(1) Scope: exactly three files. getCommitScope.ts changes only the moved `finalizing` line and its comment, the orphan rule plus its comment, and the two descriptions. MCP_SERVER.md changes only line 719. The test file changes only the new block.\n(2) Who gets exempted?\n- Only `finalizing?.workerId === caller`, for THIS task.\n- A null caller is never an orphan (the `caller !== null` guard stays first).\n- A seat freed with no finalizing attempt is still an orphan, as the row's scope says: submit_plan to AWAITING_APPROVAL, report_blocked's seat-freeing arm.\n(3) Could the completing seat be a genuine concurrent actor? No:\n- claim_next_task withholds the row from every other seat while the finalizing hold exists;\n- a crashed seat's relaunch under the same worker id owns the same landing.\nThe exemption only restores 'solo' = no OTHER live worker (docs/CONFIGURATION.md attribution.undeclared). (o4) proves a real peer still flips peersActive.\n(4) Worktree mode lands with no tiers and never reads peersActive. The wrapper reads only peersActive (moe-agent.sh:4604, ps1 :4244), so no wrapper change is needed.\n(5) No ordering hazard: finalizingAttemptsByTask is a pure read of state.attempts, now evaluated a few lines earlier in the same synchronous block.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/getCommitScope.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review of git diff: exactly three files. getCommitScope.ts changes only the moved finalizing lookup and its comment, the orphan rule and its comment, and the two descriptions. MCP_SERVER.md changes only line 719. The test file changes only the new describe block. The exemption is finalizing?.workerId === caller for THIS task only; the caller !== null guard stays first; undefined finalizing keeps today's orphan behaviour. No other doc repeats the old wording. No edits since the step-3 gates, so no re-run needed.",
+      "startedAt": "2026-11-03T20:55:42.897Z",
+      "completedAt": "2026-11-03T20:56:02.070Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 422.7,
+  "comments": [
+    {
+      "id": "comment-5661d26d54e24f2dab4951ca29fc1eb3",
+      "author": "governor-e6b40560",
+      "content": "Governor ruling, 20:51Z: task-0adea941 is DONE, so docs/MCP_SERVER.md is free. Include this row's one-line MCP_SERVER.md sync (get_commit_scope's workerId comment) in that tool's own section. Do it even if lanes.js shows task-a024ac57 holding the file: a024ac57 edits only the claim_next_task and wait_for_task sections, and worktree-mode merge-tree lands distinct sections cleanly. Don't defer the sync.",
+      "timestamp": "2026-11-03T20:50:35.517Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:41:31.379Z",
+  "updatedAt": "2026-11-04T19:20:44.643Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T20:43:03.557Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T21:02:09.017Z",
+    "wallClockMs": 1145460
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T20:51:19.198Z",
+  "executionContract": {
+    "intendedBehavior": "moe.get_commit_scope no longer counts the caller as an orphan-mode peer when that caller holds the task's finalizing attempt. That caller is the seat landing its own completion: complete_task's REVIEW write cleared the assignee before the wrapper's post-flight asks. At a shared-mode completion with no other live worker, activePeerIds is now [] and peersActive false. The default attribution.undeclared 'solo' therefore lands MEASURED paths again, matching docs/CONFIGURATION.md: commit them \"only when no other worker is live\". Every other non-assignee caller is still an orphan-mode peer.",
+    "acceptanceCriteria": [
+      "(o1) After openAttempt, setAttemptPhase('finalizing') and updateTask({status:'REVIEW'}), with no other worker live, the finalizing holder's scope has livePeerIds [], activePeerIds [] and peersActive false. It fails against 8ca8d389's source.",
+      "(o2) A caller that is neither the assignee nor the finalizing holder is in activePeerIds (['worker-1','worker-2']), with peersActive true.",
+      "(o3) A finalizing attempt the caller holds on ANOTHER task does not exempt it here.",
+      "(o4) Another live worker still makes peersActive true for the exempt caller.",
+      "(o5) Both the tool description and the workerId description contain 'neither the assignee nor the holder of the task's finalizing attempt'.",
+      "The existing BLOCKED-unassigned orphan case (getCommitScope.test.ts:310) and every other existing case pass unchanged: 70/70."
+    ],
+    "invariants": [
+      "A null caller is never an orphan, and a caller equal to the assignee never is either.",
+      "Only THIS task's well-formed finalizing attempt can exempt a caller, never another task's and never a malformed record.",
+      "livePeerIds is unchanged: it still excludes the caller and still lists every other live worker.",
+      "The reply shape is unchanged: no key added or removed."
+    ],
+    "compatibility": [
+      "No MCP schema change: the field set is the same and the input schema is unchanged apart from description text.",
+      "Older wrappers read only peersActive and get the corrected value, with no wrapper change needed.",
+      "No .moe/ state change."
+    ],
+    "approvedScope": [
+      "getCommitScope.ts liveness block: the `finalizing` lookup moved above the orphan rule, `orphanCaller` gaining `&& finalizing?.workerId !== caller`, and the orphan comment",
+      "getCommitScope.ts: the tool description's orphan-mode clause and the workerId inputSchema description",
+      "docs/MCP_SERVER.md:719: the get_commit_scope workerId comment",
+      "getCommitScope.test.ts: one new describe block with cases (o1) to (o5)"
+    ],
+    "reuse": [
+      "Reuses finalizingAttemptsByTask, which the tool already calls, and the file's h, checked(), openAttempt and setAttemptPhase helpers. No new helper."
+    ],
+    "sourceAssumptions": [
+      "getCommitScope.ts:236-237 at 8ca8d389: `orphanCaller = caller !== null && caller !== task.assignedWorkerId`, and activePeerIds appends the caller when orphanCaller is true.",
+      "getCommitScope.ts:243 looks up `finalizing = finalizingAttemptsByTask(state).get(task.id)`, from util/claimEligibility.ts:185, which keeps only well-formed 'finalizing' records via isHoldingFinalizingAttempt.",
+      "completeTask.ts:272 calls setAttemptPhase(finalizing), then :277-280 calls updateTask(status REVIEW). taskStore.ts:546-548 shouldClearWorker then nulls assignedWorkerId.",
+      "moe-agent.sh:4604 sets peers_active from scope.peersActive, and :4780 commits MEASURED only when undeclared=='solo' and not peers_active. moe-agent.ps1:4244 does the same."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"neither the assignee nor the holder of the task's finalizing attempt\" docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $P/getCommitScope.ts $P/getCommitScope.test.ts $S/$P/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/getCommitScope.test.ts",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $P/getCommitScope.test.ts $S/$P/ && git show 8ca8d38951e5279bf01f47578550b18d6ec87088:$P/getCommitScope.ts > $S/$P/getCommitScope.ts && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/getCommitScope.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +3 failed \\| 67 passed \\(70\\)\" $S/l && grep -aqF \"> (o1) \" $S/l && grep -aqF \"> (o4) \" $S/l && grep -aqF \"> (o5) \" $S/l && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Four ways to stop counting the completing seat as a peer were weighed.\n(1) Chosen, as the row's fix direction says: exempt the caller that holds THIS task's finalizing attempt. That is the signal the owner guard and claim_next_task's finalizing hold already use for the landing's owner.\n(2) Exempting any caller of an unassigned REVIEW row: too broad. A different seat recovering the row would be exempt too.\n(3) Using assigneeProtected: wrong signal. It describes the assignee, and the assignee is null at this point.\n(4) Keeping the assignee in complete_task until the landing finalizes: a large blast radius across claim, QA gating and release routing, all for one attribution answer.\nThe docs/MCP_SERVER.md:719 one-line sync is included. Its holder, task-0adea941 (REVIEW, completion landed 8ca8d389), edits only :2040 and :2991-3016, and worktree mode has no path holds.",
+    "codebaseInsights": "Wrapper consumers read only `peersActive`: moe-agent.sh:4604 and :4780 (undeclared=='solo' and not peers_active), and moe-agent.ps1:4244. activePeerIds is informational.\nfinalizingAttemptsByTask (util/claimEligibility.ts:185) keeps only well-formed 'finalizing' records, the highest generation per task.\ntsc in the daemon excludes *.test.ts, and vitest does not type-check. A tsc error probe confirmed that tsc does check source.\nArchitect dry run at 8ca8d389: RED 3 failed | 67 passed (70), GREEN 70/70, tsc clean. M-any-holder kills only (o2), and M-cross-task kills only (o3). Both checkRefs passed verbatim in a scratch clone, uncommitted and after a simulated landing commit. GREEN on the unfixed tree exits 1.\nThis repo runs worktree mode, so its own landings never hit the bug. Shared-mode projects hit it on every completion.",
+    "risks": "The RED checkRef pins `3 failed | 67 passed (70)`, so add exactly the five cases, no more.\nIt also pins base 8ca8d389's getCommitScope.ts. No other open task declares that file today. If one lands an edit first, the exact count grep fails loudly instead of passing.\nRun both gates in their own mktemp snapshots, never in the shared checkout: the daemon runs from packages/moe-daemon/dist there.\nOut of scope, a follow-up for the governor: scripts/tests/postflight-fake-proxy.js:795 still models the old orphan rule. Its default assignee is the caller, so existing postflight scenarios are unaffected, but any future FAKE_SCOPE_ASSIGNEE=none completion scenario would get peersActive true where the daemon now says false.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/getCommitScope.ts",
+      "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/util/claimEligibility.ts",
+      "packages/moe-daemon/src/tools/completeTask.ts",
+      "packages/moe-daemon/src/state/taskStore.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8ca8d38951e5279bf01f47578550b18d6ec87088",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T20:51:19.225Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T20:53:41.021Z",
+  "reviewStartedAt": "2026-11-03T20:56:31.215Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && grep -qF \"neither the assignee nor the holder of the task's finalizing attempt\" docs/MCP_SERVER.md && S=$(mktemp -d) && P=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $P/getCommitScope.ts $P/getCommitScope.test.ts $S/$P/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run src/tools/getCommitScope.test.ts",
+    "exitCode": 0,
+    "outputTail": " Test Files  1 passed (1)\n      Tests  70 passed (70)\n   Start at  22:56:19\n   Duration  3.80s (tests 60%, transform 35%, import 5%)\n\nEXIT=0 (tsc --noEmit clean before vitest)",
+    "reportedAt": "2026-11-03T20:56:31.215Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+    "packages/moe-daemon/src/tools/getCommitScope.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "get_commit_scope no longer counts the seat that holds THIS task's finalizing attempt as an orphan-mode peer, so a shared-mode completion landing on a one-seat board gets peersActive false and the default attribution.undeclared 'solo' commits MEASURED paths again.\n\nChanges (3 files):\n- getCommitScope.ts: the finalizing lookup moved above the orphan rule, and orphanCaller is now `caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller`. The orphan comment explains the exemption. The tool description and the workerId inputSchema description both say 'neither the assignee nor the holder of the task's finalizing attempt' (grep count 2). The reply shape and the input schema are unchanged apart from description text.\n- docs/MCP_SERVER.md:719: the get_commit_scope workerId comment synced, that one line only.\n- getCommitScope.test.ts: one new describe block with exactly (o1)-(o5): (o1) holder not a peer, activePeerIds [] and peersActive false (DoD 1); (o2) a non-holder is still an orphan peer, ['worker-1','worker-2'] and peersActive true (DoD 2); (o3) a finalizing attempt on another task exempts nobody; (o4) a real live peer still flips peersActive for the exempt caller; (o5) both descriptions name the exemption (DoD 3). The existing BLOCKED-unassigned orphan case passes unchanged.\n\nVerification, run in git-archive snapshots outside the shared checkout:\n- GREEN (the complete_task command): tsc --noEmit clean; `Test Files 1 passed (1)`, `Tests 70 passed (70)`, exit 0.\n- RED-AT-BASE (test file overlaid on 8ca8d389's getCommitScope.ts): `Tests 3 failed | 67 passed (70)`; (o1), (o4) and (o5) fail; printed RED-AT-BASE, exit 0.\nBoth gate snapshot dirs were removed by fingerprint.\n\nNot changed, per the plan: scripts/tests/postflight-fake-proxy.js:795 still models the old orphan rule (follow-up for the governor); seats freed without a finalizing attempt (submit_plan, report_blocked's seat-freeing arm) stay orphans.",
+  "commits": [
+    {
+      "sha": "395172f08e996b02b91c868a3fb110f384247f80",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T20:51:24Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/getCommitScope.test.ts",
+        "packages/moe-daemon/src/tools/getCommitScope.ts"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T20:59:16.341Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T20:59:20Z",
+    "at": "2026-11-03T21:02:55.270Z"
+  },
+  "completedAt": "2026-11-03T21:02:09.017Z",
+  "reviewCompletedAt": "2026-11-03T21:02:09.017Z",
+  "reviewSummary": "Approved. Reviewed completion 395172f0 (on moe/work-2026-10-24, in the control HEAD; owned files clean in tree). Own diff +74/-8, net 66 LOC, exactly the 3 planned files: getCommitScope.ts, getCommitScope.test.ts, docs/MCP_SERVER.md:719 (one line).\n\nRe-ran task.verification in a git-archive snapshot under /tmp, outside the shared checkout (removed afterwards):\n- GREEN: docs grep ok, tsc --noEmit clean, vitest getCommitScope.test.ts: Tests 70 passed (70), exit 0.\n- RED-AT-BASE (new tests over 8ca8d389's getCommitScope.ts): 3 failed | 67 passed (70); failing = (o1), (o4), (o5). Confirms DoD 1.\n- Mutant (scratch snapshot only): exempt on `!finalizing` (any finalizing attempt) fails (o2): 1 failed | 69 passed. Tests pin 'holder of THIS task's attempt'.\n\nDoD:\n1. (o1): holder gets livePeerIds [], activePeerIds [], peersActive false (full toEqual; also pins assignee null and finalizingAttempt.workerId).\n2. (o2): worker-2 (neither assignee nor holder) stays in activePeerIds ['worker-1','worker-2'], peersActive true. Existing BLOCKED-unassigned case at :310 unchanged and passing, 70/70.\n3. File passes in full; the exemption phrase is in both the tool description and the workerId inputSchema description ((o5) asserts both; also in MCP_SERVER.md).\n\nSource: orphanCaller = caller !== null && caller !== task.assignedWorkerId && finalizing?.workerId !== caller; the finalizing lookup moved above it (pure read of state.attempts, well-formed 'finalizing' records only, so a malformed or other-task attempt exempts nobody: (o3)). Null caller never orphan; livePeerIds unchanged ((o4)); reply shape unchanged. No stale old wording elsewhere (grep). No deleted or weakened tests, no scope creep. Ponytail: nothing to cut.\n\nNot covered, by plan: scripts/tests/postflight-fake-proxy.js:795 still models the old orphan rule (governor follow-up); seats freed without a finalizing attempt (submit_plan, report_blocked seat-freeing) stay orphans. Wrappers read only peersActive, so no wrapper change.",
+  "requiredCheckAtDone": null
+}

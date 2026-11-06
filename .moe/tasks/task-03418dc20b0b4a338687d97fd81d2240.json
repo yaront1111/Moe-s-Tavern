@@ -1,0 +1,232 @@
+{
+  "id": "task-03418dc20b0b4a338687d97fd81d2240",
+  "epicId": "epic-be924fb8",
+  "title": "bug: prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs run the usage stream helper with the seat's inherited MOE_USAGE_RECEIPT_FILE, so a seat that runs them appends fixture codex/claude usage rows to its own live launch receipt: 248 fake rows in 48 live receipts across 28 tasks (10-24 to 11-03), and usage-report shows codex usage in Claude-only launches",
+  "description": "Filed by defect hunt #18 (task-1c736204, lane 2: the wrapper side of Claude account rotation and usage receipts), 2026-11-04.\n\nPROBLEM\n- Both launchers export the live receipt into the agent CLI's environment:\n  - scripts/moe-agent.sh:884 and :891 `export MOE_USAGE_RECEIPT_FILE=... MOE_USAGE_CONTEXT_JSON=...`;\n  - scripts/moe-agent.ps1:1251-1252 sets them as process $env.\n  - So every process the seat starts inherits them, including the repo tests a worker or QA runs as verification.\n- scripts/usage-receipt.mjs:71-73 createUsageReceiptWriter appends to whatever env.MOE_USAGE_RECEIPT_FILE names, under env.MOE_USAGE_CONTEXT_JSON's task, attempt and worker.\n- Three test files run that writer with the inherited environment:\n  - scripts/tests/prompt-cache.test.mjs:75, :86 and :95: spawnSync(process.execPath, [prompt-cache.mjs, 'codex-stream' | 'claude-stream']) with no env option.\n  - scripts/tests/prompt-cache-launcher.test.mjs:366-368: `env: { ...process.env, ... }`; its fake codex at :345-348 emits a 1000/900-token turn.\n  - scripts/tests/onboarding.mjs:52: execFileSync(process.execPath, [cacheHelper, 'codex-stream'], ...) with no env.\n- Each run appends fixture usage to the seat's real receipt. usage-report.mjs then reports codex usage and coverageComplete:false for Claude-only launches (usage-report.mjs:256-258).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs (copy it into scripts/tests/ of a `git archive 320918dc` snapshot). `env -i PATH=$PATH HOME=<tmp> node --test scripts/tests/hunt-a-receipt-leak.test.mjs` fails at HEAD, with fixture rows appended such as \"codex task=task-live worker=qa-live ... input=1000 cacheRead=900\" (node-test-output.txt; re-run by the hunt holder at 07:5xZ).\n- Live: 48 receipt files under logs/moe-usage hold 248 fixture-signature rows charged to 28 real taskIds; 233 of those rows name a provider other than their launch's.\n  - By day: 10-24 1, 10-26 30, 10-29 26, 10-30 86, 10-31 86, 11-02 12, 11-03 7. The latest is 11-03T09:04Z, launch 7657a3b4, architect-1dd28c7c.\n  - live-pollution.txt has the raw lines. An independent recount found 44 claude-launch receipts holding codex rows.\n\nFIX DIRECTION (this row: the test side, which stops every writer found)\n- Every scripts/tests file that runs a usage-receipt writer must run it with MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON removed. For example, delete both from process.env at the top of the file, or build the child env without them. The three files above are the known writers.\n- One guard case in scripts/tests/usage-receipt.test.mjs (CI already runs it at .github/workflows/ci.yml:267) runs those tests under an env that names a temp receipt holding one launch line, and asserts the file is unchanged afterwards.\n- Error handling: the guard must fail loudly, not skip, if a child test fails.\n- HELD BACK, a follow-up after the open rows on scripts/moe-agent.{sh,ps1} land (3416b309, 62ec51f1, d861f3de): scope both variables to the wrapper's own writer commands (usage-session, usage-start, claude-stream, codex-stream) instead of exporting them to the CLI.\n- Not in scope: rewriting the 48 polluted live receipts under logs/moe-usage. That is the governor's call.\n\nFILES (4): scripts/tests/prompt-cache.test.mjs; scripts/tests/prompt-cache-launcher.test.mjs; scripts/tests/onboarding.mjs; scripts/tests/usage-receipt.test.mjs. None is held at filing (lanes.js 08:05Z). No dependsOn.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/usage-receipt.test.mjs` passes a new guard case. It runs `node --test scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs` and `node scripts/tests/onboarding.mjs` with MOE_USAGE_RECEIPT_FILE pointing at a temp receipt that holds one launch line and MOE_USAGE_CONTEXT_JSON set, and asserts that file still holds exactly that one line. A child test failure fails the guard.",
+    "The hunt repro /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into scripts/tests/ of a snapshot of the fix and run with `env -i PATH=$PATH HOME=<tmp> node --test`, passes: added is [].",
+    "`node --test scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs` and `node scripts/tests/onboarding.mjs` pass both with and without MOE_USAGE_RECEIPT_FILE set, and the diff touches no file under scripts/moe-agent.* or logs/."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TDD: write the guard first (mem:gotcha-node-test-windows-path-glob). Append ONE top-level test to scripts/tests/usage-receipt.test.mjs titled 'G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt' (the gate greps '^✔ G1: '). Body:\n- dir = mkdtempSync(...) with t.after(rmSync); file = path.join(dir, 'receipt.jsonl'); env = { ...process.env, MOE_USAGE_RECEIPT_FILE: file, MOE_USAGE_CONTEXT_JSON: JSON.stringify({ ...context, taskId: 'task-guard' }) }; then `delete env.NODE_TEST_CONTEXT` (node:test sets it in every file process, and a nested `node --test` that inherits it reports to the parent instead of running: local-runner.test.mjs:3700-3703 does the same).\n- Launch line: spawnSync(process.execPath, [helper, 'usage-start', 'claude'], { env, encoding: 'utf8' }) exits 0; before = readFileSync(file); assert it holds exactly one line.\n- Two children, each spawnSync with { cwd: the repo root (fileURLToPath(new URL('../..', import.meta.url))), env, encoding: 'utf8', timeout: 600_000, windowsHide: true }: [process.execPath, '--test', '--test-reporter=tap', 'scripts/tests/prompt-cache.test.mjs', 'scripts/tests/prompt-cache-launcher.test.mjs'] and [process.execPath, 'scripts/tests/onboarding.mjs']. Pass repo-relative forward-slash paths, never absolute ones: node --test globs its arguments on Windows, where a backslash is a glob escape.\n- Error handling, never a skip: assert.equal(child.status, 0, msg) where msg names the args, child.signal and the last 4000 chars of stdout+stderr, so a failing child, a timeout (status null) or a missing build (onboarding's 'Build moe-daemon first') fails G1 loudly. Also assert the tap run printed '# fail 0' and a '# pass N' line with N >= 1 (a run with no summary did not run), and onboarding printed a line starting 'PASS onboarding:'.\n- After both children: assert.deepEqual(readFileSync(file), before), with the appended text (readFileSync(file, 'utf8').slice(before.length)) in the message.\n- One comment line: G1 needs the built daemon and proxy because onboarding.mjs does; CI's build-all-platforms job builds both (ci.yml:222-231) before the step that runs this file (ci.yml:267).\nLeave every existing test in the file unchanged. Then run the checkRefs command once for RED: it must fail with G1 failing on the receipt assertion (at base the two prompt-cache files append 7 fixture rows) and the hunt repro failing. Record that RED in the completion summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "note": "G1 added. RED at base: G1 fails on 'receipt grew by' (codex fixture row appended), hunt repro fails (added = 4 fixture rows); pass 53 fail 2.",
+      "startedAt": "2026-11-04T08:25:07.181Z",
+      "completedAt": "2026-11-04T08:25:51.342Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, test side only (governor comment-c35a995f: no scripts/moe-agent.* edit, no logs/ rewrite; the wrapper side is task-cd3887fe). In each of scripts/tests/prompt-cache.test.mjs, scripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/onboarding.mjs, right after the import block and BEFORE any test() registration or child process (mem:gotcha-node-test-top-level-await-ends-root-early: a selected test can start while later module statements still evaluate), add:\n  // The launcher exports the seat's live usage receipt to every child; this file's fixture provider streams must never append to it (task-03418dc2).\n  delete process.env.MOE_USAGE_RECEIPT_FILE;\n  delete process.env.MOE_USAGE_CONTEXT_JSON;\nModule top level runs before node:test starts any registered test and before onboarding.mjs's bundle-mode codex-stream at :52, so every spawn in each file, present or future, inherits a clean environment: prompt-cache.test.mjs :75/:86/:95 pass no env, prompt-cache-launcher.test.mjs :366-368 spreads process.env, onboarding.mjs :52 passes none. Remove only these two keys; onboarding.mjs:65 already strips every MOE_* key for the daemon and proxy and stays as it is. Deleting an absent key is a no-op, so the files behave the same with or without the variables set; no other error handling is needed. Re-run the checkRefs command: G1 and the hunt repro now pass.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "startedAt": "2026-11-04T08:25:52.198Z",
+      "completedAt": "2026-11-04T08:26:02.714Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once: from the task worktree run the checkRefs command exactly as written; its fresh output ending 'GATE-OK' is moe.complete_task's verification evidence. It archives HEAD into a mktemp dir, overlays the four owned files plus the hunt repro (/mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into the snapshot only, never into the repo), runs npm ci + build for the daemon and proxy there, builds the VS Code bundle with moe-vscode/scripts/bundle-assets.mjs, and then, all under env -i with HOME a temp dir and no receipt variables: node --test on usage-receipt (G1 must print '✔ G1: '), prompt-cache, prompt-cache-launcher and the hunt repro (DoD 1-3); the plain onboarding smoke; and the bundle-mode onboarding smoke with MOE_USAGE_RECEIPT_FILE naming a one-line file that must still read exactly 'L' (the only check that reaches onboarding.mjs:52, which G1's non-bundle run never executes). Never run npm ci, a build or these tests in the shared checkout, and never in this seat's own environment without clearing both receipt variables: that is the bug (project rail; env -i in the command handles it). If onboarding fails at its second start on a loaded host, rerun once and cite both runs (mem:gotcha-onboarding-smoke-restart-health-timeout). A failure prints the failing output: fix the code, never weaken an assertion.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs gate ended GATE-OK: usage-receipt+prompt-cache+launcher+hunt repro pass 55 fail 0 skip 2 (G1 printed); plain onboarding PASS; bundle-mode onboarding PASS with receipt still 'L'.",
+      "startedAt": "2026-11-04T08:26:03.531Z",
+      "completedAt": "2026-11-04T08:26:30.585Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's own diff (load the adversarial-self-review skill). Check: (a) `git diff --stat` against the base touches only the four scripts/tests files, nothing under scripts/moe-agent.* or logs/ (DoD 3); (b) each delete sits above every test() and every child process in its file; (c) G1 overrides both variables, so it can never touch the seat's real receipt, and cleans its temp dir; (d) G1 still fails loudly when a child fails, times out or onboarding finds no build. Then mutants in a snapshot (back up each file once, restore from `git show HEAD:<path>`, cmp before citing the gate): revert prompt-cache.test.mjs's delete (G1 and the hunt repro die); revert prompt-cache-launcher.test.mjs's delete (G1 dies: its fake codex turn appends one row); revert onboarding.mjs's delete (G1 survives because onboarding's writer runs only in bundle mode; the gate's bundle-mode check dies: record both); drop `delete env.NODE_TEST_CONTEXT` from G1 (record what the nested run does: G1's tap-summary assertion should catch it). Put the RED from step 1 and each mutant's result in the completion summary. If any byte changed during review, re-run step 3's command before moe.complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/usage-receipt.test.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/onboarding.mjs"
+      ],
+      "note": "Diff touches only the 4 scripts/tests files (+45/-1). Mutants in a snapshot: revert prompt-cache.test.mjs delete -> G1 and hunt repro fail; revert launcher delete -> G1 fails; revert onboarding delete -> G1 survives (fail 0) but bundle-mode receipt grew from 1 to 2 lines (gate's L check would die); drop NODE_TEST_CONTEXT delete -> G1 fails on 'prompt-cache run reports no failures'.",
+      "startedAt": "2026-11-04T08:26:31.331Z",
+      "completedAt": "2026-11-04T08:27:12.128Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 502.7,
+  "comments": [
+    {
+      "id": "comment-c35a995f1f704e1bb6b27fb599fbc0cd",
+      "author": "governor-e6142a94",
+      "content": "Governor decision for the planner and QA:\n1. **Historical receipts.** The 48 already-polluted live receipts under logs/moe-usage stay as they are; do not rewrite them. They are historical logs, and rewriting them loses provenance. So usage-report totals for 10-24 to 11-03 include about 248 fixture rows. This row fixes the test side only.\n2. **Wrapper side.** Scoping MOE_USAGE_RECEIPT_FILE away from the agent CLI is filed separately as task-cd3887fe (BACKLOG, gated on 3416b309 and 62ec51f1). Keep this row out of scripts/moe-agent.{sh,ps1}.",
+      "timestamp": "2026-11-04T08:06:25.903Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T08:03:50.128Z",
+  "updatedAt": "2026-11-04T19:20:45.418Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:08:47.436Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:30:28.592Z",
+    "wallClockMs": 1301156
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-593560ee",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:17:47.374Z",
+  "executionContract": {
+    "intendedBehavior": "Running the repo's prompt-cache tests or the onboarding smoke inside a live seat, where the launcher has exported MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON, never appends a fixture usage row to that seat's receipt. Each of the three files drops both variables from its own process.env at module top, before any test or child process. A new guard G1 in usage-receipt.test.mjs proves it for the prompt-cache tests and the onboarding smoke under an inherited temp receipt, and fails loudly on any child failure. The launchers, the writer and the existing receipts under logs/moe-usage are untouched.",
+    "acceptanceCriteria": [
+      "DoD 1: `node --test scripts/tests/usage-receipt.test.mjs` passes G1. G1 runs `node --test --test-reporter=tap scripts/tests/prompt-cache.test.mjs scripts/tests/prompt-cache-launcher.test.mjs` and `node scripts/tests/onboarding.mjs` with MOE_USAGE_RECEIPT_FILE naming a temp receipt that holds exactly one usage-start launch line and MOE_USAGE_CONTEXT_JSON set, and asserts that the receipt is byte-identical afterwards. Each child must exit 0 (the tap run with '# fail 0' and at least one pass, onboarding printing 'PASS onboarding:'); a child failure, timeout or missing build fails G1, never a skip.",
+      "DoD 2: the hunt repro /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs, copied into scripts/tests/ of a snapshot of the fix and run under `env -i PATH=... HOME=<tmp> node --test`, passes (added is []).",
+      "DoD 3: prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs pass with no receipt variables (the gate's env -i runs) and with them set (G1, and the gate's bundle-mode onboarding run, whose one-line receipt still reads exactly 'L').",
+      "DoD 3: the diff touches only scripts/tests/usage-receipt.test.mjs, scripts/tests/prompt-cache.test.mjs, scripts/tests/prompt-cache-launcher.test.mjs and scripts/tests/onboarding.mjs; nothing under scripts/moe-agent.* or logs/.",
+      "RED at base: G1 fails on its receipt assertion and the hunt repro fails. Reverting prompt-cache.test.mjs's or prompt-cache-launcher.test.mjs's delete makes G1 fail; reverting onboarding.mjs's delete makes the gate's bundle-mode check fail."
+    ],
+    "invariants": [
+      "No file G1 runs writes to the receipt named by an inherited MOE_USAGE_RECEIPT_FILE.",
+      "The writer is unchanged: a stream the launcher pipes through prompt-cache.mjs (which sets both variables for its own helper) still appends as before.",
+      "Tests that set MOE_USAGE_RECEIPT_FILE explicitly for a child (usage-receipt.test.mjs run(), usage-launcher.test.mjs) behave as before.",
+      "G1 overrides both variables in its children's env, so it never touches the running seat's real receipt, and it removes its temp dir."
+    ],
+    "compatibility": [
+      "CI's 'Test agent runtime discovery' step (ci.yml:267, ubuntu, windows and macos) now also runs G1; the same job builds the daemon and proxy first (ci.yml:222-231), which onboarding.mjs needs.",
+      "Running usage-receipt.test.mjs on a checkout without built daemon and proxy dists now fails G1 loudly with onboarding's 'Build moe-daemon first', as the DoD requires (fail, never skip).",
+      "The three edited files keep every existing test and assertion; with the receipt variables unset they behave exactly as before."
+    ],
+    "approvedScope": [
+      "scripts/tests/prompt-cache.test.mjs, scripts/tests/prompt-cache-launcher.test.mjs, scripts/tests/onboarding.mjs: one comment plus `delete process.env.MOE_USAGE_RECEIPT_FILE; delete process.env.MOE_USAGE_CONTEXT_JSON;` right after the imports. No other change.",
+      "scripts/tests/usage-receipt.test.mjs: one new top-level test G1 (plus a repo-root constant if needed); every existing test unchanged.",
+      "Out of scope: scripts/moe-agent.{sh,ps1} (task-cd3887fe scopes the variables wrapper-side), logs/moe-usage (historical receipts stay, governor decision), scripts/usage-receipt.mjs, scripts/prompt-cache.mjs, and .github/workflows/ci.yml (it already runs usage-receipt.test.mjs at :267 after building both packages)."
+    ],
+    "reuse": [
+      "prompt-cache-witness.test.mjs:63-66 and local-runner-bundle.test.mjs:107 already strip inherited MOE_* keys from their codex-stream children; this applies the same idea once per file, process-wide, for the two receipt keys.",
+      "local-runner.test.mjs:3700-3703's nested node --test recipe: delete NODE_TEST_CONTEXT from the child env, --test-reporter=tap, assert the '# pass' and '# fail' lines.",
+      "usage-receipt.test.mjs's existing `helper` and `context` constants, and prompt-cache.mjs usage-start for the launch line."
+    ],
+    "sourceAssumptions": [
+      "scripts/usage-receipt.mjs:71-73 createUsageReceiptWriter appends to env.MOE_USAGE_RECEIPT_FILE under env.MOE_USAGE_CONTEXT_JSON's identity; scripts/prompt-cache.mjs runs it for usage-start, claude-stream and codex-stream.",
+      "Writers that inherit the seat's env: prompt-cache.test.mjs:75, :86 and :95 (spawnSync, no env option); prompt-cache-launcher.test.mjs:366-368 (env: { ...process.env, ... }) through its fake codex at :345-348; onboarding.mjs:52 (execFileSync, no env), which runs only in bundle mode, inside `if (bundle)` at :23-57. onboarding.mjs:65 already strips MOE_* for the daemon and proxy.",
+      "Architect dry run at HEAD 90c499e1-era tree (2026-11-04, WSL, node v24.21.0, env -i): with a one-line receipt inherited, the two prompt-cache files appended 7 rows and bundle-mode onboarding appended 1; the hunt repro failed; plain runs passed (prompt-cache files 38 tests, 36 pass, 2 skipped; onboarding printed 'PASS onboarding: ...' in about 2 s). npm ci + build of daemon and proxy took about 4 s (TypeScript 7), bundle-assets.mjs about 1 s. The checkRefs command failed at base on exactly the hunt repro (56 tests, 1 fail).",
+      "node:test sets NODE_TEST_CONTEXT in each test file process; a nested node --test that inherits it reports to its parent instead of running normally (local-runner.test.mjs:3701).",
+      "node --test globs its arguments on Windows, where a backslash is a glob escape (mem:gotcha-node-test-windows-path-glob), so G1 passes repo-relative forward-slash paths with cwd set to the repo root.",
+      "Under Node 24 the default node --test reporter prints spec lines, so a passing top-level test prints '✔ <title>' at column 0 even when piped; the gate greps '^✔ G1: '."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=scripts/tests && git archive HEAD | tar -x -C \"$S\" && cp $T/{prompt-cache,prompt-cache-launcher,usage-receipt}.test.mjs $T/onboarding.mjs /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs \"$S/$T/\" && cd \"$S\" && N=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin && for p in daemon proxy; do (cd packages/moe-$p && env -i HOME=\"$HOME\" PATH=$N sh -c 'npm ci --no-audit && npm run build') >/dev/null 2>&1 || exit 1; done && C=\"env -i HOME=$S PATH=$N\" && $C node moe-vscode/scripts/bundle-assets.mjs >/dev/null && $C node --test $T/{usage-receipt,prompt-cache,prompt-cache-launcher,hunt-a-receipt-leak}.test.mjs 2>&1 | tee o; [ ${PIPESTATUS[0]} = 0 ] && grep -aq '^✔ G1: ' o && $C node $T/onboarding.mjs && echo L > r && $C MOE_USAGE_RECEIPT_FILE=$S/r MOE_USAGE_CONTEXT_JSON={} node $T/onboarding.mjs moe-vscode/bundled && [ \"$(cat r)\" = L ] && echo GATE-OK )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Pass a cleaned env at every spawn: rejected. That is five or more call sites across three files, and any future spawn in them would leak again; one process-level delete per file covers present and future spawns. (2) Strip every MOE_* key, as prompt-cache-witness.test.mjs does for its own children: not chosen. The row scopes the two receipt keys. MOE_TOOL_WRITES_FILE matters only for file_change or mcp_tool_call events, which none of these fixtures emit, and a broad strip could change tests that read other inherited values. (3) Fix the writer or the launchers: out of scope (governor comment-c35a995f; task-cd3887fe). (4) A committed bundle-mode onboarding guard: rejected, because it needs a built bundle (bundle-assets.mjs copies node_modules), which CI's line-267 step does not have. The gate's bundle-mode run proves onboarding.mjs:52 instead, and G1 runs onboarding as the DoD states (non-bundle), which pins that mode against future writers. Tier standard (4 steps, 4 files); a tests-only plan, so effort high.",
+    "codebaseInsights": "onboarding.mjs's only receipt writer is the bundle-mode codex-stream at :52; everything else in it already uses the MOE_*-stripped env from :65. So G1's onboarding run cannot catch an onboarding.mjs regression; only the gate's bundle-mode run does. usage-receipt.test.mjs's own writers always set MOE_USAGE_RECEIPT_FILE explicitly (a temp file or ''), so the file was never a leaker. CI runs usage-receipt.test.mjs only at ci.yml:267, in build-all-platforms after the daemon and proxy builds. The hunt repro lives outside the repo and imports ../usage-report.mjs, so it must sit in a snapshot's scripts/tests/.",
+    "risks": "NODE_TEST_CONTEXT: without deleting it, the nested node --test misreports; G1's tap-summary assertion guards that. Windows: node --test globs its arguments, so G1 must pass repo-relative forward-slash paths with cwd = repo root. Placement: the deletes must precede every test() registration (mem:gotcha-node-test-top-level-await-ends-root-early). Onboarding smoke load flake at its second start on a busy host (mem:gotcha-onboarding-smoke-restart-health-timeout): rerun once and cite both. The worker's own seat has a live receipt: never run these tests in the seat's environment without clearing both variables (the gate's env -i does). Never copy the hunt repro into the repo tree. Project rails: no npm ci, build or tests in the shared checkout; no pattern kills.",
+    "keyFiles": [
+      "scripts/tests/usage-receipt.test.mjs",
+      "scripts/tests/prompt-cache.test.mjs",
+      "scripts/tests/prompt-cache-launcher.test.mjs",
+      "scripts/tests/onboarding.mjs",
+      "scripts/usage-receipt.mjs",
+      "scripts/prompt-cache.mjs"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3747c4748a7179c54a237e407914bd4576d78d93",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:17:47.407Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:25:07.181Z",
+  "reviewStartedAt": "2026-11-04T08:27:20.271Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=scripts/tests && git archive HEAD | tar -x -C \"$S\" && cp $T/{prompt-cache,prompt-cache-launcher,usage-receipt}.test.mjs $T/onboarding.mjs /mnt/d/moe-scratch/hunt-1c736204/A/c2-receiptLeak/hunt-a-receipt-leak.test.mjs \"$S/$T/\" && cd \"$S\" && N=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin && for p in daemon proxy; do (cd packages/moe-$p && env -i HOME=\"$HOME\" PATH=$N sh -c 'npm ci --no-audit && npm run build') >/dev/null 2>&1 || exit 1; done && C=\"env -i HOME=$S PATH=$N\" && $C node moe-vscode/scripts/bundle-assets.mjs >/dev/null && $C node --test $T/{usage-receipt,prompt-cache,prompt-cache-launcher,hunt-a-receipt-leak}.test.mjs 2>&1 | tee o; [ ${PIPESTATUS[0]} = 0 ] && grep -aq '^✔ G1: ' o && $C node $T/onboarding.mjs && echo L > r && $C MOE_USAGE_RECEIPT_FILE=$S/r MOE_USAGE_CONTEXT_JSON={} node $T/onboarding.mjs moe-vscode/bundled && [ \"$(cat r)\" = L ] && echo GATE-OK )",
+    "exitCode": 0,
+    "outputTail": "✔ G1: the prompt-cache tests and the onboarding smoke never append to an inherited live usage receipt (4075ms)\nℹ tests 57\nℹ pass 55\nℹ fail 0\nℹ skipped 2\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\nPASS onboarding: fresh init, health, MCP, epic/task, architect claim, plan approval, doctor, restart persistence\nGATE-OK",
+    "reportedAt": "2026-11-04T08:27:20.271Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/usage-receipt.test.mjs",
+    "scripts/tests/prompt-cache.test.mjs",
+    "scripts/tests/prompt-cache-launcher.test.mjs",
+    "scripts/tests/onboarding.mjs"
+  ],
+  "completionSummary": "Test-side fix only. prompt-cache.test.mjs, prompt-cache-launcher.test.mjs and onboarding.mjs now delete MOE_USAGE_RECEIPT_FILE and MOE_USAGE_CONTEXT_JSON from process.env right after the imports, so no fixture provider stream appends to a seat's live receipt. New guard G1 in usage-receipt.test.mjs runs the prompt-cache tests (tap) and the onboarding smoke under an env naming a one-line temp receipt, requires exit 0, '# fail 0', '# pass N>=1', 'PASS onboarding:', and asserts the receipt is byte-identical; failures, timeouts and a missing build fail loudly. RED at base: G1 failed ('receipt grew by' a codex row) and the hunt repro failed (4 fixture rows); pass 53 fail 2. After: gate GATE-OK, 55 pass 0 fail 2 skipped, plain and bundle-mode onboarding PASS, bundle receipt still 'L'. Mutants: reverting the prompt-cache or launcher delete fails G1 (and the hunt repro for prompt-cache); reverting onboarding's delete leaves G1 green but the bundle-mode receipt grows to 2 lines (only the gate catches it); dropping delete env.NODE_TEST_CONTEXT fails G1 on the tap-summary assertion. Diff: 4 scripts/tests files, +45/-1; nothing under scripts/moe-agent.* or logs/.",
+  "commits": [
+    {
+      "sha": "173bfaa804bf0ae4bb01f85870763caa5249f7a8",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:24:11Z",
+      "paths": [
+        "scripts/tests/onboarding.mjs",
+        "scripts/tests/prompt-cache-launcher.test.mjs",
+        "scripts/tests/prompt-cache.test.mjs",
+        "scripts/tests/usage-receipt.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:28:17.264Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T08:28:23Z",
+    "at": "2026-11-04T08:31:04.053Z"
+  },
+  "completedAt": "2026-11-04T08:30:28.592Z",
+  "reviewCompletedAt": "2026-11-04T08:30:28.592Z",
+  "reviewSummary": "Reviewed completion 173bfaa8 via git show: 4 files under scripts/tests, +45/-1, nothing under scripts/moe-agent.* or logs/ (DoD 3 scope OK, size fine).\n\nRe-ran task.verification in a fresh git-archive snapshot (daemon+proxy built there, env -i): node --test usage-receipt + prompt-cache + prompt-cache-launcher + hunt repro = 57 tests, 55 pass, 0 fail, 2 skipped (no PowerShell on linux); '✔ G1:' printed (DoD 1); hunt repro passes (DoD 2); plain onboarding.mjs PASS.\n\nBundle-mode step: the full gate does NOT print GATE-OK at HEAD. onboarding.mjs on moe-vscode/bundled dies at its unchanged line 55 scan: 'Bundled test artifact(s): scripts/mods/moe-account-switch/hooks/register.test.js'. Cause is not this diff: 5265909c (task-d27edf88) added that compiled test file, which bundle-assets ships. Checked the task's own claim separately: in the scratch snapshot I removed that one file, re-ran bundle mode with MOE_USAGE_RECEIPT_FILE holding 'L': PASS, receipt still exactly 'L' (DoD 3). Mutant: pre-fix onboarding.mjs (no delete) grew the receipt to 2 lines, so its delete is load-bearing (only this bundle check catches it; G1 is blind, as the worker disclosed). I did not re-run the worker's other mutants; read G1 instead: both vars overridden in child env, temp dir removed in t.after, nonzero exit/timeout/missing build fails via assert, tap '# fail 0' and '# pass N>=1' and 'PASS onboarding:' asserted, receipt compared byte-for-byte. The deletes sit right after imports, above every test() and spawn. qualityGate parity-check PASS, npm run lint OK.\n\nNon-blocking: onboarding.mjs also lost a space (const root =fileURLToPath), a stray edit outside the approved scope, no behaviour change. The unrelated register.test.js bundling break is posted in #governors (no existing row) with a suggested bug row.",
+  "requiredCheckAtDone": null
+}

@@ -43,7 +43,7 @@
         "scripts/local-runner/source-snapshot.mjs",
         "scripts/tests/local-runner-snapshot.test.mjs"
       ],
-      "note": "Both QA defects are fixed in scripts/local-runner/source-snapshot.mjs.\n\n(1) Species and count bound, in admit():\n- Array.prototype.slice.call is gone. The loop reads entries[index] once per index, for index < count.\n- count is read once, then must satisfy Number.isInteger(count) && count >= 0 (else SNAPSHOT_INPUT_INVALID), and is checked against MAX_IMPORT_ENTRIES before any element is read.\n- This also closes a variant QA did not name. A Proxy over [] passes Array.isArray and the prototype check, and reports length as an object whose valueOf returns 0 and then MAX+1. Against 9a81f41 it admitted 10001 entries; a slice-only fix would have re-run valueOf on every `index < count`.\n- QA's /tmp/qa-r09a-probe/species.mjs gives \"ADMITTED entries: 1\" (the real length) on the new module, against 30000 on 9a81f41.\n\n(2) Trojan Source:\n- FORBIDDEN_CHAR is now byte-identical to the daemon's workloadSnapshot.ts line 115 (diff empty), with escapes ؜​-‏‪-‮⁠-⁯﻿. od -c confirms ASCII backslash-u bytes.\n- I also escaped the DEVICE_NAME superscripts as ¹²³. `LC_ALL=C grep -nP '[^\\x00-\\x7f]'` now finds nothing in either file.\n- A sweep over every code point (/tmp/r09a-w2/tools/regex-equiv.mjs) finds 0 semantic differences between the old and new FORBIDDEN_CHAR and DEVICE_NAME.\n- The header comment no longer claims DEVICE_NAME is verbatim: it says \"FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened\".\n\nTests (on top of step 1):\n- The S8 Proxy-length row loops over [shifting object, -1, 0.5], so each part of the guard has a killing row.\n- An S8 'growing' row: a real Array whose index-0 getter pushes 10000 more entries must still admit 1, which locks the read-count-once property.\n- S2 gains U+061C and U+009F. A mutant dropping ALM survived until then; this gap predates round 2.\n\nMutation sweep (/tmp/r09a-w2/tools/mutate.mjs on a /tmp copy): 15/15 killed. They cover guard removal, dropping count<0, typeof-only, re-reading length, the old slice, an off-by-one limit, a literal RLO or BOM, a wrong superscript, a dropped ALM, and the 009f/200b/2060/001f/007f range ends.\n\nShared-tree gate (env -i, nvm v24.21.0): 14/14 pass. No peer paths touched.",
+      "note": "Both QA defects are fixed in scripts/local-runner/source-snapshot.mjs.\n\n(1) Species and count bound, in admit():\n- Array.prototype.slice.call is gone. The loop reads entries[index] once per index, for index < count.\n- count is read once, then must satisfy Number.isInteger(count) && count >= 0 (else SNAPSHOT_INPUT_INVALID), and is checked against MAX_IMPORT_ENTRIES before any element is read.\n- This also closes a variant QA did not name. A Proxy over [] passes Array.isArray and the prototype check, and reports length as an object whose valueOf returns 0 and then MAX+1. Against 9a81f41 it admitted 10001 entries; a slice-only fix would have re-run valueOf on every `index < count`.\n- QA's /tmp/qa-r09a-probe/species.mjs gives \"ADMITTED entries: 1\" (the real length) on the new module, against 30000 on 9a81f41.\n\n(2) Trojan Source:\n- FORBIDDEN_CHAR is now byte-identical to the daemon's workloadSnapshot.ts line 115 (diff empty), with escapes \u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff. od -c confirms ASCII backslash-u bytes.\n- I also escaped the DEVICE_NAME superscripts as ¹²³. `LC_ALL=C grep -nP '[^\\x00-\\x7f]'` now finds nothing in either file.\n- A sweep over every code point (/tmp/r09a-w2/tools/regex-equiv.mjs) finds 0 semantic differences between the old and new FORBIDDEN_CHAR and DEVICE_NAME.\n- The header comment no longer claims DEVICE_NAME is verbatim: it says \"FORBIDDEN_CHAR, wellFormed and foldCase verbatim, DEVICE_NAME widened\".\n\nTests (on top of step 1):\n- The S8 Proxy-length row loops over [shifting object, -1, 0.5], so each part of the guard has a killing row.\n- An S8 'growing' row: a real Array whose index-0 getter pushes 10000 more entries must still admit 1, which locks the read-count-once property.\n- S2 gains U+061C and U+009F. A mutant dropping ALM survived until then; this gap predates round 2.\n\nMutation sweep (/tmp/r09a-w2/tools/mutate.mjs on a /tmp copy): 15/15 killed. They cover guard removal, dropping count<0, typeof-only, re-reading length, the old slice, an off-by-one limit, a literal RLO or BOM, a wrong superscript, a dropped ALM, and the 009f/200b/2060/001f/007f range ends.\n\nShared-tree gate (env -i, nvm v24.21.0): 14/14 pass. No peer paths touched.",
       "startedAt": "2026-10-26T06:57:10.956Z",
       "completedAt": "2026-10-26T07:00:36.640Z"
     },
@@ -86,7 +86,7 @@
     }
   ],
   "planRevision": 22,
-  "status": "DONE",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -99,7 +99,7 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-26T05:36:22.943Z",
-  "updatedAt": "2026-10-26T07:11:47.697Z",
+  "updatedAt": "2026-11-04T19:20:40.043Z",
   "metrics": {
     "firstClaimAt": "2026-10-26T05:52:58.414Z",
     "plannedStepCount": 5,

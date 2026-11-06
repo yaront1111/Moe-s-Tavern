@@ -1,0 +1,41 @@
+{
+  "id": "task-3488566e38104094b1e00bb2258ba5a8",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-04 #17): file 2-4 evidence-backed bug rows from role-doc and skill drift against the daemon behaviour landed since hunt #8, the JetBrains plugin's daemon lifecycle and settings surfaces, and doctor's probes in worktree mode",
+  "description": "Filed by the governor (governor-e6142a94) at 06:26Z on 2026-11-04.\n\nWHY. At filing time 1 architect and 1 worker are idle. The three PLANNING rows are all claimed, and 0 WORKING rows are claimable. Throughput over the last 3 h was 17 DONE vs 11 created, so the board drains in about 20 min without new rows.\n\nLANE. Search in this order of preference:\n1. Role-doc and skill drift.\n   - Since hunt #8 (11-03 18:48Z), about 80 daemon commits changed tool behaviour on moe/work-2026-10-24, but only 3 commits touched docs/roles or docs/skills (3463c538, bf35a0a7, 05f4240f).\n   - For each DONE row since then that changed a contract a seat acts on, check docs/roles/{architect,worker,qa,governor}.md, their *.reference.md, and docs/skills/*/SKILL.md for an instruction the runtime now refuses or contradicts. Contracts to cover: refusal codes, a nextAction or END_SESSION hand-off, the landingRetry/LANDING-RETRY route, the needsHumanReview fences, the finalizing hold, report_blocked's seat-freeing and dependency rules, the qa_reject caps, and the collision notices.\n   - Typical shapes: a role doc telling a seat to call X where X now refuses; a skill describing an old refusal or hand-off; a governor cheat-sheet row whose default response no longer matches.\n   - Evidence: the doc line, plus the code line or the DONE row that changed it.\n   - Edit the docs/ source only, never .moe/roles or .moe/skills. A role-doc row must keep `npm run lint` (the 40-line cap on architect/worker/qa.md) green.\n2. The JetBrains plugin's daemon lifecycle and settings surfaces (moe-jetbrains/src/main/kotlin):\n   - daemon spawn, reuse and kill on project close (MOE_DAEMON_COMMAND / MOE_NODE_COMMAND resolution);\n   - the WSL agent-mode toggle (--host wsl, /mnt paths);\n   - the Accounts tab;\n   - WorktreeExclusion.kt;\n   - the role-doc/skill sync (b1d7d104 is DONE).\n   Look for client behaviour that contradicts docs/CONFIGURATION.md, the root CLAUDE.md package table, or the daemon's /ws contract. The JetBrains gate runs `gradlew test` under the jetbrains-gradle lease.\n3. `doctor`'s probes and `check-architecture` (packages/moe-daemon/src/commands/), measured against worktree mode as it runs now: control checkout on moe/control, target moe/work-2026-10-24, `.worktrees/task-*`, refs/moe/board, receipt journals. Look for a probe that FAILs or PASSes against reality, or a doc in docs/TROUBLESHOOTING.md#worktree-mode that names a probe or code the command no longer prints.\n\nSKIP.\n- The lanes of hunts #1-#16 (read the archived hunt-row titles) and every row filed on 11-03 or 11-04 (grep .moe/tasks first).\n- Every file an open row holds. At filing time those are:\n  - docs/plans/2026-10-30-per-task-worktrees.md and scripts/CLAUDE.md;\n  - scripts/moe-agent.{sh,ps1};\n  - scripts/tests/{parity-check.sh,parity-check.ps1,postflight-fake-proxy.js,postflight-owner-scope.test.mjs,postflight-vm-route.ps1,postflight-worktree.cjs};\n  - packages/moe-daemon/src/state/dependencyUnblock{,.test}.ts, src/util/workerLiveness{,.test}.ts and src/tools/reportBlocked.test.ts;\n  - after their plans land, also util/LogRotator.ts (cb272f68) and tools/qaApprove.ts / qaReject.ts (35723142).\n  docs/MCP_SERVER.md is shared by section (ruling msg-71db57ac). Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start.\n- The verified-local profile is refused by design, so a gap there counts only if it affects the legacy profile.\n\nEVIDENCE BAR. Same as hunts #2-#16: a repro on HEAD 6da87f7c or later run in a snapshot outside the shared checkout (never build or test in place); a failure line from today's logs; or a doc/code file:line pair with a call or test that shows the difference. No speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code, status PLANNING. Add no dependsOn unless a real logic edge exists; a shared file gets a placement note. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items.\n2. Post the ids, or \"nothing real\", in #governors and mention governor-e6142a94.\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD 6da87f7c or later run outside the shared checkout, a failure line from today's logs, or a doc/code file:line pair with a call or test showing the difference.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a row filed on 11-03 or 11-04. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 486.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:26:17.437Z",
+  "updatedAt": "2026-11-04T07:02:08.598Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:26:44.718Z"
+  },
+  "contextFetchedBy": [
+    "architect-c33f294e"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-c33f294e@2026-11-04T06:26:41Z",
+    "at": "2026-11-04T07:02:08.598Z"
+  }
+}

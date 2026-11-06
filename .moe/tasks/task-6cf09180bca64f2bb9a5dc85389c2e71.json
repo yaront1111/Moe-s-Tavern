@@ -1,0 +1,203 @@
+{
+  "id": "task-6cf09180bca64f2bb9a5dc85389c2e71",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a claim_next_task call with no workerId (a peek) still stamps the offered row's metrics.firstClaimAt and posts the #workers file-collision notice, so a terminal or tool peek skews wall-clock metrics and pages busy seats for a claim nobody made",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor. Re-checked at tip 8ca8d389: claimNextTask.ts is unchanged since the repro HEAD 31492ac5. It is low and rare: the proxy injects workerId for agent seats, so only direct callers such as moe-call.sh peek.\n\nPROBLEM. claim_next_task without a workerId assigns nothing, but it still writes. It stamps `metrics.firstClaimAt` on the offered row, and list_metrics wall-clock then starts at the peek. When the row's files overlap a peer, it also posts the #workers collision heads-up.\n\nEVIDENCE (at 8ca8d389):\n- claimNextTask.ts:860-865: `if (!task.metrics?.firstClaimAt) { … state.updateTask(task.id, { metrics: nextMetrics }, undefined, params.workerId) }` runs with no workerId guard.\n- claimNextTask.ts:887-898: `state.postToRoleChannel('workers', collisionNotice(task.id, fileCollision, params.workerId))` runs with no workerId guard.\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/A/zzHuntA_peekClaimWrites.test.ts with its .output.txt. \"writes nothing when no worker is named\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION. Skip both writes when no workerId is supplied. Keep the offered-row response unchanged.\n\nPLACEMENT. Open row task-4fbd3c69 may touch claimNextTask.ts around :534-544, its ATTEMPT_FINALIZING check, if it extracts a shared helper. Keep this edit inside the firstClaimAt and collision-notice blocks, add no dependsOn, and use the seat's own editor.",
+  "definitionOfDone": [
+    "A claim_next_task call with no workerId leaves the offered row's metrics.firstClaimAt untouched and posts nothing to #workers, and it still returns the same offered row as before.",
+    "A claim with a workerId still stamps firstClaimAt once and still posts the collision notice exactly as before. The ported hunt repro passes, and the existing claim_next_task test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: port the hunt repro. Create packages/moe-daemon/src/tools/claimNextTask.peek.test.ts with the Write tool, EXACTLY as below (the RED gate pins `1 failed | 1 passed (2)`). The architect dry-ran it at 6ded0c93.\n```ts\nimport { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';\nimport { ToolTestHarness } from './toolTestHarness.js';\nimport { claimNextTaskTool } from './claimNextTask.js';\n\n// task-6cf09180 (hunt #11, item A): a claim_next_task that names no workerId\n// assigns nothing and opens no attempt (a peek), so it must write nothing either:\n// no metrics.firstClaimAt stamp (list_metrics wall-clock would start at the peek)\n// and no #workers file-collision heads-up for a claim nobody made.\ndescribe('claim_next_task peek (no workerId) writes nothing (task-6cf09180)', () => {\n  const h = new ToolTestHarness();\n  const events: string[] = [];\n\n  beforeEach(async () => {\n    h.init();\n    h.setupMoeFolder();\n    h.createEpic();\n    const step = (files: string[]) => [{ stepId: 'step-1', description: 'Edit', status: 'PENDING' as const, affectedFiles: files }];\n    h.createTask({ id: 'task-a', status: 'WORKING', order: 1, implementationPlan: step(['src/shared.ts']) });\n    h.createTask({ id: 'task-b', status: 'WORKING', order: 2, implementationPlan: step(['src/shared.ts']) });\n    await h.state.load();\n    events.length = 0;\n    h.state.subscribe((e) => {\n      events.push(e.type === 'MESSAGE_CREATED' ? `MESSAGE_CREATED:${(e.payload as { content?: string }).content}` : e.type);\n    });\n  });\n\n  afterEach(() => {\n    vi.restoreAllMocks();\n    h.state.clearEmitter();\n    h.cleanup();\n  });\n\n  const claim = async (args: Record<string, unknown>) =>\n    await claimNextTaskTool(h.state).handler({ statuses: ['WORKING'], ...args }, h.state) as Record<string, unknown>;\n\n  it('(k1) a peek offers the same row and collision list but stamps nothing and posts nothing', async () => {\n    const peek = await claim({});\n    expect(peek).toMatchObject({ hasNext: true, task: { id: 'task-a', assignedWorkerId: null } });\n    expect(peek.attemptId).toBeUndefined();\n    expect(peek.fileCollision).toEqual([expect.objectContaining({ task: 'task-b' })]);\n    expect(h.state.getTask('task-a')?.assignedWorkerId).toBeNull();\n    expect(h.state.getTask('task-a')?.metrics?.firstClaimAt).toBeUndefined();\n    expect(events).toEqual([]);\n  });\n\n  it('(k2) a real claim still stamps firstClaimAt once and posts the collision heads-up once', async () => {\n    const claimed = await claim({ workerId: 'worker-1' });\n    expect(claimed).toMatchObject({ hasNext: true, task: { id: 'task-a', assignedWorkerId: 'worker-1' } });\n    const stamped = h.state.getTask('task-a')?.metrics?.firstClaimAt;\n    expect(typeof stamped).toBe('string');\n    expect(events.filter((e) => e.startsWith('MESSAGE_CREATED:⚠️ file collision on task-a: task-b: `src/shared.ts`'))).toHaveLength(1);\n\n    const resumed = await claim({ workerId: 'worker-1' });\n    expect(resumed).toMatchObject({ hasNext: false });\n    expect(h.state.getTask('task-a')?.metrics?.firstClaimAt).toBe(stamped);\n  });\n});\n```\nWhat each case guards:\n- (k1) is DoD 1. The response still carries the offered row and its fileCollision list, and the peek publishes ZERO events. That kills a fix that guards only one of the two writes, and one that skips the collision scan itself.\n- (k2) is DoD 2: a real claim stamps once, posts once, and a resume keeps the first stamp.\nRED at base: (k1) fails at the firstClaimAt stamp, and (k2) passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.peek.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.peek.test.ts"
+      ],
+      "note": "Created peek test file as specified.",
+      "startedAt": "2026-11-03T22:00:42.094Z",
+      "completedAt": "2026-11-03T22:00:58.048Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix in packages/moe-daemon/src/tools/claimNextTask.ts, with your Edit tool. Touch only the firstClaimAt block and the collision-post block, about :855-898. Open row task-4fbd3c69 may touch the ATTEMPT_FINALIZING area near :534-544, so stay out of it.\n(a) The firstClaimAt guard becomes `if (params.workerId && !task.metrics?.firstClaimAt) {`. Append to its comment: \"A peek (no workerId) claimed nothing, so it stamps nothing: wall-clock starts at the real claim.\"\n(b) The collision post: directly above `if (fileCollision.length > 0) {`, add `// A peek still reports fileCollision in its answer, but pages nobody.` and make the condition `if (params.workerId && fileCollision.length > 0) {`.\nKeep the `fileCollision` computation unconditional: the answer's `...(fileCollision.length > 0 ? { fileCollision } : {})` (about :986) must stay the same for a peek. The truthiness test matches the claim path's own `if (params.workerId)` assignment branch (about :707) and the #general 'claimed task' post, so 'a claim that assigned nothing writes nothing' holds for '' too.\nError handling: no new failure path. Both blocks keep their existing best-effort try/catch, so a stamp or post failure never blocks the claim. The guard only skips writes, it never throws, and the offered-row response is built exactly as before.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "note": "Guarded firstClaimAt stamp and collision post with params.workerId.",
+      "startedAt": "2026-11-03T22:00:59.002Z",
+      "completedAt": "2026-11-03T22:01:01.185Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, once. Never in the shared checkout (rail). Both commands snapshot into a fresh mktemp dir and work the same in your task worktree, uncommitted, and in QA's control checkout after landing. The architect dry-ran both both ways, and GREEN exits 1 on the unfixed tree.\nGREEN, which is complete_task's verification:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/claimNextTask.ts $T/claimNextTask.peek.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run claimNextTask governanceFeatures chatSystemFeed defensiveBatch lifecycle.e2e`\nExpect `Test Files 10 passed (10)` and `Tests 232 passed (232)`. That is every claimNextTask*.test.ts plus the collision-notice and firstClaimAt suites.\nRED-AT-BASE:\n`cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 6ded0c935e82f850493411b41e1b61e6bfc9ca1a packages/moe-daemon | tar -x -C $S && cp $T/claimNextTask.peek.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/claimNextTask.peek.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +1 failed \\| 1 passed \\(2\\)\" $S/l && grep -aqF \"> (k1) \" $S/l && echo RED-AT-BASE; }`\nError handling for a red run:\n- A failing pre-existing claim test means the guard leaked past the two blocks: re-read the diff.\n- Do not add taskTimeBudgetDocs to the set. It reads docs/, which this snapshot lacks, and fails there at base too.\nQuote both outputs in complete_task's summary. Delete only your own gate dirs: `for d in /tmp/tmp.*; do f=$d/packages/moe-daemon/src/tools/claimNextTask.peek.test.ts; [ -O \"$d\" ] && [ -f \"$f\" ] && grep -q 'task-6cf09180' \"$f\" && rm -rf -- \"$d\"; done`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN: 10 files, 232/232, tsc clean. RED-AT-BASE: 1 failed | 1 passed (2), (k1) fails.",
+      "startedAt": "2026-11-03T22:01:02.173Z",
+      "completedAt": "2026-11-03T22:01:44.885Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of your `git diff` plus the new file. Fix any finding, re-run step 3, then call complete_task.\n(1) Scope: claimNextTask.ts changes only the two conditions and their comments, and the new test file is the only other change.\n(2) Does a real claim still do everything?\n- An agent seat always has a workerId, because the proxy injects MOE_WORKER_ID. So seats see no change.\n- A resume keeps its first stamp, which (k2) checks.\n- Worktree-mode and control-seat suppression still apply inside the guarded block.\n(3) Could a peek now hide a real collision? No: the peek's answer still lists fileCollision. Only the page is skipped, and a page was never owed for a claim nobody made.\n(4) The metrics consumers (list_metrics wall-clock) now start at the first real claim. A row first peeked and later claimed is stamped by the claim.\n(5) Concurrency: no new state. The guard reads only the call's own arguments inside the existing mutex.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.peek.test.ts"
+      ],
+      "note": "Reviewed the diff: scope is two conditions plus comments, with no new state or failure path. Peek answer unchanged, real claims unchanged.",
+      "startedAt": "2026-11-03T22:01:47.609Z",
+      "completedAt": "2026-11-03T22:01:51.587Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 433.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:07.200Z",
+  "updatedAt": "2026-11-04T19:20:44.760Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:10:31.966Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T22:08:30.095Z",
+    "wallClockMs": 3478129
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-2dc72348",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:14:53.155Z",
+  "executionContract": {
+    "intendedBehavior": "A moe.claim_next_task call that names no workerId (a peek) assigns nothing, opens no attempt, and now writes nothing either: no metrics.firstClaimAt stamp and no #workers file-collision post. It still answers with the same offered row and fileCollision list as before. A claim with a workerId still stamps firstClaimAt once (idempotent) and posts the collision heads-up exactly as before.",
+    "acceptanceCriteria": [
+      "(k1) A peek on two WORKING rows that share src/shared.ts answers hasNext true with task-a unassigned, no attemptId, and fileCollision listing task-b. task-a's metrics.firstClaimAt stays undefined, and the peek publishes zero events.",
+      "(k2) A claim by worker-1 assigns task-a, stamps firstClaimAt, and posts exactly one '⚠️ file collision on task-a: task-b: `src/shared.ts`' notice. A resume keeps the same stamp.",
+      "Every claimNextTask*.test.ts, governanceFeatures, chatSystemFeed, defensiveBatch and lifecycle.e2e test passes: 10 files, 232 tests."
+    ],
+    "invariants": [
+      "The offered-row response, fileCollision included, is unchanged for a peek.",
+      "Real claims keep the stamp-once and post-once behaviour, including worktree-mode and control-seat suppression.",
+      "Both writes stay best-effort and never block a claim."
+    ],
+    "compatibility": [
+      "No schema or MCP contract change.",
+      "Agent seats always carry a workerId (proxy injection), so their claims behave exactly as before."
+    ],
+    "approvedScope": [
+      "claimNextTask.ts: the firstClaimAt condition and its comment, and the collision-post condition and its comment",
+      "claimNextTask.peek.test.ts (new)"
+    ],
+    "reuse": [
+      "The hunt repro (zzHuntA_peekClaimWrites.test.ts) is ported as (k1), and (k2) is its real-claim control. Both reuse ToolTestHarness and the existing best-effort blocks."
+    ],
+    "sourceAssumptions": [
+      "claimNextTask.ts (at 6ded0c93): the firstClaimAt stamp at about :857-865 and the collision post at about :887-898 are reached with no workerId guard.",
+      "The assignment branch (about :707) and the #general claimed post are guarded by `if (params.workerId)`.",
+      "The answer includes `fileCollision` from the same scan (about :986)."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/claimNextTask.ts $T/claimNextTask.peek.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run claimNextTask governanceFeatures chatSystemFeed defensiveBatch lifecycle.e2e",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 6ded0c935e82f850493411b41e1b61e6bfc9ca1a packages/moe-daemon | tar -x -C $S && cp $T/claimNextTask.peek.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/claimNextTask.peek.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +1 failed \\| 1 passed \\(2\\)\" $S/l && grep -aqF \"> (k1) \" $S/l && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Three fixes were weighed.\n(1) Chosen: guard the two writes with the call's workerId, as the row's fix direction says, and keep the collision computation so a peek's answer is unchanged.\n(2) Rejected: skipping computeFileCollisions for peeks. That changes the offered answer (fileCollision disappears), which DoD 1 forbids.\n(3) Rejected: returning early for a peek before the metrics/collision section. That would also drop the fileCollision answer and the channel ids that are built later.\nThe workerId truthiness test matches the existing assignment branch (`if (params.workerId)` about :707) and the #general claimed-task post, so the three post-claim writes share one predicate.",
+    "codebaseInsights": "Hunt repro output: the peek published exactly two events, TASK_UPDATED (the firstClaimAt stamp) and MESSAGE_CREATED (the collision notice). Every other write in the claim path is already behind `if (params.workerId)`.\nThe answer's fileCollision is built from the same scan (about :986), so the scan must stay unconditional.\ntaskTimeBudgetDocs.test.ts reads docs/ and fails in a daemon-only snapshot even at base, so it is not in the gate.\nArchitect dry run at 6ded0c93:\n- RED: 1 failed | 1 passed (2);\n- GREEN: 10 files, 232/232, tsc clean;\n- both checkRefs passed verbatim, uncommitted and after a simulated landing.",
+    "risks": "RED pins base 6ded0c93's claimNextTask.ts. If another row (e.g. task-4fbd3c69, in REVIEW) changes it first, RED still runs those pinned bytes and remains valid.\nGREEN's count 232 assumes no other row adds claim tests before this lands. If a count drifts after a rebase, re-read rather than edit the gate.\nRun only in the mktemp snapshots.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "54635828cf3870f288cccc168bb4cb10d8c8df3e",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:14:53.185Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:00:42.094Z",
+  "reviewStartedAt": "2026-11-03T22:01:56.153Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/claimNextTask.ts $T/claimNextTask.peek.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run claimNextTask governanceFeatures chatSystemFeed defensiveBatch lifecycle.e2e",
+    "exitCode": 0,
+    "outputTail": " Test Files  10 passed (10)\n      Tests  232 passed (232)\n   Start at  00:01:15\n   Duration  6.60s (tests 66%, transform 29%, import 5%)",
+    "reportedAt": "2026-11-03T22:01:56.153Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/claimNextTask.peek.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts"
+  ],
+  "completionSummary": "A claim_next_task with no workerId (a peek) now stamps no metrics.firstClaimAt and posts no #workers collision notice. The offered row and fileCollision answer are unchanged. Two guards in claimNextTask.ts (`params.workerId &&` on the firstClaimAt stamp and on the collision post), plus new claimNextTask.peek.test.ts: (k1) peek writes nothing and publishes zero events, (k2) a real claim stamps once, posts once, and a resume keeps the stamp. GREEN: tsc clean, Test Files 10 passed (10), Tests 232 passed (232). RED-AT-BASE at 6ded0c93: Tests 1 failed | 1 passed (2), (k1) fails, printed RED-AT-BASE.",
+  "commits": [
+    {
+      "sha": "a3330bce16817c794dea2fd9aef3d8de05effd64",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T21:17:34Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/claimNextTask.peek.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-03T22:03:24.037Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T22:07:15Z",
+    "at": "2026-11-03T22:08:54.337Z"
+  },
+  "completedAt": "2026-11-03T22:08:30.095Z",
+  "reviewCompletedAt": "2026-11-03T22:08:30.095Z",
+  "reviewSummary": "Reviewed completion a3330bce (contained in moe/work-2026-10-24 and control HEAD; +62/-3, net 59, well under the size cap). Diff is exactly the approved scope: claimNextTask.ts gains `params.workerId &&` on the firstClaimAt stamp condition and on the #workers collision-post condition (plus comments); the fileCollision scan and answer stay unconditional so a peek's response is unchanged. New claimNextTask.peek.test.ts has (k1) peek returns the same offered row + fileCollision, task-a stays unassigned with no attemptId, firstClaimAt undefined, zero events published; (k2) real claim by worker-1 stamps once, posts exactly one collision notice, and a resume keeps the same stamp. Re-ran task.verification in a git-archive snapshot outside the repo (working-tree copies of the two files confirmed clean vs HEAD): tsc --noEmit clean, `Test Files 10 passed (10), Tests 232 passed (232)`, exit 0. RED-AT-BASE at 6ded0c93 re-run: `Tests 1 failed | 1 passed (2)`, (k1) fails, printed RED-AT-BASE. Mutation check: removing only the collision-post guard in the snapshot makes (k1) fail again, so the test pins both writes. No existing tests deleted or weakened; no schema/MCP contract change; both writes keep their best-effort try/catch. DoD 1 and 2 both met. Snapshot dirs were mine only and are removed.",
+  "requiredCheckAtDone": null
+}

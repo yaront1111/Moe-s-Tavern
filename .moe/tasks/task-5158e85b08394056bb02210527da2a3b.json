@@ -1,0 +1,252 @@
+{
+  "id": "task-5158e85b08394056bb02210527da2a3b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: claim_next_task and release_task run their disk-state git status (up to 3 s) under the global state mutex: neither is marked blocking, so McpAdapter wraps the whole handler and every tool fleet-wide stalls behind the subprocess that diskState.ts says must run outside the lock",
+  "description": "Found by defect hunt #13 (task-cc441586). Line numbers are at HEAD f159784e.\n\nPROBLEM\n- util/diskState.ts:19-22 states the rule (invariant 2): \"Callers MUST invoke this OUTSIDE the state mutex. It spawns a git subprocess that can take up to the 3s timeout; ... running it under the lock would freeze every tool fleet-wide\".\n- Both callers were written to follow it:\n  - tools/releaseTask.ts:178-191 captures the handoff fingerprint in a \"pre-mutex region ... never inside runExclusive\" (computeDiskStateSignature at :186). Its own state.runExclusive starts at :194.\n  - tools/claimNextTask.ts:422-424 says the recompute \"must never run under the global state mutex\". Its runExclusive is at :429, and the post-mutex recompute is at :1008-1019 (\"The mutex is released — safe to shell out to git\").\n- Neither tool sets `blocking: true`. So server/McpAdapter.ts:309 (`tool.blocking ? await invoke() : await this.state.runExclusive(invoke)`) wraps the WHOLE handler. The mutex is reentrant, so it stays held through the git call.\n- `blocking` is read only at McpAdapter.ts:309. The dispatch comment at :301-303 still calls claim_next_task \"safe to wrap\".\n- The transports disagree: /ws RELEASE_TASK (server/WebSocketServer.ts:723-740) calls the same handler with no wrapper, so the capture runs unlocked there as intended.\n- Precedent: submit_plan opts out the same way for its bounded cached-Git lookup (tools/submitPlan.ts:198 `blocking: true`; packages/moe-daemon/CLAUDE.md:5).\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-cc441586/B/diskStateUnderMutex.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a `git archive f159784e` snapshot.\n- It mocks computeDiskStateSignature with a 600 ms git stand-in, records state.mutex.isHeld() during it, and times a bystander moe.list_tasks.\n- Command: `npx vitest run src/__hunt__/diskStateUnderMutex.test.ts`. Result: 2 failed. Verbatim:\n```\nrelease_task: mutex held during git = [ true ] ; bystander list_tasks waited 567 ms\nclaim_next_task: mutex held during git = [ true ] ; bystander list_tasks waited 571 ms\n× release_task with a handoffNote: git runs outside the mutex and does not stall other tools\n× claim_next_task of a task whose newest handoff carries a diskState: git runs outside the mutex\nAssertionError: expected [ true ] to deeply equal [ false ]\n```\n- Exposure:\n  - Every MCP release_task that carries a handoffNote stalls all tool dispatch and /ws mutations for as long as git runs, up to the 3 s kill.\n  - The board holds 18 handoff notes and none carries a diskState, so every capture so far failed or timed out.\n  - `git --no-optional-locks status --porcelain=v2 --branch` took 4.35 s from WSL over /mnt/d. The live daemon runs on Windows, so that timing is indicative only.\n  - The claim-side stall stays dormant until a stored diskState exists.\n\nFIX DIRECTION\n- Mark moe.claim_next_task and moe.release_task `blocking: true`, the submit_plan precedent. Both already do every state read-modify-write inside their own state.runExclusive:\n  - claim_next_task's handler (:421) has no await before :429 and writes nothing after it;\n  - release_task does only validation and the capture before :194.\n- Update the McpAdapter dispatch comment (:301-303) and the blocking-tools list in packages/moe-daemon/CLAUDE.md:5.\n- Never move the capture into the mutex.\n- docs/MCP_SERVER.md is held at filing time: sync it only if lanes show it free at planning time.\n\nFILES: packages/moe-daemon/src/tools/{claimNextTask,releaseTask}.ts, src/server/McpAdapter.ts (dispatch comment hunk only, ~:301-303; sibling hunt row on the rate limiter owns the env/RateLimiter hunks at ~:15-56), packages/moe-daemon/CLAUDE.md, plus a new vitest file.",
+  "definitionOfDone": [
+    "Through MCP dispatch, release_task's handoff disk-state capture and claim_next_task's post-claim recompute run with state.mutex.isHeld() false, and a bystander moe.list_tasks sent during a slow (mocked) capture returns before the capture ends, in a new vitest file.",
+    "Every claim and release mutation still runs inside the tool's own state.runExclusive (the existing claimNextTask and releaseTask tests pass unchanged), and the McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md's blocking-tools list name both tools.",
+    "`npx vitest run` of the new file plus src/tools/claimNextTask.test.ts and src/tools/releaseTask.test.ts passes in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (load test-driven-development). Create packages/moe-daemon/src/tools/diskStateDispatch.test.ts with your session's file-editing tool, never a shell write (rail). Use exactly the content below.\n\nWhy a new file: the existing claimNextTask and releaseTask suites call the handlers directly, so they never pass through McpAdapter's dispatch wrap, which is where the bug lives. This file drives both tools through `McpAdapter.handle`:\n- The mocked capture records `state.mutex.isHeld()`, then parks on a gate the test opens.\n- While it is parked, a bystander `moe.list_tasks` must answer (DoD 1).\n- Spies on `updateTask`/`updateWorker` prove every claim and release write still runs under the tool's own `state.runExclusive` (DoD 2).\n- Under the bug the bystander queues behind the parked capture. The 2 s bound then opens the gate, so the case fails on its assertions instead of hanging, well inside vitest's 5 s default timeout.\nKeep exactly these two cases and their `(d1) ` / `(d2) ` title prefixes: the RED checkRef pins `2 failed (2)` and both prefixes.\n\n```ts\n// task-5158e85b: claim_next_task's post-claim recompute and release_task's\n// handoff capture spawn `git status` (util/diskState.ts, killed at 3 s). Both\n// tools are `blocking`, so MCP dispatch (McpAdapter) does not wrap them in the\n// global state mutex: the git call runs with the mutex free and other tools keep\n// answering, while each tool's own writes still run inside its state.runExclusive.\nimport { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';\nimport { McpAdapter, type JsonRpcResponse } from '../server/McpAdapter.js';\nimport { ToolTestHarness } from './toolTestHarness.js';\nimport { computeDiskStateSignature } from '../util/diskState.js';\n\nvi.mock('../util/diskState.js', () => ({ computeDiskStateSignature: vi.fn() }));\nconst mockedSignature = vi.mocked(computeDiskStateSignature);\n\nconst STORED = 'v1:9f2c0a1b3d4e5f60718293a4b5c6d7e8f9012345:3:0a1b2c3d4e5f';\nconst MOVED = 'v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1:ffeeddccbbaa';\n// With the mutex free the bystander answers in milliseconds. Under the bug it\n// queues behind the parked capture, so the test opens the gate after this bound\n// and fails on its assertions instead of hanging.\nconst BYSTANDER_BOUND_MS = 2000;\n\ndescribe('disk-state git call vs the fleet-wide state mutex (MCP dispatch)', () => {\n  const h = new ToolTestHarness();\n  let adapter: McpAdapter;\n  let nextId = 1;\n  let heldDuringCapture: boolean[];\n  let heldDuringWrites: boolean[];\n  let events: string[];\n  let captureEntered: Promise<void>;\n  let finishCapture: () => void;\n\n  beforeEach(() => {\n    h.init();\n    h.setupMoeFolder();\n    h.createEpic();\n    heldDuringCapture = [];\n    heldDuringWrites = [];\n    events = [];\n    let entered!: () => void;\n    captureEntered = new Promise<void>((resolve) => { entered = resolve; });\n    const gate = new Promise<void>((resolve) => { finishCapture = resolve; });\n    mockedSignature.mockReset();\n    mockedSignature.mockImplementation(async () => {\n      heldDuringCapture.push(h.state.mutex.isHeld());\n      entered();\n      await gate;\n      events.push('capture-end');\n      return MOVED;\n    });\n  });\n\n  afterEach(() => {\n    finishCapture(); // never leave a capture parked on the gate\n    vi.restoreAllMocks();\n    h.cleanup();\n  });\n\n  /** Load state, record whether each task/worker write runs under the mutex, then build the adapter. */\n  async function start(): Promise<void> {\n    await h.state.load();\n    const realUpdateTask = h.state.updateTask.bind(h.state);\n    vi.spyOn(h.state, 'updateTask').mockImplementation(async (...args) => {\n      heldDuringWrites.push(h.state.mutex.isHeld());\n      return realUpdateTask(...args);\n    });\n    const realUpdateWorker = h.state.updateWorker.bind(h.state);\n    vi.spyOn(h.state, 'updateWorker').mockImplementation(async (...args) => {\n      heldDuringWrites.push(h.state.mutex.isHeld());\n      return realUpdateWorker(...args);\n    });\n    adapter = new McpAdapter(h.state);\n  }\n\n  function call(name: string, args: Record<string, unknown>): Promise<JsonRpcResponse> {\n    return adapter.handle({ jsonrpc: '2.0', id: nextId++, method: 'tools/call', params: { name, arguments: args } }) as Promise<JsonRpcResponse>;\n  }\n\n  function payload(response: JsonRpcResponse): Record<string, unknown> {\n    expect(response.error).toBeUndefined();\n    const result = response.result as { content: Array<{ text: string }> };\n    return JSON.parse(result.content[0].text) as Record<string, unknown>;\n  }\n\n  /** Once the capture is parked, send moe.list_tasks and report whether it answered within the bound. */\n  async function bystanderDuringCapture(): Promise<{ winner: string; listed: Promise<JsonRpcResponse> }> {\n    await captureEntered;\n    const listed = call('moe.list_tasks', {}).then((response) => { events.push('bystander'); return response; });\n    const winner = await Promise.race([\n      listed.then(() => 'bystander'),\n      new Promise<string>((resolve) => setTimeout(() => resolve('bound'), BYSTANDER_BOUND_MS)),\n    ]);\n    return { winner, listed };\n  }\n\n  it('(d1) release_task with a handoffNote captures disk state with the mutex free while a bystander tool answers', async () => {\n    h.createTask({ id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-a' });\n    h.createWorker({ id: 'worker-a', currentTaskId: 'task-1', status: 'CODING' });\n    await start();\n\n    const release = call('moe.release_task', {\n      taskId: 'task-1', workerId: 'worker-a', handoffNote: { whatIsDone: 'half', whatRemains: 'the rest' },\n    });\n    const { winner, listed } = await bystanderDuringCapture();\n    finishCapture();\n    const [released, bystander] = await Promise.all([release, listed]);\n\n    expect(heldDuringCapture).toEqual([false]);\n    expect(winner).toBe('bystander');\n    expect(events).toEqual(['bystander', 'capture-end']);\n    payload(bystander);\n    expect(payload(released)).toMatchObject({ success: true, diskStateCaptured: true });\n    expect(h.state.getTask('task-1')!.assignedWorkerId).toBeNull();\n    expect(h.state.getTask('task-1')!.priorHandoffs![0].diskState).toBe(MOVED);\n    expect(heldDuringWrites.length).toBeGreaterThan(0);\n    expect(heldDuringWrites.every(Boolean)).toBe(true);\n  });\n\n  it('(d2) claim_next_task recomputes a stored handoff diskState with the mutex free while a bystander tool answers', async () => {\n    h.createTask({\n      id: 'task-2', status: 'WORKING', assignedWorkerId: null,\n      priorHandoffs: [{ whatIsDone: 'x', whatRemains: 'y', releasedBy: 'worker-gone', releasedAt: new Date().toISOString(), diskState: STORED }],\n    });\n    h.createWorker({ id: 'worker-b' });\n    await start();\n\n    const claim = call('moe.claim_next_task', { workerId: 'worker-b', statuses: ['WORKING'] });\n    const { winner, listed } = await bystanderDuringCapture();\n    finishCapture();\n    const [claimed, bystander] = await Promise.all([claim, listed]);\n\n    expect(heldDuringCapture).toEqual([false]);\n    expect(winner).toBe('bystander');\n    expect(events).toEqual(['bystander', 'capture-end']);\n    payload(bystander);\n    expect(payload(claimed)).toMatchObject({ hasNext: true, staleHandoffDiskState: true });\n    expect(h.state.getTask('task-2')!.assignedWorkerId).toBe('worker-b');\n    expect(heldDuringWrites.length).toBeGreaterThan(0);\n    expect(heldDuringWrites.every(Boolean)).toBe(true);\n  });\n});\n```\n\nThen run the RED checkRef (the execution contract's second) verbatim, once. It archives base 09529122, where claimNextTask.ts, releaseTask.ts and McpAdapter.ts are byte-identical to the hunt's f159784e, and overlays only this file. It must print both FAIL lines, `Tests  2 failed (2)` and `RED-AT-BASE`. Each case fails on `expected [ true ] to deeply equal [ false ]`: the capture ran under the mutex, which is the bug.\n\nNever run npm or vitest in the checkout or your worktree (rail). Both checkRefs build their own mktemp snapshot.\n\nArchitect dry run (11-04): RED-AT-BASE at 09529122. With step 2 applied the file passes 2/2 in about 0.6 s. Removing `blocking` from release_task alone kills only (d1); removing it from claim_next_task alone kills only (d2). The file typechecks under the GREEN checkRef's tt.json.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/diskStateDispatch.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/diskStateDispatch.test.ts"
+      ],
+      "note": "New test file created; RED checkRef printed both FAIL lines, Tests 2 failed (2), RED-AT-BASE.",
+      "startedAt": "2026-11-03T23:10:45.169Z",
+      "completedAt": "2026-11-03T23:11:15.576Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix (load ponytail; read mem:gotcha-daemon-global-mutex-dispatch). Mark both tools `blocking: true`, following the submit_plan precedent (tools/submitPlan.ts:198), so McpAdapter.ts:309 stops wrapping their whole handler in the global state mutex. Use your file-editing tool, never a shell write (rail).\n\n(a) packages/moe-daemon/src/tools/claimNextTask.ts, in claimNextTaskTool's returned object, directly after `    name: 'moe.claim_next_task',` insert:\n```ts\n    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): once the claim's\n    // own state.runExclusive below releases, the stale-handoff recompute spawns\n    // `git status` (util/diskState.ts, killed at 3 s); a dispatch-level wrap\n    // would hold the fleet-wide mutex across it. Every read and write of the\n    // claim stays inside that runExclusive.\n    blocking: true,\n```\n(b) packages/moe-daemon/src/tools/releaseTask.ts, in releaseTaskTool's returned object, directly after `    name: 'moe.release_task',` insert:\n```ts\n    // Mutex opt-out (tools/index.ts ToolDefinition.blocking): a handoffNote's\n    // disk-state capture spawns `git status` (util/diskState.ts, killed at 3 s)\n    // before the handler's state.runExclusive; a dispatch-level wrap would hold\n    // the fleet-wide mutex across it. The ownership gates and every write stay\n    // inside that runExclusive; before it the handler only validates input,\n    // checks the caller's role for force and captures.\n    blocking: true,\n```\nChange nothing else in either file.\n\nWhy this is safe (verified at 09529122):\n- claim_next_task's handler (:421) awaits `state.runExclusive` (:429) with no await before it. It still takes the lock synchronously on entry, so claim ordering is unchanged. After the block it only recomputes the signature (:1019) and builds the reply. Never add an await before that runExclusive (mem:gotcha-submit-plan-pre-mutex-await-ordering).\n- Before its `state.runExclusive` (:194), release_task's handler only validates input, reads the caller's role for force (`workerHasRole`, a synchronous map read), clamps the note and captures. That runExclusive re-reads the row and runs every ownership gate and write. A release without a handoffNote still reaches the lock synchronously.\n- Never move computeDiskStateSignature into a runExclusive callback (util/diskState.ts invariant 2).\n\nTwo constraints:\n- The comments must not match daemonGitDocs.test.ts's /never (?:runs|executes|touches) git|runs no git|does not run git/i. It scans every non-test daemon source line, and it is in the gate.\n- Do not touch moe-proxy's BLOCKING_LONG_POLLS (packages/moe-proxy/src/index.ts:273). It is the proxy's long-poll timeout list, not this flag. Both tools keep the 30 s request timeout, and the capture is killed at 3 s.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "startedAt": "2026-11-03T23:11:16.347Z",
+      "completedAt": "2026-11-03T23:11:26.711Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Name both tools wherever the daemon documents the blocking set (DoD 2). Use your file-editing tool, never a shell write (rail). Each anchor below occurs exactly once at 09529122.\n\n(a) packages/moe-daemon/src/server/McpAdapter.ts: the tools/call dispatch comment above `const invoke` (~:300). Replace these three lines:\n```\n          // Blocking tools opt out — they'd hold the lock for minutes. The\n          // mutex is reentrant, so tools that already call runExclusive\n          // internally (claim_next_task, submit_plan, …) are safe to wrap.\n```\nwith:\n```\n          // `blocking` tools opt out and take state.runExclusive themselves\n          // around every read-modify-write: wait_for_task, chat_wait and\n          // wait_for_resource park for minutes, while claim_next_task and\n          // release_task (the handoff disk-state `git status`,\n          // util/diskState.ts), submit_plan (its cached-ref Git lookup) and\n          // get_execution_readiness (a bounded evaluation) do slow work\n          // outside their own exclusive section that a wrap here would make\n          // every other tool wait on. The mutex is reentrant, so a wrapped\n          // tool that also calls runExclusive internally does not deadlock.\n```\nThis is a comment-only change. Do not touch the env/RateLimiter lines near the top (~:15-56): open row task-301cf760 owns them.\n\n(b) packages/moe-daemon/CLAUDE.md, first bullet. Replace this sentence:\n```text\n`submit_plan` also opts out for its bounded cached-Git lookup, serializing and revalidating each write attempt itself.\n```\nwith:\n```text\nTools that do bounded slow work outside their own `state.runExclusive` opt out too and serialize every write themselves: `submit_plan` (its cached-Git lookup; it revalidates each write attempt), `claim_next_task` and `release_task` (the handoff disk-state `git status` in `util/diskState.ts`, up to 3 s) and `get_execution_readiness` (a bounded evaluation).\n```\nThe daemonGitDocs phrases are forbidden here too. The GREEN checkRef overlays the edited CLAUDE.md and runs that test.\n\nNo docs/MCP_SERVER.md change: neither tool's request or reply contract changes. Its `### moe.release_task` section already says the capture runs \"outside the state mutex\", which this task makes true, and `### moe.claim_next_task` makes no mutex claim. Leave that file alone; open row task-b1f60b53 edits other sections of it.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/CLAUDE.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/CLAUDE.md"
+      ],
+      "startedAt": "2026-11-03T23:11:27.826Z",
+      "completedAt": "2026-11-03T23:11:35.865Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once (see mem:convention-daemon-vitest-mutant-checkref).\n\nRun the GREEN checkRef (the execution contract's first) verbatim; it is complete_task's verification. It does the following:\n- archives HEAD's packages/moe-daemon, scripts, docs and CLAUDE.md into a mktemp snapshot and overlays your five files;\n- runs npm ci there, then typechecks the sources (`tsc --noEmit`) and the new test file (`tt.json`);\n- runs the new file, every claimNextTask suite, releaseTask.test.ts (both unchanged, DoD 2), McpAdapter.test.ts and daemonGitDocs.test.ts (the edited comments and CLAUDE.md);\n- runs every suite that drives claim or release through McpAdapter: src/delivery, src/__acceptance__, workstreamComposition, dependencyUnblock and submitPlan.\nIt is a superset of DoD 3's three files. In the architect's dry run (09529122 plus this plan) it exited 0 with `Test Files  34 passed (34)` and `Tests  1643 passed (1643)`, about 12 s of tests after npm ci. The counts move only if a peer adds tests to those suites.\n\nThen run the RED checkRef once more. It must still print RED-AT-BASE. Quote both outputs in your completion summary.\n\nError handling for a red run:\n- A failure in the new file: fix the source, never the assertions. The test is the DoD's evidence.\n- A failure in any other suite: re-run it in a second snapshot without your overlay (`git archive HEAD` only).\n  - If it fails there too, it is pre-existing. Do not edit it: post the evidence in #general and call moe.report_blocked.\n  - If it fails only with your change, fix your change. Never weaken a test.\n\nOptional, not part of the gate: in the architect's dry run, the whole daemon suite in a whole-tree snapshot (`git archive HEAD | tar -x`) passed with this change: 270 files, 7350 passed, 24 skipped.\n\nLeave nothing in the checkout or the worktree. The snapshots live in /tmp.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN checkRef exit 0: Test Files 34 passed (34), Tests 1643 passed (1643); tsc and tt.json clean. RED checkRef printed RED-AT-BASE in step 1 (test file unchanged since).",
+      "startedAt": "2026-11-03T23:11:36.648Z",
+      "completedAt": "2026-11-03T23:12:10.603Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load adversarial-self-review) of your `git diff`. Fix any finding, then re-run step 4's two checkRefs.\n\n(1) Scope:\n- claimNextTask.ts and releaseTask.ts gain only the comment and `blocking: true`;\n- McpAdapter.ts only the dispatch comment hunk;\n- packages/moe-daemon/CLAUDE.md one sentence;\n- plus the new test.\nNo handler logic changed, the existing claim and release test files are untouched, and docs/MCP_SERVER.md is unchanged.\n\n(2) Lock coverage:\n- claim: still no await before its runExclusive, and nothing after it except the recompute and the reply;\n- release: every gate and write is inside runExclusive, which re-reads the row with state.getTask;\n- outside the two runExclusive blocks, the handlers touch state only through the synchronous role read and state.projectPath.\n\n(3) Concurrency, now that dispatch no longer serializes these two tools:\n- Two claims racing for one row still serialize on the claim's own runExclusive, and one wins.\n- A release with a handoffNote now queues for the lock after its git call, so a tool sent during the capture runs first. A claim in that window still sees the row assigned and skips it. The release's TASK_UPDATED then wakes any parked wait_for_task seat.\n\n(4) Known residual, by design; state it in the completion summary. release_task's force role check runs before the lock, as it already did on /ws, whose RELEASE_TASK calls the handler unwrapped. A team-role change that races a force release is therefore judged on the role at call time.\n\n(5) Wire: unchanged. tools/list exposes only name, description and inputSchema, both reply shapes are identical, and moe-proxy is untouched.\n\nThen call moe.complete_task with step 4's GREEN evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/diskStateDispatch.test.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts",
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/CLAUDE.md"
+      ],
+      "note": "Self-review of git diff: only comment + blocking:true in the two tools, dispatch comment hunk in McpAdapter, one CLAUDE.md sentence, new test. No handler logic changed; docs/MCP_SERVER.md untouched. Residual by design: release_task's force role check runs before the lock (as on /ws).",
+      "startedAt": "2026-11-03T23:12:11.478Z",
+      "completedAt": "2026-11-03T23:12:15.223Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 448.7,
+  "comments": [
+    {
+      "id": "comment-8997282db8a04054b5c39cf5c2dd04b9",
+      "author": "architect-24611a0a",
+      "content": "Sibling id for the hunk-ownership note under FILES: the rate-limiter row is task-301cf760. In McpAdapter.ts it owns the env parsing (~:15-16) and the RateLimiter constructor (~:36-56). This row owns only the dispatch comment (~:301-303). No dependency is needed.",
+      "timestamp": "2026-11-03T22:47:14.432Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:46:19.358Z",
+  "updatedAt": "2026-11-04T19:20:44.894Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:46:37.166Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T23:26:36.498Z",
+    "wallClockMs": 2399332
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-d6c1cb7a",
+    "qa-93f9625e"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T23:08:49.702Z",
+  "executionContract": {
+    "intendedBehavior": "moe.claim_next_task and moe.release_task are `blocking` tools, so McpAdapter's tools/call dispatch no longer wraps their whole handler in the global state mutex. release_task's handoff disk-state capture and claim_next_task's stale-handoff recompute (util/diskState.ts computeDiskStateSignature, a `git status` killed at 3 s) therefore run with the mutex free, and other tools keep answering during them, as on the /ws RELEASE_TASK path. Every claim and release ownership check and write still runs inside the tool's own state.runExclusive. Request and reply shapes are unchanged.",
+    "acceptanceCriteria": [
+      "Through McpAdapter.handle, the mocked capture of a release_task with a handoffNote sees state.mutex.isHeld() false, and so does the recompute of a claim_next_task whose newest handoff carries a diskState. A moe.list_tasks sent while either is parked answers before it ends (diskStateDispatch.test.ts (d1), (d2)).",
+      "Every updateTask/updateWorker call those claims and releases make runs with state.mutex.isHeld() true. The release stores the captured signature on priorHandoffs[0].diskState, and the claim reports staleHandoffDiskState: true.",
+      "The McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md name claim_next_task and release_task as blocking opt-outs.",
+      "The GREEN checkRef exits 0, and the RED checkRef prints RED-AT-BASE."
+    ],
+    "invariants": [
+      "util/diskState.ts invariant 2: computeDiskStateSignature runs outside the state mutex on both the MCP and /ws paths.",
+      "Every claim and release ownership check and every task or worker write runs inside the tool's own state.runExclusive, which reads the row fresh.",
+      "claim_next_task reaches its runExclusive with no await before it, and a release without a handoffNote reaches its runExclusive synchronously.",
+      "An undefined disk-state signature still means unknown, never unchanged."
+    ],
+    "compatibility": [
+      "No MCP contract change: tools/list exposes only name, description and inputSchema, and both tools' request and reply shapes are unchanged.",
+      "WebSocketServer RELEASE_TASK already calls the release handler unwrapped and stays unchanged.",
+      "moe-proxy's BLOCKING_LONG_POLLS and its request timeouts are unchanged.",
+      ".moe/ state files and docs/MCP_SERVER.md are unchanged."
+    ],
+    "approvedScope": [
+      "claimNextTaskTool and releaseTaskTool definitions: `blocking: true` plus a comment, with no handler change",
+      "McpAdapter.ts: only the tools/call dispatch comment above `const invoke`",
+      "packages/moe-daemon/CLAUDE.md first bullet: the submit_plan opt-out sentence, rewritten to name every bounded opt-out",
+      "New packages/moe-daemon/src/tools/diskStateDispatch.test.ts"
+    ],
+    "reuse": [
+      "ToolTestHarness fixtures and McpAdapter.handle, as the hunt repro (/mnt/d/moe-scratch/hunt-cc441586/B/diskStateUnderMutex.test.ts) did",
+      "The gate-promise pattern of submitPlan.test.ts 'releases the fleet mutex during Git lookup and rechecks status before submission'",
+      "vi.mock('../util/diskState.js'), as claimNextTask.test.ts and releaseTask.test.ts do"
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/server/McpAdapter.ts:309 `tool.blocking ? await invoke() : await this.state.runExclusive(invoke)` is the only production reader of ToolDefinition.blocking (grep at 09529122).",
+      "packages/moe-daemon/src/tools/claimNextTask.ts: the claimNextTaskTool handler (:421) awaits state.runExclusive (:429) first. After the block it calls only computeDiskStateSignature (:1019) and builds the reply.",
+      "packages/moe-daemon/src/tools/releaseTask.ts: the releaseTaskTool handler (:123) does validation, workerHasRole, clampField and computeDiskStateSignature (:186) before state.runExclusive (:194), which re-reads the row and holds every gate and write.",
+      "packages/moe-daemon/src/state/StateManager.ts: AsyncMutex (:268) is reentrant via AsyncLocalStorage, and StateManager.mutex (:411) is public readonly with isHeld().",
+      "packages/moe-daemon/src/tools/submitPlan.ts:198 and getExecutionReadiness.ts:103 already set blocking: true for bounded work."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon scripts docs CLAUDE.md | tar -x -C \"$S\" && cp --parents $P/tools/claimNextTask.ts $P/tools/releaseTask.ts $P/server/McpAdapter.ts $P/tools/diskStateDispatch.test.ts packages/moe-daemon/CLAUDE.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/diskStateDispatch.test.ts\"],\"exclude\":[]}' > tt.json && npx tsc -p tt.json && NO_COLOR=1 npx vitest run src/tools/diskStateDispatch.test.ts src/tools/claimNextTask src/tools/releaseTask.test.ts src/server/McpAdapter.test.ts src/util/daemonGitDocs.test.ts src/delivery src/__acceptance__ src/__e2e__/workstreamComposition src/state/dependencyUnblock.test.ts src/tools/submitPlan.test.ts",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive 0952912256fcaad04d50d5a9f46c5b70fd412628 packages/moe-daemon | tar -x -C \"$S\" && cp --parents $P/tools/diskStateDispatch.test.ts \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/diskStateDispatch.test.ts > \"$S/l\" 2>&1; grep -aE \"^ +Tests |^ FAIL \" \"$S/l\"; grep -aqE \"^ +Tests +2 failed \\(2\\)\" \"$S/l\" && grep -aqF \"> (d1) \" \"$S/l\" && grep -aqF \"> (d2) \" \"$S/l\" && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: mark both tools `blocking: true`, the precedent set by submit_plan (tools/submitPlan.ts:198) and get_execution_readiness (:103). Both handlers already do every state read-modify-write inside their own state.runExclusive, so only the dispatch wrap has to go. Rejected:\n(a) Releasing the lock inside the handler around the git call. AsyncMutex.exit() only leaves the AsyncLocalStorage context; it does not release a lock the outer wrap holds, so other tools would still queue. A real unlock-and-relock helper would be a new mechanism for what the flag already expresses.\n(b) Moving the capture into the lock, or dropping it. That violates util/diskState.ts invariant 2 and the row's fix direction.\n(c) Marking only release_task. The claim-side stall goes live as soon as any stored diskState exists.\n(d) Editing the ToolDefinition.blocking JSDoc in tools/index.ts. Its example list is non-exhaustive and still true.\n(e) Syncing docs/MCP_SERVER.md. Neither contract changes, and its release_task section already says the capture runs outside the state mutex (true after this fix). A 6th file would also floor the plan to the heavy tier, because the size rule counts newFiles.",
+    "codebaseInsights": "- server/McpAdapter.ts:309 is the only production reader of ToolDefinition.blocking. tools/list exposes only name, description and inputSchema, so the flag is not on the wire.\n- Three test helpers mirror the dispatch rule: executionPolicyLifecycle.test.ts:163, profileRollout.test.ts:111 and getExecutionReadiness.test.ts:72.\n- moe-proxy's BLOCKING_LONG_POLLS (index.ts:273) is a separate, hard-coded long-poll timeout list. It already omits submit_plan and get_execution_readiness.\n- WebSocketServer RELEASE_TASK (:723-740) calls the release handler unwrapped.\n- AsyncMutex (state/StateManager.ts:268) is reentrant via AsyncLocalStorage. isHeld() reports whether the calling async context is inside runExclusive, and StateManager.mutex is public readonly.\n- util/daemonGitDocs.test.ts scans every CLAUDE.md, every docs/*.md file and every non-test daemon source line for /never (?:runs|executes|touches) git|runs no git|does not run git/i.\n- Architect dry run at 09529122, with this exact plan applied in a scratch clone: both checkRefs passed verbatim (GREEN 34 files / 1643 tests; RED printed RED-AT-BASE). The whole daemon suite in a whole-tree snapshot passed 270 files, 7350 passed, 24 skipped.",
+    "risks": "1) Never add an await before claim_next_task's runExclusive. Today the claim takes the lock synchronously on entry, so claim ordering is unchanged; an await would let a later call go first.\n2) A release with a handoffNote now queues for the lock after its git call, so tools sent during the capture go first. This is benign: a claim in that window still sees the row assigned.\n3) release_task's force role check (workerHasRole, a synchronous read) runs before the lock, as it already does on /ws. A team-role change that races a force release is judged on the role at call time. This is a known residual, by design.\n4) Comments and CLAUDE.md must avoid the NEVER_RUNS_GIT phrases that daemonGitDocs checks.\n5) The RED checkRef pins exactly two cases with the (d1) and (d2) prefixes.\n6) Leave McpAdapter's env/RateLimiter hunks alone: open row task-301cf760 owns them.",
+    "keyFiles": [
+      "packages/moe-daemon/src/server/McpAdapter.ts",
+      "packages/moe-daemon/src/tools/claimNextTask.ts",
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/util/diskState.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/tools/submitPlan.ts",
+      "packages/moe-daemon/src/tools/toolTestHarness.ts",
+      "packages/moe-daemon/src/util/daemonGitDocs.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "942717bcbab72c52dc3dad8c421087915c026777",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T23:08:49.738Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T23:24:40Z",
+    "at": "2026-11-03T23:26:59.226Z"
+  },
+  "workStartedAt": "2026-11-03T23:10:45.169Z",
+  "reviewStartedAt": "2026-11-03T23:12:22.429Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && P=packages/moe-daemon/src && git archive HEAD packages/moe-daemon scripts docs CLAUDE.md | tar -x -C \"$S\" && cp --parents $P/tools/claimNextTask.ts $P/tools/releaseTask.ts $P/server/McpAdapter.ts $P/tools/diskStateDispatch.test.ts packages/moe-daemon/CLAUDE.md \"$S\" && cd \"$S/packages/moe-daemon\" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/diskStateDispatch.test.ts\"],\"exclude\":[]}' > tt.json && npx tsc -p tt.json && NO_COLOR=1 npx vitest run src/tools/diskStateDispatch.test.ts src/tools/claimNextTask src/tools/releaseTask.test.ts src/server/McpAdapter.test.ts src/util/daemonGitDocs.test.ts src/delivery src/__acceptance__ src/__e2e__/workstreamComposition src/state/dependencyUnblock.test.ts src/tools/submitPlan.test.ts",
+    "exitCode": 0,
+    "outputTail": "Test Files  34 passed (34)\n      Tests  1643 passed (1643)\n   Start at  01:11:47\n   Duration  13.75s (tests 83%, transform 13%, import 4%)\nEXIT=0",
+    "reportedAt": "2026-11-03T23:12:22.429Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/diskStateDispatch.test.ts",
+    "packages/moe-daemon/src/tools/claimNextTask.ts",
+    "packages/moe-daemon/src/tools/releaseTask.ts",
+    "packages/moe-daemon/src/server/McpAdapter.ts",
+    "packages/moe-daemon/CLAUDE.md"
+  ],
+  "completionSummary": "Marked moe.claim_next_task and moe.release_task `blocking: true` (submit_plan precedent), so McpAdapter no longer holds the global state mutex across release_task's handoff disk-state capture or claim_next_task's stale-handoff recompute (git status, up to 3 s). Handlers are unchanged; every claim/release gate and write still runs inside the tool's own state.runExclusive. Updated the McpAdapter dispatch comment and packages/moe-daemon/CLAUDE.md first bullet to name both tools. New src/tools/diskStateDispatch.test.ts (d1, d2) drives both through McpAdapter.handle: mutex not held during the mocked capture, a bystander list_tasks answers before the capture ends, and all updateTask/updateWorker writes run under the mutex. Evidence: GREEN checkRef exit 0 (tsc + tt.json clean, Test Files 34 passed (34), Tests 1643 passed (1643)). RED checkRef at base 09529122 printed both FAIL lines, `Tests 2 failed (2)` and RED-AT-BASE (run before the fix; the test file has not changed since, so I did not re-run it). Known residual by design: release_task's force role check runs before the lock, as it already does on /ws RELEASE_TASK.",
+  "commits": [
+    {
+      "sha": "d5431577a5e4e4e823811e30cb4f92cc4dcdc341",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T23:09:32Z",
+      "paths": [
+        "packages/moe-daemon/CLAUDE.md",
+        "packages/moe-daemon/src/server/McpAdapter.ts",
+        "packages/moe-daemon/src/tools/claimNextTask.ts",
+        "packages/moe-daemon/src/tools/diskStateDispatch.test.ts",
+        "packages/moe-daemon/src/tools/releaseTask.ts"
+      ],
+      "recordedBy": "architect-24611a0a",
+      "recordedAt": "2026-11-03T23:23:28.251Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-03T23:26:36.498Z",
+  "reviewCompletedAt": "2026-11-03T23:26:36.498Z",
+  "reviewSummary": "Reviewed completion d5431577 (on moe/work-2026-10-24, pushed): 5 files, +162/-4 = 158 net LOC (under the 400 cap), no existing test touched. Read the diff and both handlers. claimNextTask.ts/releaseTask.ts gain only a comment + `blocking: true`. claim reaches its runExclusive with no prior await and after it only recomputes the signature + builds the reply; release before its runExclusive only validates, does the sync workerHasRole force check, clamps and captures. Ownership/currency gates, the fresh getTask re-read and every updateTask/updateWorker/closeOpenAttempts stay inside the callback, so dropping the dispatch wrap loses no lost-update protection. `.blocking` has one production reader (McpAdapter.ts:326). McpAdapter change is the dispatch comment only; CLAUDE.md bullet names claim_next_task, release_task, submit_plan, get_execution_readiness. docs/MCP_SERVER.md untouched, as planned.\nRe-ran GREEN checkRef in a /tmp snapshot: tsc --noEmit + tt.json clean, Test Files 34 passed (34), Tests 1643 passed (1643), EXIT=0 (new diskStateDispatch.test.ts, claimNextTask*, releaseTask.test.ts unchanged, McpAdapter, daemonGitDocs, delivery, __acceptance__, workstreamComposition, dependencyUnblock, submitPlan). Re-ran RED checkRef (base 09529122 + only the new test): (d1) and (d2) both FAIL with `expected [ true ] to deeply equal [ false ]`, `Tests 2 failed (2)`, RED-AT-BASE printed. Test asserts mutex free during capture, bystander list_tasks answers before capture ends, all writes under the mutex, stored signature and staleHandoffDiskState reply. DoD 1-3 each evidenced. Residual accepted (same as /ws RELEASE_TASK): release force role check runs before the lock. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

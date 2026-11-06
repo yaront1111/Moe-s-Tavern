@@ -1,0 +1,222 @@
+{
+  "id": "task-e07e695ca77b4f3484cee886f7d24d3d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: VS Code compares a daemon's project path by spelling only, so a workspace opened through a symlink reads its own live daemon as another project, deletes its daemon.json without a /health probe and starts a second daemon on the same .moe/ (JetBrains' isSameProject also accepts equal canonical paths)",
+  "description": "Filed by hunt #19 (task-443e8eac), lane 1: the VS Code extension's daemon lifecycle. HEAD 3cd256eb.\n\nJETBRAINS TWIN. MoeDaemonSupervisor.isSameProject (moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt:1029-1031, since c8a2a173) accepts a comparable-spelling match OR equal File.canonicalPath. JetBrains uses it for daemon.json (:99, :155) and for STATE_SNAPSHOT (MoeMessageDispatcher.kt:96). VS Code has no canonical fallback.\n\nPROBLEM (moe-vscode/src/services/MoeDaemonClient.ts)\n- pathsMatch (:152) compares comparableProjectPath (:126) of both sides. That is spelling only, with no realpath.\n- Four callers act on a mismatch, and none checks whether the recorded daemon is alive:\n  - ensureDaemonRunning :1656-1661 unlinks daemon.json, then calls startDaemon('start');\n  - getDaemonInfo :1576-1580 unlinks daemon.json (removeStale);\n  - classifyIdentity :184 reads /health as 'foreign', so getVerifiedDaemonInfo removes daemon.json (:1542) and starts (:1543);\n  - the STATE_SNAPSHOT handler :1858-1866 unlinks daemon.json and disconnects.\n- The daemon's own start guard would refuse the second start. In symguard.sh, `start --project <link>/proj` against the live <real>/proj daemon exits 0 and leaves daemon.json unchanged. But VS Code deletes daemon.json first, so the guard never sees it.\n- Spellings differ whenever the daemon was started through a different path to the same folder than the one VS Code opened:\n  - a symlinked home or checkout;\n  - macOS /tmp -> /private/tmp;\n  - a terminal start, a launcher seat (moe-agent.sh:865 keeps the logical `pwd`) or a JetBrains start.\n\nEVIDENCE (a snapshot of HEAD 3cd256eb outside the shared checkout; scripts and outputs are in /mnt/d/moe-scratch/hunt-443e8eac/mine/)\n1. zz-hunt443e-symlink.test.cjs uses tests/daemon-identity.test.cjs's fixture with a stubbed spawn. <root>/link is a symlink to <root>/real. daemon.json, /health and STATE_SNAPSHOT all name <real>/proj, and the workspace is <link>/proj. Output (symlink-harness.out):\n   OBSERVED {\"outcome\":\"rejected: Daemon not running. Start daemon first.\",\"spawns\":[[\"bundled-daemon.js\",\"start\",\"--project\",\"<link>/proj\"]],\"daemonJsonKept\":false,\"liveWs\":0,\"log\":[\"Stale daemon.json: expected project <link>/proj, found <real>/proj\"],\"pathsMatch\":false}\n2. zz-hunt443e-symlink-e2e.cjs uses a real snapshot daemon, `init --project <root>/real/proj`. Through <root>/link/proj it is the same directory, with the same .moe inode. The real client, with a real spawn, then (symlink-e2e.out):\n   client spawned: [\"<daemon>\",\"start\",\"--project\",\"<root>/link/proj\"]\n   daemon.json now {\"port\":19985,\"pid\":2880846,\"projectPath\":\"<root>/link/proj\"}\n   first daemon pid 2880696 alive=true /health 127.0.0.1:19980 -> <root>/real/proj\n   second daemon pid 2880846 alive=true /health 127.0.0.1:19985 -> <root>/link/proj\n   That is two live writers on one .moe/.\n\nFIX DIRECTION\n- Add one \"same project\" helper beside pathsMatch: pathsMatch(a, b), or both absolute (isAbsoluteAnyOs) and fs.realpathSync.native(a) === fs.realpathSync.native(b). Any realpath error falls back to the spelling rule, like JetBrains' canonicalPath fallback.\n- Use the helper at all four callers: :184 (so /health stops reading a symlinked spelling as foreign), :1576, :1656 and :1861.\n- Keep pathsMatch and comparableProjectPath unchanged. tests/daemon-identity.test.cjs pins their spelling rules.\n- Out of scope: JetBrains' /health classify (DaemonIdentity.kt:72-82) has no canonical fallback either, so JetBrains' /health stage may have the same gap. This row does not edit JetBrains files; the hunt reported that to the governor.\n\nFILES: moe-vscode/src/services/MoeDaemonClient.ts; a new moe-vscode/tests/daemon-symlink-project.test.cjs.\n\nPLACEMENT: shares MoeDaemonClient.ts with the VS Code bindHost row filed by the same hunt (named in a comment). This row owns the four project-path comparisons and the new helper beside pathsMatch. That row owns a new pre-check in connect() and its own helper. Their hunks are distinct, so there is no dependsOn.",
+  "definitionOfDone": [
+    "A workspace opened through a symlink to the folder its live daemon serves (daemon.json, /health and STATE_SNAPSHOT name the canonical path): connect() spawns nothing, leaves daemon.json byte-identical, opens /ws on that daemon and is still connected after its STATE_SNAPSHOT. A node --test file under moe-vscode/tests that uses a real symlink in a temp dir pins this and fails at 3cd256eb (skip only where creating a symlink is refused, such as Windows without the privilege).",
+    "Two distinct folders still mismatch at all four sites: a /health reply naming another existing folder still refuses with today's warning, and a path that cannot be resolved falls back to the spelling rule. tests/daemon-identity.test.cjs passes unchanged.",
+    "`cd moe-vscode && npm test && npm run compile` passes, run in a snapshot of the commit outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Create moe-vscode/tests/daemon-symlink-project.test.cjs with the session's own editing tool (Write/Edit on a Claude seat, apply_patch on a codex exec seat; never a shell write, cp, or a subagent). A validated prototype of this exact file is at /mnt/d/moe-scratch/plan-e07e695c/prototype-daemon-symlink-project.test.cjs: read it and author the file yourself with your editor.\n\nHarness (copy the pattern of tests/daemon-identity.test.cjs; read mem:gotcha-vscode-vm-test-harness):\n- ts.transpileModule of ../src/services/MoeDaemonClient.ts, run with vm.runInNewContext and the REAL process object;\n- a vscode stub that records output-channel lines, warnings and errors; getConfiguration answers 'daemon.port' 0 and 'autoConnect' false, so no reconnect timer outlives a row;\n- a child_process.spawn stub that records argv and emits 'spawn' in a microtask;\n- client.resolveBundledDaemonPath = () => 'bundled-daemon.js' and client.waitForDaemonInfo = async () => {}.\n- layout(t, withLink): root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-symlink-'))) so macOS /var->/private/var and a Windows 8.3 TEMP do not skew; real = <root>/real/proj (with .moe/), other = <root>/other, and <root>/link -> <root>/real via fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir') (a junction needs no privilege). Error handling: on EPERM or EACCES call t.skip('symlink refused: <code>') and return; rethrow any other error. t.after removes root.\n- daemon(t, healthPath, rootPath = healthPath): an http server answering /health {projectPath: healthPath} plus a ws server that sends STATE_SNAPSHOT {project:{rootPath}} on each connection and counts connections; t.after terminates clients and closes both.\n\nRows. Each top-level test name MUST start with exactly these ids plus a space, because the step-3 checkRef counts them:\n- H1 pathsMatch(viaLink, real) === false, and isSameProject is true in BOTH directions (kills a one-sided realpath).\n- H2 two distinct existing folders: isSameProject(real, other) === false.\n- H3 unresolvable paths fall back to spelling: isSameProject(<root>/link/missing, <root>/real/missing) === false; isSameProject('D:\\\\x\\\\y', '/mnt/d/x/y') === true.\n- H4 rel = path.relative(process.cwd(), viaLink); if path.isAbsolute(rel) (different Windows drives) t.skip; else isSameProject(rel, real) === false.\n- H5 doubled = win32 ? '\\\\\\\\?\\\\' + real : '/' + real; isSameProject(doubled, real) === false.\n- L1 workspace = viaLink; daemon.json {port, pid: process.pid, startedAt, projectPath: real}, /health and STATE_SNAPSHOT name real. outcome = await connect().then(() => 'connected', e => e.message); assert outcome === 'connected' (a regression must be an assertion, not a thrown rejection); await client.waitForState(2000) === true; spawns length 0; daemon.json byte-identical (compare `fs.existsSync(file) && fs.readFileSync(file, 'utf8')` with the written text); the live server saw exactly 1 /ws; connectionState === 'connected'; no log line matching /Stale daemon\\.json|project mismatch/.\n- L2 the same, reversed: workspace = real, and daemon.json, /health and STATE_SNAPSHOT name viaLink.\n- L3 workspace = viaLink; daemon.json names real with bindHost '::1', pid process.pid and a CLOSED 127.0.0.1 port (listen on 0, then close): connect() rejects with a message containing 'listens on ::1', spawns 0, daemon.json byte-identical.\n- M1 (ensureDaemonRunning) daemon.json names other: connect() rejects /Daemon not running/; spawns are exactly [['bundled-daemon.js','start','--project', real]]; daemon.json is gone; a log line contains `Stale daemon.json: expected project ${real}, found ${other}`.\n- M2 (getDaemonInfo) daemon.json names other: getDaemonInfo(false) is undefined and the file is byte-identical; getDaemonInfo() is undefined and the file is gone.\n- M3 (/health) daemon.json names real, /health names other: connect() rejects; the foreign server saw 0 /ws; a warning contains `serves ${other}, not this workspace (${real}). Starting this project's daemon`; one start spawn.\n- M4 (STATE_SNAPSHOT) /health names real, snapshot rootPath other: after connect(), poll up to 2 s for the log `STATE_SNAPSHOT project mismatch: expected ${real}, got ${other}`; daemon.json gone; isStateReady false; connectionState 'disconnected'.\n- M5 offLoopbackBindRefusal({bindHost:'::1', pid: process.pid, projectPath: other}, real, win32) === null, and with projectPath real it returns a string.\n\nRED before step 2, from the worktree's moe-vscode: `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/daemon-symlink-project.test.cjs`. It must show H1-H5 and L1-L3 not ok, with M1-M5 ok. For DoD 1's named commit, copy `git show 3cd256eb:moe-vscode/src/services/MoeDaemonClient.ts` and this test into a mktemp layout (src/services/, tests/) outside the repo and run it with `--test-name-pattern='^L[12] '`: L1 and L2 must be not ok. Keep both outputs for complete_task, then rm -rf the literal temp path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "note": "Authored moe-vscode/tests/daemon-symlink-project.test.cjs (13 rows H1-H5, L1-L3, M1-M5) with the Write tool. RED in the worktree against unchanged source: 13 tests, 5 pass, 8 fail. H1-H5 and L1-L3 not ok, M1-M5 ok. H1-H5 fail with 'isSameProject is not a function'. L3 fails on the assertion (outcome was 'Daemon not running. Start daemon first.', expected 'listens on ::1'). Against git show 3cd256eb's MoeDaemonClient.ts in a mktemp layout, with --test-name-pattern='^L[12] ': L1 and L2 both not ok (2 tests, 0 pass, 2 fail). Temp layout removed.",
+      "startedAt": "2026-11-04T08:21:54.931Z",
+      "completedAt": "2026-11-04T08:22:36.180Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (DoD 1 and 2) in moe-vscode/src/services/MoeDaemonClient.ts with the session's own editing tool. The 9-line reference diff is /mnt/d/moe-scratch/plan-e07e695c/prototype-helper.diff (made at 3747c474).\n\n1. Directly after pathsMatch (:152-154) and before isAbsoluteAnyOs (:156), add `export function isSameProject(a: string, b: string): boolean`. It mirrors JetBrains MoeDaemonSupervisor.isSameProject (:1029: comparable spelling OR equal canonical path):\n   - `if (pathsMatch(a, b)) { return true; }` comes first. A non-string projectPath then still throws pathsMatch's TypeError into each caller's existing catch, so behaviour is unchanged.\n   - Only spellings that are host-absolute and not doubled-separator reach the file system: `isFullyQualified(p)` (:659, host semantics: drive letter or UNC on Windows, a leading / elsewhere) AND `!/^[\\\\/]{2}/.test(p)`. Otherwise return false. Why, in a one-line comment: daemon.json is repository content and /health is any local listener, so a UNC or device spelling must never open a network path (Windows would start an SMB session), and a relative spelling names the daemon's cwd, not the extension host's.\n   - Then `const real = realPathOrNull(a); return real !== null && real === realPathOrNull(b);`. Reuse realPathOrNull (:314, fs.realpathSync.native, null on any error).\n   - Error handling: every realpath failure (missing path, dangling link, EACCES, a Windows trailing-dot spelling, see mem:gotcha-windows-node-namespaced-realpath) falls back to the spelling verdict (false). Nothing here throws except pathsMatch's existing TypeError on a non-string.\n2. Replace pathsMatch with isSameProject at exactly these five project-identity sites, nothing else:\n   - classifyIdentity :184 (the /health verdict; protected admission still needs the spawn-proof HMAC);\n   - offLoopbackBindRefusal :268. task-c203c09a (e62cd216) added it after this row was filed. JetBrains decides same-project with isSameProject before its bindHost refusal (MoeDaemonSupervisor.kt:155 and :166), and without this change a linked workspace skips the refusal and spawns a start;\n   - getDaemonInfo :1638;\n   - ensureDaemonRunning :1718;\n   - the STATE_SNAPSHOT case :1923.\n3. Do NOT change pathsMatch, comparableProjectPath or isAbsoluteAnyOs: tests/daemon-identity.test.cjs pins them. Add NO import: several harnesses run this file under closed vm require maps (mem:gotcha-vscode-vm-test-harness). fs and both helpers are already in the module, and function declarations hoist.\n\nThen, from the worktree's moe-vscode, run `NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test tests/daemon-symlink-project.test.cjs tests/daemon-identity.test.cjs tests/daemon-bindhost.test.cjs tests/daemon-start.test.cjs`. All must pass, with only the three existing files unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Added export isSameProject(a, b) directly after pathsMatch in MoeDaemonClient.ts: pathsMatch first, then only host-absolute non-doubled-separator spellings (isFullyQualified && !/^[\\\\/]{2}/) reach realPathOrNull, equal canonical paths count as same, and any realpath failure falls back to false. Swapped it in at exactly five sites: classifyIdentity, offLoopbackBindRefusal, getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT case. grep shows pathsMatch( is now called only in its own definition and isSameProject. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are untouched and no import was added. Test run (tap): daemon-symlink-project + daemon-identity + daemon-bindhost + daemon-start gave 89 tests, 89 pass, 0 fail, 0 skipped, exit 0; H1-H5, L1-L3 and M1-M5 all ok. The three existing test files are unchanged (git status shows only MoeDaemonClient.ts modified plus the new test file).",
+      "startedAt": "2026-11-04T08:22:38.222Z",
+      "completedAt": "2026-11-04T08:23:17.329Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY (DoD 3), once. From the task worktree root, run the plan's checkRef verbatim (text also at /mnt/d/moe-scratch/plan-e07e695c/checkref-gate.txt). Its fresh output is the complete_task verification evidence. What it does:\n- `git archive HEAD` of the WHOLE repo into /tmp/me07.XXXX (mem:gotcha-vscode-tests-need-full-repo-snapshot), then overlays this row's two files from the worktree, since uncommitted bytes are not in HEAD;\n- Linux-native `npm ci`, so `npm run compile` resolves TS7 (mem:gotcha-vscode-gate-from-wsl);\n- `npx eslint src/services/MoeDaemonClient.ts`, `npm test`, `npm run compile`;\n- RED: the merge-base MoeDaemonClient.ts against the new test. Exactly H1-H5 and L1-L3 fail, and M1-M5 pass.\nIt never runs npm in the shared checkout.\n\nWhole-tree `npm run lint` is NOT part of the gate. It already fails at the base on src/panels/SettingsPanel.ts:73 (no-useless-escape, from a000b817), which is outside this row, so the gate lints only the touched file.\n\nThe architect's dry run of this exact command at 3747c474 plus the prototype exited 0: 798 tests, 788 pass, 0 fail, 10 skipped. Expect about that. The run leaves /tmp/me07.XXXX behind: list /tmp/me07.* before and after, then rm -rf the literal new path. If it fails, it prints the snapshot path and the log tail; fix the cause and re-run it in full.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "Ran the plan's checkRef verbatim from the worktree root: GATE_EXIT=0. In the /tmp/me07.N0wB git-archive snapshot it did npm ci, eslint on src/services/MoeDaemonClient.ts, npm test (tests 798, pass 788, fail 0, skipped 10), npm run compile, then the RED leg with the merge-base MoeDaemonClient.ts: exactly H1, H2, H3, H4, H5, L1, L2, L3 not ok, and M1-M5 ok. Matches the architect's dry run. Whole-tree npm run lint was not part of the gate, per the plan: it already fails at base on SettingsPanel.ts:73. Removed /tmp/me07.N0wB by its literal path (no me07.* was present before the run).",
+      "startedAt": "2026-11-04T08:23:19.323Z",
+      "completedAt": "2026-11-04T08:23:46.066Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as an attacker who writes .moe/daemon.json, answers /health on the port, or sends STATE_SNAPSHOT, and as an unlucky user on Windows or macOS:\n- Can any of those three values make the extension host touch a UNC, device or // path, resolve a relative path against its own cwd, or wait on a hung mount for a spelling that already matches? Only isFullyQualified, non-doubled spellings may reach realpath, and only after pathsMatch says no.\n- Does a non-string projectPath or rootPath (42, [], {}) behave exactly as before at every site?\n- Do two distinct folders, a dangling link, a missing path and a Windows trailing-dot spelling all keep the spelling verdict, never a false 'same'?\n- Are all five sites converted (grep `pathsMatch(` in the file: only pathsMatch's own body and isSameProject may call it)? Are pathsMatch and comparableProjectPath byte-identical to the base?\n- Does protected admission (probeSpawnProof -> classifyIdentity) still require the spawn-proof HMAC? projectStateKey is already realpath-keyed, so a linked spelling must not unlock anything the HMAC refuses.\n- Is the cost acceptable? realpath runs only on a spelling mismatch: two syscalls per STATE_SNAPSHOT for a linked workspace.\n- Test hygiene: no listener, socket, timer or temp dir left (t.after); skips only on symlink EPERM/EACCES and H4's cross-drive case; every regression is an assertion failure. For a mutation check, /mnt/d/moe-scratch/plan-e07e695c/mutants.py applies 9 scratch-copy mutants (`python3 -I mutants.py <fixed.ts> <name> <out.ts>`). Run it only on a copy outside the repo, never on the worktree file.\nIf anything changes, re-run the step-3 command and use that fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "note": "Adversarial self-review done, no code change, so step-3's gate output stands.\n- Hostile spellings: only isFullyQualified (host semantics) and non-doubled-separator spellings reach realpath, and only after pathsMatch says no. UNC, device, // and relative forms return false (H4, H5 pin them; mutants nounc and noabs are killed by H5 and H4).\n- Non-string projectPath/rootPath: pathsMatch runs first and comparableProjectPath calls .trim(), so 42, [] and {} throw the same TypeError into each caller's existing catch before isFullyQualified is reached. classifyIdentity and offLoopbackBindRefusal already typeof-guard.\n- Distinct folders, missing path, dangling link: realpath failure returns null, so the verdict is the spelling verdict (false). Equal canonical paths cannot be two different folders. A Windows trailing-dot spelling fails realpath with ENOENT (namespaced fs), so it falls back to false, per mem:gotcha-windows-node-namespaced-realpath. The M rows pin the distinct-folder verdicts.\n- Sites: grep shows pathsMatch( only in its own body and isSameProject. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are untouched. No new import.\n- Protected admission: a linked spelling only yields identity 'same'. protectedAdmissionRefusal still verifies the spawn-proof HMAC against the realpath-keyed projectKey record, so nothing is unlocked that the HMAC refuses.\n- Accepted theoretical risk: realpath is a synchronous call, so a hostile /health or STATE_SNAPSHOT naming an absolute path on a hung mount could stall the extension host once. It runs only on a spelling mismatch, JetBrains' canonicalPath has the same property, and pathForms/isOutsideProject here already realpath candidate paths. Cost is two syscalls per STATE_SNAPSHOT for a linked workspace.\n- Test hygiene: servers, sockets and temp dirs are released in t.after, skips happen only on symlink EPERM/EACCES and H4's cross-drive case, and every regression is an assertion failure.\n- Mutation check (scratch copies under /tmp, removed after): s184 killed by L1 L2; s1576 L1 L2; s1656 L1 L2; s268 L3; s1861 L1 L2; nounc H5; noabs H4; onesided H1 L1 L3; alwaysreal H2 H3 M1-M5. All 9 died by ERR_ASSERTION.",
+      "startedAt": "2026-11-04T08:23:48.617Z",
+      "completedAt": "2026-11-04T08:25:04.469Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 496.7,
+  "comments": [
+    {
+      "id": "comment-c5ceb9b730b04eafadf293694b0fe008",
+      "author": "architect-cd0ac706",
+      "content": "Placement (hunt #19): the VS Code bindHost row is task-c203c09ad69c4a07ac19633e2f8257ab. It shares moe-vscode/src/services/MoeDaemonClient.ts with this row.\n- That row owns a new pre-check at the top of connect(), before ensureDaemonRunning (:915), and its own offLoopbackBindRefusal helper.\n- This row owns the four project-path comparisons (:184, :1576, :1656, :1861) and the new same-project helper beside pathsMatch.\n- That row's pre-check calls this row's helper if this row has landed first.\nThe hunks are distinct, so there is no dependsOn.",
+      "timestamp": "2026-11-04T07:58:41.122Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:57:42.392Z",
+  "updatedAt": "2026-11-04T19:20:45.353Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T07:57:48.048Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 2,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T08:39:09.101Z",
+    "wallClockMs": 2481053
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "worker-5772dacf",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:18:27.518Z",
+  "executionContract": {
+    "intendedBehavior": "A workspace opened through a symlink or junction to the folder its live daemon serves is treated as the same project by every project-identity check in MoeDaemonClient: the daemon.json comparison in ensureDaemonRunning and getDaemonInfo, the /health classification, the off-loopback bindHost refusal and the STATE_SNAPSHOT check. So VS Code keeps daemon.json, starts no second daemon, opens /ws on the live daemon and stays connected after its STATE_SNAPSHOT. Two distinct folders and any path that cannot be resolved keep today's spelling verdict, with today's logs and warnings.",
+    "acceptanceCriteria": [
+      "Linked workspace, daemon naming the canonical path (and the reverse): connect() spawns nothing, daemon.json is byte-identical, exactly one /ws opens on the live daemon, and waitForState is true while connectionState stays 'connected'.",
+      "Linked workspace whose live daemon is bound off loopback: connect() rejects with the c203c09a refusal naming the host, with nothing spawned and daemon.json byte-identical.",
+      "Distinct existing folders at each of the five sites behave exactly as before: ensureDaemonRunning's Stale log, unlink and start; getDaemonInfo returns undefined; the /health warning plus a start; the STATE_SNAPSHOT mismatch disconnect; offLoopbackBindRefusal returns null.",
+      "An unresolvable, relative or doubled-separator spelling falls back to the spelling rule, and only an absolute, host-qualified, non-UNC spelling ever reaches fs.realpathSync.native."
+    ],
+    "invariants": [
+      "pathsMatch, comparableProjectPath and isAbsoluteAnyOs are byte-identical to the base.",
+      "No new import in MoeDaemonClient.ts.",
+      "tests/daemon-identity.test.cjs, tests/daemon-bindhost.test.cjs and tests/daemon-start.test.cjs pass unchanged.",
+      "No UNC, device, double-slash or relative spelling is ever passed to fs.realpathSync.native.",
+      "A non-string projectPath or rootPath behaves exactly as at the base."
+    ],
+    "compatibility": [
+      "No MCP, /ws or /health wire change; daemon.json, /health and STATE_SNAPSHOT shapes are read exactly as before.",
+      "JetBrains files are not edited; JetBrains' /health classify gap is a separate row (be7d169f)."
+    ],
+    "approvedScope": [
+      "New export isSameProject(a, b) in moe-vscode/src/services/MoeDaemonClient.ts, placed beside pathsMatch",
+      "pathsMatch -> isSameProject at classifyIdentity, offLoopbackBindRefusal, getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT case",
+      "New moe-vscode/tests/daemon-symlink-project.test.cjs with rows H1-H5, L1-L3 and M1-M5"
+    ],
+    "reuse": [
+      "pathsMatch (spelling rule) is the first leg",
+      "realPathOrNull: fs.realpathSync.native, null on any error",
+      "isFullyQualified: host-semantics absolute check, already used by the protected path selection"
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/src/services/MoeDaemonClient.ts at 3747c474: pathsMatch :152, isAbsoluteAnyOs :156, classifyIdentity :177 (compare at :184), offLoopbackBindRefusal :261 (compare at :268), realPathOrNull :314, isFullyQualified :659, getDaemonInfo :1617 (compare at :1638), ensureDaemonRunning :1686 (compare at :1718), STATE_SNAPSHOT case :1920 (compare at :1923).",
+      "moe-jetbrains MoeDaemonSupervisor.kt: isSameProject :1029 (spelling OR File.canonicalPath), used at :99 and :155; bindRefusal is gated on sameProject at :166.",
+      "package.json test script is `node --test tests/*.test.cjs`, so the new file is picked up by npm test."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/me07.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && P=src/services/MoeDaemonClient.ts && Q=tests/daemon-symlink-project.test.cjs && cp \"$R/moe-vscode/$P\" $P && cp \"$R/moe-vscode/$Q\" $Q && git -C \"$R\" show \"$B:moe-vscode/$P\" > ../base.ts && ! cmp -s ../base.ts $P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" P=$P Q=$Q bash -c 'umask 022; npm ci --no-audit && npx eslint $P && npm test && npm run compile && { cp ../base.ts $P; node --test --test-reporter=tap $Q > ../red.log 2>&1; true; }' > ../v.log 2>&1 || { echo \"$L\"; tail -30 ../v.log; exit 1; }; grep -a '^ℹ [tpfs]' ../v.log && N=$(grep '^not ok' ../red.log) && echo \"RED: $N\" && [ $(grep -c ' - L[1-3] ' <<<\"$N\") = 3 ] && ! grep -v ' - [HL][1-5] ' <<<\"$N\" && [ $(grep -c '^ok [0-9]* - M[1-5] ' ../red.log) = 5 ] )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Spelling-only plus a /health probe before every unlink. Rejected: it does not fix the STATE_SNAPSHOT disconnect, and it leaves the client disagreeing with JetBrains. (2) realpath on any isAbsoluteAnyOs spelling, as the row's fix direction says. Refined, not rejected: host-semantics isFullyQualified keeps a cross-OS spelling ('/x' on Windows resolves against the current drive; 'D:\\\\x' on POSIX is relative) and UNC or device spellings from hostile input off the file system. (3) Changing pathsMatch itself. Rejected: tests/daemon-identity.test.cjs pins its pure spelling rules, and the DoD keeps it unchanged.",
+    "codebaseInsights": "Prototype validated 2026-11-04 at 3747c474. The 9-line helper plus five call-site swaps, and the 13-row test, are both in /mnt/d/moe-scratch/plan-e07e695c/. GREEN: the full moe-vscode suite in a Linux snapshot gives 798 tests / 788 pass / 0 fail / 10 skipped, compile exits 0, and eslint on the file exits 0. RED at the merge-base fails exactly H1-H5 and L1-L3, while M1-M5 pass. All nine mutants are assertion-killed: each of the five sites reverted, the UNC clause dropped, the absolute clause dropped, a one-sided realpath, and an always-true leg. task-c203c09a (e62cd216) landed during planning and added the fifth comparison, offLoopbackBindRefusal :268, which this plan converts too. isEpicFinal is true only through the max-order fallback, because epic-be924fb8 has no finalTaskId. The full moe-vscode suite is the full regression for the only package touched.",
+    "risks": "The whole-tree `npm run lint` already fails on SettingsPanel.ts:73 (a000b817), so the gate lints only MoeDaemonClient.ts; it was reported to the governors separately. Windows: os.tmpdir() may be an 8.3 path and the test cwd may be on another drive, so canonicalize the temp root with realpathSync.native and skip H4 when path.relative is absolute. Use a junction on win32 so the link rows run on Windows CI (the runners are admin anyway). Never mutate the worktree's source for a mutation check: use a /tmp copy.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/tests/daemon-identity.test.cjs",
+      "moe-vscode/tests/daemon-bindhost.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/services/MoeDaemonSupervisor.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "3747c4748a7179c54a237e407914bd4576d78d93",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:18:27.555Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T08:36:59Z",
+    "at": "2026-11-04T08:39:37.301Z"
+  },
+  "workStartedAt": "2026-11-04T08:21:54.931Z",
+  "reviewStartedAt": "2026-11-04T08:25:29.328Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/me07.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && P=src/services/MoeDaemonClient.ts && Q=tests/daemon-symlink-project.test.cjs && cp \"$R/moe-vscode/$P\" $P && cp \"$R/moe-vscode/$Q\" $Q && git -C \"$R\" show \"$B:moe-vscode/$P\" > ../base.ts && ! cmp -s ../base.ts $P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" P=$P Q=$Q bash -c 'umask 022; npm ci --no-audit && npx eslint $P && npm test && npm run compile && { cp ../base.ts $P; node --test --test-reporter=tap $Q > ../red.log 2>&1; true; }' > ../v.log 2>&1 || { echo \"$L\"; tail -30 ../v.log; exit 1; }; grep -a '^ℹ [tpfs]' ../v.log && N=$(grep '^not ok' ../red.log) && echo \"RED: $N\" && [ $(grep -c ' - L[1-3] ' <<<\"$N\") = 3 ] && ! grep -v ' - [HL][1-5] ' <<<\"$N\" && [ $(grep -c '^ok [0-9]* - M[1-5] ' ../red.log) = 5 ] )",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 798\nℹ suites 0\nℹ pass 788\nℹ fail 0\nℹ skipped 10\nℹ todo 0\nRED: not ok 1 - H1 link and real spellings are one project in both directions\nnot ok 2 - H2 distinct existing folders stay apart\nnot ok 3 - H3 unresolvable paths fall back to the spelling rule\nnot ok 4 - H4 a relative spelling is never resolved\nnot ok 5 - H5 a doubled-separator spelling is never resolved\nnot ok 6 - L1 a workspace opened through a link keeps and connects to its live daemon\nnot ok 7 - L2 a daemon started through a link keeps and connects to its live daemon\nnot ok 12 - L3 a link to a live off-loopback daemon is refused, not respawned\nGATE_EXIT=0",
+    "reportedAt": "2026-11-04T08:25:29.328Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/daemon-symlink-project.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts"
+  ],
+  "completionSummary": "VS Code now treats a workspace opened through a symlink/junction as the same project as its live daemon. New export isSameProject(a, b) in moe-vscode/src/services/MoeDaemonClient.ts sits right after pathsMatch: pathsMatch first, then equal fs.realpathSync.native paths (via realPathOrNull), reached only when both spellings are isFullyQualified and not doubled-separator (no UNC, device, // or relative spelling ever reaches realpath). Any realpath failure falls back to the spelling verdict. It replaces pathsMatch at exactly five sites: classifyIdentity (/health), offLoopbackBindRefusal (added by task-c203c09a after this row was filed), getDaemonInfo, ensureDaemonRunning and the STATE_SNAPSHOT case. pathsMatch, comparableProjectPath and isAbsoluteAnyOs are unchanged and no import was added. New moe-vscode/tests/daemon-symlink-project.test.cjs has 13 rows: H1-H5 (helper), L1-L3 (link rows) and M1-M5 (distinct folders). RED at the merge-base: exactly H1-H5 and L1-L3 fail and M1-M5 pass. L1/L2 also fail against 3cd256eb's source (DoD 1). Gate run in a git-archive snapshot outside the shared checkout: eslint on the touched file, npm test 798 tests / 788 pass / 0 fail / 10 skipped, npm run compile exit 0. 9 scratch mutants (each of the five sites, the UNC clause, the absolute clause, one-sided realpath, always-true) are all killed by assertions. The qualityGate (parity-check.sh && npm run lint) exited 0. Whole-tree moe-vscode lint is not in the gate: it already fails at base on SettingsPanel.ts:73 (a000b817), outside this row. Accepted risk: realpath is synchronous, so a hostile /health could name a path on a hung mount once; it runs only on a spelling mismatch, as in JetBrains' canonicalPath.",
+  "commits": [
+    {
+      "sha": "58e54180bb8be9ba6fd2d4194e3cbb64d683f211",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T08:20:43Z",
+      "paths": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/daemon-symlink-project.test.cjs"
+      ],
+      "recordedBy": "worker-5772dacf",
+      "recordedAt": "2026-11-04T08:36:49.848Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T08:39:09.101Z",
+  "reviewCompletedAt": "2026-11-04T08:39:09.101Z",
+  "reviewSummary": "APPROVED. Completion 58e54180 (on moe/work-2026-10-24, recorded, pushed). 2 files, +187/-5, net 182 LOC.\n\nRe-ran task.verification verbatim in a git-archive snapshot outside the repo (MOE_LAND_TARGET=58e54180^): npm ci, eslint on MoeDaemonClient.ts, npm test 799 tests / 789 pass / 0 fail / 10 skipped, compile OK, GATE_EXIT=0. RED at merge-base: exactly H1-H5 and L1-L3 not ok, M1-M5 ok.\n\nDoD 1: L1/L2 also fail against git show 3cd256eb source (re-run by me); at the fix they pass: 0 spawns, daemon.json byte-identical, 1 /ws, waitForState true, connected, no Stale/mismatch log. Real symlink, skip only on EPERM/EACCES.\nDoD 2: M1-M5 pin distinct folders at all five sites; H3/H4/H5 pin unresolvable, relative, doubled-separator fallback. daemon-identity/bindhost/start tests pass unchanged.\nDoD 3: npm test + compile green in the snapshot.\n\nSource: isSameProject right after pathsMatch; pathsMatch first, then only isFullyQualified non-doubled-separator spellings reach realPathOrNull (null on error, so false). pathsMatch( is called only inside pathsMatch/isSameProject; isSameProject at exactly the five sites. pathsMatch/comparableProjectPath/isAbsoluteAnyOs unchanged; no new import; no JetBrains edits; spawn-proof admission untouched.\n\nMutants: re-ran all 9 on a snapshot copy; all killed by assertions (s184/s1576/s1656/s1861 L1 L2; s268 L3; nounc H5; noabs H4; onesided H1 L1 L3; alwaysreal H2 H3 M1-M5). qualityGate (parity-check.sh && npm run lint) in place: exit 0 both. Scratch dir removed.\n\nNon-blocking: sync realpath on a hostile /health naming a hung mount could stall the host once (accepted, same as JetBrains canonicalPath).",
+  "requiredCheckAtDone": null
+}

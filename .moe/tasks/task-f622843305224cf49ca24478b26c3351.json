@@ -11,37 +11,61 @@
     {
       "stepId": "step-1",
       "description": "TDD red: write the twin regression test first, then wire it into CI. Create scripts/tests/intent-journal.test.mjs modeled on scripts/tests/push-failure-message.test.mjs. Reuse its `slice(source, start, end)` helper, which asserts both markers are found, and its engine matrix: win32 runs bash 'C:/Program Files/Git/bin/bash.exe', 'powershell.exe' and 'pwsh.exe'; other platforms run '/bin/bash' and 'pwsh', skipping pwsh when `spawnSync(pwsh, ['-NoProfile','-Command','exit 0']).status !== 0`.\n\nSlice the REAL writers out of the wrapper sources, never a copy: ps1 from 'function Write-MoeIntentJournal(' up to 'function Get-MoeBaselineLandedFlag('; sh from 'intent_journal_write() {' up to 'receipt_send() {'.\n\nFor every engine run three cases. Each case gets its own mkdtemp dir, removed by t.after(() => rmSync(dir, {recursive:true, force:true})) so cleanup runs even on failure. The journal lives at <dir>/gitdir/moe/receipt/task-fixture.json.\n(a) overwrite: the receipt dir exists and the journal holds '{\"stale\":true}';\n(b) create: neither the journal nor moe/receipt exists;\n(c) directory: an existing empty directory sits at the journal path.\n\nBash script: `PYTHON_CMD=<'python' on win32, else 'python3'>`, then the sh slice, then `if intent_journal_write \"$JOURNAL_PATH\" \"$JOURNAL_REPORT\"; then echo RESULT=ok; else echo RESULT=fail; fi`. JOURNAL_REPORT is a fixed compact JSON string with no '/' characters, which keeps MSYS2 argument path conversion out of Git Bash.\n\nPowerShell script: write it with a '\\ufeff' prefix and run it with -NoProfile -NonInteractive -File. Body: `$ErrorActionPreference='Stop'`, then the ps1 slice, then an [ordered] report {taskId, attemptId, generation (an int), ledger=[ordered]@{sessionId; role; status}} and `$ok = Write-MoeIntentJournal $env:JOURNAL_PATH $r; 'RESULT=' + [string]$ok`. Matching an exact 'RESULT=True' or 'RESULT=False' line also catches a leaked pipeline value.\n\nPass both values by env, using JOURNAL_PATH and JOURNAL_REPORT, never MOE_* names. Forward-slash the path for bash, as the template does.\n\nAssertions, mutation-resistant, with error handling for a missing engine or a timeout: assert.ifError(result.error), then status 0, with stdout+stderr in each message.\n- (a) and (b): the success line. The file does not start with a UTF-8 BOM. The sh bytes equal JOURNAL_REPORT exactly; for PowerShell, JSON.parse of the file deep-equals the report object. readdirSync(receipt dir) deep-equals ['task-fixture.json']: no *.tmp.* and no backup.\n- (c): the failure line. The journal path is still an empty directory, and the receipt dir lists only it.\n\nCI: append scripts/tests/intent-journal.test.mjs to the node --test list of the 'Test agent runtime discovery' step in .github/workflows/ci.yml, beside push-failure-message.test.mjs. That step runs on ubuntu, windows and macOS.\n\nWrite both files with the Write/Edit tools only. ci.yml is declared by other open rows, and a shell write leaves no witness, so the path would be held at landing.\n\nRed evidence: from WSL, run `\"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs` against the UNFIXED wrapper. Exactly the powershell and pwsh overwrite cases must fail (RESULT=False). Every bash case and every create/directory case must pass. Put the failing case names in the step note. If any other case fails, fix the test, not the wrapper.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         ".github/workflows/ci.yml"
       ],
       "newFiles": [
         "scripts/tests/intent-journal.test.mjs"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/intent-journal.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Red evidence on unfixed wrapper via Windows node.exe: only \"powershell: intent journal overwrite\" and \"pwsh: intent journal overwrite\" fail (RESULT=False); all bash cases and the create/directory cases pass. WSL node: bash 3 pass, pwsh 3 skipped. ci.yml node --test list now includes intent-journal.test.mjs.",
+      "startedAt": "2026-11-02T22:34:20.765Z",
+      "completedAt": "2026-11-02T22:34:55.442Z"
     },
     {
       "stepId": "step-2",
       "description": "Fix scripts/moe-agent.ps1 Write-MoeIntentJournal by changing ONLY `[IO.File]::Replace($tmp, $Path, $null)` to `[IO.File]::Replace($tmp, $Path, [NullString]::Value)`.\n\nWhy: PowerShell passes $null to a .NET string parameter as \"\", and File.Replace rejects that. Verified 2026-10-31: PS 5.1.26100 says 'The path is not of a legal form' and pwsh 7.6.9 says 'The path is empty'. [NullString]::Value overwrites on both and leaves no tmp file. So every overwrite of an existing strong journal returned $false, and the landing refused with MOE_COMMIT_REFUSED_INTENT_UNWRITABLE, while sh's os.replace overwrites.\n\nKeep File.Replace, the atomic replace that CQ-V07 chose. Do NOT switch to Move-Item -Force: the function's own comment says it deletes first. Do NOT use File.Move's 3-argument overload either: it does not exist in PS 5.1's .NET Framework.\n\nAdd one line to the function's comment explaining why [NullString]::Value is needed, citing task-f6228433.\n\nChange nothing else: not the error handling (the catch removes the tmp and returns $false), not the call site in Invoke-MoeLanding, not scripts/moe-agent.sh.\n\nEdit with the Edit tool only. Many open rows declare this file, and a shell write leaves no TOOL witness, so the path would be held at landing. Keep the UTF-8 BOM and LF line endings.\n\nTDD green: re-run the step-1 node.exe command; every case passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/moe-agent.ps1"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Replace backup arg $null -> [NullString]::Value plus a 2-line comment. BOM intact, 0 CR. node.exe run: all 9 pass, 0 skipped.",
+      "startedAt": "2026-11-02T22:34:56.194Z",
+      "completedAt": "2026-11-02T22:35:16.545Z"
     },
     {
       "stepId": "step-3",
       "description": "Regression gate. Run it once, fresh, from the repo root in WSL:\n`node --test scripts/tests/intent-journal.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs && bash scripts/tests/parity-check.sh`\n\nWhat each part covers:\n- Linux node covers bash. pwsh is not on PATH inside WSL, so its cases skip there.\n- Windows node covers Git Bash, PowerShell 5.1 and pwsh 7. It must show every case passing with 0 skipped; this is the run that proves the fix.\n- parity-check confirms the ps1 BOM and the twin strings.\n\nThis is the complete_task verification evidence: the command, exitCode 0, and an outputTail that holds both node test summaries and 'PASS parity-check.sh'.\n\nOn a native Windows host, the equivalent is `node --test scripts/tests/intent-journal.test.mjs` followed by the parity check. No npm build or npm test is needed, and per the rails none may run in the shared checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate rc=0: Linux node 3 pass/3 skip (pwsh absent in WSL); Windows node.exe 9/9 pass, 0 skipped (Git Bash, PS 5.1, pwsh 7); PASS parity-check.sh.",
+      "startedAt": "2026-11-02T22:35:17.251Z",
+      "completedAt": "2026-11-02T22:35:29.641Z"
     },
     {
       "stepId": "step-4",
       "description": "Adversarial self-review of this task's own diff: scripts/moe-agent.ps1, .github/workflows/ci.yml and the new test. Check each point, then record the findings in the final step note.\n(1) The ps1 diff is exactly one argument plus one comment line. The BOM is intact and no other bytes changed.\n(2) Write-MoeIntentJournal is still called only under verified-local, so legacy landings never reach it. CQ-V08's pre-freeze MOE_COMMIT_REFUSED_UNRECONCILED_INTENT refusal still runs before any write, so a stale unreconciled journal still refuses the landing rather than being overwritten. The overwrite that is reachable today is a CAS retry after the failed-CAS `Remove-Item ... -ErrorAction SilentlyContinue` silently failed, for example on a Windows sharing violation. Overwriting there is correct, because that journal is this landing's own intent and its ref never moved; sh already does the same.\n(3) The test slices the real functions and fails if a marker moves. Cleanup runs in t.after even on failure, the test never writes inside the repo, and the PowerShell cases really ran (0 skipped in the node.exe run).\n(4) Concurrency: tmp names carry $PID / os.getpid(), so two writers never share a tmp file.\n(5) Null, empty and huge inputs: an empty path still returns $false / 1 before any write (unchanged).",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        ".github/workflows/ci.yml",
+        "scripts/tests/intent-journal.test.mjs"
+      ],
+      "note": "Self-review: (1) ps1 diff = one argument + 2 comment lines (the plan said one; the second is a wrap), BOM intact, 0 CR. (2) The only caller stays inside the verified-local branch; V08's pre-freeze unreconciled-journal refusal is untouched; sh unmodified. (3) The test slices the real functions (asserts markers), cleans up in t.after, writes only to tmpdir, and PS cases ran (0 skipped under node.exe). (4) tmp names carry $PID. (5) Empty path still returns $false before any write. No defects found.",
+      "startedAt": "2026-11-02T22:35:30.471Z",
+      "completedAt": "2026-11-02T22:35:38.874Z"
     }
   ],
   "planRevision": 1,
-  "status": "WORKING",
+  "status": "ARCHIVED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -51,15 +75,21 @@
   "parentTaskId": null,
   "dependsOn": [
     "task-2720c13bc79b438e840b14cbba4fea50",
-    "task-f58c7c75e2f7401fbd8648817d343a6b",
-    "task-faa4d9ef330f4ef7900a00bd2b7dc049"
+    "task-f58c7c75e2f7401fbd8648817d343a6b"
   ],
   "priority": "LOW",
   "order": 285.5,
-  "comments": [],
+  "comments": [
+    {
+      "id": "comment-be1cd3d3059f4cf8a8291f8a0e1fd98a",
+      "author": "governor-e6b40560",
+      "content": "GOVERNOR RULING (19:42Z), the same as on 414eae5a (comment-4908ce55). Any plan text here that requires an atomic whole-file save of scripts/moe-agent.{sh,ps1} (\"a running seat hot-reloads it… never edit in place\") is moot in worktree mode. Your .worktrees/<taskId> copy is executed by no seat, because seats run the control checkout's committed bytes, which change only by fast-forward at landing.\nEdit W's copy in place with your session's TOOL-witnessed editor (Edit/Write, apply_patch or Serena), never by shell writes. Then run `bash -n` or the PowerShell parser on it. QA: read the plan's editing rule as this ruling.",
+      "timestamp": "2026-11-02T19:41:19.936Z"
+    }
+  ],
   "hasPendingQuestion": false,
   "createdAt": "2026-10-31T14:18:10.500Z",
-  "updatedAt": "2026-10-31T17:07:33.701Z",
+  "updatedAt": "2026-11-04T19:20:42.866Z",
   "planningEntry": {
     "from": "BACKLOG",
     "at": "2026-10-31T15:03:15.203Z",
@@ -68,16 +98,26 @@
   "metrics": {
     "firstClaimAt": "2026-10-31T15:05:14.015Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T01:03:34.186Z",
+    "wallClockMs": 208700171
   },
   "contextFetchedBy": [
-    "architect-8419009e"
+    "architect-8419009e",
+    "worker-8cf0816c",
+    "qa-af7be174"
   ],
   "tier": "standard",
   "effort": "high",
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-10-31T15:14:57.647Z",
   "executionContract": {
@@ -145,7 +185,44 @@
     "outcome": "nothing",
     "kind": "checkpoint",
     "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
-    "sessionId": "architect-8419009e@2026-10-31T15:05:16Z",
-    "at": "2026-10-31T15:27:23.972Z"
-  }
+    "sessionId": "qa-af7be174@2026-11-03T01:02:14Z",
+    "at": "2026-11-03T01:04:02.944Z"
+  },
+  "workStartedAt": "2026-11-02T22:34:20.765Z",
+  "reviewStartedAt": "2026-11-02T22:35:42.904Z",
+  "verification": {
+    "command": "node --test scripts/tests/intent-journal.test.mjs && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/intent-journal.test.mjs && bash scripts/tests/parity-check.sh",
+    "exitCode": 0,
+    "outputTail": "✔ powershell: intent journal overwrite (440ms)\n✔ powershell: intent journal create\n✔ powershell: intent journal directory\n✔ pwsh: intent journal overwrite (468ms)\n✔ pwsh: intent journal create\n✔ pwsh: intent journal directory\nℹ tests 9\nℹ pass 9\nℹ fail 0\nℹ skipped 0\n(Linux node: tests 6, pass 3, skipped 3 - pwsh absent in WSL)\nPASS parity-check.sh",
+    "reportedAt": "2026-11-02T22:35:42.904Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/intent-journal.test.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/moe-agent.ps1"
+  ],
+  "completionSummary": "Write-MoeIntentJournal now overwrites an existing journal: File.Replace's backup argument is [NullString]::Value instead of $null (which binds as \"\" and always threw), so strong-profile overwrites return $true instead of refusing with MOE_COMMIT_REFUSED_INTENT_UNWRITABLE. File.Replace atomicity is kept. New scripts/tests/intent-journal.test.mjs slices the real ps1 and sh writers and runs overwrite/create/directory cases on bash, PS 5.1 and pwsh 7; wired into ci.yml. Red before the fix: only the powershell and pwsh overwrite cases failed. After: node.exe 9/9 pass, 0 skipped; Linux node 3 pass (pwsh cases skip in WSL); parity-check PASS. moe-agent.sh untouched; ps1 BOM and LF kept.",
+  "commits": [
+    {
+      "sha": "091c7dd03f16f5679d209095fd000fc39f227b46",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T22:33:12Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/intent-journal.test.mjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T22:36:39.097Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "completedAt": "2026-11-03T01:03:34.186Z",
+  "reviewCompletedAt": "2026-11-03T01:03:34.186Z",
+  "reviewSummary": "Reviewed completion 091c7dd0 (on moe/control and moe/work-2026-10-24; 3 paths, +98/-3, well under the 400 LOC cap). Diff read from git show, not the dirty tree. Re-ran task.verification on a git-archive snapshot of 091c7dd0 (scripts/ + .github/, outside the repo): Linux node --test intent-journal.test.mjs = 3 pass / 3 skip (pwsh absent in WSL); Windows node.exe = 9/9 pass, 0 skipped (Git Bash, PowerShell 5.1, pwsh 7); bash scripts/tests/parity-check.sh = PASS. Mutation check in a scratch copy with the old `$null` restored: exactly the 'powershell: intent journal overwrite' and 'pwsh: intent journal overwrite' cases fail (7 pass / 2 fail); every bash, create and directory case still passes, so the test catches the bug and the fix is the only thing that turns it green. Contract items checked: (1) ps1 hunk is one argument ($null -> [NullString]::Value) plus a 2-line comment; File.Replace atomicity, WriteThrough+Flush($true) tmp and the catch (tmp removed, returns $false) are unchanged; no Move-Item -Force. (2) Overwrite and create assert exact RESULT line, no BOM, JSON-equal (ps) / byte-equal (sh) and readdir == ['task-fixture.json'] (no tmp or backup). (3) Directory case asserts fail-closed, dir untouched and empty, no tmp. (4) moe-agent.sh not modified (git diff on it empty). (5) moe-agent.ps1 at the commit keeps its UTF-8 BOM, 0 CR bytes. (6) ci.yml hunk only appends intent-journal.test.mjs to the 'Test agent runtime discovery' node --test list. Test slices the real functions (marker-asserting), cleans up in t.after, writes only to tmpdir. Routed file-collision notice acked in chan-421a621d: this commit touches only this task's own lines in the shared ps1/ci.yml. Not verified: pwsh cases cannot run inside WSL itself, covered by the Windows node.exe run. Complexity pass: nothing to delete.",
+  "requiredCheckAtDone": null
 }

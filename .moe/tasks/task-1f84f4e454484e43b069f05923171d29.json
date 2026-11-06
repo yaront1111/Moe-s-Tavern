@@ -1,0 +1,245 @@
+{
+  "id": "task-1f84f4e454484e43b069f05923171d29",
+  "epicId": "epic-be924fb8",
+  "title": "bug: LogRotator.rotate() deletes the oldest activity-log generation and shifts the rest before it compresses the live log, so a failed or timed-out compression (a full disk, a locked file) leaves a 0-byte activity.log.1.gz, and since every append retries the rotation, five appends while it keeps failing wipe all five retained generations",
+  "description": "Filed by defect hunt #15 (task-928a468d), lane 3 (state persistence and the activity log). Verified at HEAD d5431577 in a git-archive snapshot outside the shared checkout.\n\nPROBLEM\n- packages/moe-daemon/src/util/LogRotator.ts rotate() changes the generation chain before the new generation exists:\n  - it unlinks activity.log.<retentionCount>.gz (:91-94);\n  - it renames each .<i>.gz to .<i+1>.gz (:97-103);\n  - only then does it compress the live log into .1.gz (:107) and truncate the live log (:110).\n- When compressFile rejects, the chain is already damaged. compressFile rejects on a read, gzip or write stream error, such as ENOSPC or a Windows EPERM/EBUSY on the destination, and on the 30 s COMPRESSION_TIMEOUT_MS (:161-166). After that:\n  - rejectOnce destroys the streams but never unlinks the partial destination (:139-159), so a 0-byte or truncated .1.gz stays behind;\n  - the oldest generation is already deleted;\n  - the live log is not truncated.\n- rotateIfNeeded swallows the error and returns false (:71-74). But appendActivity calls it before EVERY append, inside the activity mutex (state/activityLog.ts:100-102). While the failure persists, each appended event repeats the whole cycle: one more good generation is deleted and replaced by a partial one, and the full live log is re-read and re-gzipped.\n\nCONTRACT\n- docs/MCP_SERVER.md:3167 (### moe.get_activity_log): \"rotation keeps `LOG_RETENTION_COUNT` (default 5) generations\".\n- docs/CONFIGURATION.md:21: LOG_RETENTION_COUNT is the \"Number of rotated logs to keep\".\n- state/activityLog.ts:203 relies on it: \"LogRotator (util/LogRotator.ts) keeps activity.log.<n>.gz, newest n=1, contiguous\". get_activity_log reads those generations (05a77c0d), and its reader stops at the first missing one (activityLog.ts:221).\n- Sibling contract for the same class of write: util/atomicWrite.ts:11, \"On any failure the temp file is cleaned up rather than leaked\". atomicWrite never touches the target until the new bytes are fsynced.\n\nEVIDENCE\n- Repro: /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_rotateFailure.test.ts. Copy it into packages/moe-daemon/src/__hunt__/ of a d5431577 snapshot and run `npx vitest run src/__hunt__/zzHuntMe_rotateFailure.test.ts`.\n- The test seeds activity.log.1-5.gz with gen-1 to gen-5 and a live log over the 1 MB threshold. It mocks zlib.createGzip with a stream that fails its first chunk with ENOSPC, then calls rotateIfNeeded(). Result: 2 failed.\n  - One failed rotation: expected [gen-1 … gen-5]; received [\"<unreadable 0B>\", \"gen-1\", \"gen-2\", \"gen-3\", \"gen-4\"]. gen-5 is deleted and a 0-byte .1.gz is left behind.\n  - Five failing appends: received [\"<unreadable 0B>\" ×5]. createGzip was called 5 times, one full re-compress per append.\n- Output: /mnt/d/moe-scratch/hunt-928a468d/me/rotateFailure.vitest.txt\n- Exposure: the live board's five generations are intact today (gzip -t OK on .moe/activity.log.1-5.gz, which span 2026-11-01T11:33Z to now). So this is a guard gap, not a live incident. The trigger is a full disk or a locked file during a rotation, which happens every ~10 MB, about twice a day at today's volume.\n\nFIX DIRECTION\n- Compress the live log to a temp file next to it first.\n- Only after the gzip stream finishes: unlink the oldest generation, shift the rest, rename the temp to .1.gz, and truncate the live log.\n- On any compression failure, unlink the temp and leave the chain and the live log untouched.\n- Optionally, skip the rotation attempt for a short interval after a failure, so a persistent failure doesn't re-gzip the whole live log on every append under the activity mutex.\n- The existing compressFile tests (util/LogRotator.test.ts) keep passing.\n\nFILES\n- packages/moe-daemon/src/util/LogRotator.ts\n- packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts (new)\n- docs/MCP_SERVER.md: sync your own section, `### moe.get_activity_log`. Next to the :3167 retention sentence, or as a Notes bullet, say that a failed rotation keeps every generation and the live log.\n\nPlacement: no open row holds these files at filing time.",
+  "definitionOfDone": [
+    "With zlib.createGzip mocked to fail, one LogRotator.rotateIfNeeded() over a seeded activity.log.1-5.gz chain leaves every .N.gz decompressing to its seeded content in place, the live activity.log byte-identical, and no other new file in the directory (new test file packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts)",
+    "Five consecutive failing rotateIfNeeded() calls still leave all five seeded generations readable in place, and a later successful rotateIfNeeded() writes the live content to .1.gz, shifts the seeded generations to .2-.5 dropping the oldest, and truncates the live log (same test file)",
+    "docs/MCP_SERVER.md's ### moe.get_activity_log section states that a failed rotation keeps every generation and the live log",
+    "`cd packages/moe-daemon && npx vitest run src/util/LogRotator.rotateFailure.test.ts src/util/LogRotator.test.ts src/state/activityLog.rotation.test.ts` passes, run in a snapshot outside the shared checkout"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Runtime (DoD 1, DoD 2): make LogRotator.rotate() compress first, and change the generations only after the compressed copy is complete. All edits are in packages/moe-daemon/src/util/LogRotator.ts.\n(1) rotate(). The temporary file is path.join(dir, `${baseName}.rotating.tmp`). It sits next to the log, never matches the reader's activity.log.<n>.gz pattern (state/activityLog.ts readActivityTail), and is covered by .gitignore's `.moe/activity.log*`. Order:\n  a. Remove a leftover temp: fs.rmSync with force, because a crash may have left one.\n  b. `await this.compressFile(this.logPath, pending)`.\n  c. For i = retentionCount-1 down to 1, rename an existing .i.gz to .(i+1).gz. renameSync replaces its target on POSIX and on Windows (libuv MoveFileEx REPLACE_EXISTING). So the first rename drops the oldest generation, and the explicit unlink of .retentionCount.gz goes away: a failed first rename now loses nothing.\n  d. Rename the temp to .1.gz.\n  e. Truncate the live log.\n  Wrap that whole sequence in one try/catch. On any throw, remove the temp (rmSync force) inside its own try/catch that only logs a cleanup failure at warn, then rethrow the ORIGINAL error. compressFile itself is unchanged, and its tests in util/LogRotator.test.ts must keep passing as they are. Update rotate()'s doc comment to the new order.\n(2) rotateIfNeeded(). Add `export const ROTATION_RETRY_DELAY_MS = 60_000` and a private `retryAfter = 0` (epoch ms). At the top: `if (Date.now() < this.retryAfter) return false;`. In the existing catch, set `this.retryAfter = Date.now() + ROTATION_RETRY_DELAY_MS` and add retryInMs to the existing error log. Success, a missing log and a log under the threshold behave exactly as today. rotateIfNeeded still never throws: appendActivity (state/activityLog.ts:96-102) calls it under the activity mutex before every append and relies on that.\nError handling: every failure path ends in the same catch: a compression error or timeout, a failed rename, a failed truncate. The temp is removed, the original error is rethrown and logged by rotateIfNeeded, and the next attempt waits ROTATION_RETRY_DELAY_MS. Keep the change small (about +30/-15 lines). Edit with your own editor tool (Edit on Claude, apply_patch on codex exec), never a shell write (project rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "note": "rotate() now compresses to activity.log.rotating.tmp first; shifts via rename-replace (no explicit unlink of the oldest), renames tmp to .1.gz, truncates live; any failure removes tmp (warn-only cleanup) and rethrows the original error. rotateIfNeeded gains exported ROTATION_RETRY_DELAY_MS=60_000 and private retryAfter; a failure arms it, and a call inside the window returns false without compressing. compressFile/getRotatedLogs untouched.",
+      "startedAt": "2026-11-04T00:28:13.907Z",
+      "completedAt": "2026-11-04T00:29:10.743Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Tests: create packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts (vitest) with exactly four rows, named starting with '(f1)' to '(f4)'. The gate requires the line '(4 tests)'.\nBase the helpers on /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_rotateFailure.test.ts (seed, generations, failingGzip):\n- a mkdtemp dir per test, removed in afterEach together with vi.restoreAllMocks();\n- activity.log.1-5.gz holding gzipSync(`gen-<n>\\n`);\n- a live activity.log over the threshold of `new LogRotator(logPath, { maxSizeMB: 0.0001, retentionCount: 5 })`, which is about 105 bytes;\n- `vi.spyOn(zlib, 'createGzip').mockImplementation(failingGzip)`, where failingGzip is a Transform whose first chunk fails with an Error whose code is 'ENOSPC';\n- a fake clock, `let now = 1_700_000_000_000; vi.spyOn(Date, 'now').mockImplementation(() => now)`, stepped by the imported ROTATION_RETRY_DELAY_MS + 1. Never use vi.useFakeTimers: it would also take over the timers compressFile's real streams depend on.\nAssert exact values: the seeded live-log Buffer `.equals()` the file afterwards, `fs.readdirSync(dir).sort()` equals the seeded listing, and each generation decompresses to its seeded text.\n(f1) DoD 1: one failing rotateIfNeeded() returns false. .1-.5 still decompress to gen-1..gen-5 in place, the live log is byte-identical, and the directory holds no other file (no temp left).\n(f2) DoD 2: five failing calls, with the clock stepped past the delay before each, so createGzip is called 5 times. All five generations, the live log and the listing are unchanged after every call. Then restore createGzip (mockRestore on its spy) and step the clock: rotateIfNeeded() returns true. .1.gz decompresses to the seeded live content and .2-.5 to gen-1..gen-4. No file holds gen-5, the live log is 0 bytes, and the listing is activity.log plus .1-.5.gz only.\n(f3) Retry delay: after one failure, a call before the delay has passed returns false without compressing (createGzip still called once). A call after it compresses again (twice).\n(f4) Failure after a partial write, the timeout path (compressFile's rejectOnce never removes its destination): spy `(rotator as any).compressFile` with an implementation that writes 'partial' to its destination argument and then rejects with Error('Compression timed out after 30000ms'). The destination it received is in the log's directory and is no activity.log.<n>.gz name. Afterwards the generations, the live log and the listing are unchanged: the partial file is gone.\nAll four rows must fail against today's LogRotator.ts; step 5 proves it. For error handling in the test itself: nothing may swallow a failed assertion. A vi.spyOn on logger.error to keep the output quiet is optional. Create the file with your own editor tool (Write on Claude, apply_patch on codex exec).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts"
+      ],
+      "note": "Created LogRotator.rotateFailure.test.ts with rows (f1)-(f4): one failing rotation, five failing then one success, retry delay via a Date.now spy (no fake timers), partial-write timeout path via a compressFile spy. Executed in step 4's snapshot gate.",
+      "startedAt": "2026-11-04T00:29:12.341Z",
+      "completedAt": "2026-11-04T00:29:17.619Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (DoD 3): in docs/MCP_SERVER.md, section `### moe.get_activity_log`, add one Notes bullet right after '- Filtered queries scan at most 5000 recent lines; older matches are not returned'. Suggested text: '- Reads cover the live `activity.log` and its rotated `activity.log.<n>.gz` generations (newest `n=1`); rotation keeps `LOG_RETENTION_COUNT` (default 5) of them. A rotation compresses the live log to a temporary file first and changes the generations only once that file is complete, so a failed or timed-out compression (a full disk, a locked file) keeps every generation and the live log, removes the temporary file, and is not retried for 60 s.' Keep it consistent with step 1. Touch only this hunk: three open rows (task-87cba58c, task-21702095, task-e44fbbf3) edit other sections of this file. Use your own editor tool (Edit on Claude, apply_patch on codex exec), never Serena (it ignores docs/) and never a shell write. Error handling: none applies to a docs edit; the gate's tests do not read this file.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Added one Notes bullet to ### moe.get_activity_log (after the Filtered queries bullet): a failed rotation keeps every generation and the live log, removes the temp file, not retried for 60 s. No other hunk touched.",
+      "startedAt": "2026-11-04T00:29:20.445Z",
+      "completedAt": "2026-11-04T00:29:28.151Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once. From the task worktree root, run exactly the command in executionContract.checkRefs. It is the complete_task evidence, and QA re-runs it:\n( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m1f8.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && for f in src/util/LogRotator.ts src/util/LogRotator.rotateFailure.test.ts; do cp \"$R/packages/moe-daemon/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/util/LogRotator.rotateFailure.test.ts src/util/LogRotator.test.ts src/state/activityLog.rotation.test.ts' > ../v.log 2>&1 || { echo \"$S\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; echo \"($S)\"; grep -aqE ' ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(4 tests\\)' ../v.log )\nWhat it does:\n- archives HEAD's packages/moe-daemon (the three test files read nothing outside the package);\n- overlays your two daemon files, because your edits may still be uncommitted;\n- runs npm ci, then `npx tsc --noEmit` (which type-checks LogRotator.ts; tsc excludes test files), then the DoD's three vitest files, under env -i with nvm Node v24.21.0;\n- requires the new file's line ' ✓ src/util/LogRotator.rotateFailure.test.ts (4 tests)'.\nThe architect dry-ran it at 0f56d3a7 with four placeholder rows: 3 files and 15 tests passed, exit 0. Never run npm in the shared checkout (project rail).\nError handling for a red run: the command prints the snapshot dir and the log tail. Read <dir>/v.log, fix the cause in the worktree, and re-run the whole command; never edit the snapshot. Afterwards, remove the /tmp/m1f8.* dir it printed, by its literal path.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Snapshot gate green, exit 0: LogRotator.test.ts (3), LogRotator.rotateFailure.test.ts (4), activityLog.rotation.test.ts (8); 3 files / 15 tests passed; tsc --noEmit clean. The ' ✓ src/util/LogRotator.rotateFailure.test.ts (4 tests)' line matched. Snapshot dir removed.",
+      "startedAt": "2026-11-04T00:29:29.165Z",
+      "completedAt": "2026-11-04T00:29:41.103Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's own diff, as the last step (load the adversarial-self-review skill).\n(1) RED proof. Run this command, which tests the merge-base's LogRotator.ts with your new test file:\n( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && S=$(mktemp -d /tmp/r1f8.XXXX) && git -C \"$R\" archive \"$B\" packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && cp \"$R/packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts\" src/util/ && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund >/dev/null 2>&1; npx vitest run src/util/LogRotator.rotateFailure.test.ts' > ../red.log 2>&1; grep -aE '^ +(Test Files|Tests) ' ../red.log; echo \"($S)\" )\nIt must print 'Tests  4 failed (4)'. A row that passes on the old rotator proves nothing: tighten it. Paste that output into the completion summary, then remove the /tmp/r1f8.* dir it printed.\n(2) Walk each failure path:\n- a compression error, and a timeout;\n- a rename failure mid-shift: the chain is shifted, the live log is kept and the temp is removed. This is a pre-existing class and out of scope; say so;\n- a truncate failure: duplicates until the next rotation, also pre-existing;\n- a leftover temp from a crash: removed at the next attempt;\n- Windows: renameSync replaces its target; rmSync on the file of a stream that was just destroyed;\n- retentionCount 1, and a gap in the chain.\n(3) Confirm that compressFile and util/LogRotator.test.ts are unchanged, that rotateIfNeeded can never throw, that no added line contains a project.json globalRails.forbiddenPatterns string, and that the docs hunk is the only change in docs/MCP_SERVER.md.\nIf anything changes, re-run step 4 and use that fresh output as the complete_task evidence.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Review only, no file changed. RED proof (merge-base LogRotator.ts + new test file): \"Test Files 1 failed (1) / Tests 4 failed (4)\". Rows f2/f3 failed there partly because the old file lacks ROTATION_RETRY_DELAY_MS (NaN clock), so I re-ran in the scratch snapshot with only that constant added to the old file: still 4 failed for the real reasons (f1/f2 \"unexpected end of file\" = 0-byte .1.gz, f3 createGzip 2x, f4 dest is activity.log.1.gz). Walked: compression error/timeout (f1/f4); rename failure mid-shift and truncate failure are pre-existing classes, out of scope (temp removed, original error rethrown, live log kept; a mid-shift failure leaves .1 missing until the next attempt, truncate failure duplicates once); crash leftover temp removed by rmSync at the start of rotate(); Windows renameSync replaces target, a failing rmSync is caught, warned, and the original error rethrown; retentionCount 1: shift loop skipped, temp renamed over .1.gz; chain gap unchanged. Theoretical: system clock jumping back delays the next rotation (log grows, no data loss); destination open racing a destroyed stream could leave an empty temp, removed next attempt, gitignored. rotateIfNeeded cannot throw (Date.now, existsSync outside try cannot throw; stat+rotate inside); only caller is appendActivity under the activity mutex. compressFile, getRotatedLogs, util/LogRotator.test.ts unchanged; no forbidden pattern in added lines; docs diff is one hunk in ### moe.get_activity_log.",
+      "startedAt": "2026-11-04T00:29:41.998Z",
+      "completedAt": "2026-11-04T05:27:03.126Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 468.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T23:59:48.386Z",
+  "updatedAt": "2026-11-04T19:20:45.091Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T00:19:13.055Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T05:50:06.535Z",
+    "wallClockMs": 19853480
+  },
+  "contextFetchedBy": [
+    "architect-74d9e1c7",
+    "worker-d6c1cb7a",
+    "worker-a0305b0b",
+    "qa-1cd86a39"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T00:26:56.799Z",
+  "executionContract": {
+    "intendedBehavior": "LogRotator.rotate() first compresses the live activity.log into a temporary file next to it (activity.log.rotating.tmp). It changes the generation chain only after that file is complete: each existing activity.log.<i>.gz moves to <i+1> (each rename replaces its target, so the first drops the oldest), the temporary file becomes activity.log.1.gz, and only then is the live log truncated. Any failure in that sequence removes the temporary file and rethrows, so a failed or timed-out compression leaves every generation and the live log exactly as they were. rotateIfNeeded still swallows the error and returns false. After a failure it skips further attempts for ROTATION_RETRY_DELAY_MS (60 s), so a persistent failure no longer re-reads and re-gzips the whole live log on every append under the activity mutex.",
+    "acceptanceCriteria": [
+      "(f1) One failing rotation keeps .1-.5.gz in place with their seeded content and the live log byte-identical, and leaves no other file in the directory (DoD 1).",
+      "(f2) Five failing rotations, each really attempted, keep everything. A later successful one writes the live content to .1.gz, shifts the seeded generations to .2-.5 dropping the oldest, and truncates the live log (DoD 2).",
+      "(f3) After a failure, rotateIfNeeded does not compress again until ROTATION_RETRY_DELAY_MS has passed.",
+      "(f4) A compression that rejects after a partial write (the timeout path) targets only the temporary file and leaves the chain, the live log and the directory listing unchanged.",
+      "docs/MCP_SERVER.md ### moe.get_activity_log states that a failed rotation keeps every generation and the live log (DoD 3).",
+      "The gate (tsc --noEmit plus the DoD's three vitest files in a snapshot) passes, and the new file runs 4 tests (DoD 4)."
+    ],
+    "invariants": [
+      "The generations and the live log change only after a complete compressed copy exists.",
+      "No failed rotation leaves the temporary file behind (a leftover from a crash is removed at the next attempt).",
+      "rotateIfNeeded never throws."
+    ],
+    "compatibility": [
+      "The generation names and order are unchanged (activity.log.<n>.gz, newest n=1, contiguous), so readActivityTail and existing .moe/ state files keep working.",
+      "The temporary name activity.log.rotating.tmp matches .gitignore's `.moe/activity.log*` and never the reader's `.<n>.gz` pattern. FileWatcher ignores top-level .moe files.",
+      "LogRotatorOptions, getRotatedLogs and compressFile are unchanged, and util/LogRotator.test.ts passes unmodified.",
+      "No MCP tool contract changes; the docs bullet is additive."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/util/LogRotator.ts: rotate(), rotateIfNeeded(), a private retryAfter field and an exported ROTATION_RETRY_DELAY_MS. compressFile and getRotatedLogs are unchanged.",
+      "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts (new): rows (f1) to (f4).",
+      "docs/MCP_SERVER.md: one Notes bullet in ### moe.get_activity_log."
+    ],
+    "reuse": [
+      "compressFile as it is (stream pipeline, timeout, cleanup).",
+      "The hunt repro helpers in /mnt/d/moe-scratch/hunt-928a468d/me/zzHuntMe_rotateFailure.test.ts (seed, generations, failingGzip)."
+    ],
+    "sourceAssumptions": [
+      "packages/moe-daemon/src/util/LogRotator.ts:84-113: rotate() unlinks .retentionCount.gz, shifts .i to .i+1, then compresses into .1.gz and truncates. rotateIfNeeded:58-75 swallows every error and returns false. compressFile:118-188 rejects on stream errors and on COMPRESSION_TIMEOUT_MS without removing its destination.",
+      "packages/moe-daemon/src/state/activityLog.ts:96-102: appendActivity calls state.logRotator.rotateIfNeeded() under activityMutex before every append. appendActivityAsync appends under the same mutex. readActivityTail (:211-235) reads `${logPath}.${n}.gz` from n=1 and stops at the first missing generation.",
+      "packages/moe-daemon/src/state/StateManager.ts:1129 constructs the only production LogRotator.",
+      ".gitignore:69 `.moe/activity.log*`. state/FileWatcher.ts ignores top-level files in .moe/."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m1f8.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && for f in src/util/LogRotator.ts src/util/LogRotator.rotateFailure.test.ts; do cp \"$R/packages/moe-daemon/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/util/LogRotator.rotateFailure.test.ts src/util/LogRotator.test.ts src/state/activityLog.rotation.test.ts' > ../v.log 2>&1 || { echo \"$S\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; echo \"($S)\"; grep -aqE ' ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(4 tests\\)' ../v.log )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Compress in memory with gzipSync: rejected, it blocks the event loop on a ~10 MB log. (2) Keep the shift-first order and roll the renames back on failure: rejected, because compress-first reduces the failure path to one unlink. (3) Unlink the oldest generation first, as today, versus rename-replace: chose rename-replace. Both give the same result on success, but a failed first rename then loses nothing. (4) A compaction pass that heals gaps left by a mid-shift rename failure: out of scope, since it needs a rename to fail, not the compression. (5) The retry delay as a constructor option versus an exported constant: chose the constant; tests drive Date.now through vi.spyOn.",
+    "codebaseInsights": "Every activity append runs rotateIfNeeded first, under the activity mutex, so without the retry delay a persistent failure re-gzips the whole live log once per event. With the 30 s compression timeout, that can also stall the queue past its 1000-pending backpressure limit. The reader stops at the first missing generation, so keeping the chain contiguous matters as much as keeping the bytes. LogRotator imports zlib's default export and calls zlib.createGzip at call time, so vi.spyOn(zlib, 'createGzip') reaches it.",
+    "risks": "(a) A theoretical race: if the destination stream's open had not finished when the compression failed, the cleanup could run first and leave an empty temp. That is harmless (gitignored, not a generation name) and removed by the next attempt; in the test the gzip fails only after the source was read, so the open has finished. (b) A rename failing mid-shift or a truncate failing are pre-existing failure classes; they do not lose the live log, and are out of scope. (c) Tests must not use vi.useFakeTimers; Date.now via vi.spyOn is enough. (d) vitest's restoreAllMocks restores the Date.now and createGzip spies between tests. (e) docs/MCP_SERVER.md is also edited by three open rows: touch only this section's bullet.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/LogRotator.ts",
+      "packages/moe-daemon/src/util/LogRotator.test.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "packages/moe-daemon/src/state/activityLog.rotation.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "8ca6a40bbda169dea598b087c4809d990e1db30b",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T00:26:56.847Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T00:28:13.907Z",
+  "commits": [
+    {
+      "sha": "0bbf0e405dd2328e80e27a17089c78287059e1ae",
+      "ref": "refs/heads/moe/task/task-1f84f4e454484e43b069f05923171d29",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T05:23:55Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T05:24:36.296Z",
+      "treeId": "a46975b764ca7d2c25da72ebd73574225ceba2de",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "d4a387efa8a01c0e20d5555f6902acfda24e27fc",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a0305b0b@2026-11-04T05:23:55Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "recordedBy": "worker-a0305b0b",
+      "recordedAt": "2026-11-04T05:48:20.298Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "packages/moe-daemon/src/util/LogRotator.ts",
+    "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-1cd86a39@2026-11-04T05:48:26Z",
+    "at": "2026-11-04T05:50:25.788Z"
+  },
+  "reviewStartedAt": "2026-11-04T05:27:30.914Z",
+  "verification": {
+    "command": "( set -o pipefail; R=$(git rev-parse --show-toplevel) && S=$(mktemp -d /tmp/m1f8.XXXX) && git -C \"$R\" archive HEAD packages/moe-daemon | tar -x -C \"$S\" && cd \"$S/packages/moe-daemon\" && for f in src/util/LogRotator.ts src/util/LogRotator.rotateFailure.test.ts; do cp \"$R/packages/moe-daemon/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'npm ci --no-audit --no-fund && npx tsc --noEmit && npx vitest run src/util/LogRotator.rotateFailure.test.ts src/util/LogRotator.test.ts src/state/activityLog.rotation.test.ts' > ../v.log 2>&1 || { echo \"$S\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) | ✓ src/' ../v.log; echo \"($S)\"; grep -aqE ' ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(4 tests\\)' ../v.log )",
+    "exitCode": 0,
+    "outputTail": " ✓ src/util/LogRotator.test.ts (3 tests) 13ms\n ✓ src/util/LogRotator.rotateFailure.test.ts (4 tests) 27ms\n ✓ src/state/activityLog.rotation.test.ts (8 tests) 201ms\n Test Files  3 passed (3)\n      Tests  15 passed (15)\n(/tmp/m1f8.FoiA)",
+    "reportedAt": "2026-11-04T05:27:30.914Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "LogRotator.rotate() now compresses the live log to activity.log.rotating.tmp first, and only then shifts the generations (rename-replace, so the first rename drops the oldest), renames tmp to .1.gz and truncates the live log. Any failure removes the tmp (warn-only cleanup) and rethrows the original error, so a failed or timed-out compression leaves every generation and the live log untouched. rotateIfNeeded still swallows the error and returns false; after a failure it skips attempts for ROTATION_RETRY_DELAY_MS (60 s, exported). compressFile, getRotatedLogs and util/LogRotator.test.ts are unchanged. New LogRotator.rotateFailure.test.ts has 4 rows: f1 one failing rotation, f2 five failing then a success, f3 retry delay, f4 partial write then reject. docs/MCP_SERVER.md: one Notes bullet in ### moe.get_activity_log. Gate (snapshot, fresh): tsc clean; LogRotator.test.ts 3, LogRotator.rotateFailure.test.ts 4, activityLog.rotation.test.ts 8; 3 files / 15 tests passed. RED proof at merge-base with the new test file: \"Test Files 1 failed (1) / Tests 4 failed (4)\". With only the missing ROTATION_RETRY_DELAY_MS export added to the old file it is still 4 failed, for the real reasons (0-byte .1.gz, createGzip 2x, dest named .1.gz). Out of scope, pre-existing: a rename failing mid-shift, a truncate failure.",
+  "completedAt": "2026-11-04T05:50:06.535Z",
+  "reviewCompletedAt": "2026-11-04T05:50:06.535Z",
+  "reviewSummary": "Reviewed completion d4a387ef (on moe/work-2026-10-24; +200/-24, 3 files, net 176, under the 400 cap; working tree identical to the commit for them).\n\nRe-ran task.verification in a fresh /tmp snapshot (git archive HEAD + overlay, env -i, Node 24.21.0, npm ci, tsc --noEmit, vitest): exit 0, tsc clean, LogRotator.test.ts 3 + rotateFailure 4 + activityLog.rotation 8 = 15 passed; the '(4 tests)' line matched. Mutation check in the snapshot: parent LogRotator.rotateFailure-less rotator plus only the ROTATION_RETRY_DELAY_MS export gives 4 failed (4) for the real reasons (0-byte .1.gz, createGzip 2x, dest named .1.gz). Snapshot removed; nothing run in the shared checkout.\n\nDoD 1 (f1): one failing rotateIfNeeded() returns false; .1-.5.gz decompress to seeded gen-N, live log byte-identical, listing unchanged. DoD 2 (f2): five failing calls keep everything (createGzip x5); a later success writes live content to .1.gz, shifts gen-1..4 to .2-.5, drops gen-5, truncates live. DoD 3: one added Notes bullet in ### moe.get_activity_log (failed rotation keeps every generation and the live log, no retry for 60 s); no other docs hunk. DoD 4: command above.\n\nCode: rotate() compresses to activity.log.rotating.tmp first, shifts by rename-replace, tmp -> .1.gz, then truncates; any failure removes the tmp (cleanup failure only warned) and rethrows the original error; a crash-leftover tmp is removed at the start. rotateIfNeeded arms retryAfter and never throws. compressFile, getRotatedLogs and LogRotator.test.ts unchanged. No forbidden pattern; exact-value asserts; Date.now spy, not fake timers.\n\nAccepted, pre-existing: rename failing mid-shift leaves .1 missing until the next attempt; truncate failure duplicates live content once; a chain gap leaves a stale .<retention>.gz; a backwards clock jump delays rotation. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,200 @@
+{
+  "id": "task-649f34ddde5b4950ba2f5dd346589e6c",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/tests/seat-registration.test.mjs throws at import at the tip (\"missing boundaries:     MOE_SKIP_LAUNCH=false\"), because 3586957f (task-1ccae85c) rewrote that moe-agent.sh line as `MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false`, so none of its 58 bash and PowerShell seat re-registration cases run and CI's \"Test launcher daemon.json cap and seat re-registration\" step is red on Linux and Windows",
+  "description": "Filed by hunt #20 (task-9f3eac6d, a CI dry run of moe/work-2026-10-24 at bc4793cf).\n\nPROBLEM\n- seat-registration.test.mjs builds `SEGMENTS` (:80-101) at module top. Each entry is a real launcher slice, cut between two boundary strings by `between()` (:18-23), which asserts that both boundaries exist.\n- The sh `decide` slice (:86) starts at `'    MOE_SKIP_LAUNCH=false\\n'`.\n- 3586957f (task-1ccae85c, CQ-M epic, DONE, 2026-11-04 00:29, \"Bash VM taskless skip prints a second misleading idle reason\") changed that line to `    MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false`, which is moe-agent.sh:11185 at bc4793cf.\n  - `git show 3586957f^:scripts/moe-agent.sh | grep -c '^    MOE_SKIP_LAUNCH=false$'` gives 1; at bc4793cf it gives 0.\n- So `between` throws during import, node --test reports the whole file as one failed test, and none of its 58 cases run. They include the bash and pwsh 7 rows of the pruned/DEAD idle-seat re-join path (task-8333866a), plus the PowerShell 5.1 rows on Windows.\n- 1ccae85c's verification ran only parity-check.sh and postflight-vm-route.sh.\n- Every other boundary still matches. I checked all 14 against bc4793cf with a copy that logs misses instead of asserting: only this one is missing. 62ec51f1's WIP branch (80879746) also keeps every ps1 boundary.\n\nEVIDENCE (HEAD bc4793cf, Linux snapshot, pwsh 7.6.9 on PATH, every MOE_* var cleared)\n- CI dry run, step \"Test launcher daemon.json cap and seat re-registration\": exit 1 (tests 111, pass 73, fail 1, skipped 37). Log: /mnt/d/moe-scratch/hunt-9f3eac6d/ci/j4/13-daemon-json-cap-seat-reg.log\n    AssertionError [ERR_ASSERTION]: missing boundaries:     MOE_SKIP_LAUNCH=false\n     /     if [ \"$MOE_SKIP_LAUNCH\" != true ] && { [ \"$CLI_TYPE\" = claude ]\n        at between (file:///.../scripts/tests/seat-registration.test.mjs:21:10)\n        at file:///.../scripts/tests/seat-registration.test.mjs:86:13\n    ✖ scripts/tests/seat-registration.test.mjs (33.596251ms)\n      'test failed'\n- With only that boundary changed to `'    MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false\\n'`, the file gives tests 58, pass 38, skipped 19 (PowerShell 5.1, Windows-only).\n  - Its single failure, \"CI runs this suite on Linux and Windows\", is an artifact of the renamed copy.\n  - Copies in /mnt/d/moe-scratch/hunt-9f3eac6d/seatreg/: seat-registration.segcheck.mjs (the boundary check) and seat-registration.fixed.test.mjs.\n\nFIX DIRECTION\n- Test-only. Re-anchor the sh `decide` start boundary on the current line.\n- Prefer a boundary that tolerates a trailing statement on that line: the prefix `'    MOE_SKIP_LAUNCH=false'` with no `\\n`. Its first occurrence is line 11185.\n- Do the same for the ps1 twin `'    $moeSkipLaunch = $false\\n'` (:93). task-1dfec7a4 (CQ-M, BACKLOG, the ps1 twin of 1ccae85c) is likely to make the same edit to that ps1 line.\n- Do not change moe-agent.sh or moe-agent.ps1.\n\nFILES: scripts/tests/seat-registration.test.mjs only. Not held by any open row (lanes.js -v at 09:12Z).\nPLACEMENT: no dependsOn. task-1dfec7a4's plan should re-run this file; a comment on 1dfec7a4 points here.",
+  "definitionOfDone": [
+    "`node --test scripts/tests/seat-registration.test.mjs` exits 0 in a Linux git-archive snapshot of the fix commit with pwsh 7 on PATH and every MOE_* var unset, reporting at least 38 passing cases with only the PowerShell 5.1 rows skipped.",
+    "The row's diff touches neither scripts/moe-agent.sh nor scripts/moe-agent.ps1, and the sh and ps1 `decide` start boundaries still match when that line carries a trailing `; <statement>` (shown by a case or by running the file against a copy with one appended).",
+    "The CI step command `node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs` exits 0 in that snapshot."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit scripts/tests/seat-registration.test.mjs only, with the Edit tool (TOOL witness). Never touch scripts/moe-agent.sh or scripts/moe-agent.ps1.\n(a) Just above `const SEGMENTS = {` (:80) add:\n```\n// The taskless launch decision's first line, matched as a prefix, not a whole line:\n// 3586957f appended `; VM_TASKLESS_SKIP=false` to the sh one, and the whole-line\n// boundary then threw at import, so none of this file's cases ran.\nconst DECIDE = {\n  sh: ['    MOE_SKIP_LAUNCH=false', '    if [ \"$MOE_SKIP_LAUNCH\" != true ] && { [ \"$CLI_TYPE\" = claude ]'],\n  ps1: ['    $moeSkipLaunch = $false', '    if (-not $moeSkipLaunch -and $cliType -in'],\n};\n```\nThe start strings keep their 4-space indent and drop today's trailing \\n. The end strings are byte-identical to today's.\n(b) :86 becomes `    decide: between(sh, ...DECIDE.sh),` and :97 becomes `    decide: between(ps, ...DECIDE.ps1),`. No other boundary, fixture or case changes.\n(c) Between the first top-level test (:203-215) and `for (const engine of ENGINES) {` (:217) add:\n```\ntest('a statement appended to the decide start line stays in both decide slices', () => {\n  for (const [label, source, [start, end], extra] of [\n    ['sh', sh, DECIDE.sh, '; MOE_FIXTURE_EXTRA=1'],\n    ['ps1', ps, DECIDE.ps1, '; $moeFixtureExtra = 1'],\n  ]) {\n    assert.equal(count(source, start), 1, `${label}: one decide start line`);\n    const eol = source.indexOf('\\n', source.indexOf(start));\n    const appended = source.slice(0, eol) + extra + source.slice(eol);\n    assert.equal(between(appended, start, end), between(source, start, end).replace('\\n', `${extra}\\n`), label);\n  }\n});\n```\nWhy: count === 1 pins 'first occurrence = the decide line', which a prefix needs more than a whole line did. The equality shows the slice still starts on that line, keeps the appended statement and ends at the same end boundary (DoD 2). It is load-bearing: with \\n restored on the ps1 start this case fails 'missing boundaries', and with it restored on the sh start the import throws (the architect checked both in scratch). The sh fixture now also runs `VM_TASKLESS_SKIP=false`, so the outcome slice's `[ \"$VM_TASKLESS_SKIP\" = true ]` branch reads false and every expected reason line stays the same. Error handling is unchanged: between() keeps its assert, so any boundary that goes missing again still fails loudly at import with the boundary named.\nAfter editing, print `git diff -U0 -- scripts/tests/seat-registration.test.mjs` (mem:gotcha-edit-tool-trims-trailing-space). Quick loop from the worktree root (it writes only mkdtemp dirs; the PS 7 rows skip without pwsh, which is fine here): `env $(compgen -e | grep '^MOE_' | sed 's/^/-u /') node --test scripts/tests/seat-registration.test.mjs`.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "note": "Added DECIDE prefix boundaries, two call sites, and the appended-statement case. Quick loop: 59 tests, 0 fail (pwsh absent so PS7 skipped).",
+      "startedAt": "2026-11-04T09:35:04.414Z",
+      "completedAt": "2026-11-04T09:35:37.862Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Run the task's one gate verbatim from the ROOT of your task worktree. It exports HEAD and overlays your uncommitted test edit; at QA time the overlay is a no-op. Run it from the root, because `git archive HEAD` in a subdirectory archives only that subdirectory.\nbash -c 'set -euo pipefail; R=$PWD; S=$(mktemp -d /tmp/moe-649f-XXXXXX); echo \"snapshot=$S\"; git archive HEAD | tar -x -C \"$S\"; cp \"$R/scripts/tests/seat-registration.test.mjs\" \"$S/scripts/tests/\"; mkdir \"$S/pwsh\"; tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C \"$S/pwsh\"; chmod +x \"$S/pwsh/pwsh\"; export PATH=\"$S/pwsh:$PATH\"; unset $(compgen -e | grep \"^MOE_\" || true); cd \"$S\"; for p in moe-daemon moe-proxy; do (cd \"packages/$p\" && npm install --no-audit --no-fund && npm run build) > \"build-$p.log\" 2>&1 || { tail -20 \"build-$p.log\"; exit 1; }; done; rc=0; node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs > seat.tap || rc=$?; tail -8 seat.tap; [ \"$rc\" = 0 ]; grep -qx \"# fail 0\" seat.tap; grep -qx \"# skipped 19\" seat.tap; grep -Eqx \"# pass (3[89]|[4-9][0-9])\" seat.tap; node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs'\nWhat it does, in order:\n- Exports HEAD to a fresh /tmp/moe-649f-* snapshot.\n- Puts pwsh 7.6.9 on PATH from /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz. pwsh is not installed in WSL. If that file is gone, copy /tmp/hunt-9f3e/pwsh.tgz to that path; else download PowerShell 7's linux-x64 tar.gz from its GitHub releases to that path. Never apt-install on the shared host.\n- Unsets every MOE_* var.\n- Builds moe-daemon and moe-proxy inside the snapshot exactly like ci.yml's Build daemon / Build proxy steps. daemon-json-cap's identity and path-contract rows read packages/*/dist; without the build 14 rows fail.\n- Runs seat-registration alone under TAP and asserts exit 0, '# fail 0', '# skipped 19' and '# pass' >= 38 (DoD 1). Skipped 19 means only the PowerShell 5.1 rows; without pwsh it would be 38.\n- Runs CI's exact step command (DoD 3).\nError handling: the gate fails closed under `set -euo pipefail`.\n- A missing pwsh tarball is a tar error, never a silent PS7 skip.\n- A failed build prints its log tail and exits 1.\n- Every count is grep-checked.\nArchitect dry runs at acea850b:\n- With this edit, 85 s: '# tests 59 / # pass 40 / # fail 0 / # skipped 19', then 'tests 169 / pass 113 / fail 0 / skipped 56', exit 0.\n- Unfixed: '# tests 1 / # fail 1', exit 1.\nNever run npm in the worktree or the shared checkout (rail). Put the command verbatim, its exit code and the output tail in complete_task's verification. Then delete the snapshot (about 400 MB) by the literal path it printed as snapshot=.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate passed exit 0: seat-registration 59 tests/40 pass/0 fail/19 skipped; CI step 169 tests/113 pass/0 fail/56 skipped. Snapshot deleted.",
+      "startedAt": "2026-11-04T09:35:40.942Z",
+      "completedAt": "2026-11-04T09:37:25.102Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review, then complete_task with step 2's evidence.\n1. `git status --porcelain` and `git diff --stat` in the worktree name only scripts/tests/seat-registration.test.mjs (DoD 2: no launcher bytes).\n2. The diff is exactly the DECIDE block, the two decide call sites and the new case.\n3. Mutant proofs, in a mkdtemp dir outside the worktree that holds scripts/moe-agent.sh, scripts/moe-agent.ps1, .github/workflows/ci.yml and the edited test at the same relative paths (shell edits are fine there):\n   - Restore \\n on the ps1 DECIDE start and run `node --test --test-name-pattern='decide start line' scripts/tests/seat-registration.test.mjs`. Expect 1 fail, 'missing boundaries:     $moeSkipLaunch = $false'.\n   - Put `git show HEAD:scripts/tests/seat-registration.test.mjs` there and run it. Expect the import to fail with 'missing boundaries:     MOE_SKIP_LAUNCH=false'.\n4. Think it through:\n   - A later `    MOE_SKIP_LAUNCH=false…` or `    $moeSkipLaunch = $false…` line placed above the decide block would make the prefix pick the wrong line. The count === 1 assertion names that case.\n   - Windows CI reads the launchers with CRLF normalized to LF, so the prefixes match the same lines under Git Bash, PS 5.1 and pwsh 7.\n5. If anything changed, re-run step 2's command and use the fresh output. Delete your scratch dirs by literal path. Never pattern-kill (shared-host rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "note": "Self-review: status shows only the test file. Mutants verified: ps1 start with \\n restored fails the new case 'missing boundaries: $moeSkipLaunch = $false'; HEAD's old test fails at import with 'missing boundaries: MOE_SKIP_LAUNCH=false'. count===1 guards a duplicate prefix line. Scratch dirs deleted.",
+      "startedAt": "2026-11-04T09:37:25.957Z",
+      "completedAt": "2026-11-04T09:37:32.365Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 514.7,
+  "comments": [
+    {
+      "id": "comment-3d8bb573469a4db792f74991f771aaf1",
+      "author": "architect-cd0ac706",
+      "content": "Correction from the filer: the ps1 `decide` boundary `'    $moeSkipLaunch = $false\\n'` is at seat-registration.test.mjs:97, not :93 (:93 is the third `funcs` slice). The sh `decide` boundary is at :86, as stated. Both line numbers were re-derived at bc4793cf with `grep -n \"decide: between\" scripts/tests/seat-registration.test.mjs`.",
+      "timestamp": "2026-11-04T09:18:51.698Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T09:13:31.165Z",
+  "updatedAt": "2026-11-04T19:20:45.524Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T09:14:03.891Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T09:43:20.675Z",
+    "wallClockMs": 1756784
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "worker-5772dacf",
+    "qa-25f21f0a"
+  ],
+  "tier": "light",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T09:33:58.387Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/seat-registration.test.mjs imports cleanly again and runs all its cases. The sh and ps1 decide slices start at the taskless launch decision's first line, matched as a prefix. A statement appended to that line therefore stays inside the slice instead of throwing 'missing boundaries' at import. Today that is moe-agent.sh:11185 `MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false`, and likely the ps1 line after task-1dfec7a4. One new case proves both prefixes tolerate an appended statement. No launcher byte changes.",
+    "acceptanceCriteria": [
+      "In a Linux git-archive snapshot of the fix, with pwsh 7 on PATH and every MOE_* var unset, `node --test scripts/tests/seat-registration.test.mjs` exits 0 with '# fail 0', '# skipped 19' (the PowerShell 5.1 rows only) and at least 38 passing (40 expected of 59).",
+      "In that snapshot, after building moe-daemon and moe-proxy as ci.yml does, CI's step command `node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs` exits 0.",
+      "The diff touches only scripts/tests/seat-registration.test.mjs.",
+      "The new case fails with 'missing boundaries' when the ps1 DECIDE start regains its trailing \\n."
+    ],
+    "invariants": [
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 are unchanged",
+      "every other SEGMENTS boundary string, every fixture, every engine case and the 'CI runs this suite on Linux and Windows' guard are unchanged",
+      "the decide end boundaries are unchanged",
+      "between() keeps its assert, so a missing boundary still fails loudly at import"
+    ],
+    "compatibility": [
+      "The Windows CI legs (Git Bash, PS 5.1, pwsh 7) keep running the same slices, because the launchers are read with CRLF normalized to LF before slicing.",
+      ".github/workflows/ci.yml is unchanged."
+    ],
+    "approvedScope": [
+      "DECIDE constant (the sh and ps1 decide start/end boundary pairs) in scripts/tests/seat-registration.test.mjs",
+      "the SEGMENTS.sh.decide and SEGMENTS.ps1.decide call sites",
+      "one new top-level node:test case that uses the existing between() and count() helpers"
+    ],
+    "reuse": [
+      "The existing between() (:18-23) and count() (:190) helpers. No regex boundary helper: a prefix string is enough."
+    ],
+    "sourceAssumptions": [
+      "seat-registration.test.mjs:18-23 between(source, start, end) asserts both boundaries exist and returns source.slice(from, to). SEGMENTS (:80-101) is evaluated at module top, so a missing boundary throws at import, and node --test then reports the whole file as one failed test.",
+      "seat-registration.test.mjs:86: the sh decide start '    MOE_SKIP_LAUNCH=false\\n' no longer exists. scripts/moe-agent.sh:11185 has read '    MOE_SKIP_LAUNCH=false; VM_TASKLESS_SKIP=false' since 3586957f (task-1ccae85c), and it is the only line containing MOE_SKIP_LAUNCH=false.",
+      "seat-registration.test.mjs:97: the ps1 decide start '    $moeSkipLaunch = $false\\n' still matches scripts/moe-agent.ps1:10591, the only such line. task-62ec51f1's WIP 80879746 keeps it and every other ps1 boundary.",
+      "count(text, needle) is defined at :190, the first top-level test is at :203-215 and the engine loop starts at :217.",
+      "scripts/tests/daemon-json-cap.test.mjs needs packages/moe-daemon/dist (server/healthHost.js) and packages/moe-proxy/dist (utils.js). ci.yml:222-233 builds both before the step at :273-277.",
+      "ENGINES[2].skip (:201) turns the PowerShell 7 rows into skips when pwsh is missing, and the exit code stays 0, so only the TAP skipped count proves pwsh 7 ran."
+    ],
+    "checkRefs": [
+      "bash -c 'set -euo pipefail; R=$PWD; S=$(mktemp -d /tmp/moe-649f-XXXXXX); echo \"snapshot=$S\"; git archive HEAD | tar -x -C \"$S\"; cp \"$R/scripts/tests/seat-registration.test.mjs\" \"$S/scripts/tests/\"; mkdir \"$S/pwsh\"; tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C \"$S/pwsh\"; chmod +x \"$S/pwsh/pwsh\"; export PATH=\"$S/pwsh:$PATH\"; unset $(compgen -e | grep \"^MOE_\" || true); cd \"$S\"; for p in moe-daemon moe-proxy; do (cd \"packages/$p\" && npm install --no-audit --no-fund && npm run build) > \"build-$p.log\" 2>&1 || { tail -20 \"build-$p.log\"; exit 1; }; done; rc=0; node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs > seat.tap || rc=$?; tail -8 seat.tap; [ \"$rc\" = 0 ]; grep -qx \"# fail 0\" seat.tap; grep -qx \"# skipped 19\" seat.tap; grep -Eqx \"# pass (3[89]|[4-9][0-9])\" seat.tap; node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Chosen: drop the trailing \\n from both decide start strings, so they match as prefixes. This is the smallest change that tolerates a trailing statement, and it is the row's own fix direction. Rejected: (1) a regex-capable between(), which is more code for the same result. (2) Splitting moe-agent.sh's line back in two: DoD 2 forbids touching the launchers, and every launcher edit hot-reloads every seat. (3) Re-anchoring every other boundary that ends in \\n: out of scope, and each of those still matches.",
+    "codebaseInsights": "The sh decide slice now carries `; VM_TASKLESS_SKIP=false`, which the sh outcome slice reads as `[ \"$VM_TASKLESS_SKIP\" = true ]`. That is harmless in the fixture, which sets no VM_ROUTE. isEpicFinal:true is only the max-order fallback, because epic-be924fb8 has no finalTaskId; the gate is scoped to the red CI step, not a whole-epic regression. The architect dry-ran this exact plan: the edit applied to a clone at acea850b, with the step-2 command run from its root. It passed in 85 s (seat-registration 59 tests, 40 pass, 19 skipped, all PS 5.1; then the CI step 169 tests, 113 pass, 0 fail, 56 skipped). The same command on the unfixed file exits 1. The ps1-boundary mutant fails the new case with 'missing boundaries'.",
+    "risks": "pwsh 7 exists on this host only as tarballs: /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz (the architect copied it from hunt #20's /tmp/hunt-9f3e/pwsh.tgz). Without pwsh the PS7 rows SKIP and the exit code stays 0, which is why the gate greps '# skipped 19'. task-1dfec7a4 (BACKLOG, the ps1 twin of 1ccae85c) will probably edit the ps1 decide line. A trailing statement there is now covered, but a second `    $moeSkipLaunch = $false` line above it would trip the count === 1 assertion, by design. task-62ec51f1 (WORKING) holds scripts/moe-agent.ps1, not this test file.",
+    "keyFiles": [
+      "scripts/tests/seat-registration.test.mjs",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "acea850b15455dad35ae9d37e41b4f9d3ac1b360",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T09:33:58.419Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T09:35:04.414Z",
+  "reviewStartedAt": "2026-11-04T09:37:35.592Z",
+  "verification": {
+    "command": "bash -c 'set -euo pipefail; ... snapshot of HEAD + test overlay, pwsh 7.6.9 on PATH, MOE_* unset, daemon+proxy built; node --test --test-reporter=tap scripts/tests/seat-registration.test.mjs (asserts fail 0, skipped 19, pass>=38); node --test scripts/tests/daemon-json-cap.test.mjs scripts/tests/seat-registration.test.mjs scripts/tests/subagent-mirror.test.mjs' (step 2 command verbatim)",
+    "exitCode": 0,
+    "outputTail": "seat-registration: # tests 59 / # pass 40 / # fail 0 / # skipped 19. CI step: ℹ tests 169, pass 113, fail 0, cancelled 0, skipped 56; exit=0",
+    "reportedAt": "2026-11-04T09:37:35.592Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/seat-registration.test.mjs"
+  ],
+  "completionSummary": "Re-anchored the sh and ps1 decide start boundaries in seat-registration.test.mjs as prefixes (DECIDE constant), so a trailing statement on that line no longer throws at import; added one case proving both tolerate an appended statement. No launcher bytes changed.",
+  "commits": [
+    {
+      "sha": "95d91dc2107433a2f1b95a2b7882427d4d7c898d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-5772dacf@2026-11-04T09:34:07Z",
+      "paths": [
+        "scripts/tests/seat-registration.test.mjs"
+      ],
+      "recordedBy": "qa-1cd86a39",
+      "recordedAt": "2026-11-04T09:39:02.782Z",
+      "status": "REVIEW"
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-67c762f6@2026-11-04T09:14:01Z",
+    "at": "2026-11-04T09:49:25.785Z"
+  },
+  "completedAt": "2026-11-04T09:43:20.675Z",
+  "reviewCompletedAt": "2026-11-04T09:43:20.675Z",
+  "reviewSummary": "Reviewed completion 95d91dc2 (on moe/work-2026-10-24, in HEAD; 1 file, +23/-3, test-only). Re-ran the task gate verbatim from the repo root in a fresh /tmp git-archive snapshot (pwsh 7.6.9, MOE_* unset, daemon+proxy built): exit 0. seat-registration: tests 59, pass 40, fail 0, skipped 19 (PS 5.1 only). CI step command: tests 169, pass 113, fail 0, skipped 56. DoD 1 and 3 met. DoD 2: diff touches only scripts/tests/seat-registration.test.mjs (launchers untouched). Appended-statement proof: a copy with `; QA_EXTRA=1` on the sh line and `; $qaExtra = 1` on the ps1 line imports and runs 59/40/0/19. Mutants: restoring \\n on the ps1 start fails the new case with 'missing boundaries:     $moeSkipLaunch = $false'; the pre-fix test file throws 'missing boundaries:     MOE_SKIP_LAUNCH=false' at import. between() still asserts; end boundaries and other segments unchanged. Non-blocking nit: the diff also changes `const t = (name, fn)` to `const t =(name, fn)` (one space lost, cosmetic, no behaviour change). Scratch deleted.",
+  "requiredCheckAtDone": null
+}

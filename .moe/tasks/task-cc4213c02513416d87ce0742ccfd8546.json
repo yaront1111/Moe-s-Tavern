@@ -1,0 +1,257 @@
+{
+  "id": "task-cc4213c02513416d87ce0742ccfd8546",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "bug: a launch outage carried into a verified-local iteration never ends: the VM route turns every launch probe into a no-launch while the outage suppresses every claim (moe-agent.sh)",
+  "description": "Found while planning task-1ccae85c. It is the residual of QA hand-forward comment-87cd53fd (b) on CQ-M07m (task-828e7d21).\n\nSince M07m, a VM-route iteration never ENTERS a launch outage (scripts/moe-agent.sh:11953 gates outage entry on VM_ROUTE != true). But LAUNCH_OUTAGE is wrapper-process state, and the readiness gate re-reads the profile on every iteration.\n\nRepro:\n1. A legacy-profile bash worker seat reaches 3 fast launch failures, so LAUNCH_OUTAGE=true and the held task is released.\n2. The project flips to verified-local (ready) while that wrapper process lives.\n3. On the next iteration VM_ROUTE=true and the seat VM starts. The claim is suppressed (~:10022, outage with nothing held).\n4. The taskless decision sets LAUNCH_PROBE=true and prints `MOE_LAUNCH_PROBE ... launching a taskless launch probe` (~:11037). The VM block then turns that probe into a no-launch (`reason=vm-route`).\n5. MOE_SKIP_LAUNCH leaves the streak and the outage as they were (~:11923). Only a launch that runs clears the outage (~:11985), so the seat never claims again. It idles until a hot reload or relaunch resets the shell state.\n\nFix direction (the planner decides): a VM-route iteration does not honour a carried-over outage, because outage mode is a host-CLI concept and the VM route has its own job-failure budget. Either clear the outage state when the route engages, or skip the outage claim-suppression and the probe on the route. Also, print MOE_LAUNCH_PROBE only when a probe actually launches. Legacy launches and outage handling must stay byte-identical.\n\nTest needs a mid-run readiness flip. The shared fixture scripts/tests/postflight-fake-proxy.js answers FAKE_READINESS from env only, so it needs an additive knob that is inert when unset. The PowerShell twin follows CQ-M07n (task-62ec51f1), which mirrors M07m's outage exemption.",
+  "definitionOfDone": [
+    "A bash verified-local iteration that starts in a launch outage carried over from a legacy iteration claims again, launches no host CLI, and prints no MOE_LAUNCH_PROBE line.",
+    "Legacy launch-outage behavior and diagnostics are byte-identical; the existing postflight.sh launch-outage rows pass unchanged.",
+    "A postflight-vm-route.sh row flips readiness mid-run (legacy outage, then verified-local) and asserts the claim resumes; focused wrapper rows and parity-check pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "DoD 1, 2. scripts/moe-agent.sh: a VM-route iteration ends a launch outage carried over from a legacy iteration. Add ONE guarded block immediately after the per-iteration gate call `case \"$ROLE\" in worker|qa) verified_local_gate ;; esac` (~:9959), before `if [ \"$AUTO_CLAIM\" = true ]`:\n\n```bash\nif [ \"$VM_ROUTE\" = true ] && [ \"$LAUNCH_OUTAGE\" = true ]; then\n    echo -e \"${GREEN}[launch-outage]${NC} The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes.\"\n    if [ -n \"${GENERAL_CHANNEL_ID:-}\" ]; then\n        LAUNCH_OK_MSG=\"$WORKER_ID: the verified-local VM route runs this seat's sessions in its VM, never the host CLI, after $LAUNCH_FAIL_STREAK host launch failures. Launch outage over: claiming resumes.\"\n        LAUNCH_OK_ARGS=<the same python json.dumps line the success branch uses, ~:11981>\n        moe_rpc chat_send \"$LAUNCH_OK_ARGS\" > /dev/null 2>&1 || true\n    fi\n    LAUNCH_FAIL_STREAK=0; LAUNCH_FAIL_BACKOFF_SEC=0\n    LAUNCH_OUTAGE=false; LAUNCH_OUTAGE_HELD_TASK_ID=\"\"; LAUNCH_OUTAGE_RELEASE_TRIED=\"\"; LAUNCH_OUTAGE_ANNOUNCE=false\nfi\n```\n\nThe six resets are exactly the success branch's (~:11987-11992). Put a 3-4 line comment above it: outage mode is host-CLI state; the VM route never enters it (the fast-failure branch gates entry on VM_ROUTE != true, ~:11961) and turns a probe into a no-launch, so an outage carried over from a legacy iteration of this wrapper process would suppress every claim forever (task-cc4213c0); the route's own job failures restart the shared streak/backoff from 0.\n\nWhy here: VM_ROUTE is reset to false at every iteration start (~:9904) and set true only inside verified_local_gate after every refusal check, so the block runs only on an engaged route. Everything that reads the outage later in the iteration then sees none: the claim suppression (~:10022), the claim-wait gate (~:10115), the pre-flight outage branches (~:10437-10461), the probe decision (~:11037) and launch_outage_postflight (~:12398). Do NOT edit any of those sites. The MOE_LAUNCH_PROBE echo becomes unreachable on the route, so it prints only before a probe that really launches (the description's second ask). Legacy output keeps its exact text and order.\n\nA held outage task (a refused release, or BLOCKED) is covered too. The marked claim answers alreadyAssigned and the route resumes it; launch_outage_postflight never releases a VM seat's task.\n\nNo new MOE_* token, so the parity families are unchanged. moe-agent.ps1 is untouched: its twin goes with CQ-M07n (task-62ec51f1).\n\nError handling: the chat post is best-effort (`|| true`) and never blocks the iteration, and an empty GENERAL_CHANNEL_ID skips it. GENERAL_CHANNEL_ID still holds the previous iteration's join value here; the reset at ~:9972 comes later.\n\nEdit in place in the task worktree with the Edit tool, then run `bash -n scripts/moe-agent.sh`. Never temp+mv (scripts/CLAUDE.md, worktree mode). The new test row comes in step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Added the guarded VM_ROUTE && LAUNCH_OUTAGE block right after the verified_local_gate call site: one [launch-outage] line, a best-effort #general chat_send (same json.dumps pattern as the success branch), and the success branch's six resets. No other site edited. bash -n OK.",
+      "startedAt": "2026-11-03T22:59:00.293Z",
+      "completedAt": "2026-11-03T22:59:49.984Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "DoD 3 (fixture). scripts/tests/postflight-fake-proxy.js: an additive knob, inert when unset, inside the readiness handler only. Place it immediately ABOVE `if (tool === 'get_execution_readiness' && process.env.FAKE_READINESS) {` (~:454):\n\n```js\nif (tool === 'get_execution_readiness' && process.env.FAKE_READINESS_AFTER) { ... }\n```\n\nBehaviour:\n- Parse the value with /^(\\d+):([\\s\\S]+)$/ into <n> and <mode>. A value that does not match throws, so a typo fails the row loudly (the same as the handler's unparseable-JSON throw).\n- Every get_execution_readiness call increments .moe/readiness-count: ensureDir, then read, increment, write (the heartbeat-count pattern, ~:365).\n- From call n+1 on, set `process.env.FAKE_READINESS = mode`. The existing handler then answers exactly as FAKE_READINESS=<mode> does (JSON, unknown, refuse or fail).\n- Calls 1..n keep whatever FAKE_READINESS (or its unset default) gives.\n\nThis models a project whose profile flips while a wrapper process lives. The wrapper reads readiness exactly once per iteration, in verified_local_gate (moe-agent.sh ~:9737), so <n> counts iterations.\n\nDocument the knob in 2-3 comment lines at the handler only. Do NOT touch the header comment or any other handler. task-e76f32a0 edits this file's get_commit_scope region, and an additive hunk here lets merge-tree land both.\n\nError handling: a missing or unreadable count file counts as 0, as the other counters do. The knob changes nothing when unset: no readiness-count file is written. The test row that uses it comes in step 3.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "FAKE_READINESS_AFTER=<n>:<mode> handler placed immediately above the FAKE_READINESS handler (3 comment lines, header untouched). Counts reads in .moe/readiness-count (missing/unreadable = 0); from read n+1 sets process.env.FAKE_READINESS=mode. Spot-checked: 2:<json> answers default, default, json; unset writes nothing under the project; a malformed value throws (exit 1).",
+      "startedAt": "2026-11-03T22:59:50.676Z",
+      "completedAt": "2026-11-03T23:00:37.959Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DoD 1, 3 (test). scripts/tests/postflight-vm-route.sh: add row VR-outage in the `[seat job]` subshell, after the three VR-taskless rows and before `echo '[seat job] VR-reload…'`.\n\nSetup:\n- A fake host CLI at \"$TMP_DIR/outage-bin/outage-cli\". Its basename is not codex/gemini/grok, so CLI_TYPE stays claude (moe-agent.sh ~:631). It appends `{\"tool\":\"host-cli\",\"args\":{}}` to \"$FAKE_CALL_LOG\" (inherited through vmr_run), so the call log orders it among the RPCs, and it exits 1 at once.\n- `VMR_ARGS=(--poll-interval 0)`: single-shot without --no-loop. A launch failure relaunches after its backoff, and the first iteration that neither fails nor probes ends the run (loop end ~:12405).\n- `VMR_CMD=\"$TMP_DIR/outage-bin/outage-cli\"`.\n- `vmr_run VR-outage worker claude \"$LEGACY\" on 0 FAKE_CLAIM_MODE=idle FAKE_MENTION=1 FAKE_READINESS_AFTER=\"3:$READY\" MOE_ACCOUNT_ROTATION=off MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1`.\n\nHow the run goes:\n- Iterations 1-3 read legacy. The fake re-serves its routed mention on every chat_read, so each iteration launches the notification-only host CLI. It fails fast every time, and the third failure enters the outage with no task held.\n- Iteration 4 reads verified-local ready, starts the seat VM, and (fixed) claims marked. The idle claim then takes the vm-route taskless skip with no seat job, so it needs no VM credential.\n- MOE_ACCOUNT_ROTATION=off is REQUIRED. The block exports rotation on, and under rotation a failed claude run relaunches on the next account and zeroes the streak (the ACCOUNT_RELAUNCH branch, ~:11935), so the outage would never be entered.\n\nAssertions: a node heredoc over \"$CALLS\", \"$OUT\" (ANSI stripped), \"$PROJECT/.moe/evidence-rpcs.jsonl\" and \"$PROJECT/.moe/messages/chan-general.jsonl\"; any failure goes to vmr_fail VR-outage.\n- Exit 0.\n- 'entering launch outage mode' appears: the carried-over precondition.\n- The step-1 local line appears exactly once.\n- No 'MOE_LAUNCH_PROBE' anywhere.\n- Exactly 3 host-cli rows, all before the 4th get_execution_readiness.\n- At least one claim_next_task before the flip, each with no executionRoute key.\n- At least one claim_next_task after the flip, each with executionRoute 'vm'. This is the resumed claim.\n- The agent-seat cmds are exactly ['seat-start','seat-stop'].\n- The chat file has 'after 3 host launch failures. Launch outage over: claiming resumes.'.\n- Then `vmr_one_reason VR-outage vm-route`.\n\nAfterwards, restore `VMR_ARGS=(--no-loop --poll-interval 0)` (VMR_CMD resets itself) and add 'outage' to the block's PASS echo line. Iterate with `bash scripts/tests/postflight-vm-route.sh` alone (~1-2 min). Error handling: every assertion names what it expected, and vmr_fail dumps the wrapper output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Row VR-outage added in the [seat job] block before VR-reload: fake host CLI outage-bin/outage-cli (logs host-cli into $CALLS, baked path; exits 1), VMR_ARGS=(--poll-interval 0), FAKE_READINESS_AFTER=3:$READY, rotation off, backoff 1/1. Node assertions: exit 0, outage entered, one outage-over line (the VM-route text), no MOE_LAUNCH_PROBE, 3 host-cli rows all before the 4th readiness read, unmarked legacy claims before / vm-marked claims after the flip, seats [seat-start, seat-stop], #general 'after 3 host launch failures. Launch outage over: claiming resumes.'; then vmr_one_reason vm-route. VMR_ARGS restored; PASS line gains 'outage'. env -i Node 24 run of postflight-vm-route.sh alone: PASS, rc=0 (3m56s).",
+      "startedAt": "2026-11-03T23:00:38.838Z",
+      "completedAt": "2026-11-03T23:06:19.238Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "DoD 2, 3. Verification: run this once, fresh, as the final gate. Work from the task worktree root: `cd \"$(git rev-parse --show-toplevel)\"`.\n\nIt takes about 30-35 min, past the Bash tool's 10-min cap, so launch it detached (setsid nohup … > log 2>&1 &), record its PID, and poll the log (mem:convention-postflight-scratch-harness):\n\n`env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'`\n\nWhat it covers:\n- postflight.sh runs scenario AH, the launch-outage rows, unchanged (DoD 2).\n- Its last line chains postflight-vm-route.sh, which includes VR-outage and the earlier T and VR rows (DoD 3).\n\nThe launcher harnesses may run in place, as the project rail says. Never pattern-kill: stop only the PID you recorded.\n\nBefore that final run, iterate on scenario AH with a trimmed scratch harness as that memory describes. In complete_task, report the exit code and an output tail that shows the '[scenario AH]' line and '[seat job] PASS … outage'.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Full gate, fresh, in place from the task worktree at 37193cc9 (env -i, Node 24, detached setsid runner): bash -n + parity-check + postflight.sh (which chains postflight-vm-route.sh) -> EXIT=0, ~38 min (23:42-00:20Z, load ~14). Log lines: 'PASS parity-check.sh', '[scenario AH] ok' (launch-outage rows, harness unchanged), '[seat job] PASS ... taskless-idle, outage, reload', 'PASS postflight-vm-route.sh', 'PASS postflight.sh'. Skipped the separate AH scratch iteration: AH's harness is unchanged and the full run covers it. git status clean after the run.",
+      "startedAt": "2026-11-03T23:06:20.114Z",
+      "completedAt": "2026-11-04T00:20:09.371Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (final step, adversarial-self-review skill), scoped to this task's diff. Check each item below.\n\n(a) `git diff` touches only the 3 planned files. moe-agent.sh gains only the guarded block, so VM_ROUTE=false never enters it, and legacy outage text and order are unchanged.\n\n(b) Mutant proof: VR-outage must FAIL against the pre-fix wrapper.\n- Build a full-tree snapshot (the vm-route drift guard reads packages/moe-daemon/src/state/validators.ts): S=$(mktemp -d); git archive HEAD | tar -x -C \"$S\".\n- Copy this task's harness and fake proxy into it.\n- Overwrite its scripts/moe-agent.sh with `git show \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\":scripts/moe-agent.sh`.\n- Run its postflight-vm-route.sh. Expect a VR-outage failure: MOE_LAUNCH_PROBE printed, or no marked claim after the flip. Name it in the completion summary.\n\n(c) With FAKE_READINESS_AFTER unset, the fake proxy behaves exactly as before and writes no readiness-count.\n\n(d) Edge cases:\n- A held outage task on the route resumes through alreadyAssigned and is never released by launch_outage_postflight.\n- A profile flipping back to legacy restarts the host streak at 0.\n- The first VM iteration still waits out one outage backoff at the loop top (at most MOE_LAUNCH_BACKOFF_MAX_SEC). That is accepted and noted.\n\n(e) parity-check passes, and there is no new MOE_* token and no ps1 edit (twin: CQ-M07n, task-62ec51f1).\n\n(f) Error handling: the chat post can never fail the iteration.\n\nIf anything changes, re-run step 4's command and submit that fresh output as the test evidence. Optionally add FAKE_READINESS_AFTER and VR-outage to the fixture list in mem:convention-verified-local-wrapper-gate (Serena edit_memory).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "note": "Self-review, no code change (so no re-run past step 4's gate).\n(a) The diff vs 09529122 touches only the 3 files. The wrapper gains only the block guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true, and the legacy outage sites are byte-identical.\n(b) MUTANT RED: a full git-archive HEAD snapshot in /tmp with 09529122's moe-agent.sh. Its postflight-vm-route.sh fails VR-outage with 'expected one outage-over line (0 !== 1)'. The wrapper output shows the defect after the flip: 'Launch outage (streak 3): ... calls no claim_next_task', then 'MOE_LAUNCH_PROBE ... launching a taskless launch probe', then the probe turned into 'MOE_TASKLESS_NO_LAUNCH reason=vm-route'. EXIT=1 on two independent runs.\n(c) The knob only runs when FAKE_READINESS_AFTER is truthy, and readiness-count is referenced nowhere else. When unset, nothing is written.\n(d) A held outage task (refused release) is cleared from LAUNCH_OUTAGE_HELD_TASK_ID. The marked claim resumes it via alreadyAssigned, and launch_outage_postflight is unreachable (LAUNCH_OUTAGE false). A flip back to legacy restarts the streak at 0. The first VM iteration still waits one outage backoff at the loop top and prints the 'claims none until a probe launches' backoff line before the route engages. That was accepted in the plan (at most MOE_LAUNCH_BACKOFF_MAX_SEC).\n(e) parity PASS. No new MOE_* token in the added lines. moe-agent.ps1 untouched (twin: CQ-M07n).\n(f) The python json build and moe_rpc chat_send are both '|| true' with output to /dev/null. The message goes to python as argv (no injection), and an empty GENERAL_CHANNEL_ID skips the post.",
+      "startedAt": "2026-11-04T00:20:27.826Z",
+      "completedAt": "2026-11-04T00:20:46.131Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Its only prerequisite, 1ccae85c (Bash VM taskless skip), reached DONE at 22:40:06Z, so plan against the landed moe-agent.sh at the tip. Placement: task-e76f32a0 (WORKING) is editing scripts/tests/postflight-fake-proxy.js's get_commit_scope orphan rule. Keep this row's FAKE_READINESS knob additive, inert when unset, and in the readiness handler only, so merge-tree lands both. moe-agent.ps1 stays with CQ-M07n (62ec51f1), as the row says. In the task worktree, edit moe-agent.sh in place with a TOOL-witnessed editor, then bash -n (scripts/CLAUDE.md, worktree mode). The human can drag this row back to BACKLOG to veto.",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-1ccae85c01d145d5b3167c0a3f1371d6"
+  ],
+  "priority": "LOW",
+  "order": 238.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:12:21.590Z",
+  "updatedAt": "2026-11-04T19:20:41.439Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T22:41:27.476Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:43:02.962Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T06:00:48.993Z",
+    "wallClockMs": 26266031
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c",
+    "worker-c9368191",
+    "qa-af7be174",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T22:57:38.214Z",
+  "executionContract": {
+    "intendedBehavior": "A bash worker/QA iteration whose verified-local VM route engages ends any launch outage left over from an earlier legacy iteration of the same wrapper process. It prints one [launch-outage] line, posts one best-effort #general line, and resets the outage state and the host launch streak/backoff. That iteration then makes its marked claim, launches no host CLI and prints no MOE_LAUNCH_PROBE. Legacy (VM_ROUTE=false) iterations are byte-identical.",
+    "acceptanceCriteria": [
+      "VR-outage: 3 fast host launches under legacy enter the outage, then the readiness flips to verified-local ready. After the flip the seat calls claim_next_task with executionRoute vm, launches no host CLI, prints no MOE_LAUNCH_PROBE, prints the clear line once, starts and stops one seat VM, and exits 0.",
+      "postflight.sh scenario AH (launch outage rows) passes with the harness unchanged.",
+      "parity-check.sh passes; bash -n scripts/moe-agent.sh passes.",
+      "With FAKE_READINESS_AFTER unset, the fake proxy behaves as before."
+    ],
+    "invariants": [
+      "VM_ROUTE=false iterations never enter the new block.",
+      "No new MOE_* token; moe-agent.ps1 untouched.",
+      "The fake proxy knob is additive, inert when unset, and lives only in the readiness handler.",
+      "The chat post never fails or blocks the iteration."
+    ],
+    "compatibility": [
+      "Legacy launch-outage text, order, chat lines and release behavior are unchanged (scenario AH).",
+      "The existing VR/T rows in postflight-vm-route.sh are unchanged."
+    ],
+    "approvedScope": [
+      "moe-agent.sh: one guarded block right after the verified_local_gate call site.",
+      "postflight-fake-proxy.js: FAKE_READINESS_AFTER in the readiness handler.",
+      "postflight-vm-route.sh: row VR-outage plus the PASS line."
+    ],
+    "reuse": [
+      "The success branch's reset list and its chat_send json pattern (moe-agent.sh ~:11976-11992).",
+      "vmr_run, VMR_CMD, VMR_ARGS, vmr_one_reason and the [seat job] fixture (vmj_fixture, the fake agent seat).",
+      "The fake proxy's counter-file pattern (heartbeat-count)."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh:9904 resets VM_ROUTE=false per iteration; :9959 is the only verified_local_gate call; get_execution_readiness is read only at :9737.",
+      "scripts/moe-agent.sh:11961 keeps VM-route iterations out of outage entry; :11976-11992 is the only place a launch clears the outage.",
+      "scripts/tests/postflight-fake-proxy.js answers get_execution_readiness from FAKE_READINESS at ~:454 and re-serves FAKE_MENTION=1 on every chat_read."
+    ],
+    "checkRefs": [
+      "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Two fixes were weighed: (1) clear the outage when the route engages, or (2) skip the outage claim-suppression and the probe on the route at each read site. (2) touches 3-5 legacy-adjacent sites (~:10022, ~:10115, ~:11037, ~:12398) and leaves stale LAUNCH_OUTAGE/streak state that a VM job failure or a profile flip-back would misread. (1) is one guarded block at the gate call site, so legacy bytes stay byte-identical.\n\nThe outage clear also posts a #general line. The outage entry told governors 'this seat claims no new task until a launch probe succeeds', and the legacy success branch posts the matching 'Launch outage over: claiming resumes.'\n\nTest designs:\n- A task-holding legacy outage was rejected for the row. A claude VM seat job needs account rotation ON (vm-credential needs ACCOUNT_LEASED_ID), while rotation turns failed legacy launches into account relaunches that zero the streak.\n- The taskless mention design (FAKE_CLAIM_MODE=idle + FAKE_MENTION=1, rotation off) is deterministic and proves the exact mechanics: the claim suppression and the probe turned into a no-launch.\n- The readiness flip is a count knob, not a marker file. Readiness is read exactly once per iteration.\n\nThe docs (TROUBLESHOOTING.md:427-431, 'the first launch that runs ends the outage') are deferred to the CQ-M07 final docs sweep. verified-local is not activatable yet, and the VM route is undocumented by design.",
+    "codebaseInsights": "moe-agent.sh flow per iteration: :9904 resets VM_ROUTE=false. :9959 runs verified_local_gate, which sets VM_ROUTE=true only after the WSL, CLI, worktree, ready, auto-claim and codex-key checks, then starts the seat VM. Then come the pre-flight join (:9972 resets GENERAL_CHANNEL_ID), the claim (:10022, suppressed in an outage with nothing held), the claim-wait (:10115, skipped in an outage or with an unread mention), the taskless decision (:11033-11047: the probe echo, then the VM block turning any taskless iteration into a no-launch) and the launch classification (:11928 skip, :11935 account relaunch, :11944 fast failure with outage entry gated on VM_ROUTE != true at :11961, :11976 success clears the outage). Post-flight follows, then launch_outage_postflight (:12398), and the loop end (:12405): single-shot keeps going only after a failed launch or a probe.\n\nCLI_TYPE defaults to claude for any basename except codex/gemini/grok (:631). The fake proxy logs every claim into evidence-rpcs.jsonl, and FAKE_CALL_LOG has the full call order. The fake re-serves FAKE_MENTION=1 on every chat_read (stateless).",
+    "risks": "- Under rotation, a failed claude run never builds a streak; the row must pass MOE_ACCOUNT_ROTATION=off.\n- The flip count assumes one readiness read per iteration. If a future change adds a read, the row's count shifts; the assertion on 3 host-cli rows before the 4th readiness read catches that.\n- The full postflight.sh takes ~30-35 min. Run it detached and poll, and kill only your own recorded PID.\n- e76f32a0 edits the fake proxy's get_commit_scope region. Keep this hunk additive in the readiness handler.\n- ps1 parity: the new lines are sh-only and not in parity-check's required prose. The ps1 twin goes with CQ-M07n (62ec51f1).\n- The worktree wrapper is edited in place with the Edit tool, then bash -n (no atomic temp+mv).",
+    "keyFiles": [
+      "scripts/moe-agent.sh",
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight-vm-route.sh",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/parity-check.sh"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "0952912256fcaad04d50d5a9f46c5b70fd412628",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T22:57:38.244Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:59:00.293Z",
+  "commits": [
+    {
+      "sha": "37193cc95f5c46fe17cbda790052528ddf244f0d",
+      "ref": "refs/heads/moe/task/task-cc4213c02513416d87ce0742ccfd8546",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T22:57:48Z",
+      "paths": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T23:40:30.371Z",
+      "treeId": "1b7cb103ca0b688f079c37d9934f0a179c8d474a",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "8ca6a40bbda169dea598b087c4809d990e1db30b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T23:40:40Z",
+      "paths": [
+        "scripts/moe-agent.sh",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight-vm-route.sh"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-04T00:22:23.462Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/moe-agent.sh",
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight-vm-route.sh"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T05:27:55Z",
+    "at": "2026-11-04T06:01:24.351Z"
+  },
+  "reviewStartedAt": "2026-11-04T00:21:24.813Z",
+  "verification": {
+    "command": "env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=360 bash -c 'bash -n scripts/moe-agent.sh && bash scripts/tests/parity-check.sh && bash scripts/tests/postflight.sh'",
+    "exitCode": 0,
+    "outputTail": "PASS parity-check.sh\n...\n[scenario AH] launch outage: the third fast exit releases the held task once, then taskless probes until a launch runs\n[scenario AH] ok\n...\n[seat job] PASS VR-happy, nonzero, R2, noclaim, qa-shared, protected, shared, qa, sigint, taskless, taskless-teamless, taskless-idle, outage, reload\n...\n[vm candidate] ok R1, R1u, R2a-R5b, R6-R9\n[strong intent] a no-op for legacy; the strong profile needs the frozen candidate of exactly M on B\n[strong intent] ok G1-G7 and G8\nPASS postflight-vm-route.sh\nPASS postflight.sh\nEXIT=0\n(run in place from the task worktree at 37193cc9, 2026-11-03 23:42-00:20Z, ~38 min, tree clean before and after)",
+    "reportedAt": "2026-11-04T00:21:24.813Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "A bash verified-local iteration now ends a launch outage carried over from an earlier legacy iteration of the same wrapper process.\n\nscripts/moe-agent.sh gains one block, right after the verified_local_gate call site and guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true. It does three things:\n- prints one green [launch-outage] line ('The verified-local VM route runs this seat's sessions in its VM, never the host CLI: launch outage over, claiming resumes.');\n- posts a best-effort #general line ('... after N host launch failures. Launch outage over: claiming resumes.');\n- applies the success branch's six resets: streak, backoff, outage, held id, release-tried and announce.\n\nThat iteration then makes its marked claim, launches no host CLI and prints no MOE_LAUNCH_PROBE. The probe echo is unreachable on the route. No other site was touched, so legacy (VM_ROUTE=false) bytes and the outage flow are unchanged.\n\nFixture: FAKE_READINESS_AFTER=<n>:<mode> in postflight-fake-proxy.js. It sits in the readiness handler only and is inert when unset; it counts reads in .moe/readiness-count and answers FAKE_READINESS=<mode> from read n+1 on.\n\nRow VR-outage (postflight-vm-route.sh) runs 3 legacy failing launches into the outage, then flips readiness to verified-local. It asserts:\n- exit 0;\n- one outage-over line and no MOE_LAUNCH_PROBE;\n- 3 host CLI rows, all before the flip;\n- unmarked claims before the flip and executionRoute vm claims after it;\n- seat-start then seat-stop;\n- the #general line;\n- a single reason=vm-route line.\n\nMutant RED: the harness against the pre-fix wrapper (09529122) fails VR-outage with 'expected one outage-over line (0 !== 1)'. Its output shows the defect: the claim is suppressed, MOE_LAUNCH_PROBE prints, then reason=vm-route.\n\nGate: bash -n + parity + full postflight.sh (scenario AH unchanged, vm-route chained). EXIT=0.\n\nAccepted residue: the first VM iteration still waits one outage backoff at the loop top, and prints the outage backoff line before the route",
+  "completedAt": "2026-11-04T06:00:48.993Z",
+  "reviewCompletedAt": "2026-11-04T06:00:48.993Z",
+  "reviewSummary": "Completion 8ca6a40b is on moe/work-2026-10-24 and pushed. Diff: 3 files, +65/-1, the planned scope; ps1 untouched.\n\nRe-gated the landed sha because the target moved after the worker's base (1d830f75 changed moe-agent.sh). Full-tree git archive in /tmp, blobs hash-checked, then the exact checkRef (env -i, node24, bash -n + parity-check + postflight.sh). EXIT=0, 05:30-06:00Z: PASS parity; '[scenario AH] ok'; '[seat job] PASS ... outage, reload'; PASS postflight-vm-route.sh; PASS postflight.sh.\n\nMutant: the same snapshot with a5157059's moe-agent.sh, postflight-vm-route.sh alone, EXIT=1. VR-outage fails with 'expected one outage-over line'. The log shows the defect: claim suppressed, MOE_LAUNCH_PROBE, then reason=vm-route.\n\nDoD 1: the block is guarded by VM_ROUTE=true && LAUNCH_OUTAGE=true and sits right after the verified_local_gate call. VM_ROUTE resets false per iteration and is set only after every refusal. Its six resets equal the success branch's. The row asserts:\n- 3 host-cli rows, all before the flip;\n- unmarked claims before it, executionRoute vm after it;\n- seat-start then seat-stop;\n- no MOE_LAUNCH_PROBE, one clear line, the #general line.\n\nDoD 2: no legacy site edited; AH passes with its harness unchanged.\nDoD 3: the row, focused rows and parity pass.\n\nFAKE_READINESS_AFTER lives in the readiness handler only. It is inert when unset, and a malformed value throws. The chat post is best-effort (|| true).\n\nNotes, non-blocking:\n- The first VM iteration still waits one outage backoff and prints the outage backoff line (accepted residue).\n- TROUBLESHOOTING.md ~:427 still says only a running launch ends the outage; left for the CQ-M07 docs sweep.\n- Ponytail: the reset list is duplicated on purpose, because a helper would touch legacy bytes.",
+  "requiredCheckAtDone": null
+}

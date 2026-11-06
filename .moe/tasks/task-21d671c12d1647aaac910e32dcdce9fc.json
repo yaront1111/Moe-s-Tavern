@@ -1,0 +1,41 @@
+{
+  "id": "task-21d671c12d1647aaac910e32dcdce9fc",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #8): file 2-4 evidence-backed bug rows from the daemon chat tool family, Docker/packaging drift, and role-doc or skill instructions the runtime refuses",
+  "description": "Filed by the governor at 18:50Z on 2026-11-03, the same lever as hunts #1-#7. Since 17:05Z, 21 rows reached DONE, most of them hunt-filed rows within about 40 minutes of filing.\n\nWHY. At filing time 5 coders are idle with 0 claimable WORKING rows. Only 2 rows are in PLANNING (66108835, 3e1d0c2e), and the CQ-M07 wrapper chain stays serial.\n\nLANE. Search in this order of preference:\n1. The daemon chat tool family: packages/moe-daemon/src/tools/chat*.ts (chatPin, chatUnpin, chatJoin, chatCreateChannel, chatSend, chatRead, chatWho, chatResync, chatChannels, chatDecision) and the chat state they call. Look for a member that skips a guard, a validation, an actor, a channel-existence or membership check, a size cap or a refusal code that its siblings apply. Hunt #7 left one unverified lead here: (d) chat_pin accepts any workerId as pinnedBy.\n2. Docker and packaging drift: packages/moe-daemon/Dockerfile, packages/moe-daemon/docker-compose.yml, the root README.md and packages/moe-proxy/README.md, checked against the code. Hunt #7 left one unverified lead here too: (c) neither the Dockerfile nor docker-compose.yml passes --host or MOE_BIND_HOST, so `-p 9876:9876` probably cannot reach a daemon that binds 127.0.0.1 by default. Prove it without Docker: cite the image's CMD and the bind default in src/index.ts, then run that same CMD from a clone outside the shared checkout and show the listen address (for example with `ss -ltnp`).\n3. docs/roles/*.md, docs/roles/*.reference.md and docs/skills/*/SKILL.md, checked against the runtime. Look for an instruction that makes a seat call a tool with arguments the tool refuses, or that names a tool, field, refusal code, env var or file that does not exist. The 18:38Z block of 57fe7ad1 is this class: the global rail named only Claude's Edit/Write, and a Codex seat missed that the wrapper also witnesses apply_patch (governor ruling comment-e4b42690, rail proposal prop-c8364fbc). Cite the doc line and the code file:line.\n\nSkip:\n- Every file an open row holds. At filing time that is scripts/moe-agent.sh, scripts/moe-agent.ps1, scripts/tests/postflight-vm-route.{sh,ps1}, scripts/tests/postflight-fake-proxy.js, scripts/tests/postflight-fake-agent-seat.js, scripts/tests/parity-check.{sh,ps1} and docs/DEVELOPMENT.md.\n- The files planned for 66108835 (chatBacklog.ts, chatWait.ts) and for 3e1d0c2e (createEpic.ts, updateEpic.ts, deleteEpic.ts, deleteTask.ts, the matching StateManager.ts methods).\n- Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n\nAlready known, so don't re-file:\n- chat_wait's backlog drain over-delivery (66108835) and chat_read's sinceId cursor rewind (b2f95099, DONE).\n- chat_decision's skipped sender and channel checks (314405bb).\n- The epic/task actor gap (3e1d0c2e).\n- TURBO auto-approve's \"WORKING by unknown\" line.\n- The JetBrains board fingerprint omitting needsHumanReview.\n- isEpicFinal's max-order fallback (governor ruling msg-bbf4f109).\n- The launcher attempt pin (a7d02ec3).\n- Hunt #6's held items (doctor.sh's Node floor, the moe-call.sh comment).\n- Hunt #7's held item (b), the wrapper's UNKNOWN-status skip message. It stays held while CQ-M07 holds the wrappers.\n- This checkout's untracked .serena/project.yml ignoring docs/. That is local config, not a repo defect.\n\nEVIDENCE BAR. Same as hunts #2-#7. Work only from real evidence:\n- A repro on HEAD b5f40fee or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a family gap: the sibling file:line that applies the check, the member file:line that skips it, and a test or call that shows the difference.\n- For docs drift: the doc line and the code file:line.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file or one grep gate.\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD b5f40fee or later run outside the shared checkout, a failure line from today's logs, or a sibling/member (or doc/code) file:line pair.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time). The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 404.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T18:48:51.996Z",
+  "updatedAt": "2026-11-03T19:29:24.403Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T18:50:59.255Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-1dd28c7c@2026-11-03T18:50:58Z",
+    "at": "2026-11-03T19:29:24.403Z"
+  }
+}

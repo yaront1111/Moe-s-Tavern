@@ -1,0 +1,264 @@
+{
+  "id": "task-b7203d8993244211913c2f1ec0ab367f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a parked wait_for_task re-matches only on TASK_CREATED and TASK_UPDATED, so a delete_task that makes a legacy dependent claimable (its only unmet prerequisite is gone) never wakes the waiting seat",
+  "description": "Held item from hunt #11 (task-afe61cc0, architect-74d9e1c7, msg-7ed73235), filed by the governor in BACKLOG. It edits tools/waitForTask.ts, the same file as task-4fbd3c69 (wait_for_task vs the caller's finalizing attempt), so it waits on that row. The governor promotes it once 4fbd3c69 is DONE. Impact is low.\n\nPROBLEM. For a legacy (non verified-local) consumer a missing prerequisite counts as satisfied, so deleting a dependent's only unmet prerequisite makes the dependent claimable. But delete emits TASK_DELETED, and a parked wait_for_task re-matches only on TASK_CREATED and TASK_UPDATED. The waiting seat sleeps until its timeout or an unrelated update.\n\nEVIDENCE (at 8ca8d389):\n- waitForTask.ts:435 `if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;`\n- Repro: /mnt/d/moe-scratch/hunt-afe61cc0/A/zzHuntA_waitDeleteWake.test.ts with its .output.txt. \"wakes a parked WORKING waiter when deleting its only unmet prerequisite makes the dependent claimable\" fails, \"Tests 1 failed (1)\".\n\nFIX DIRECTION. Also re-run the existing findMatchingTask match on TASK_DELETED, and on any other event that can change dependency readiness, such as TASK_ARCHIVED if it is not already covered. Keep the wake/cleanup path unchanged.",
+  "definitionOfDone": [
+    "A wait_for_task parked for WORKING rows wakes with the dependent row when delete_task removes that row's only unmet prerequisite, and an unrelated TASK_DELETED still doesn't wake it.",
+    "The ported hunt repro passes, and the existing wait_for_task test files stay green in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first: port the hunt repro. Create packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts with the Write tool, EXACTLY as below (the RED gate pins `2 failed | 1 passed (3)` at base 54635828, with (w2) and (w3) failing). The architect dry-ran it there and against the fix. Keep `park()` returning `{ parked }`: an async helper that returned the bare promise would adopt it and block until the wait settled, so (w2) would time out even with the fix.\n```ts\nimport { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';\nimport { ToolTestHarness } from './toolTestHarness.js';\nimport type { ToolDefinition } from './index.js';\nimport { claimNextTaskTool } from './claimNextTask.js';\nimport { deleteTaskTool } from './deleteTask.js';\nimport { activeWaiters, waitForTaskTool } from './waitForTask.js';\n\n// task-b7203d89 (hunt #11): a legacy dependent counts a missing dependsOn id as\n// satisfied, so delete_task can make it claimable. A parked wait_for_task must\n// re-run its match on TASK_DELETED; it re-matched only on TASK_CREATED/UPDATED.\ndescribe('wait_for_task wakes when a delete frees a dependent (task-b7203d89)', () => {\n  const h = new ToolTestHarness();\n\n  beforeEach(async () => {\n    h.init();\n    h.setupMoeFolder();\n    h.createEpic();\n    h.createTask({ id: 'task-prereq', status: 'PLANNING', order: 1 });\n    h.createTask({ id: 'task-dep', status: 'WORKING', dependsOn: ['task-prereq'], order: 2 });\n    h.createTask({ id: 'task-other', status: 'PLANNING', order: 3 });\n    h.createTask({ id: 'task-gate-a', status: 'PLANNING', order: 4 });\n    h.createTask({ id: 'task-gate-b', status: 'PLANNING', order: 5 });\n    h.createTask({ id: 'task-dep2', status: 'WORKING', dependsOn: ['task-gate-a', 'task-gate-b'], order: 6 });\n    await h.state.load();\n  });\n\n  afterEach(() => {\n    vi.restoreAllMocks();\n    for (const waiter of Array.from(activeWaiters.values())) waiter.unsubscribe();\n    activeWaiters.clear();\n    h.state.clearEmitter();\n    h.cleanup();\n  });\n\n  const call = async (tool: ToolDefinition, args: Record<string, unknown>) =>\n    (await tool.handler(args, h.state)) as Record<string, unknown>;\n  const remove = (taskId: string) => call(deleteTaskTool(h.state), { taskId });\n  const tick = () => new Promise((resolve) => setTimeout(resolve, 50));\n  // Returns the pending wait inside an object: an async function returning the\n  // bare promise would adopt it and block until the wait itself settles.\n  const park = async () => {\n    const parked = call(waitForTaskTool(h.state), { statuses: ['WORKING'], workerId: 'worker-1', timeoutMs: 3000 });\n    await tick();\n    expect(activeWaiters.has('worker-1')).toBe(true);\n    return { parked };\n  };\n  const stillParked = async () => {\n    await tick();\n    expect(activeWaiters.has('worker-1')).toBe(true);\n  };\n\n  it('(w1) an unrelated delete re-runs the match but keeps the waiter parked', async () => {\n    await park();\n    await remove('task-other');\n    await stillParked();\n  });\n\n  it('(w2) deleting the only unmet prerequisite wakes the waiter with the dependent, which the claim then hands out', async () => {\n    const { parked } = await park();\n    await remove('task-prereq');\n    expect(await parked).toMatchObject({ hasNext: true, task: { id: 'task-dep' }, nextAction: { tool: 'moe.claim_next_task' } });\n    const claimed = await call(claimNextTaskTool(h.state), { statuses: ['WORKING'], workerId: 'worker-1' });\n    expect(claimed).toMatchObject({ hasNext: true, task: { id: 'task-dep' } });\n  }, 15_000);\n\n  it('(w3) deleting one of two unmet prerequisites keeps it parked; deleting the second wakes it', async () => {\n    const { parked } = await park();\n    await remove('task-gate-a');\n    await stillParked();\n    await remove('task-gate-b');\n    expect(await parked).toMatchObject({ hasNext: true, task: { id: 'task-dep2' } });\n  }, 15_000);\n});\n```",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts"
+      ],
+      "note": "Created the ported hunt repro as specified. The RED run happens in step 4.",
+      "startedAt": "2026-11-03T22:00:41.476Z",
+      "completedAt": "2026-11-03T22:00:56.278Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix in packages/moe-daemon/src/tools/waitForTask.ts, with your Edit tool. Replace only the comment and the event filter in the parked listener, about :439-440:\n```ts\n          // Only react to task creation/update events\n          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED') return;\n```\nwith\n```ts\n          // Re-match on task creation, update and deletion: a delete can free a\n          // dependent, since a legacy consumer counts a missing dependsOn id as met.\n          if (event.type !== 'TASK_CREATED' && event.type !== 'TASK_UPDATED' && event.type !== 'TASK_DELETED') return;\n```\nLeave everything after it alone: the findMatchingTask call, the skippedForNoTeam wake, and the pending-question branch, which keeps its own `event.type === 'TASK_UPDATED'` test so a delete never takes it. Sibling task-c8618ccd (WORKING) edits that pending-question path, so do not reflow it. Its hunks sit about 28 lines below this one, so the landing merge stays clean.\nWhy not a delete-specific wake: the deleted row may be unrelated ((w1)), or the dependent may still have another unmet prerequisite ((w3)). Only the shared re-match gets both right, and it keeps dependency gating, finalizing holds, profile admission and the team rule in one predicate.\nError handling: no new path. A throw in findMatchingTask is caught and logged by StateManager.emit, exactly as for a create or update; emit drops a subscriber only after 3 throws in a row, and the wait's own timer still resolves it. The delete's payload is never read. taskStore.ts removes the row from state.tasks before it emits TASK_DELETED, so the re-match sees the row gone.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "note": "Widened the parked listener's event filter to include TASK_DELETED and updated its comment. Nothing else in the file changed.",
+      "startedAt": "2026-11-03T22:00:57.309Z",
+      "completedAt": "2026-11-03T22:01:04.755Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "docs/MCP_SERVER.md, `### moe.wait_for_task` section only, with your Edit tool. Make three phrase edits and nothing else:\n(a) About :1576, the Returns comment `// Task available (immediately, or on a TASK_CREATED/TASK_UPDATED wake):` becomes `// Task available (immediately, or on a TASK_CREATED/TASK_UPDATED/TASK_DELETED wake):`.\n(b) About :1610, at the end of the **Dependency gating matches `claim_next_task`** note, after `so a parked dependent wakes the moment its last prerequisite lands.`, append one sentence: `The` + ` TASK_DELETED` (in backticks) + ` that` + ` moe.delete_task` (in backticks) + ` publishes re-runs it too, so a legacy or observe dependent whose last unmet prerequisite is deleted wakes at once (a deleted id counts as satisfied for it).`\n(c) About :1613, `Wake triggers while parked: ` followed by the backticked `TASK_CREATED`/`TASK_UPDATED` and ` producing a claimable match;` becomes the backticked `TASK_CREATED`/`TASK_UPDATED`/`TASK_DELETED` followed by ` producing a claimable match (a delete that frees nothing leaves the wait parked);`.\nNo daemon test asserts these phrases; the doc tests under src/util check other text.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Made the three wait_for_task phrase edits in docs/MCP_SERVER.md.",
+      "startedAt": "2026-11-03T22:01:05.783Z",
+      "completedAt": "2026-11-03T22:01:14.887Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once. Never run it in the shared checkout (rail). Both commands snapshot into a fresh mktemp dir, so they work the same in your task worktree (uncommitted) and in QA's control checkout (after landing). The architect dry-ran both, both ways, in a scratch clone; GREEN exits 1 on the unfixed source. mem:convention-daemon-vitest-mutant-checkref\nGREEN, which is complete_task's verification command:\n```\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.ts $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run waitForTask deleteTask dependencyUnblock waiter-ownership\n```\nExpect exit 0, no tsc output, `Test Files  6 passed (6)` and `Tests  86 passed (86)`. The 6 files are the three waitForTask files, deleteTask, dependencyUnblock and WebSocketServer.waiter-ownership.\nRED-AT-BASE, which archives base 54635828 plus only the new test file:\n```\ncd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 54635828cf3870f288cccc168bb4cb10d8c8df3e packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/waitForTask.deleteWake.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +2 failed \\| 1 passed \\(3\\)\" $S/l && grep -aqF \"> (w2) \" $S/l && grep -aqF \"> (w3) \" $S/l && echo RED-AT-BASE; }\n```\nExpect the two `FAIL` lines for (w2) and (w3), then `Tests  2 failed | 1 passed (3)`, then `RED-AT-BASE`.\nThen delete only the gate dirs you made, by fingerprint. A dir qualifies only if it is a /tmp/tmp.* dir, passes `[ -O \"$d\" ]`, and its packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts contains `task-b7203d89 (hunt #11)`. /tmp is shared with other seats, so never delete by name pattern alone, and never pattern-kill a process (rail).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "GREEN: tsc clean, 6 files and 86 tests passed, exit 0. RED-AT-BASE: (w2) and (w3) failed, 2 failed | 1 passed (3). Removed my two temp dirs by fingerprint.",
+      "startedAt": "2026-11-03T22:01:15.971Z",
+      "completedAt": "2026-11-03T22:01:55.703Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of your `git diff` plus the new file. Fix any finding, re-run step 4, then call complete_task.\n(1) Scope: waitForTask.ts changes only the filter line and its comment, and MCP_SERVER.md only the three phrases. The new test file is the only other change.\n(2) Over-waking: a delete wakes only through findMatchingTask, the same predicate a create or update runs. (w1) and (w3) prove that a delete which frees nothing leaves the wait parked.\n(3) NO_TEAM_MEMBERSHIP: suppose a delete frees a row that only the solo epic+status rule withholds. A team-less caller now wakes with that remedy, exactly as the matching create or update would wake it. That is intended.\n(4) Pending questions: that branch still requires TASK_UPDATED, so a deleted row's hasPendingQuestion wakes nobody.\n(5) Cost: delete_epic deletes its tasks one by one through deleteTask. Each delete emits TASK_DELETED and re-runs the matcher once per parked waiter, the same per-event cost every update already pays.\n(6) Concurrency: the listener runs synchronously inside emit, after the row is gone. cleanup() unsubscribes before resolve, so two deletes in a row cannot resolve one wait twice.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/waitForTask.ts",
+        "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review found no issues. The diff is 3 files: the filter line and comment, the three doc phrases, and the new test. A delete reaches a wake only through findMatchingTask, the pending-question branch still keys on TASK_UPDATED, and no new state or throw path was added.",
+      "startedAt": "2026-11-03T22:01:56.862Z",
+      "completedAt": "2026-11-03T22:02:10.212Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted by the governor at 21:15Z on 2026-11-03, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Its only dependsOn, task-4fbd3c69, reached DONE at 21:13:58Z (landing 67d7a0c0). Build on waitForTask.ts as 67d7a0c0 left it. Placement (worktree mode): sibling task-c8618ccd (pending-question masking) is promoted at the same time and may touch waitForTask.ts's pending-question path. Keep this edit inside the event filter around :435 and the re-match call; don't reflow other code.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-4fbd3c69b8bc4bdcb2760d62c73bd3c3"
+  ],
+  "priority": "LOW",
+  "order": 435.7,
+  "comments": [
+    {
+      "id": "comment-1f4ec278769846b1af087fa435198d40",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-03T22:23:07.410Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-e3bd8ddde1f9419b8632f32c87f6ee7f (generation 2); paths: docs/MCP_SERVER.md; rescue ref: refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z; target tip: cbae60700324951a00c65eae299c1dbbdac114c8; task WORKING."
+    },
+    {
+      "id": "comment-38f3c955460e4b58982ffc1f55d24572",
+      "author": "governor-e6b40560",
+      "content": "Governor note for the landing-retry session (22:24Z). This landing failed MOE_COMMIT_FAILED_CONFLICT against target cbae6070, and docs/MCP_SERVER.md is the only conflicting path; waitForTask.ts and waitForTask.deleteWake.test.ts merge cleanly. I reproduced it with git merge-file on the rescue ref. There is one hunk, in `### moe.wait_for_task`, at about :1618:\n- The target side is task-a024ac57's docs commit cbae6070. It added a NEW bullet, \"- **The execution route matches `claim_next_task` too:** ...\", directly above the \"- Wake triggers while parked:\" line.\n- This row's side changed that \"Wake triggers while parked\" line to name `TASK_DELETED` (\"...producing a claimable match (a delete that frees nothing leaves the wait parked)...\").\nResolve it by keeping both, in this order: the target's execution-route bullet unchanged, then this row's TASK_DELETED version of the wake-triggers line. Remove the target's old wake-triggers line; nothing else changes. Edit the file with your session's own editor (Edit, or apply_patch on a codex exec seat), not a shell write. Then re-run the plan's verification on the merged tree and call complete_task as the LANDING-CONFLICT prompt says.",
+      "timestamp": "2026-11-03T22:23:47.913Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T20:47:23.553Z",
+  "updatedAt": "2026-11-04T19:20:44.781Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T21:14:24.970Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T21:15:01.538Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T22:29:31.680Z",
+    "wallClockMs": 4470142
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a",
+    "worker-2dc72348",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T21:26:40.346Z",
+  "executionContract": {
+    "intendedBehavior": "A moe.wait_for_task parked for WORKING rows re-runs its claimable match on TASK_DELETED as well as on TASK_CREATED and TASK_UPDATED. When delete_task removes a legacy or observe dependent's last unmet prerequisite (a deleted dependsOn id counts as satisfied), the wait wakes with that dependent, and the claim that follows hands it out. A delete that frees nothing re-runs the match, finds none and leaves the wait parked.",
+    "acceptanceCriteria": [
+      "(w1) Deleting task-other, which no row depends on, leaves worker-1's wait parked (still in activeWaiters).",
+      "(w2) Deleting task-prereq, task-dep's only unmet prerequisite, resolves the wait with hasNext true, task task-dep and nextAction moe.claim_next_task. A WORKING claim by worker-1 then hands out task-dep.",
+      "(w3) Deleting task-gate-a, one of task-dep2's two unmet prerequisites, leaves the wait parked. Deleting task-gate-b then wakes it with task-dep2.",
+      "At base 54635828 the new file reads 2 failed | 1 passed (3), with (w2) and (w3) failing. With the fix, tsc is clean and the waitForTask, deleteTask, dependencyUnblock and waiter-ownership suites pass: 6 files, 86 tests.",
+      "docs/MCP_SERVER.md's wait_for_task section names TASK_DELETED in three places: the Returns comment, the dependency-gating note and the wake-trigger list."
+    ],
+    "invariants": [
+      "The pending-question branch still keys on TASK_UPDATED only, and the MESSAGE_CREATED branch is unchanged.",
+      "A delete wakes a waiter only through findMatchingTask: with a claimable match, or with the NO_TEAM_MEMBERSHIP remedy that a create or update would also give.",
+      "No new error handling path: a throw in the re-match is caught by StateManager.emit, as for created and updated events.",
+      "No new state, timer or subscription. The only change is a wider event filter in the existing listener."
+    ],
+    "compatibility": [
+      "No schema or MCP contract change. The wake answers keep their shapes; one more event can now trigger them.",
+      "delete_epic deletes its tasks through deleteTask, which publishes TASK_DELETED for each, so an epic delete re-runs the match too.",
+      "A verified-local dependent is unaffected. The matcher already skips verified-local rows, and a missing prerequisite never satisfies one."
+    ],
+    "approvedScope": [
+      "waitForTask.ts: the parked listener's event filter line and its comment, about :439-440",
+      "waitForTask.deleteWake.test.ts (new)",
+      "docs/MCP_SERVER.md: three wait_for_task phrases, about :1576, :1610 and :1613"
+    ],
+    "reuse": [
+      "The hunt repro (zzHuntA_waitDeleteWake.test.ts) is ported as (w2), and (w1) and (w3) are its negative controls. They reuse ToolTestHarness, the exported activeWaiters map and the existing findMatchingTask re-match."
+    ],
+    "sourceAssumptions": [
+      "waitForTask.ts (at 54635828): the parked listener returns at about :440 unless the event is TASK_CREATED or TASK_UPDATED. It then calls findMatchingTask(state, statuses, params.epicId, workerId, executionRoute).",
+      "taskStore.ts deleteTask: state.tasks.delete(taskId) runs before state.emit({ type: 'TASK_DELETED', payload: task }) at about :744.",
+      "util/claimEligibility.ts isClaimGatedByDependsOn counts a missing dependsOn id as satisfied for a legacy or observe consumer.",
+      "StateManager.emit wraps each subscriber in try/catch and drops a subscriber only after 3 consecutive throws.",
+      "Sibling task-c8618ccd (WORKING) edits the pending-question path of waitForTask.ts, not the event filter."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.ts $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run waitForTask deleteTask dependencyUnblock waiter-ownership",
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive 54635828cf3870f288cccc168bb4cb10d8c8df3e packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && { NO_COLOR=1 npx vitest run src/tools/waitForTask.deleteWake.test.ts > $S/l 2>&1; grep -aE \"^ +Tests |^ FAIL \" $S/l; grep -aqE \"^ +Tests +2 failed \\| 1 passed \\(3\\)\" $S/l && grep -aqF \"> (w2) \" $S/l && grep -aqF \"> (w3) \" $S/l && echo RED-AT-BASE; }"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Chosen: widen the parked listener's event filter to TASK_DELETED, so a delete re-runs the same findMatchingTask predicate a create or update runs. It is one line, and it inherits dependency gating, finalizing holds, profile admission and the team rule unchanged.\n(2) Rejected: a delete-specific wake that looks up rows naming the deleted id in dependsOn. It wakes a dependent that still has another unmet prerequisite (that mutant fails (w3)), and it duplicates the claim predicate.\n(3) Rejected: having delete_task publish a TASK_UPDATED per dependent. It broadcasts rows that did not change (phantom board updates), and the governor asked to keep the edit inside the filter.",
+    "codebaseInsights": "Hunt repro: after delete_task removed the prerequisite, the parked wait timed out (hasNext false, timedOut), although an immediate claim would have handed out the dependent.\ndeleteEpic cascades through deleteTask, which emits TASK_DELETED per task, so epic deletes are covered too.\nArchitect dry run at 54635828:\n- RED: 2 failed | 1 passed (3).\n- GREEN: 6 files, 86/86, tsc clean. All 27 test files that mention wait_for_task also pass, 806/806.\n- Mutants: a dependents-lookup wake fails (w3), and a wake on any delete fails all three tests.\n- Both gates ran verbatim in a scratch clone, uncommitted and after a simulated landing commit. GREEN exits 1 on the unfixed source.",
+    "risks": "Sibling task-c8618ccd (WORKING) edits waitForTask.ts's pending-question path about 28 lines below this hunk, so the landing merge is clean. If it ever conflicts, keep both changes.\nThe tests use 50 ms ticks and a 3000 ms wait. With the fix the wake is synchronous on the delete, so the ticks only let the waiter register. Do not shorten the wait below 1000 ms, because the tool clamps it.\nError handling stays as it is: no new throw site.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/waitForTask.ts",
+      "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "716b7bc66c49713c060a343f72010f731a5b2ca3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T21:26:40.380Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T22:00:41.476Z",
+  "reviewStartedAt": "2026-11-03T22:25:41.706Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && T=packages/moe-daemon/src/tools && git archive HEAD packages/moe-daemon | tar -x -C $S && cp $T/waitForTask.ts $T/waitForTask.deleteWake.test.ts $S/$T/ && cd $S/packages/moe-daemon && npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && NO_COLOR=1 npx vitest run waitForTask deleteTask dependencyUnblock waiter-ownership",
+    "exitCode": 0,
+    "outputTail": "(run on the merged worktree via git ls-files snapshot, same npm ci / tsc --noEmit / vitest commands) Test Files  6 passed (6)\n      Tests  86 passed (86)\nexit 0",
+    "reportedAt": "2026-11-03T22:25:41.706Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts",
+    "packages/moe-daemon/src/tools/waitForTask.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Landing conflict resolved: docs/MCP_SERVER.md's wait_for_task section had one conflict hunk. Kept the target's new \"execution route matches claim_next_task\" bullet unchanged, followed by this task's TASK_DELETED wake-triggers line; the old wake-triggers line and all markers are removed. Code unchanged: waitForTask.ts parked listener re-matches on TASK_DELETED, plus new waitForTask.deleteWake.test.ts ((w1) unrelated delete stays parked, (w2) wakes with task-dep, (w3) two prerequisites). Re-verified on the merged tree, built from the worktree's git ls-files (not git archive HEAD) in a snapshot outside the shared checkout: tsc clean, 6 files, 86 tests passed. RED-AT-BASE (2 failed | 1 passed (3)) was recorded earlier and the test file is unchanged.",
+  "commits": [
+    {
+      "sha": "7574573fa61d06e57dd02979f57140a05b4d51fd",
+      "ref": "refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-03T21:26:45Z",
+      "paths": [],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-03T22:23:05.390Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-b7203d8993244211913c2f1ec0ab367f ref=refs/moe/rescue/task-b7203d8993244211913c2f1ec0ab367f/20261103T222305Z sha=7574573fa61d06e57dd02979f57140a05b4d51fd reason=conflict"
+    },
+    {
+      "sha": "52185bb4c612299e93be14233863a8efd37bb7fc",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T22:23:39Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/waitForTask.deleteWake.test.ts",
+        "packages/moe-daemon/src/tools/waitForTask.ts"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T22:27:36.505Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T22:27:36Z",
+    "at": "2026-11-03T22:30:00.836Z"
+  },
+  "landingRetry": null,
+  "completedAt": "2026-11-03T22:29:31.680Z",
+  "reviewCompletedAt": "2026-11-03T22:29:31.680Z",
+  "reviewSummary": "Reviewed completion 52185bb4 (on moe/work-2026-10-24 = control HEAD; 3 files, +79/-5, far under the 400 LOC cap), read via git show, not the working tree.\n\nRe-ran task.verification in a snapshot outside the shared checkout (git archive HEAD + overlay, npm ci there): tsc --noEmit clean; vitest waitForTask deleteTask dependencyUnblock waiter-ownership = 6 files, 86 tests passed, exit 0. Re-ran RED-AT-BASE (base 54635828 + only the new test file): 2 failed | 1 passed (3), FAIL lines for (w2) and (w3), printed RED-AT-BASE. Removed my two temp dirs by fingerprint; nothing built or installed in the shared tree.\n\nDoD 1: the parked listener's filter in waitForTask.ts now also accepts TASK_DELETED and reuses findMatchingTask. (w2) deleting the only unmet prerequisite wakes the waiter with task-dep (nextAction moe.claim_next_task) and the claim then hands out task-dep. (w1) an unrelated delete and (w3) deleting one of two prerequisites leave the waiter in activeWaiters, so an unrelated TASK_DELETED does not wake it.\nDoD 2: the ported hunt repro passes with the fix and fails at base; the four existing suites stay green.\n\nInvariants: the pending-question branch still keys on TASK_UPDATED, MESSAGE_CREATED branch untouched, no new state/timer/subscription/error path; runtime change is the filter line plus comment (+3/-2).\nDocs: docs/MCP_SERVER.md wait_for_task names TASK_DELETED in all three places. The landing-conflict hunk was resolved as the governor asked: task-a024ac57's execution-route bullet kept unchanged above the TASK_DELETED wake-triggers line; no markers left.\n\nNot run: the full daemon suite (narrow plan-named set only, mid-epic). Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

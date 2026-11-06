@@ -1,0 +1,308 @@
+{
+  "id": "task-f81c85acfec54b0f89affccb7a833b6a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a wrapper hot reload releases the seat's held task, so an idle peer claims it in the ~2 s before the re-exec'd seat re-registers and a mid-step row changes hands",
+  "description": "Observed 2026-11-02 by governor-e6b40560.\n\nWhat happened:\n- 23:07:16Z: worker-33f67e5b's wrapper hot-reloaded (deregister reason wrapper_restart) and released WT-14 (task-befdddf7). Steps 1-4 were COMPLETED, and step 5's long verification had been IN_PROGRESS since 21:43:47Z.\n- 23:07:18Z: worker-fdb2af60, an idle Codex seat, claimed it. The re-exec'd worker-33f67e5b came back IDLE.\n- The new seat restarts step 5 from scratch (about an hour) without the first seat's context.\n- 21:48:29Z, same day: worker-2dc72348's reload released 4fdc7590 (steps 1-3 done), and the seat claimed the higher-priority 475e8844 instead. 4fdc7590 sat unowned until the governor raised its priority.\n- Of 9+ reloads that day, 2 stranded the row and 1 handed it to a peer. Worktree mode raised the cadence: every landing that changes moe-agent.{sh,ps1} reloads every seat at its next loop top (follow_control_checkout, then the hash check).\n\nCode:\n- scripts/moe-agent.sh ~8824-8842 (the hot-reload block) deregisters with reason wrapper_restart, then `exec`s. Its comment says it on purpose: \"any held task is released for it (or a peer) to re-claim\".\n- The ps1 in-process supervisor reload is the twin.\n- On the daemon side, deregister releases the seat's tasks (the 🔌 \"released 1 task\" line), and the claim path treats the row as claimable at once.\n- A wrapper-only \"re-claim by taskId after exec\" does not close the gap: the peer won the race inside the 2 s window, before the re-exec'd seat's first claim.\n\nWanted:\n- A reload keeps the seat's task. Between the reload's deregister and the re-exec'd wrapper's first claim, no other seat may claim it, and that first claim gets the same task back (alreadyAssigned / resume).\n- If the re-exec'd seat never comes back within a bounded window, the task becomes claimable exactly as today, so a reload that dies strands nothing. Name the window and its setting.\n- Both launchers keep parity: sh `exec` and the ps1 in-process supervisor.\n- This changes what the fleet may claim, so the governor surfaces the plan to the human before it is approved.\n\nLikely files: the daemon deregister/claim path (state/workerLifecycle.ts or tools/deregisterWorker.ts, plus claimNextTask.ts) and its tests; scripts/moe-agent.sh and scripts/moe-agent.ps1 (the reload block passes the hold or reason); a postflight arm; scripts/CLAUDE.md's Hot reload bullet; docs/MCP_SERVER.md (deregister_worker).",
+  "definitionOfDone": [
+    "A daemon test: a seat holding a WORKING task deregisters with reason wrapper_restart; a peer's claim_next_task in the grace window does not get that task; the same workerId's next claim gets it back (alreadyAssigned or a resume of the same task).",
+    "A daemon test: when the same workerId does not re-register within the bounded grace window, the task becomes claimable by any seat exactly as today. The window and its setting are documented.",
+    "A sh and a ps1 postflight arm show a hot-reloading seat resuming its own held task, with no peer claim and no release line naming a peer.",
+    "scripts/CLAUDE.md's Hot reload bullet and docs/MCP_SERVER.md's deregister_worker section describe the hold. The existing hot-reload arms and the restart purge/reattach behavior are unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Fake daemon hold in scripts/tests/postflight-fake-proxy.js. First read task-4ddbfb31's landed deregisterWorker and claim code and mirror its response shapes (heldTaskIds, holdUntil). Where the landed code differs from this text, follow the code. Add FAKE_CLAIM_MODE=reload-hold and document it at its handler like the other modes.\n\nState: <project>/.moe/reload-hold.holder holds the holder's workerId.\n- Create the file only with flag 'wx'. That makes two seats unable to both become holder; EEXIST means another seat already is.\n- Error handling: a reader that finds the file empty, unreadable or racing never throws. It answers as a non-holder, so it fails toward 'none'. Any other fs error propagates, as the fake's other handlers do, so the arm fails loudly instead of answering half-built state.\n\nclaim_next_task:\n- No holder file: create it for the caller. Answer {...attemptFixture(), hasNext:true, task:{id:'task-postflight', title:'Postflight smoke', status:'WORKING', chatChannel:'chan-task'}}.\n- The holder: answer with the 'resume' mode's alreadyAssigned shape (with its nextAction) for task-postflight, status WORKING.\n- Anyone else: {hasNext:false}.\n- Append one row per answer to <project>/.moe/claim-answers.jsonl: {workerId, answer:'claimed'|'resumed'|'none'}.\n\nderegister_worker: keep the existing deregister.log line and race hook unchanged, then:\n- The holder with reason wrapper_restart keeps the holder file and answers {success:true, workerId, alreadyDead:false, releasedTaskIds:[], releasedCount:0, heldTaskIds:['task-postflight'], holdUntil:<now+120000 as ISO>}.\n- The holder with any other reason deletes the file (a release) and answers releasedTaskIds ['task-postflight'], heldTaskIds [].\n- A non-holder gets both lists empty.\n\nAdd 'reload-hold' to the list that skips the unconditional attemptFixture() call (~line 392), so only the holder's claim writes the attempt record, with workerId set to the holder. Every other mode's answers stay byte-identical.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight-fake-proxy.js"
+      ],
+      "note": "FAKE_CLAIM_MODE=reload-hold added, mirroring a13eb354's deregisterWorker/claim shapes (heldTaskIds always, holdUntil only on a hold, message strings copied). Holder file .moe/reload-hold.holder created only with flag 'wx'. reloadHolder() fails toward none on ENOENT or empty content and rethrows other fs errors. Every answer is appended to .moe/claim-answers.jsonl. 'reload-hold' is added to the attemptFixture skip list, so only the 'claimed' answer writes the attempt record (workerId = holder). Every other mode's deregister still answers {success:true} byte-identically. Direct check: the sequence claim/peer/resume/peer-dereg/reload-dereg/peer/resume/terminal-dereg/peer gave claimed,none,resumed,none,resumed,claimed. 8 parallel first claims gave exactly 1 claimed.",
+      "startedAt": "2026-11-03T07:22:06.785Z",
+      "completedAt": "2026-11-03T07:25:16.839Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Add a [hot reload hold] arm to scripts/tests/postflight.sh, right after the [hot reload] arm (~1855-1945). Reuse reload_repo, reload_commit and reload_fail. Give reload-sequence.cjs an optional 3rd argument, a workerId; with it, only that worker's rows count. Without it, the output is unchanged, so the existing arms keep their exact assertions.\n\nSETUP\n- RELOAD_DIR=$TMP_DIR/reload-hold: a fresh copy of scripts/, then reload_repo.\n- In the project: project.json with autoCommit:false, daemon.json, chan-general.jsonl, and a WORKING task record for task-postflight (write_task_record, or literal JSON).\n- A second copy of scripts/ at $TMP_DIR/reload-hold-peer. It is never edited, so the peer never reloads and keeps polling through the window.\n- A fake CLI that appends its argv plus a '--- launch ---' line to $TMP_DIR/reload-hold-launches.txt, then exits 0.\n\nRUN\n1. Start worker-reload in the background: --role worker --loop --poll-interval 1 --no-start-daemon, with FAKE_CLAIM_MODE=reload-hold, MOE_DISABLE_HEARTBEAT=1 and MOE_RESUME_MAX_ATTEMPTS=50. Add its PID to LIVE_PIDS.\n2. Once its first claim is answered 'claimed', start worker-peer the same way from the peer copy, also in LIVE_PIDS.\n3. After the first '--- launch ---' line, append one comment line to the reload copy and reload_commit it.\n4. Wait, bounded by POSTFLIGHT_TIMEOUT_SEC, until three things hold: worker-reload's filtered sequence matches ^c+rc+$, a launch is recorded after its r, and worker-peer has at least one claim row after that r.\n5. Kill both recorded PIDs only, never by name or pattern, and restore LIVE_PIDS.\n\nERROR HANDLING\n- Every wait is bounded.\n- Every failure path, including a dead seat or a timeout, goes through reload_fail. It kills both recorded PIDs, prints both out files, deregister.log and the sequence, then exits 1.\n\nASSERT, each through reload_fail with a named reason:\n(a) worker-reload's sequence is ^c+rc+$: exactly one wrapper_restart deregister and no other deregister.\n(b) In claim-answers.jsonl, worker-reload's first answer is claimed and every later one is resumed. The count of its answers equals its c count.\n(c) worker-peer has no claimed or resumed answer. The RPC log has no release_task from either seat and no deregister from worker-peer.\n(d) After the out file's 'restarting to load it' line comes '[resume] worker-reload already holds task-postflight (WORKING) from a previous session (attempt 1/'. That is, the re-exec'd process, with a fresh resume counter, resumed the same task.\n(e) The last launch block carries 'RESUME: you are workerId worker-reload and you already claimed task task-postflight'.\n\nFinish with '[hot reload hold] ok: ...'. No output line may start with SKIP, because postflight-safe.mjs fails on one.\n\nTIPS\n- To iterate fast, cut a scratch harness from the prelude, the reload helpers and this arm (mem:convention-postflight-scratch-harness, last section).\n- Edit wrapper copies only by short appends (mem:gotcha-bash-hot-reload-incremental-parse).\n- Run the arm once against a mutant fake whose wrapper_restart branch deletes the holder file. It must fail at (b) or (c). Record that run in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.sh"
+      ],
+      "note": "Added the [hot reload hold] arm right after [hot reload]. reload-sequence.cjs takes an optional argv[3] workerId filter; with no argument every row passes the filter, so the output is unchanged. The arm reuses reload_repo, reload_commit and reload_fail (hold_fail kills the peer PID, prints the peer out file and claim-answers.jsonl, then calls reload_fail). Every wait is bounded (hold_until, POSTFLIGHT_TIMEOUT_SEC). Each poll also checks (b) and (c), so a wrong answer fails at once and by name. Only the two recorded PIDs are killed (kill -KILL by PID, then LIVE_PIDS restored). After the kill, a bounded 10 s settle waits for answers to match claims, because an orphaned fake RPC can still be writing. One strengthening versus the plan text: the edit is committed after TWO launches, not one, so the pre-reload resume counter has reached 1 and the post-restart 'attempt 1/' proves the counter is fresh. ANSI is stripped portably with $(printf '\\033'). Evidence: a scratch cut (prelude 1-28, 50-114, reload helpers through the arm) in /tmp git-archive snapshot /tmp/f81c-scratch-8w4nIh, env -i with node 24: PASS in 17 s, sequence ccrc. A kept-temp run showed '[resume] ... (attempt 1/50)' at lines 34 and 68 around 'restarting to load it' (44), peer answers all none, and deregister.log holding only worker-reload wrapper_restart. 3 parallel green runs: 3/3 ok. MUTANT (fake keepsHold=false, releases on wrapper_restart): EXIT=1, failing at \"(b) worker-reload's answers must be claimed, then only resumed: 'claimed resumed claimed'\". All 7 [hot reload*] arms plus [stale offset] cut (1838-2370): all ok, 68 s.",
+      "startedAt": "2026-11-03T07:25:19.488Z",
+      "completedAt": "2026-11-03T07:32:09.450Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Add the twin [hot reload hold] arm to scripts/tests/postflight.ps1, right after the [hot reload] arm (~1604-1697).\n\nREUSE\n- Initialize-ReloadRepo, Invoke-ReloadCommit and Get-ReloadRows.\n- Give Get-ReloadSequence an optional [string]$Worker filter. Without it, the existing arms' calls behave the same.\n\nMIRROR STEP 2\n- The reload copy is git-initialised. The peer copy is unedited and has no repo. Copy the wrapper plus every sibling .mjs, as the existing arm does.\n- Write a WORKING task record (Write-TaskRecord).\n- Set FAKE_CLAIM_MODE=reload-hold, MOE_DISABLE_HEARTBEAT=1 and MOE_RESUME_MAX_ATTEMPTS=50 inside try/finally, restoring each.\n- Start both seats with Start-Process and record both process objects. Start the peer only after the first 'claimed' answer.\n- Append to the reload copy with a retrying write (as Set-ReloadWrapperText retries), then Invoke-ReloadCommit.\n- Use the same bounded wait, including at least one worker-peer claim after the r.\n- In the finally, run taskkill /T /F /PID on each recorded PID only. Add no command-line-matched cleanup. The ps1 reload stays in one process, so the recorded PID is still valid after it.\n\nERROR HANDLING\n- Every failure throws 'HOT RELOAD HOLD FAILED: <reason>', with both out files and the sequence in the message, like the other reload arms.\n- The finally still kills both recorded PIDs and restores the env.\n\nASSERT (a) to (d) as in step 2\n- Read claim-answers.jsonl and the RPC log as UTF-8 JSON.\n- Match the [resume] line on its ASCII prefix only: the redirected out file is in the OEM code page, and the ps1 line goes on with an em dash.\n- A .cmd argv recorder is optional, because cmd mangles a prompt that contains quotes.\n\nIt must pass under Windows PowerShell 5.1 and pwsh 7. Finish with '[hot reload hold] ok: ...' and print no SKIP lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/postflight.ps1"
+      ],
+      "note": "Added the ps1 twin [hot reload hold] arm right after [hot reload], and gave Get-ReloadSequence an optional [string]$Worker filter (a default call is unchanged). Two seats from separate wrapper copies share one fake under FAKE_CLAIM_MODE=reload-hold: worker-reload uses a launch-counting .cmd CLI, and worker-peer uses an unedited copy plus true.cmd. A UTF-8 no-BOM append commits one edit after 2 launches. Assertions: (a) ^c+rc+$ with exactly one deregister in the log, a wrapper_restart; (b) answers C then only R, with one answer per claim; (c) the peer gets only N and nothing calls release_task; (d) a fresh '[resume] ... (attempt 1/' line after 'restarting to load it'. The task record is literal JSON because Write-TaskRecord is defined later. Only the two Start-Process PIDs are killed, by taskkill /T /F /PID, and there is no command-line-matched cleanup. Verified with a scratch cut (prelude + helpers 1586-1660 + new arm) in /mnt/d/moe-scratch/f81c-ps-4YgMBE: ParseFile is clean on the full file and on the cut. PS 5.1.26100 passed (sequence ccrc, 10s), plus 2 parallel repeats that both passed, and pwsh 7.6.9 passed (8s). The keepsHold=false mutant exits 1 with 'HOT RELOAD HOLD FAILED: (c) worker-peer was handed the held task'. The kept-temp evidence shows attempt 1/50 at line 33, the restart at 44, attempt 1/50 again at 68, and deregister.log holding only worker-reload wrapper_restart.",
+      "startedAt": "2026-11-03T07:32:13.789Z",
+      "completedAt": "2026-11-03T07:40:10.896Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Docs. Describe the hold exactly as task-4ddbfb31 landed it: read its commit, and where the code differs from this text, document the code.\n\n1. scripts/CLAUDE.md, Hot reload bullet.\n- After 'deregistering with reason `wrapper_restart`', say that the daemon then holds the seat's active tasks for its relaunch instead of releasing them. Cover: settings.reloadHoldMs, default 2 min, where 0 releases at once as before; no peer can claim them in the gap; the re-exec'd wrapper's first claim_next_task answers alreadyAssigned and the seat resumes its own task; a relaunch that never claims has them released by the 60 s worker sweep after the window.\n- Point to moe.deregister_worker in docs/MCP_SERVER.md.\n- Change the Tests sentence to 'the seven `[hot reload*]` arms ... (`[hot reload race]` and `[hot reload hold]` included)'.\n\n2. docs/MCP_SERVER.md, '### moe.deregister_worker'.\n- Qualify the opening 'release every task it holds' with 'except a hot reload (below)'.\n- Add a bullet, '**A hot reload holds its tasks.**', covering: reason exactly wrapper_restart; a non-DEAD seat holding a PLANNING, WORKING, REVIEW or BLOCKED task; the finalizing close still runs first; nothing is released and no DEAD mark is written; reloadHoldUntil; the holding banner and the WORKER_DISCONNECTED row; peers refused; the hold ends at the seat's next claim_next_task; a repeat keeps the deadline; expiry by the 60 s worker sweep as reload_hold_expired, which is today's full release, between reloadHoldMs and reloadHoldMs + 60 s after the reload; any other reason, or an idle seat, behaves as before; a restart keeps the deadline.\n- Add heldTaskIds: string[] and holdUntil?: string to Returns.\n\n3. docs/CONFIGURATION.md: add a reloadHoldMs row after reconcileWindowMs. Default 120000 (2 min); 0 disables; capped at 1800000; an invalid value gives the default; measured from the deregister, never from idle time.\n\n4. docs/SCHEMA.md: add Worker reloadHoldUntil?: string | null, with a one-line comment.\n\nTwo things to avoid: any sentence saying the daemon never runs git (daemonGitDocs.test.ts scans for it), and @ group tokens in prose.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ],
+      "modifiedFiles": [
+        "scripts/CLAUDE.md",
+        "docs/MCP_SERVER.md",
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md"
+      ],
+      "note": "Docs match the landed a13eb354 code (workerLifecycle.ts beginReloadHold/endReloadHold/resolveReloadHoldMs, sweeps.ts runReloadHoldSweep, deregisterWorker.ts response).\n- scripts/CLAUDE.md: the Hot reload bullet now describes the hold (reloadHoldMs default 2 min, 0 = release at once, peers can't claim, the first claim answers alreadyAssigned with a fresh resume counter, the 60 s sweep releases after the window) and points to MCP_SERVER. The Tests sentence is now \"seven [hot reload*] arms (race and hold included)\"; a grep confirms 7.\n- MCP_SERVER.md moe.deregister_worker: the opening sentence has the hot-reload exception. New \"A hot reload holds its tasks\" block: exact reason; non-DEAD seat with a PLANNING/WORKING/REVIEW/BLOCKED task; the finalizing close first; no release, DEAD mark, chat-leave or resource change; the banner text and the WORKER_DISCONNECTED fields; peers refused; the returning claim clears the hold first and a failed clear fails the claim; a repeat keeps the deadline with no writes; expiry by the 60 s watcher as reload_hold_expired, unparseable deadlines included, between reloadHoldMs and reloadHoldMs + 60 s; terminal_closed, idle, 0 and a failed hold write behave as before; the deadline persists on the record. Returns gained heldTaskIds and holdUntil?, and the hold message.\n- CONFIGURATION.md: a reloadHoldMs row after reconcileWindowMs (default 120000, 0 disables, cap 1800000, invalid values give the default, measured from the deregister, never from idle time).\n- SCHEMA.md: Worker.reloadHoldUntil?: string | null.\nNo sentence says the daemon never runs git, and the prose has no @ tokens.",
+      "startedAt": "2026-11-03T07:40:17.586Z",
+      "completedAt": "2026-11-03T07:42:20.684Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Run the gate once, from the task worktree, as the two legs below. Neither leg fits in one Bash call: launch each detached with job control and poll its log. mem:gotcha-qa-session-env-and-signals-leak-into-harness covers set -m, the SigIgn check, and keeping the Windows leg in its own call; also see mem:pattern-wrapper-harness-snapshot-verify-from-wsl.\n\nLINUX LEG:\nL=$(mktemp -d /tmp/moe-f81c-XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/CLAUDE.md docs/MCP_SERVER.md docs/CONFIGURATION.md docs/SCHEMA.md; do cp \"$f\" \"$L/$f\"; done && cd \"$L\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund && NO_COLOR=1 npx vitest run'\n\nWINDOWS LEG:\nP=$(mktemp -d /mnt/d/moe-scratch/f81c-XXXXXX) && git archive HEAD | tar -x -C \"$P\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$P/$f\"; done && \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$P/scripts/tests/postflight-safe.mjs\")\" powershell\n\nOptional: run the same with pwsh if time allows; CI runs it.\n\nCOMPLETION EVIDENCE for complete_task verification:\n- command: both legs, exactly as run.\n- exitCode: 0.\n- outputTail: each engine's postflight-safe JSON line (failureClass NONE), the daemon vitest summary (it includes task-4ddbfb31's src/state/reloadHold.test.ts), and parity's last line.\n\nCoverage: the daemon suite proves DoD 1-2 and the restart purge/reattach half of DoD 4. postflight-safe on both engines proves DoD 3 and the existing hot-reload arms. If a test fails, rerun it on a pristine git archive HEAD before calling it yours.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I ran the gate once on the step-4 bytes. The previous session died with cli-exit=1 after launching both legs detached at 07:43Z. This session confirmed that both snapshots match the worktree byte for byte, adopted the two runs and polled them to the end. Neither leg was relaunched.\n\nLINUX (/tmp/moe-f81c-CpCbys: git archive HEAD plus the 7 files; env -i; node 24; MOE_POSTFLIGHT_TIMEOUT_SEC=240; SigIgn 0x5). GATE_EXIT=0.\n- PASS parity-check.sh.\n- postflight-safe bash: {\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n- account-trust-docs: 5/5 pass.\n- Daemon vitest: Test Files 230 passed (230), Tests 6974 passed | 20 skipped. That includes src/state/reloadHold.test.ts (25 tests).\n\nWINDOWS (D:\\moe-scratch\\f81c-J8HwTs, Windows PowerShell 5.1 through postflight-safe.mjs powershell). Exit 0 at about 10:32 local: {\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}.\n\nTarget check: origin/moe/work-2026-10-24 has one newer commit on overlapping paths, 87609414, which touches moe-agent.{sh,ps1} PATH filtering. git merge-tree with HEAD is clean. 4ddbfb31 has no newer commit after a13eb354, so the mirrored shapes still match.",
+      "startedAt": "2026-11-03T07:42:23.975Z",
+      "completedAt": "2026-11-03T08:32:47.551Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Adversarial self-review of this diff only. Check each of these:\n- Can the two seats' fake RPCs race on the holder file? Only a 'wx' create may make a holder, and only the holder's non-reload deregister may delete it.\n- Is either arm vacuous? The mutant fake from step 2 must fail it.\n- Did the peer really poll after the reload deregister, with every answer 'none'?\n- Do the six existing [hot reload*] arms and [stale offset] assert exactly what they did before (the reload-sequence.cjs and Get-ReloadSequence defaults)?\n- Is every PID the arm started killed on every exit path, including a failed assertion?\n- Does any harness line start with SKIP?\n- Do the docs match the landed daemon code: field names, reason strings, default, cap and sweep cadence?\n- Is scripts/moe-agent.{sh,ps1} untouched? Check with git diff --quiet HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1.\nFix any finding in its own file, re-run the affected leg, and say so in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I reviewed only this task's diff (a13eb354..HEAD), adversarially. Nothing needed a fix and no file changed, so no leg was re-run.\n\n- Holder race: the only path that makes a holder is fs.writeFileSync with flag 'wx'. On EEXIST the claim re-reads the file. A file that is created but still empty reads as no holder, so a peer gets 'none'. Only the holder's deregister with a reason other than wrapper_restart deletes the file (rmSync force). In step 1, 8 parallel first claims gave exactly 1 claimed.\n- Not vacuous: the keepsHold=false mutant failed the sh arm at (b) (step 2) and the ps1 arm at (c) (step 3).\n- The peer did poll after the reload: when the first 'r' is seen, the peer's claim count is marked, and the arm requires a claim after that mark. Both the per-poll and the final checks require every peer answer to be 'none'.\n- Defaults unchanged: reload-sequence.cjs with no argv[3] and Get-ReloadSequence with '' let every row through the filter. The gate's postflight-safe returned failureClass NONE on bash and PS 5.1, which includes the existing 6 [hot reload*] arms and [stale offset]. Later ps1 arms reassign every $reload* variable the hold arm sets.\n- PIDs: sh kills only reload_pid and hold_peer_pid (kill -KILL by PID; both are in LIVE_PIDS for the EXIT trap). ps1 runs taskkill /T /F /PID on the two Start-Process objects in finally, guarded by HasExited on a held handle.\n  - Theoretical, left as is: after the sh kill and wait, a later assertion failure re-sends kill -KILL to the reaped PIDs. The existing [hot reload] arm has the same pattern, and pid_max is 4194304, so a reuse within the few ms before exit is not a practical risk.\n- No added line starts with SKIP, and no pkill/killall/pgrep/fuser was added.\n- Docs checked against a13eb354: wrapper_restart and reload_hold_expired; 120000 default, 1800000 cap, and non-finite or negative values give the default; the 60 s staleWorkerWatcher interval; Date.parse NaN expires; endReloadHold runs before alreadyAssigned and a failed clear propagates; heldTaskIds is always present and holdUntil only on a hold; the message strings; Worker.reloadHoldUntil.\n- git diff --quiet a13eb354 HEAD -- scripts/moe-agent.sh scripts/moe-agent.ps1 passes, so the wrappers are untouched.\n- npm run lint: OK.\n- Noted: the ps1 arm has no (e) RESUME-argv assertion. The plan made it optional, since cmd mangles quoted prompts, and the AC asks only for the sequence, answer and [resume] assertions.",
+      "startedAt": "2026-11-03T08:32:49.622Z",
+      "completedAt": "2026-11-03T08:34:13.554Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promotion, 06:35Z, under the human's \"make sure board is moving / also move from backlog\". This is a real seat-churn defect: a hot reload hands a mid-step row to a peer, as WT-14 lost an hour on 11-02. Planning and QA review it like any row. The human can drag it back to BACKLOG to veto the claim-behaviour change.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 345.7,
+  "comments": [
+    {
+      "id": "comment-650351a7595d44878334c615d931f3df",
+      "author": "architect-24611a0a",
+      "content": "Split for size (architect-24611a0a, 2026-11-03). As one row this is about 12 files, over submit_plan's 10-file cap and QA's 400-net-LOC cap. The daemon hold (DoD 1-2) moved to task-4ddbfb31aa2041bdbed1861aa32903ea, which this row now depends on. This row keeps the human DoD and lands last. It owns the sh and ps1 postflight arms (DoD 3) and the four docs (DoD 4), and it re-verifies DoD 1-2 by running task-4ddbfb31's landed test file inside the full daemon suite.\n\nDesign, so the human can veto it before it ships (drag either row to BACKLOG):\n- The hold keys on the existing reason \"wrapper_restart\", and neither wrapper is edited. Every live seat's old bytes already send that reason, so the first reload after the daemon fix is protected. A wrapper landing would itself hot-reload the whole fleet under the unfixed daemon.\n- A seat that holds an active task keeps it, stays not DEAD, and gets reloadHoldUntil. Its next claim_next_task ends the hold and answers alreadyAssigned.\n- If the seat has not claimed by the deadline, the 60 s worker sweep deregisters it as \"reload_hold_expired\", which is today's full release.\n- Setting: settings.reloadHoldMs. Default 120000 ms; 0 restores today's behaviour; capped at 30 min.\n- Evidence from the 11-01..11-03 activity log: relaunches re-claimed their row 2.4-8.5 s after the deregister. Peers won three times, inside 1.7-2.4 s.\n- Known residual: the reload-block comments in moe-agent.{sh,ps1} still say a held task is released. They are left unchanged on purpose, because editing either file hot-reloads every seat. Fold the correction into the next wrapper change.",
+      "timestamp": "2026-11-03T06:56:09.372Z"
+    },
+    {
+      "id": "comment-e23913ff90714c97ad66d1594f5dee09",
+      "author": "governor-e6b40560",
+      "content": "Governor early start, 07:19Z. I removed this row's dependsOn on task-4ddbfb31, and you may start now. 4ddbfb31's completion a13eb354 has landed on moe/work-2026-10-24 (pushed), and that row is in REVIEW, so only QA's verdict is still pending.\n- Build on the landed bytes in a13eb354. Steps 1 and 4 tell you to read 4ddbfb31's landed deregisterWorker/claim code and document the code: that means a13eb354 (`git show a13eb354`), not the plan text.\n- If a QA reject on 4ddbfb31 changes those response shapes or the reloadHoldMs semantics, re-sync the fake-daemon mirror and the docs to the new completion before you complete.\n- The two rows share no files: 4ddbfb31 changed only packages/moe-daemon/src, and this row touches scripts/tests and docs.",
+      "timestamp": "2026-11-03T07:19:03.741Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:08:50.369Z",
+  "updatedAt": "2026-11-04T19:20:43.943Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-03T06:32:59.859Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T06:33:01.893Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-03T09:30:21.054Z",
+    "wallClockMs": 10639161
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-c9368191",
+    "qa-93f9625e"
+  ],
+  "dependsOn": [],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "lowEffortEligible": true,
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T06:59:12.623Z",
+  "executionContract": {
+    "intendedBehavior": "Prove and document the reload hold that task-4ddbfb31 adds to the daemon.\n\nBoth postflight harnesses gain a [hot reload hold] arm. In it, a seat holding task-postflight hot-reloads on a committed edit, and its re-exec'd process resumes the same task: its first claim is answered alreadyAssigned, the wrapper prints its [resume] line with a fresh attempt counter, and it relaunches the CLI with the RESUME prompt. A live peer seat polls the same fake daemon after the reload, never receives the task, and nothing is released.\n\nThe fake daemon models the hold: a wrapper_restart deregister from the holder keeps the task held, and any other deregister releases it.\n\nscripts/CLAUDE.md, docs/MCP_SERVER.md (deregister_worker), docs/CONFIGURATION.md and docs/SCHEMA.md describe the landed hold. No runtime file changes.",
+    "acceptanceCriteria": [
+      "The postflight.sh [hot reload hold] arm passes. worker-reload's RPC sequence is ^c+rc+$, and every claim answer after its first is resumed. After the restart line, the output carries '[resume] worker-reload already holds task-postflight (WORKING) from a previous session (attempt 1/'. The last CLI launch carries 'RESUME: you are workerId worker-reload'.",
+      "In that arm, worker-peer claims at least once after the reload deregister and is never answered claimed or resumed. The RPC log has no release_task and no deregister except worker-reload's one wrapper_restart.",
+      "The postflight.ps1 twin arm passes on Windows PowerShell 5.1 with the same sequence, answer and [resume] assertions.",
+      "A mutant fake that releases on wrapper_restart fails the sh arm.",
+      "The six existing [hot reload*] arms and [stale offset] pass unchanged. reload-sequence.cjs and Get-ReloadSequence, called without the new argument, give the same output as before.",
+      "The four docs describe the landed hold: the reason wrapper_restart; active tasks held; settings.reloadHoldMs's default, 0 and cap; the hold ending at the seat's first claim_next_task; expiry by the 60 s worker sweep as reload_hold_expired; heldTaskIds and holdUntil; Worker.reloadHoldUntil."
+    ],
+    "invariants": [
+      "The new arms kill only the PIDs they started: sh through LIVE_PIDS plus kill by recorded PID, ps1 through taskkill /T /F /PID of each Start-Process child. No pkill, killall or command-line-matched kill.",
+      "No harness output line starts with SKIP, and each harness still prints its PASS marker."
+    ],
+    "compatibility": [
+      "Every existing FAKE_CLAIM_MODE answer, the deregister.log line and the reload race hook stay byte-identical.",
+      "Called without the new argument, reload-sequence.cjs and Get-ReloadSequence behave exactly as before.",
+      "scripts/moe-agent.sh and scripts/moe-agent.ps1 are not edited: a landing that changes either file hot-reloads every seat."
+    ],
+    "approvedScope": [
+      "scripts/tests/postflight-fake-proxy.js: FAKE_CLAIM_MODE=reload-hold (holder file, claim-answers.jsonl, deregister answer); reload-hold skipped by the unconditional attemptFixture call.",
+      "scripts/tests/postflight.sh: reload-sequence.cjs's optional workerId argument and the [hot reload hold] arm.",
+      "scripts/tests/postflight.ps1: Get-ReloadSequence's optional -Worker filter and the [hot reload hold] arm.",
+      "Docs: scripts/CLAUDE.md's Hot reload bullet and its Tests sentence; docs/MCP_SERVER.md's moe.deregister_worker; docs/CONFIGURATION.md's settings table; docs/SCHEMA.md's Worker."
+    ],
+    "reuse": [
+      "sh: reload_repo, reload_commit, reload_fail, write_task_record and the [hot reload] arm's launch pattern.",
+      "ps1: Initialize-ReloadRepo, Invoke-ReloadCommit, Get-ReloadRows, Write-TaskRecord and the [hot reload] arm's Start-Process pattern.",
+      "fake: the resume mode's alreadyAssigned shape and attemptFixture."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.sh ~9360-9425: the hot-reload block deregisters with reason wrapper_restart through moe-call.sh, then execs, keeping the PID.",
+      "scripts/moe-agent.ps1 ~9088: Invoke-MoeDeregister -Reason 'wrapper_restart'; then the in-process supervisor reruns the copy in the same process.",
+      "Resume line: moe-agent.sh ~9829 and ps1 ~9435, '[resume] <id> already holds <task> (<status>) from a previous session (attempt N/M)'. RESUME prompt: sh ~10456 and ps1 ~9878.",
+      "postflight.sh's [hot reload] arm is ~1855-1945 (reload-sequence.cjs, reload_seq, reload_wait, reload_fail). postflight.ps1's reload helpers are ~1586-1697.",
+      "postflight-fake-proxy.js: the claim_next_task case is at ~463, the deregister_worker case at ~788, and the unconditional attemptFixture call at ~392.",
+      "CI runs 'node scripts/tests/postflight-safe.mjs bash|powershell|pwsh' (.github/workflows/ci.yml ~314-330)."
+    ],
+    "checkRefs": [
+      "L=$(mktemp -d /tmp/moe-f81c-XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/CLAUDE.md docs/MCP_SERVER.md docs/CONFIGURATION.md docs/SCHEMA.md; do cp \"$f\" \"$L/$f\"; done && cd \"$L\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund && NO_COLOR=1 npx vitest run'",
+      "P=$(mktemp -d /mnt/d/moe-scratch/f81c-XXXXXX) && git archive HEAD | tar -x -C \"$P\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$P/$f\"; done && \"/mnt/c/Program Files/nodejs/node.exe\" \"$(wslpath -w \"$P/scripts/tests/postflight-safe.mjs\")\" powershell"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1. A wrapper-only re-claim by taskId after exec. Rejected: the peer wins inside the ~2 s gap, before the relaunch's first claim (see the task description).\n2. An explicit hold flag on deregister_worker. Rejected: the deregister comes from each live seat's OLD wrapper bytes, so only keying on the existing reason wrapper_restart protects the first reload after the daemon fix. It also needs no wrapper edit, and a wrapper landing hot-reloads every seat under the unfixed daemon.\n3. Reusing the restart hold (a reconciling attempt plus reattach). Rejected: its window is reconcileWindowMs (2 h), and the attempt records belong to delivery.\n4. Lazy expiry inside claim_next_task. Rejected: nothing is published at the deadline, so parked waiters never wake, and a peer's claim would run a deregister.\n5. One row for everything. Rejected: about 12 files (the cap is 10) and over 400 net LOC. Split instead: task-4ddbfb31 (daemon hold, DoD 1-2) lands first; this row (arms plus docs) keeps the human DoD and lands last. See comment-650351a7.",
+    "codebaseInsights": "- The fake proxy runs one node process per RPC. All its state lives in files under <project>/.moe, and both harnesses share it.\n- sh `exec` and the ps1 in-process supervisor both keep the wrapper's PID, so a recorded PID stays valid across a reload.\n- The reload deregister is moe-agent.sh ~9398 (moe-call.sh, output discarded) and moe-agent.ps1 ~9088 (Invoke-MoeDeregister).\n- The resume line is moe-agent.sh ~9829 and ps1 ~9435. The RESUME prompt is sh ~10456 and ps1 ~9878.\n- RESUME_MAX_ATTEMPTS defaults to 5 (MOE_RESUME_MAX_ATTEMPTS), and a fast exit-0 CLI is not a launch failure.\n- CI runs both harnesses through postflight-safe.mjs. It fails on any line starting with SKIP and needs the 'PASS postflight.<ext>' marker.\n- The postflight.ps1 reload arms are Windows-only (Win32_Process).",
+    "risks": "- Two wrappers share one fake state. The holder file must be created atomically ('wx'), and readers must fail toward 'none'.\n- The peer must run from an unedited copy. If it ran from the same copy, it would reload too and stop polling during the window.\n- Under fleet load the 60 s per-wrapper default can be tight. MOE_POSTFLIGHT_TIMEOUT_SEC widens it.\n- In ps1 output, only ASCII prefixes are reliable (OEM code page).\n- The new arms run two seats, so kill exactly the recorded PIDs, never by pattern (global rail).\n- Accepted residual: the reload-block comments in moe-agent.{sh,ps1} still say a held task is released. Editing either file hot-reloads every seat, so correct them in the next wrapper change.\n- The docs must follow task-4ddbfb31's LANDED behaviour, which its QA may have adjusted.",
+    "keyFiles": [
+      "scripts/tests/postflight-fake-proxy.js",
+      "scripts/tests/postflight.sh",
+      "scripts/tests/postflight.ps1",
+      "scripts/CLAUDE.md",
+      "docs/MCP_SERVER.md",
+      "docs/CONFIGURATION.md",
+      "docs/SCHEMA.md",
+      "packages/moe-daemon/src/state/workerLifecycle.ts",
+      "packages/moe-daemon/src/tools/deregisterWorker.ts",
+      "scripts/moe-agent.sh",
+      "scripts/moe-agent.ps1"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "70e6698a8c13a9b2849758deaed7c2c11b833908",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T06:59:12.716Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T07:22:06.785Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-93f9625e@2026-11-03T08:36:19Z",
+    "at": "2026-11-03T09:32:02.354Z"
+  },
+  "commits": [
+    {
+      "sha": "6626cb8ca2372ceff7a3cc70401540463a150d92",
+      "ref": "refs/heads/moe/task/task-f81c85acfec54b0f89affccb7a833b6a",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T07:19:05Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "scripts/CLAUDE.md",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T08:05:29.173Z",
+      "treeId": "0475fb777fd3f45880f72daf4d0ae3ab7f80be39",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "9657a30c4fe9f4a644987ec33c440820da83c3e6",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-c9368191@2026-11-03T08:05:41Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "scripts/CLAUDE.md",
+        "scripts/tests/postflight-fake-proxy.js",
+        "scripts/tests/postflight.ps1",
+        "scripts/tests/postflight.sh"
+      ],
+      "recordedBy": "worker-c9368191",
+      "recordedAt": "2026-11-03T08:36:18.426Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/postflight-fake-proxy.js",
+    "scripts/tests/postflight.sh",
+    "scripts/tests/postflight.ps1",
+    "scripts/CLAUDE.md",
+    "docs/MCP_SERVER.md",
+    "docs/CONFIGURATION.md",
+    "docs/SCHEMA.md"
+  ],
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-03T08:34:54.508Z",
+  "verification": {
+    "command": "LINUX: L=$(mktemp -d /tmp/moe-f81c-XXXXXX) && git archive HEAD | tar -x -C \"$L\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1 scripts/CLAUDE.md docs/MCP_SERVER.md docs/CONFIGURATION.md docs/SCHEMA.md; do cp \"$f\" \"$L/$f\"; done && cd \"$L\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" MOE_POSTFLIGHT_TIMEOUT_SEC=240 bash -c 'bash scripts/tests/parity-check.sh && node scripts/tests/postflight-safe.mjs bash && node --test scripts/tests/account-trust-docs.test.mjs && cd packages/moe-daemon && npm ci --no-audit --no-fund && NO_COLOR=1 npx vitest run'   ;;   WINDOWS: P=$(mktemp -d /mnt/d/moe-scratch/f81c-XXXXXX) && git archive HEAD | tar -x -C \"$P\" && for f in scripts/tests/postflight-fake-proxy.js scripts/tests/postflight.sh scripts/tests/postflight.ps1; do cp \"$f\" \"$P/$f\"; done && cmd.exe /d /c D:\\moe-scratch\\f81c-win.cmd   (run.cmd: cd /d <P as D:\\moe-scratch\\f81c-...> & set MOE_POSTFLIGHT_TIMEOUT_SEC=240 & \"C:\\Program Files\\nodejs\\node.exe\" \"<P>\\scripts\\tests\\postflight-safe.mjs\" powershell)",
+    "exitCode": 0,
+    "outputTail": "LINUX (GATE_EXIT=0):\nPASS parity-check.sh\n{\"engine\":\"bash\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nℹ tests 5 ℹ pass 5 ℹ fail 0   (account-trust-docs)\n ✓ src/state/reloadHold.test.ts (25 tests) 3168ms\n Test Files  230 passed (230)\n      Tests  6974 passed | 20 skipped (6994)\nGATE_EXIT=0\n\nWINDOWS (Windows PowerShell 5.1):\n{\"engine\":\"powershell\",\"exit\":0,\"lastScenario\":\"Z\",\"failureClass\":\"NONE\",\"failureLine\":null}\nX_EXIT=0\nWINDONE",
+    "reportedAt": "2026-11-03T08:34:54.508Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "This row proves and documents task-4ddbfb31's reload hold (a13eb354). It has no runtime changes: scripts/moe-agent.{sh,ps1} are untouched.\n\n- postflight-fake-proxy.js gains FAKE_CLAIM_MODE=reload-hold.\n  - The holder file is created only with 'wx'. Every answer is appended to claim-answers.jsonl.\n  - deregister_worker mirrors deregisterWorker.ts: heldTaskIds/holdUntil on a wrapper_restart from the holder, and a release on any other reason. Other modes are byte-identical.\n- postflight.sh and postflight.ps1 gain a [hot reload hold] arm.\n  - worker-reload claims, launches twice, then hot-reloads on one committed edit. Its re-exec'd process gets alreadyAssigned, and a fresh '[resume] ... (attempt 1/' line follows 'restarting to load it'. In sh, the last launch carries the RESUME prompt.\n  - worker-peer polls the same fake from an unedited copy after the reload and gets only 'none'.\n  - Asserted: a sequence of ^c+rc+$; answers claimed, then only resumed; one answer per claim; no release_task; exactly one deregister, worker-reload's wrapper_restart.\n  - The keepsHold=false mutant fails sh at (b) and ps1 at (c).\n  - Only the recorded PIDs are killed: sh by kill -KILL, ps1 by taskkill /T /F /PID.\n  - reload-sequence.cjs (argv[3]) and Get-ReloadSequence (-Worker) take an optional filter; without it the output is unchanged.\n- Docs now describe the landed hold: the scripts/CLAUDE.md Hot reload bullet and its 7-arm Tests sentence; MCP_SERVER moe.deregister_worker \"A hot reload holds its tasks\" plus heldTaskIds/holdUntil in Returns; the CONFIGURATION reloadHoldMs row (120000 default, 0 disables, 1800000 cap); SCHEMA Worker.reloadHoldUntil.\n\nGate, both legs exit 0:\n- Linux: parity PASS; postflight-safe bash failureClass NONE; account-trust-docs 5/5; daemon vitest 230 files, 6974 passed / 20 skipped, including reloadHold.test.ts (25).\n- Windows: postflight-safe powershell (PS 5.1) NONE.\n- The legs were launched at 07:43Z by this task's previous session, which then died. This sessi",
+  "completedAt": "2026-11-03T09:30:21.054Z",
+  "reviewCompletedAt": "2026-11-03T09:30:21.054Z",
+  "reviewSummary": "Completion 9657a30c on origin/moe/work-2026-10-24 (pushed). tree b125fa23 = candidate treeSha. 7 files, +357/-10 (net 347 LOC). moe-agent.{sh,ps1} untouched.\n\nRe-ran task.verification on git archive 9657a30c, env -i:\n- LINUX: GATE_EXIT=0. parity PASS; postflight-safe bash failureClass NONE; account-trust-docs 5/5; daemon vitest 230/230 files, 6974 pass / 20 skip, incl. reloadHold.test.ts (25).\n- WINDOWS PS 5.1 postflight-safe powershell: NONE, X_EXIT=0.\n- npm run lint: OK.\n\nMutants (fake keepsHold=false, my own arm cuts):\n- sh: green ccrc, peer 4x none; mutant fails (b).\n- PS 5.1: green ccrc; mutant fails (c).\nSo neither arm is vacuous.\n\nDoD:\n1-2: reloadHold.test.ts proves peer exclusion, the same seat's alreadyAssigned, and the release after the deadline. reloadHoldMs is documented.\n3: both [hot reload hold] arms pass: sequence ^c+rc+$; claimed then only resumed; peer only none; no release_task; one wrapper_restart deregister; fresh '(attempt 1/' after the restart. sh also asserts the RESUME argv.\n4: docs match a13eb354 (reason strings, active set, messages, heldTaskIds/holdUntil, 60 s sweep, default/0/cap, Worker.reloadHoldUntil). The '7 arms' count is right. The existing arms' unfiltered sequence output is unchanged, and the other fake modes are byte-identical.\n\nRails: only recorded PIDs are killed; no SKIP lines; no orphans.\n\nNon-blocking:\n(a) MCP_SERVER 'Peers are refused' says no peer 'can take one', but a replaceExisting:true taskId claim can still evict a lease-less live owner, as for any live row.\n(b) The ps1 arm has no RESUME-argv (e) check; optional per the plan.\n(c) The wrapper reload-block comments still say \"released\"; left deliberately, to fix in the next wrapper row.",
+  "requiredCheckAtDone": null
+}

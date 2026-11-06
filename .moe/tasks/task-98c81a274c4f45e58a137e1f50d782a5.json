@@ -1,0 +1,269 @@
+{
+  "id": "task-98c81a274c4f45e58a137e1f50d782a5",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: VS Code's verified-local pin is session-only, so a project.json edit between sessions downgrades a protected project to legacy with no confirmation (no RF02 parity)",
+  "description": "Found by CQ-RF07 (task-f3f364a6), the epic-final adversarial review; RF06 (task-98ffe33f) listed it as a known gap.\n\nEvidence at 28df02f7: moe-vscode/src/services/MoeDaemonClient.ts runtimeProfile() pins a verified-local read only in the in-memory pinnedProjects set. Nothing persists. After a VS Code restart, a project.json that now says legacy (or omits executionProfile), for example after a git pull or checkout, gives 'legacy' with no prompt. JetBrains (RF02) persists the confirmed profile in its owner-only store and asks \"Moe: Execution Profile Downgrade\" (Keep Protected / Allow Downgrade) before any downgrade, effective only after a restart.\n\nScenario: a protected project is opened in VS Code, and the repository then flips the declaration between sessions. The next session launches agents through resolveAgentScript (repository/PATH copies) and the legacy daemon start, which are the runtimes the protected profile exists to exclude.",
+  "definitionOfDone": [
+    "VS Code persists a confirmed protected profile outside the repository, owner-only (a store under the extension's globalStorage or the OS user state, never the workspace), and a weaker or untrusted declaration of a project recorded as protected stays protected until an explicit, safe-default human confirmation; an allowed downgrade takes effect only after a restart.",
+    "An unreadable, foreign or untrusted record reads as protected; a store that cannot be proved outside the project persists nothing new.",
+    "LEGACY projects never prompt; the existing moe-vscode tests are unchanged and new tests cover persist, ask, decline, dismiss and untrusted-record cases; `cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows."
+  ],
+  "taskRails": [
+    "Protected-profile state lives outside the repository, owner-only; a missing, unreadable or mismatched record fails closed to protected.",
+    "Size-only exception for task-98c81a274c4f45e58a137e1f50d782a5 (VS Code persistent verified-local pin with downgrade confirmation; RF02 parity). Its completion may total at most 450 net changed non-board lines, measured from its first commit's parent to its final completion, across exactly these files: moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and the new moe-vscode/tests/protected-profile-pin.test.cjs. The DoD bundles the owner-only store, the pin, the confirmation and five test families in one row. This waives size-based rejection only. Every DoD item, rail, test and verification requirement still applies. Grow it only by QA-required fixes."
+  ],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED tests first (test-driven-development). Create moe-vscode/tests/protected-profile-pin.test.cjs with the Write tool. Build the harness on tests/protected-runtime.test.cjs and protected-daemon-spawn.test.cjs: transpile src/services/MoeDaemonClient.ts and run it in vm.runInNewContext with a permissive require map. Pass Buffer and process. vscode.window.showWarningMessage records (message, options, ...items) and resolves f.choice (default undefined).\n\nA RESTART is a fresh vm load of the module against the same store directory, so the module-level session pin resets. Each fixture uses a temp project, plus a store root OUTSIDE it set through f.api.useProtectedStateRoot(root). Cases:\n(P1) Persist. Session 1 reads a verified-local project.json and gets 'protected'. It writes exactly one record file under root, named by protectedStateName('profile', key) as 16 hex characters plus '.json', so no input reaches the name. The record is {\"version\":1,\"project\":<key>,\"profile\":\"protected\"}. On POSIX the file mode is 0600 and the root's is 0700.\n(P2) Ask. Session 2, after project.json flipped to legacy or lost executionProfile, gets 'protected' and asks once: a modal showWarningMessage with exactly 'Keep Protected' and 'Allow Downgrade', and text naming the folder and the after-restart rule. More runtimeProfile calls in that session ask nothing more.\n(P3) Decline with 'Keep Protected': the record stays protected, and session 3 asks again and stays protected.\n(P4) Dismiss (undefined): the same as decline.\n(P5) Allow with 'Allow Downgrade': session 2 still answers 'protected' (it takes effect only after a restart). The record becomes 'legacy'. Session 3 answers 'legacy' with no prompt.\n(P6) Untrusted record. With a legacy declaration, each of these answers 'protected' and asks: malformed JSON; an extra field; version 2; another project's key; profile 'observe'; a record file larger than 64 KiB; and on POSIX, a 0644 file, a 0755 root, and a symlinked record or root.\n(P7) A store root INSIDE the project: a verified-local read writes nothing (no file is created anywhere under the root), and still answers 'protected' for the session.\n(P8) A LEGACY project with no record never prompts and writes nothing.\n(P9) With no store root configured, behavior is exactly today's: session pin only, no prompt, no writes.\n(P10) An unreadable or invalid project.json still answers 'protected' with no prompt, as today.\n\nRED: run `node --test tests/protected-profile-pin.test.cjs` in the step-4 Linux snapshot with only this file overlaid. The new cases must fail against the unchanged client. Quote the failures in complete_step.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "RED: created moe-vscode/tests/protected-profile-pin.test.cjs (Write tool). 30 cases: P1 persist (FNV-1a 64 name checked against a test-side reference validated on the published vectors '' and 'a'; record bytes; 0600/0700), P2 x3 flips (legacy / no executionProfile / no project.json) ask once, modal, exact buttons and text; P3/P4 x5 (Keep, dismiss, another label, rejected prompt, throwing prompt) keep the record untouched (same inode) and re-ask next session; P5 allow records legacy, the session stays protected, restart answers legacy, verified-local re-protects; P6 x15 untrusted records (malformed, extra/missing field, v2, foreign key, observe, array, BOM, >64 KiB, record is a dir, root is a file; POSIX 0644 file, 0755 root, symlinked record, symlinked root) answer protected + ask, and no SECRET content reaches a log; P7 root inside the project writes nothing; P8 legacy no record never prompts or creates the root; P9 no root = session-only; P10 untrusted declaration protected, no prompt, no pin, no write; S1 store round-trip, name refusal, oversize refusal, no temp file left after a failed rename. RED run in Linux snapshot /tmp/moe-98c8-red-bn8L (git archive HEAD b99e31c2 + this file overlaid, cmp ok, npm ci exit 0): `node --test tests/protected-profile-pin.test.cjs` -> all 30 fail, each with `TypeError: api.useProtectedStateRoot is not a function` (the store API does not exist yet).",
+      "startedAt": "2026-11-02T23:00:12.583Z",
+      "completedAt": "2026-11-02T23:03:49.016Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The owner-only store (DoD 1-2; the epic and task rails on owner-only state). It mirrors JetBrains util/ProtectedStateStore.kt, and task-648a5916 reuses it for daemon spawn records, so keep this API exactly. Module-level in moe-vscode/src/services/MoeDaemonClient.ts, next to runtimeProfile:\n\n- `export function useProtectedStateRoot(dir: string | undefined): void` sets the root. moe-vscode/src/extension.ts calls `useProtectedStateRoot(path.join(context.globalStorageUri.fsPath, 'protected-state'))` as the FIRST statement of activate(), before the client is constructed or anything reads runtimeProfile. globalStorage is per user and outside every workspace.\n- `export function projectStateKey(basePath: string): string` is the expression runtimeProfile uses today: comparablePath(realPathOrNull(base) ?? path.resolve(base), defaultFoldCase). Extract it and reuse it there.\n- `export function protectedStateName(kind: string, projectKey: string): string` is FNV-1a 64 (BigInt) over the UTF-8 bytes of `${kind}:${projectKey}`, as 16 lowercase hex characters plus '.json'. It is non-cryptographic on purpose: node:crypto cannot be loaded synchronously here without a top-level import, and three suites load this file through a closed require map (accounts-wire, plan-approval-client, task-notifier: vscode, ws, child_process, fs, path, net only). So add NO new top-level import. Every record carries its project key and is checked on read, so a collision reads as foreign, which means protected (fail closed).\n- `export function readProtectedState(name: string): string | undefined` returns undefined when no root is set, the root is absent, or the file is absent. It THROWS an Error for state this extension would not have written:\n  - the root or file is not a plain directory or regular file under lstat (a link is refused);\n  - on POSIX: the root's mode & 0o777 !== 0o700, the file's !== 0o600, or a uid other than process.getuid();\n  - the file is larger than 64 KiB.\n  The error message names the broken rule, never the contents.\n- `export function writeProtectedState(name: string, text: string, basePath: string): boolean` writes only when isOutsideProject(root, basePath) holds; otherwise it logs and returns false. It does mkdirSync(root, { recursive: true, mode: 0o700 }), then chmod 0o700 and re-verifies on POSIX. It writes a temp file in the root opened 'wx' with mode 0o600, then renameSync over the target. On failure it deletes the temp file and returns false. It never throws.\n- On Windows, Node has no ACL API, so the per-user profile location (globalStorage) is the owner-only boundary. State that in a comment; the link, kind and size checks still apply.\n\nError handling: every fs call is inside try/catch. read reports untrusted state by throwing (the caller fails closed); write reports failure by returning false.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "note": "Store API added to MoeDaemonClient.ts next to runtimeProfile, with exactly the planned names and signatures: useProtectedStateRoot(dir|undefined), projectStateKey(base) (extracted; runtimeProfile now calls it), protectedStateName(kind, key) = FNV-1a 64 BigInt over UTF-8 `${kind}:${key}` -> 16 hex + '.json', readProtectedState(name) (undefined for no root / absent root / absent file; throws for a name that is not 16 hex + .json, a non-plain-directory root or non-regular file under lstat (links refused), POSIX mode != 0700/0600 or a foreign uid, >64 KiB; opens with O_NOFOLLOW where available and re-checks fstat), writeProtectedState(name, text, base) (false + log unless isOutsideProject(root, base); size cap; mkdir 0700 + chmod on a plain dir + re-verify; temp opened 'wx' 0600 + fchmod, renameSync; temp removed on failure; never throws). readCappedText's body moved into readCappedFd(fd, ...) so the store reuses the capped read (no behavior change). Windows comment: no ACL API in Node, globalStorage is the owner-only boundary. No new top-level import. extension.ts: imports useProtectedStateRoot from the existing MoeDaemonClient import and calls useProtectedStateRoot(path.join(context.globalStorageUri.fsPath, 'protected-state')) as the first statement of activate(). Deliberately skipped: JetBrains requireDirectoryAbove (a root BELOW a regular file on Windows reads absent) - deleting the record has the same effect, so it adds no protection. Snapshot /tmp/moe-98c8-red-bn8L with the 3 files overlaid (cmp ok): new suite 30 tests, 4 pass (S1 store round-trip/name/size/temp cleanup now green), 26 fail pending step 3; `tsc -p ./ --noEmit` exit 0.",
+      "startedAt": "2026-11-02T23:03:51.190Z",
+      "completedAt": "2026-11-02T23:06:33.339Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "The RF02 pin in runtimeProfile (DoD 1-3). It mirrors JetBrains RuntimeSelectionPolicy.profile, storedProfile, persist and askDowngrade, and ProfileDowngradeDialog. runtimeProfile stays synchronous and never throws:\n1. A blank base is 'legacy'. A key in pinnedProjects is 'protected'.\n2. A declaration read that throws is 'protected', as today: log, no pin, no write.\n3. stored = ABSENT | LEGACY | PROTECTED | UNTRUSTED. ABSENT means no root or no file. A strict parse of the record requires exactly {version, project, profile}, version 1, project === key and profile 'protected' or 'legacy'. Any read throw or parse failure is UNTRUSTED, logged.\n4. A verified-local declaration pins the key and, unless stored is PROTECTED, writes {\"version\":1,\"project\":key,\"profile\":\"protected\"} via writeProtectedState(protectedStateName('profile', key), text, base).\n5. Otherwise, ABSENT or LEGACY answers 'legacy', unless the key was pinned meanwhile.\n6. Otherwise (PROTECTED or UNTRUSTED), pin the key. The first time in a session, call the confirmer without awaiting it: `void vscode.window.showWarningMessage(message, { modal: true }, 'Keep Protected', 'Allow Downgrade')`, with `.then(choice => ...)` and a catch.\n   - The message is: '<folder name> now declares the legacy execution profile, but it was confirmed protected. Moe keeps it protected until you allow the downgrade. An allowed downgrade takes effect after you restart VS Code.'\n   - Only exactly 'Allow Downgrade' writes profile 'legacy'. 'Keep Protected', dismissal, a rejection or an exception keep protected, and are logged.\n   - The session pin keeps this session protected either way, so an allowed downgrade takes effect only after a restart.\n   Return 'protected'.\n\nLEGACY projects never reach step 6, so they never prompt. With no root (the existing tests), steps 3-6 reduce to today's session behavior.\n\nError handling: the confirmer's promise always has a catch, and a failing write only logs. Nothing here makes a LEGACY project protected except an existing record that is PROTECTED or UNTRUSTED.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts"
+      ],
+      "note": "RF02 pin in runtimeProfile, synchronous, never throws: blank -> legacy; session pin -> protected; a declaration read that throws -> protected via the existing catch (no pin, no store read, no write); storedProfile(key) = absent (no root, short-circuited before hashing so closed-map suites never touch Buffer, or no file) | legacy | protected | untrusted (any read throw; JSON.parse failure logged as a fixed rule string so record contents never reach the log; keys not exactly version/project/profile; version !== 1; project !== key; profile not protected/legacy). verified-local pins and persists {\"version\":1,\"project\":key,\"profile\":\"protected\"} unless already PROTECTED. Otherwise ABSENT/LEGACY -> legacy; PROTECTED/UNTRUSTED pins and calls askDowngrade once (the pin makes later calls return early): `void Promise.resolve(vscode.window.showWarningMessage(message, { modal: true }, 'Keep Protected', 'Allow Downgrade')).then(...).catch(...)` inside try/catch; only exactly 'Allow Downgrade' writes legacy; keep/dismiss/other/reject/throw log 'Moe keeps the protected profile'. Message text exactly as planned. Skipped the \"pinned meanwhile\" re-check from plan item 5: runtimeProfile is synchronous JS, nothing can pin between the top check and the store read. GREEN in snapshot /tmp/moe-98c8-red-bn8L (3 files overlaid, cmp ok): protected-profile-pin 30/30 pass; full `npm test` 622 tests, 618 pass, 0 fail, 4 skipped; `tsc -p ./ --noEmit` exit 0; `npm run lint` exit 0.",
+      "startedAt": "2026-11-02T23:06:35.654Z",
+      "completedAt": "2026-11-02T23:07:54.639Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification, run once (DoD 3). Run ONE command fresh from the task worktree that runs both legs; its output tail is the complete_task evidence.\n\n- Linux leg: R=$(git rev-parse --show-toplevel); S=$(mktemp -d); git -C \"$R\" archive HEAD | tar -x -C \"$S\". Overlay exactly moe-vscode/src/services/MoeDaemonClient.ts, moe-vscode/src/extension.ts and moe-vscode/tests/protected-profile-pin.test.cjs, `cp` then `cmp` each. Then `cd \"$S/moe-vscode\" || exit 1` and run `env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" bash -c 'npm ci --no-audit --no-fund && npm test && npm run compile'`.\n- Windows leg: the same archive plus overlay into a fresh dir under /mnt/d/moe-scratch/. Then `cmd.exe /d /c \"cd /d D:\\\\moe-scratch\\\\<dir>\\\\moe-vscode && npm ci --no-audit --no-fund && npm test && npm run compile\"`. On Windows the POSIX-mode cases skip, and the link, size and parse cases still run.\n\nBoth legs must exit 0. Report each leg's tests / pass / fail / skipped. The base is 583 tests (579 pass, 4 skipped) at the latest VS Code landing, plus the new cases. Never run npm in the shared control checkout.\n\nAlso run `npm run lint` in the Linux snapshot. The diff must touch only these three files; declare them as modifiedFiles. Size: the size-only waiver for this row is filed (approved or pending).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Before verifying, trimmed to the pending TASK size waiver prop-b13568c2 (<=450 net): comments folded to one line, KEEP/ALLOW constants inlined, test helpers condensed (recordIn), P10's no-pin half dropped (protected-runtime.test.cjs P2 already proves an untrusted declaration never pins). Diff now exactly the 3 files: extension.ts +3/-1, MoeDaemonClient.ts +165/-17, new protected-profile-pin.test.cjs 293 lines => +461/-18, net 443. Fresh run of ONE command: `bash /mnt/d/moe-scratch/98c81a27-verify.sh` (exit 0). It git-archives HEAD b99e31c2 into /tmp/moe-98c8-linux-1793661073-pqTp and /mnt/d/moe-scratch/98c81a27-win-1793661073, overlays exactly the 3 files (cp + cmp ok), then runs both legs in parallel. Linux leg (env -i, node v24.21.0): `npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint` exit 0 -> tests 622, pass 618, fail 0, skipped 4; new suite 30/30. Windows leg (cmd.exe, node v24.16.0, D:\\moe-scratch\\98c81a27-win-1793661073\\moe-vscode): `npm ci --no-audit --no-fund && npm test && npm run compile` exit 0 -> tests 618, pass 613, fail 0, skipped 5 (all 5 pre-existing symlink/NTFS skips); new suite 26/26 (the 4 POSIX-only P6 cases are not registered on Windows: 0644 record, 0755 root, symlinked record, symlinked root). Base without this row = 592 tests on Linux (622 - 30).",
+      "startedAt": "2026-11-02T23:10:57.874Z",
+      "completedAt": "2026-11-02T23:11:58.438Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this row's diff, once (load adversarial-self-review). Record it in complete_step.\n(a) Fail closed: no record state other than ABSENT or LEGACY can let a non-verified-local declaration answer 'legacy'. A failing confirmer never downgrades.\n(b) Restart semantics: an allowed downgrade never changes the current session's answer.\n(c) Store safety:\n  - names never come from input;\n  - a link, wrong mode, foreign uid or oversize file is refused;\n  - the temp-plus-rename write is atomic and leaves no temp file on failure;\n  - a root inside the project writes nothing.\n(d) Concurrency: two VS Code windows on one project. Each writes the whole record by atomic rename, so the last writer wins with a valid record, and neither can produce a torn file.\n(e) The strict-map suites pass: no new top-level import (grep the import block).\n(f) Mutation check in a scratch copy of the Linux snapshot:\n  - let UNTRUSTED read as LEGACY: P6 must fail;\n  - persist on 'Keep Protected': P3 must fail;\n  - drop the inside-project guard: P7 must fail;\n  - skip the session pin after allow: P5 must fail.\n  Then confirm the restored copy passes.\n(g) Name in the handoff what task-648a5916 reuses: useProtectedStateRoot, projectStateKey, protectedStateName(kind, key), readProtectedState and writeProtectedState.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "note": "Adversarial self-review of `git diff -- moe-vscode/src/services/MoeDaemonClient.ts moe-vscode/src/extension.ts` + the new test (no code change resulted).\n(a) Fail closed: a non-verified-local declaration answers 'legacy' only from stored 'absent'/'legacy'; every read throw or parse failure is 'untrusted' -> protected + ask. A thrown or rejected prompt, a dismissal, Keep and any other label never write (P3/P4 x5: same inode after settle). An unreadable declaration still returns protected through the existing catch before any store access.\n(b) Restart: the key is pinned before askDowngrade and is never removed, so an allow only writes 'legacy' for the next load (P5).\n(c) Store: names must match /^[0-9a-f]{16}\\.json$/ (both read and write), produced only by protectedStateName. lstat refuses links, kinds, POSIX mode != 0700/0600 and foreign uid. The read opens with O_NOFOLLOW where available and re-checks fstat, capped at 64 KiB. The write uses a 'wx' 0600 temp in the root plus renameSync, and the temp is removed on any failure (S1: a rename onto a directory leaves only the two expected entries). A root inside the project writes nothing (P7).\n(d) Two windows: separate temp names (pid + serial) and atomic rename, so the last writer wins with a whole record. A torn or empty file after a crash reads untrusted, which means protected.\n(e) The import block is unchanged (vscode, fs, path, net, type http, child_process, ws). accounts-wire, plan-approval-client and task-notifier pass in both legs. storedProfile and persistProfile return before protectedStateName when no root is set, so contexts without Buffer never hash.\n(f) Mutations in scratch /tmp/moe-98c8-mut-Injo (the Linux snapshot's src+tests, node_modules linked), each run with `node --test tests/protected-profile-pin.test.cjs`:\n- M1, untrusted read as legacy: 15 fail, all P6;\n- M2, Keep treated as allow: 1 fail, P3/P4 (Keep Protected);\n- M3, inside-project guard dropped: 1 fail, P7;\n- M4, pin deleted on allow: 1 fail, P5.\nThe restored copy (cmp equal to the worktree) passes 30/30.\nTheoretical only, accepted with parity to JetBrains:\n- On Windows, a link swapped in between lstat and open is not refused (no O_NOFOLLOW), and a swap of the root's parent is unchecked on any OS. Both need write access to the user's own globalStorage, and with that access the record could simply be deleted (absent).\n- A root left at the wrong mode or owner (for example a no-metadata mount, or created under sudo) makes every legacy project read untrusted and prompt. JetBrains checks the root first in the same way. The log names the rule.\n- No fsync: a power loss reads untrusted, which fails closed.\n(g) task-648a5916 reuses: useProtectedStateRoot(dir), projectStateKey(base), protectedStateName(kind, key) (16 hex + .json), readProtectedState(name) (undefined, or throws for untrusted) and writeProtectedState(name, text, base) (boolean, never throws). Use kind 'spawn'.",
+      "startedAt": "2026-11-02T23:12:00.757Z",
+      "completedAt": "2026-11-02T23:13:36.862Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Waiver prop-b13568c2 APPROVED by the human at 07:05:46Z. The TASK size exception (450 net) is in taskRails exactly once. Bytes are unchanged since QA's substance pass on completion 9eca3971 (comment-c01fee7f; net 443 across the 3 approvedScope files), so QA approves on that evidence. A re-run is needed only if the bytes changed.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 315.6,
+  "comments": [
+    {
+      "id": "comment-75ad377790a84179944595d9bb5d25cc",
+      "author": "qa-7328a40d",
+      "content": "Docs drift note from the CQ-RF07 QA (qa-7328a40d, task-f3f364a6). This is not a defect in this row's DoD, which names no docs.\n\nRF07 landed b7f0afd9 before this row's 9eca3971. Its docs still describe VS Code's verified-local pin as session-only. Once this row is approved, these three places are stale:\n- docs/ARCHITECTURE.md, Security Notes, **VS Code parity**, second gap bullet: \"Its verified-local pin is held in memory only, so a `project.json` edit between sessions downgrades with no confirmation (task-98c81a27).\"\n- docs/TROUBLESHOOTING.md, \"Protected profile in VS Code\", Cause: \"its `verified-local` pin lasts one window session and has no downgrade dialog (task-98c81a27).\"\n- docs/CONFIGURATION.md, the end of the JetBrains protected state store paragraph: \"VS Code keeps no such store: its protected pin lives in memory for one window session.\" 9eca3971 adds globalStorage/protected-state and the Keep Protected / Allow Downgrade prompt.\n\nSuggested route: this row's QA decides whether to ask for a docs touch here, or to file a small docs row in epic-5f4acf0a that describes the new store, its owner-only and Windows globalStorage boundary, and the prompt text.",
+      "timestamp": "2026-11-02T23:41:33.940Z"
+    },
+    {
+      "id": "comment-4d2985945a194dbeab02f58a7e165af1",
+      "author": "governor-e6b40560",
+      "content": "Governor, 23:58Z. This row is held BLOCKED for size only. 9eca3971 measures +461/-18, which is net 443 by the +407/-3 = net 404 convention QA used for CQ-R11e2. That is over the 400 cap and under the 450 cap of the architect's TASK exception prop-b13568c2, which is PENDING the human's IDE click. I set it back to REVIEW as soon as the human approves. A seat that sees this BLOCKED row has nothing to do.\n\nDocs-drift route (qa-7328a40d's note above): no docs touch here, because a docs edit would push the row past its 450 cap. The three stale spots are filed as task-48bbd091 (BACKLOG, LOW). It depends on this row and on task-648a5916, whose own gap bullet is in the same ARCHITECTURE.md paragraph. The QA for this row reviews code and tests on substance only.",
+      "timestamp": "2026-11-02T23:58:13.577Z"
+    },
+    {
+      "id": "comment-987a6218be634753bad30808f13c3651",
+      "author": "governor-e6b40560",
+      "content": "Governor note for QA, 06:35Z. I'm moving this row from BLOCKED back to REVIEW so its substance review can happen while the QA seats are idle. The size exception prop-b13568c2 (cap 450 net; 9eca3971 measures +461/-18 = 443) is still PENDING the human's click.\n\nReview it on substance exactly as you did WT-14 (comment-9922ed28 pattern):\n- If it passes, record your evidence, withhold the verdict, and report_blocked on the waiver. Do not size-reject.\n- If it fails on substance, reject as normal.\n\ntask-648a5916 now builds on 9eca3971 (early start), so name any store or pin API change in your rejectionDetails. For the docs drift qa-7328a40d noted, the fix is task-48bbd091; it is not part of this row's scope.",
+      "timestamp": "2026-11-03T06:32:43.751Z"
+    },
+    {
+      "id": "comment-c01fee7fe7b240e5a83cc01718477f97",
+      "author": "qa-af7be174",
+      "content": "QA substance review, qa-af7be174, 2026-11-03 ~06:50Z. Candidate cand-d90b75c2, completion 9eca3971, which is on moe/work-2026-10-24 and origin/moe/work-2026-10-24. Following the WT-14 pattern: the review PASSES on substance, and the verdict is withheld only because the size waiver prop-b13568c2 is still pending. Do not size-reject. A QA seat that picks this up after the waiver is approved can approve on this evidence. The 9eca3971 bytes are unchanged, and no later commit touches moe-vscode (`git log 9eca3971..HEAD -- moe-vscode` is empty).\n\n**Size.** `git diff --shortstat 9eca3971^ 9eca3971` gives 3 files, +461/-18, net 443: extension.ts +3/-1, MoeDaemonClient.ts +165/-17, and the new protected-profile-pin.test.cjs +293. That is over the 400 cap and under the 450 cap of prop-b13568c2. The diff touches exactly the three approvedScope files. No existing test is changed or weakened.\n\n**Re-run on the exact commit.** Fresh full-repo `git archive 9eca3971` snapshots; the three files are cmp-equal to the commit.\n- Linux (/tmp/qa98c8-linux, under env -i, node v24.21.0): `npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint` exits 0. 622 tests, 618 pass, 0 fail, 4 skipped. protected-profile-pin passes 30/30.\n- Windows (D:\\moe-scratch\\qa98c8-win via a .cmd run under cmd.exe, node v24.16.0, `set MOE` not defined): `npm ci && npm test && npm run compile` exits 0. 618 tests, 613 pass, 0 fail, 5 skipped. All 5 skips are pre-existing symlink/NTFS skips, none in the new suite. The new suite passes 26/26; its 4 POSIX-only P6 cases are not registered on Windows.\nThese match the worker's task.verification exactly.\n\n**DoD mapping**\n- DoD 1:\n  - extension.ts sets globalStorage/protected-state as the first statement of activate().\n  - A verified-local read persists {version:1, project, profile:'protected'} with modes 0600/0700 (P1).\n  - A weaker declaration with a PROTECTED or UNTRUSTED record pins the key and asks once, with a modal 'Keep Protected' / 'Allow Downgrade' (P2: legacy, no executionProfile, no project.json).\n  - Only exactly 'Allow Downgrade' writes legacy, and the session stays protected until a restart (P5).\n- DoD 2:\n  - 15 untrusted-record shapes each read as protected and ask, and no record contents reach the log (P6).\n  - A lexically in-project root writes nothing (P7).\n  - An untrusted declaration answers protected and writes nothing (P10).\n- DoD 3:\n  - LEGACY with no record never prompts and never creates the root (P8).\n  - With no root, behavior equals today's (P9).\n  - Both legs are green, as above.\n- Invariants: the import block is unchanged. storedProfile and persistProfile return before hashing when no root is set, so the closed-map suites (accounts-wire, plan-approval-client, task-notifier) pass on both legs.\n- Parity: I read JetBrains RuntimeSelectionPolicy.profile, storedProfile, persist and askDowngrade, and ProtectedStateStore.read. VS Code checks the root before the file in the same order.\n\n**My own mutants** (scratch /tmp/qa98c8-mut; `node --test tests/protected-profile-pin.test.cjs` each):\n- M1, the storedProfile catch returns 'absent': 15 fail, all P6.\n- M2, no pin before askDowngrade: 4 fail (P2 x3, P5).\n- M3, only 'Keep Protected' keeps: 5 fail (P2 x3; P3/P4 dismissal and another label).\n- M4, the root owner check dropped on read: 2 fail (P6 0755 root, symlinked root).\n- M5, the inside-project guard dropped: P7 fails.\nThe restored copy is cmp-equal and passes 30/30.\n\n**One non-blocking residual, demonstrated, not a reject.** On POSIX, a store root that does not exist yet, under a symlinked ancestor that resolves INTO the project, passes isOutsideProject, and the first verified-local read writes the record inside the project. My probe was /tmp/qa98c8-probe/probe.cjs, with root = outside/link/globalStorage/protected-state and link pointing to the project. It printed `isOutsideProject = true` and the record was written under <project>/globalStorage/protected-state. The cause predates this row: pathForms() in MoeDaemonClient.ts walks the nearest existing ancestor (missingRealPath) only on win32, while JetBrains' ancestorOutside runs on every OS. writeProtectedState calls it as the plan said to.\n\nWhy I'm not rejecting:\n- It needs the user's own VS Code user-data path to run through a link into the project, which the repository cannot create.\n- Its worst outcome is no weaker than the mandated refusal. A refused write also reads ABSENT, then legacy with no prompt, next session. A git-planted record is 0644, which reads untrusted, so protected.\nThe same POSIX gap also affects protectedPathEntries, the PATH filter: a missing PATH leaf under a symlinked ancestor that points into the project. Suggested follow-up row: VS Code pathForms skips the missing-leaf ancestor walk on POSIX, so match JetBrains ancestorOutside. Optionally also re-check isOutsideProject after mkdirSync in writeProtectedState.\n\n**Non-blocking notes**\n- The prompt says \"now declares the legacy execution profile\" even for an omitted or observe declaration. This is wording only.\n- ponytail pass: nothing to cut. readCappedFd reuses the existing capped read. The hand-rolled FNV-1a is justified by the rule against new top-level imports.\n\nDocs drift is task-48bbd091, per the governor. The store and pin API task-648a5916 builds on needs no change from this review.\n\n@governor-e6b40560: the substance review passed; this row needs only prop-b13568c2 approved, then a QA approve.",
+      "timestamp": "2026-11-03T06:40:18.207Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T22:16:10.352Z",
+  "updatedAt": "2026-11-04T19:20:43.431Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T22:26:15.663Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T22:51:29.480Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T07:19:26.220Z",
+    "wallClockMs": 30476740
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-8cf0816c",
+    "qa-af7be174",
+    "qa-7328a40d",
+    "architect-1dd28c7c"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T22:56:40.370Z",
+  "executionContract": {
+    "intendedBehavior": "A project VS Code once read as verified-local stays protected across restarts. Its confirmed profile is persisted in an owner-only record outside the repository (globalStorage/protected-state). A later weaker or untrusted declaration asks 'Keep Protected' / 'Allow Downgrade'; only an explicit allow records legacy, and it takes effect after a restart. Untrusted records read as protected, a store that is not provably outside the project persists nothing, and LEGACY projects never prompt.",
+    "acceptanceCriteria": [
+      "tests/protected-profile-pin.test.cjs covers persist, ask, decline, dismiss, allow-after-restart, untrusted record, store inside the project, legacy no-prompt, no store root (today's behavior) and an untrusted declaration, RED first.",
+      "`cd moe-vscode && npm test && npm run compile` exits 0 on Linux and on Windows."
+    ],
+    "invariants": [
+      "Only an explicit 'Allow Downgrade' ever records legacy; nothing downgrades within the session.",
+      "No new top-level import in MoeDaemonClient.ts.",
+      "With no store root configured, behavior equals today's."
+    ],
+    "compatibility": [
+      "The store API is reused by task-648a5916 for spawn records (kind 'spawn').",
+      "Every existing moe-vscode test passes unchanged."
+    ],
+    "approvedScope": [
+      "The module-level store API in MoeDaemonClient.ts (useProtectedStateRoot, projectStateKey, protectedStateName, readProtectedState, writeProtectedState) plus the RF02 logic inside runtimeProfile and its downgrade confirmer.",
+      "extension.ts calls useProtectedStateRoot(globalStorageUri/protected-state) first in activate()."
+    ],
+    "checkRefs": [
+      "cd moe-vscode && npm test && npm run compile (Linux snapshot and Windows snapshot, per step 4)"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) SecretStorage. Rejected for the pin: it is async, while runtimeProfile is synchronous and called from connect, AgentLauncher and ManagedVmTreeProvider. A preload race would read 'legacy' first, or need awaits added at every caller. 2) A single profiles.json map. Rejected: a read-modify-write across two windows can drop another project's pin (fail-open). 3) Per-record files in an owner-only root under globalStorage, CHOSEN. This mirrors JetBrains ProtectedStateStore, and the DoD names globalStorage. task-648a5916 will be re-planned to reuse this store for its spawn records, so there is one store, as in JetBrains (RF02 reused RF01's store). 4) sha256 names. Rejected: no synchronous crypto without a top-level import, and three suites load the file through a closed require map. FNV-1a 64 plus an in-record project check fails closed on a collision.",
+    "codebaseInsights": "runtimeProfile (MoeDaemonClient.ts ~:297) pins only in the module-level pinnedProjects set. isOutsideProject (~:438) already handles realpath, alias and missing paths. The vm harnesses re-load the module per fixture, so a fresh load simulates a restart. extension.ts activate() is synchronous and constructs the client at :35. The JetBrains references are RuntimeSelectionPolicy.profile/storedProfile/askDowngrade, ProfileDowngradeDialog (text and buttons) and ProtectedStateStore (owner-only rules, 64 KiB cap, atomic write).",
+    "risks": "(1) A top-level import breaks the accounts-wire, plan-approval-client and task-notifier suites. (2) POSIX mode assertions must skip on Windows, and Node has no ACL API there; document it. (3) The modal is fire-and-forget, so tests must await the confirmer's settlement (a flush of microtasks or setImmediate) before asserting writes. (4) task-648a5916 will depend on this row and reuse its store API, so keep the names and signatures exactly as planned.",
+    "keyFiles": [
+      "moe-vscode/src/services/MoeDaemonClient.ts",
+      "moe-vscode/src/extension.ts",
+      "moe-vscode/tests/protected-runtime.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/RuntimeSelectionPolicy.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProtectedStateStore.kt",
+      "moe-jetbrains/src/main/kotlin/com/moe/util/ProfileDowngradeDialog.kt"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "b99e31c2b8d9d0d8157df183b901cadae47b938d",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T22:56:40.409Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T23:00:12.583Z",
+  "reviewStartedAt": "2026-11-02T23:14:11.821Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/98c81a27-verify.sh",
+    "exitCode": 0,
+    "outputTail": "HEAD b99e31c2b8d9d0d8157df183b901cadae47b938d; linux /tmp/moe-98c8-linux-1793661073-pqTp; windows /mnt/d/moe-scratch/98c81a27-win-1793661073; overlay cmp ok\n== linux leg exit 0 (/tmp/moe-98c8-linux-1793661073-pqTp/leg.log)   [npm ci --no-audit --no-fund && npm test && npm run compile && npm run lint]\nℹ tests 622\nℹ pass 618\nℹ fail 0\nℹ cancelled 0\nℹ skipped 4\n== windows leg exit 0 (/mnt/d/moe-scratch/98c81a27-win-1793661073/leg.log)   [cmd.exe: npm ci --no-audit --no-fund && npm test && npm run compile]\nℹ tests 618\nℹ pass 613\nℹ fail 0\nℹ cancelled 0\nℹ skipped 5\n> tsc -p ./\nexit=0",
+    "reportedAt": "2026-11-02T23:14:11.821Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/protected-profile-pin.test.cjs",
+    "moe-vscode/src/services/MoeDaemonClient.ts",
+    "moe-vscode/src/extension.ts"
+  ],
+  "completionSummary": "VS Code RF02 parity: a confirmed verified-local project stays protected across restarts.\n\nStore (MoeDaemonClient.ts, module level, no new top-level import). This API is reused by task-648a5916 with kind 'spawn':\n- useProtectedStateRoot\n- projectStateKey\n- protectedStateName: FNV-1a 64 of kind:key, 16 hex + .json\n- readProtectedState: undefined when absent. It throws for a link, the wrong kind, POSIX mode != 0700/0600, a foreign uid, more than 64 KiB, or a bad name.\n- writeProtectedState: writes only in a root provably outside the project, as a 'wx' 0600 temp plus rename, and never throws.\nextension.ts calls useProtectedStateRoot(globalStorageUri/protected-state) first in activate().\n\nruntimeProfile:\n- verified-local persists {version:1,project,profile:'protected'};\n- a weaker declaration with a PROTECTED or UNTRUSTED record pins the session and asks once (modal 'Keep Protected' / 'Allow Downgrade', not awaited, safe default);\n- only exactly 'Allow Downgrade' records legacy, effective after a restart;\n- ABSENT or LEGACY records answer legacy with no prompt;\n- with no root, behavior is unchanged.\n\nTests: tests/protected-profile-pin.test.cjs has 30 cases (P1-P10 + S1), RED first (all failed: useProtectedStateRoot missing).\n\nVerification: `bash /mnt/d/moe-scratch/98c81a27-verify.sh` runs a fresh git-archive snapshot of HEAD per leg with the 3 files overlaid and cmp-checked.\n- Linux: npm ci, test, compile and lint all exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile all exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips. The 4 POSIX-only P6 cases are not registered there.\n\nMutation check: untrusted-as-legacy, persist-on-Keep, no inside-project guard and unpin-on-allow each fail P6, P3, P7 and P5. The restored copy passes 30/30.\n\nSize: net 443 (+461/-18) across exactly the 3 files, under the 450 cap in the pending TASK waiver prop-b13568c2. Accepted theoretical edges are in the step-5 note.",
+  "commits": [
+    {
+      "sha": "9eca3971f5508cb0b32eabeb97cee847f1e1ff3d",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-8cf0816c@2026-11-02T22:56:40Z",
+      "paths": [
+        "moe-vscode/src/extension.ts",
+        "moe-vscode/src/services/MoeDaemonClient.ts",
+        "moe-vscode/tests/protected-profile-pin.test.cjs"
+      ],
+      "recordedBy": "worker-8cf0816c",
+      "recordedAt": "2026-11-02T23:15:56.977Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-7328a40d@2026-11-03T07:15:47Z",
+    "at": "2026-11-03T07:20:20.949Z"
+  },
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "blockedReason": null,
+  "priorBlockedReason": "QA size hold, verdict withheld (governor's WT-14 pattern, comment-987a6218). The substance review PASSES; the evidence is in comment-c01fee7f. Completion 9eca3971 measures +461/-18, net 443 across exactly the 3 approvedScope files. That is over the 400 cap, and no rail waives it yet: the TASK exception prop-b13568c2 (cap 450 net) is still PENDING the human's IDE click.\n\nQA re-ran both legs on a fresh git archive of 9eca3971:\n- Linux: npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows, and 5 QA mutants are each killed.\n\nOnce prop-b13568c2 is approved, set REVIEW again; the next QA approves on that evidence, since the bytes are unchanged. Nothing for a worker to do. One non-blocking follow-up is suggested in the comment: the VS Code pathForms POSIX missing-leaf ancestor walk, for parity with JetBrains ancestorOutside.",
+  "blockedResourceId": null,
+  "blockedOnTaskIds": null,
+  "completedAt": "2026-11-03T07:19:26.220Z",
+  "reviewCompletedAt": "2026-11-03T07:19:26.220Z",
+  "reviewSummary": "QA qa-7328a40d approves completion 9eca3971 (cand-d90b75c2; tree d3d065ff matches). It is an ancestor of origin/moe/work-2026-10-24, and no later commit touches moe-vscode.\n\nSIZE: +461/-18, net 443, across exactly the 3 approvedScope files. That is within the TASK size exception in taskRails (cap 450). No existing test is modified.\n\nRE-RUN on fresh `git archive 9eca3971` snapshots (/mnt/d/moe-scratch/qa7328-98c8/run.sh, exit 0):\n- Linux (node 24.21): npm ci, test, compile and lint exit 0. 622 tests, 618 pass, 0 fail, 4 skipped.\n- Windows (cmd.exe, node 24.16): npm ci, test and compile exit 0. 618 tests, 613 pass, 0 fail, 5 pre-existing skips.\n- The new suite passes 30/30 on Linux and 26/26 on Windows.\n\nMUTANTS, all killed:\n- foreign-key check dropped: P6 fails;\n- file 0600 check dropped: P6 0644 fails;\n- verified-local does not re-protect a legacy record: P5 fails.\n\nDoD 1: the root is set first in activate(). The record is persisted 0600/0700 (P1). The prompt is modal and asks once (P2 x3). Only 'Allow Downgrade' writes legacy, effective after a restart (P5). Keep, dismiss, another label, a rejected prompt and a throwing prompt write nothing (P3/P4).\nDoD 2: 15 untrusted shapes read protected, with no content in logs (P6). A root inside the project writes nothing (P7). An untrusted declaration writes nothing (P10).\nDoD 3: legacy never prompts (P8). No root behaves as today (P9). Both legs are green.\nImports are unchanged.\n\nRESIDUAL, not a reject: a missing POSIX root under a symlinked in-project ancestor passes the pre-existing isOutsideProject, because pathForms walks ancestors only on win32. Tracked as task-20a64797. Docs drift is task-48bbd091.",
+  "requiredCheckAtDone": null
+}

@@ -1,0 +1,230 @@
+{
+  "id": "task-fefce9648a4e481fba0a819ca516f56f",
+  "epicId": "epic-be924fb8",
+  "title": "bug: qa_approve and qa_reject on an unassigned REVIEW row fall back to the caller as the hand-off seat (task.assignedWorkerId || params.workerId) and set it IDLE with currentTaskId null, so a seat that holds another task loses its own claim pointer while that task still names it as assignee",
+  "description": "Filed by the governor from hunt #15's held items (task-928a468d, architect-1dd28c7c, msg-492975dd). Re-verified at tip f76c55f3. It waits in BACKLOG on task-e44fbbf3, which edits the same two tools to fence verdicts on rows parked for a human. The governor promotes it when e44fbbf3 is DONE.\n\nPROBLEM\npackages/moe-daemon/src/tools/qaApprove.ts:118 and qaReject.ts:142 compute `handoffWorkerId = task.assignedWorkerId || params.workerId`. After the verdict, qaApprove.ts:251 and qaReject.ts:384 run `touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null })`.\nOn an unassigned REVIEW row, the hand-off seat is therefore the caller itself, even when the caller holds another task. The task still says assignedWorkerId = that seat, while the worker record says IDLE with no current task. The board shows the seat idle, and the seat's own bookkeeping (status, currentTaskId) no longer matches the row it owns.\n\nEVIDENCE\nRepro: /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts, case 2, run at d5431577 in a snapshot; output in sideLeads.vitest.txt. qa-b holds task-2 (REVIEW, assigned to qa-b, currentTaskId task-2, status CODING) and calls qa_approve on unassigned REVIEW task-1. Afterwards task-2 is still assigned to qa-b, but qa-b reads status IDLE and currentTaskId null.\n\nFIX DIRECTION\nIdle only the seat that actually held the reviewed row: the captured task.assignedWorkerId. When the row was unassigned, touch no worker, or touch the caller only if its currentTaskId is the reviewed task. Apply this the same way in both tools. Error handling unchanged. Check how e44fbbf3 (landed first) restricts who may give a verdict on an unassigned row, and keep its fence. Sync the qa_approve and qa_reject MCP_SERVER.md sections if they describe the hand-off (ruling msg-71db57ac); if not, the summary says none was owed.\n\nFILES\npackages/moe-daemon/src/tools/qaApprove.ts, qaReject.ts, and one vitest file. Gate: that file plus qaApprove.test.ts and qaReject.test.ts, run in a snapshot outside the shared checkout (global rail).",
+  "definitionOfDone": [
+    "A qa_approve or qa_reject on an unassigned REVIEW row leaves a caller that holds another task untouched: its status and currentTaskId still point at its own task. The hunt repro case 2 passes for both tools.",
+    "A verdict on an assigned REVIEW row still idles that row's assignee exactly as before (an existing or new regression case).",
+    "The behavior is identical in both tools, and the existing qaApprove.test.ts and qaReject.test.ts pass."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the regression test first. Create packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts with your own editor (Write on Claude, apply_patch on codex exec), never a shell copy and never a subagent: the TOOL witness matters at landing (global rail). Start from the architect's dry-run prototype /mnt/d/moe-scratch/plan-fefce964/qaVerdictHandoff.test.ts (113 lines). Its fixture mirrors tools/parkedReview.guard.test.ts (setupMoe / writeTask / createWorker), and task-1 defaults to an unassigned REVIEW row.\n\nSix tests, it.each over [['qa_approve','DONE'],['qa_reject','WORKING']]:\n(a) The hunt repro case 2 (/mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts) for both tools. qa-b (CODING, currentTaskId task-2) holds REVIEW task-2 (assigned qa-b) and gives the verdict on unassigned REVIEW task-1. task-1 lands DONE / WORKING, task-2 is still assigned to qa-b, and qa-b reads exactly { status: 'CODING', currentTaskId: 'task-2' }.\n(b) A caller whose own currentTaskId IS the unassigned task-1 (qa-c, CODING) is still idled: { status: 'IDLE', currentTaskId: null }. This pins the chosen fix over 'touch no one when unassigned'.\n(c) A workerId-less verdict on task-1 assigned to qa-a (CODING, task-1) unassigns task-1 and idles qa-a. A bystander qa-b (CODING on its own task-2) stays { status: 'CODING', currentTaskId: 'task-2' } (DoD 2, human path).\n\nAssert with toEqual on the { status, currentTaskId } projection, never truthiness.\n\nRED: run the step-3 checkRef now, before step 2's edit. It must exit 1 with exactly the two (a) cases failing ('expected { status: IDLE, currentTaskId: null } to deeply equal { status: CODING, … }'); the architect's dry run at d1062cb0 gave 2 failed / 235 passed across the 8 files. Put that RED in your step summary.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ],
+      "note": "RED before the fix: checkRef exit 1, exactly the two (a) cases failed (IDLE/null vs CODING/task-2); 2 failed / 235 passed across 8 files.",
+      "startedAt": "2026-11-04T05:36:58.139Z",
+      "completedAt": "2026-11-04T05:37:27.732Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "The fix, identical in both tools. In packages/moe-daemon/src/tools/qaApprove.ts:127 and packages/moe-daemon/src/tools/qaReject.ts:151, replace\n  const handoffWorkerId = task.assignedWorkerId || params.workerId;\nwith exactly (same indentation as the line it replaces):\n  // Idle only the seat that held this row: its assignee. On an unassigned\n  // row, where assertWorkerOwns lets any seat give the verdict, that is the\n  // caller only when its own pointer is on this row, so a seat that holds\n  // another task keeps its claim.\n  const handoffWorkerId = task.assignedWorkerId\n    || (params.workerId && state.getWorker(params.workerId)?.currentTaskId === task.id ? params.workerId : null);\nThe dry-run diff is /mnt/d/moe-scratch/plan-fefce964/fix.diff (2 files, +12/-2). Use your own editor (Edit, apply_patch, or Serena replace_content), never a shell write.\n\nWhy this shape:\n- Keep `||`, not `??`: an empty assignee or workerId stays 'none', as assertWorkerOwns reads it.\n- Read the worker at this line, before updateTask. Both verdicts run under the global state mutex. updateTask never rewrites the caller's record on an unassigned row: its prior-owner release (state/taskStore.ts:622-639) keys on task.assignedWorkerId.\n- touchWorker (state/workerStore.ts:91-116) already no-ops a null id, a missing record and a DEAD one. So no new error handling is needed, and no refusal changes.\n\nLeave untouched:\n- a5157059's needsHumanReview fence (qaApprove.ts:74-81, qaReject.ts:137-144);\n- the finalizing hold, assertWorkerOwns and assertContextFetched;\n- the touchWorker lines (qaApprove.ts:258-260, qaReject.ts:391-393) and their payload;\n- the tool description strings and every other line.\n\nPlacement: in qaReject.ts change only the line at :151. task-77e54ebb (PLANNING) edits the cap-escalation block (:199-245); keep your hunk away from it so merge-tree lands both.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "startedAt": "2026-11-04T05:37:28.473Z",
+      "completedAt": "2026-11-04T05:37:35.808Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification. Run it once, before moe.complete_task; its fresh output is the completion evidence. From the task worktree root, run the executionContract checkRef exactly as written. The same text (993 chars) is at /mnt/d/moe-scratch/plan-fefce964/checkref-gate.txt.\n\nWhat it does:\n- It overlays the three owned files onto a whole-tree `git archive HEAD` snapshot made with mktemp, outside the repo (global rail; mem:gotcha-harness-snapshot-needs-full-archive).\n- Under env -i, with nvm Node v24.21.0 and NO_COLOR=1, it runs `npm ci`, then `tsc --noEmit` on the runtime, then `tsc -p tt.json`, which types the new test file (the package tsconfig excludes tests; mem:convention-daemon-full-suite-gate-checkref).\n- vitest then runs the new file plus qaApprove, qaReject, qaOwnership, qaReject.failedDodItems, parkedReview.guard, reviewLoopActor and state/attemptHandback.\n- It exits 0 only when everything passes and the new file reports exactly (6 tests).\n\nExpected (the architect's dry run of the prototype at d1062cb0): 'Test Files  8 passed (8)', 'Tests  237 passed (237)', 'handoff ok (<snapshot>)', about 10 s with a warm npm cache.\n\nRules:\n- Never run npm in the shared checkout (global rail).\n- Never pass TMPDIR into the env -i (the TMPDIR trap in mem:convention-daemon-full-suite-gate-checkref).\n\nDocs: the ### moe.qa_approve (docs/MCP_SERVER.md:2258) and ### moe.qa_reject (:2332) sections never say which seat a verdict idles, so no sync is owed (ruling msg-71db57ac). Say so in the completion summary; do not edit the doc.\n\nSupplementary, not the gate: the original hunt repro case 2 passes against the fix. Copy /mnt/d/moe-scratch/hunt-928a468d/A/sideLeads.test.ts to src/__hunt__/ in the snapshot, then run `npx vitest run src/__hunt__/sideLeads.test.ts -t \"own claim on task-2\"` (1 passed, 1 skipped; case 1 belongs to task-93e09a54). The architect also ran the full daemon suite on the fixed snapshot: 281 files, 7440 passed, 24 skipped.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef exit 0: Test Files 8 passed, Tests 237 passed, handoff ok. No docs sync owed.",
+      "startedAt": "2026-11-04T05:37:36.546Z",
+      "completedAt": "2026-11-04T05:37:49.139Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review, the final step. Load the adversarial-self-review skill and read your diff as an attacker.\n- Identity: the two handoffWorkerId hunks, comment included, are byte-identical. Diff the two hunks against each other.\n- Precedence: the needsHumanReview fence, qa_approve's finalizing hold, assertWorkerOwns, assertContextFetched and the summary/candidate/delivery gates all still run before any write. Nothing moved.\n- Walk every caller shape:\n  - assigned row, its owner calls: owner idled, as before;\n  - assigned row, no workerId: assignee idled;\n  - assigned row, another seat calls: NOT_ALLOWED, unchanged;\n  - unassigned row, caller busy elsewhere: untouched;\n  - unassigned row, caller's pointer on it: idled;\n  - unassigned row, IDLE caller with no task: untouched (it was already IDLE/null);\n  - unknown workerId: getWorker is null, so no touch (touchWorker skipped a missing record before too);\n  - DEAD caller: touchWorker skips DEAD;\n  - parked row with a workerId: refused, unchanged;\n  - qa_reject's hard-cap park of an assigned row: captured assignee idled, unchanged (no updateTask prior-owner release there, because the status does not change);\n  - empty-string workerId: falsy, so the human path, as before.\n- Concurrency: neither tool is `blocking` and neither takes its own runExclusive, so McpAdapter runs the whole handler under the global state mutex. The getWorker read and the touchWorker write cannot interleave with another tool.\n- Scope: no other line changed in either tool, nothing in qaReject.ts's :199-245 cap block (task-77e54ebb), no docs, no description string.\n- The test bites: it fails on the unfixed code (your step-1 RED). It also fails on the 'touch no one' mutant `const handoffWorkerId = task.assignedWorkerId;`, which fails the two (b) cases; the architect's dry run gave 2 failed / 235 passed.\n\nIf anything changes, re-run the step-3 checkRef and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ],
+      "note": "Self-review: the two hunks are byte-identical (diffed); only the handoffWorkerId line changed (+12/-2 total); no other line, fence, gate, doc or description moved; every caller shape walked (touchWorker no-ops null/missing/DEAD). Verification re-run was step 3's, no changes since.",
+      "startedAt": "2026-11-04T05:37:49.827Z",
+      "completedAt": "2026-11-04T05:37:57.938Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Promoted from BACKLOG by the governor. Its prerequisite, task-e44fbbf3, is DONE (completion a5157059), which is the trigger named in this row's description, under the human's standing \"move from backlog\" (2026-11-02 21:00Z). Line anchors moved after a5157059: handoffWorkerId is now qaApprove.ts:127 and qaReject.ts:151, and the touchWorker calls are qaApprove.ts:260 and qaReject.ts:393. Read a5157059's needsHumanReview fence first and keep it.\nPlacement note: task-77e54ebb is promoted at the same time and also edits qaReject.ts, but only the cap-escalation block (around :205-245). Keep this row's hunks to the hand-off lines so merge-tree lands both. No dependsOn between the two.",
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-e44fbbf336754fdf9e852f80c93a9ee8"
+  ],
+  "priority": "LOW",
+  "order": 472.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T00:03:30.681Z",
+  "updatedAt": "2026-11-04T19:20:45.133Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-04T00:27:56.803Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-04T05:24:06.558Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T06:08:36.682Z",
+    "wallClockMs": 2670124
+  },
+  "contextFetchedBy": [
+    "architect-67c762f6",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T05:36:06.207Z",
+  "executionContract": {
+    "intendedBehavior": "qa_approve and qa_reject set IDLE with currentTaskId null only the seat that held the reviewed row. That is the row's captured assignedWorkerId. On an unassigned REVIEW row it is the caller only when the caller's own worker record has currentTaskId equal to the reviewed task. A seat that holds another task and gives a verdict on an unassigned REVIEW row keeps its status and currentTaskId, so the board and its own bookkeeping still match the row it owns. Everything else about both verdicts is unchanged: the gates and their order, the Review and task writes, chat posts, refusals and return shapes. The workerId-less human path idles the assignee or no one, as before.",
+    "acceptanceCriteria": [
+      "Hunt repro case 2, both tools: qa-b (CODING, currentTaskId task-2) holds REVIEW task-2 (assigned qa-b). After qa-b's qa_approve on unassigned REVIEW task-1, task-1 is DONE; after its qa_reject, task-1 is WORKING. Either way task-2 stays assigned to qa-b and qa-b reads exactly { status: 'CODING', currentTaskId: 'task-2' }.",
+      "A caller whose own currentTaskId is the unassigned reviewed row (qa-c, CODING, task-1) still ends { status: 'IDLE', currentTaskId: null } after either verdict.",
+      "A workerId-less verdict on task-1 assigned to qa-a (CODING, task-1) unassigns task-1 and idles qa-a. A bystander qa-b holding task-2 is untouched. qaOwnership.test.ts's 'qa_approve releases the assigned QA worker after approval' and 'qa_reject releases the assigned QA worker after rejection' pass unchanged.",
+      "qaApprove.test.ts, qaReject.test.ts, qaReject.failedDodItems.test.ts, qaOwnership.test.ts, parkedReview.guard.test.ts, reviewLoopActor.test.ts and state/attemptHandback.test.ts pass unchanged. The new qaVerdictHandoff.test.ts reports exactly 6 passing tests."
+    ],
+    "invariants": [
+      "The handoffWorkerId declaration is byte-identical in both tools and stays at its current position: after assertContextFetched, before assertReviewBinding. The caller's record is therefore read before updateTask.",
+      "a5157059's needsHumanReview fence (qaApprove.ts:74-81, qaReject.ts:137-144) and assertWorkerOwns/assertContextFetched's deliberate unassigned no-op (util/enforcement.ts:62-68) are unchanged.",
+      "The touchWorker call and its { status: 'IDLE', currentTaskId: null } payload are unchanged; only the id it receives changes. touchWorker still no-ops a null id, a missing record and a DEAD record (state/workerStore.ts:91-116).",
+      "No change to error handling, refusal codes, gate order, Review writes, updateTask payloads, chat posts or tool description strings."
+    ],
+    "compatibility": [
+      "No MCP wire change: qa_approve and qa_reject keep their parameters, return shapes and error codes.",
+      "The workerId-less human/IDE verdict path is unchanged.",
+      "No .moe/ state shape change; existing task and worker files load as before."
+    ],
+    "approvedScope": [
+      "qaApprove.ts and qaReject.ts: only the handoffWorkerId declaration (qaApprove.ts:127, qaReject.ts:151), plus a 4-line comment above it. qaReject.ts's cap-escalation block (:199-245) belongs to task-77e54ebb and stays untouched.",
+      "New test file packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts (6 tests: 3 cases x 2 tools).",
+      "No docs change: docs/MCP_SERVER.md's ### moe.qa_approve and ### moe.qa_reject sections do not describe which seat a verdict idles (checked at d1062cb0), so none is owed (ruling msg-71db57ac). The completion summary says so."
+    ],
+    "reuse": [
+      "StateManager.getWorker (state/StateManager.ts:1230, returns Worker | null) reads the caller's record. The existing touchWorker is reused unchanged.",
+      "The test fixture copies tools/parkedReview.guard.test.ts's setupMoe / writeTask / createWorker shape.",
+      "No shared helper: the expression is one line at two call sites, and a helper would add a fourth file."
+    ],
+    "sourceAssumptions": [
+      "At d1062cb0, qaApprove.ts:127 and qaReject.ts:151 read `const handoffWorkerId = task.assignedWorkerId || params.workerId;`. qaApprove.ts:260 and qaReject.ts:393 run `await state.touchWorker(handoffWorkerId, { status: 'IDLE', currentTaskId: null });`.",
+      "assertWorkerOwns returns early on an unassigned row (util/enforcement.ts:43-44), deliberately (enforcement.ts:62-68), so any seat may give a verdict on an unparked unassigned REVIEW row.",
+      "updateTask's prior-owner release (state/taskStore.ts:622-639) touches only task.assignedWorkerId's worker, and only when that worker's currentTaskId is the task. On an unassigned row the tool's touchWorker is the only write that reaches the caller.",
+      "Neither verdict tool is blocking: true, and neither takes its own runExclusive, so McpAdapter dispatch runs the whole handler under the global state mutex.",
+      "The REVIEW self-heal (state/sweeps.ts:505-531) clears the owner's currentTaskId when it unassigns its row."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src/tools && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon\" && for f in qaApprove.ts qaReject.ts qaVerdictHandoff.test.ts; do cp \"$R/$f\" src/tools/$f || exit 1; done && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/qaVerdictHandoff.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/qa{VerdictHandoff,Approve,Reject,Ownership,Reject.failedDodItems}.test.ts src/tools/{parkedReview.guard,reviewLoopActor}.test.ts src/state/attemptHandback.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aqE 'qaVerdictHandoff\\.test\\.ts \\(6 tests\\)' ../v.log && echo \"handoff ok ($L)\" )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Touch no worker on an unassigned row (`handoff = task.assignedWorkerId`). Simplest, but it drops the cleanup of a caller whose own pointer is on the reviewed row, which the old fallback did correctly. The (b) tests pin against it, and the architect's mutant run gave 2 failed. (2) A shared util helper: a fourth file for a one-line expression at two call sites. Rejected. (3) A heartbeat-only touch of a caller that is not the hand-off seat: not asked for, and the wrapper's heartbeat sidecar keeps a live seat's lastActivityAt fresh anyway. (4) Reading the caller after updateTask: no benefit under the mutex, and it would move the hunk toward task-77e54ebb's block.",
+    "codebaseInsights": "Any seat may give a verdict on an unparked, unassigned REVIEW row, because assertWorkerOwns's unassigned no-op is deliberate (util/enforcement.ts:62-68). Only the parked (needsHumanReview) row is fenced (a5157059). updateTask already releases the prior OWNER on a status change that clears the pointer (taskStore.ts:622-639), but only when the owner's currentTaskId is the task, and it IDLEs only task-bound statuses. The tools' touchWorker is the unconditional IDLE for the captured assignee, and the only write that can reach the caller on an unassigned row. qa_reject's hard-cap park keeps status REVIEW, so updateTask does no prior-owner release there; the captured-assignee touch is what idles that seat and must stay. The prototype was dry-run at d1062cb0: RED 2 failed, GREEN 8 files / 237 passed, full daemon suite 281 files / 7440 passed / 24 skipped, hunt case 2 green. Artifacts are in /mnt/d/moe-scratch/plan-fefce964/.",
+    "risks": "task-77e54ebb (PLANNING) also edits qaReject.ts, but only the cap block (:199-245). Keep this row's hunk at :151 so merge-tree lands both. No existing daemon test relied on the old caller fallback: the full suite is green with the prototype. Do not change the touchWorker payload: the assigned-row behavior must stay exactly as before (DoD 2). The new test must type-check; the gate's tsc -p tt.json covers it, because the package tsconfig excludes tests.",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaApprove.ts",
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/state/workerStore.ts",
+      "packages/moe-daemon/src/state/taskStore.ts",
+      "packages/moe-daemon/src/tools/parkedReview.guard.test.ts",
+      "packages/moe-daemon/src/tools/qaOwnership.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "c54b063b4ae577a91ca07e9f7b59fdbeb7fcfa64",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T05:36:06.240Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T05:36:58.139Z",
+  "reviewStartedAt": "2026-11-04T05:38:05.428Z",
+  "verification": {
+    "command": "( set -o pipefail; T=$(git rev-parse --show-toplevel) && R=$T/packages/moe-daemon/src/tools && L=$(mktemp -d) && git -C \"$T\" archive HEAD | tar -x -C \"$L\" && cd \"$L/packages/moe-daemon\" && for f in qaApprove.ts qaReject.ts qaVerdictHandoff.test.ts; do cp \"$R/$f\" src/tools/$f || exit 1; done && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/qaVerdictHandoff.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'npm ci && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/tools/qa{VerdictHandoff,Approve,Reject,Ownership,Reject.failedDodItems}.test.ts src/tools/{parkedReview.guard,reviewLoopActor}.test.ts src/state/attemptHandback.test.ts' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ +(Test Files|Tests) ' ../v.log; grep -aqE 'qaVerdictHandoff\\.test\\.ts \\(6 tests\\)' ../v.log && echo \"handoff ok ($L)\" )",
+    "exitCode": 0,
+    "outputTail": " Test Files  8 passed (8)\n      Tests  237 passed (237)\nhandoff ok (/tmp/tmp.PHYe2yY3qu)",
+    "reportedAt": "2026-11-04T05:38:05.428Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts",
+    "packages/moe-daemon/src/tools/qaApprove.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts"
+  ],
+  "completionSummary": "qa_approve and qa_reject now idle only the seat that held the reviewed row. handoffWorkerId = task.assignedWorkerId || (caller only when its own currentTaskId is the reviewed task, else null), byte-identical in both tools, same position, plus a 4-line comment. A caller holding another task on an unassigned REVIEW row keeps its status and currentTaskId; a caller whose pointer is on the row is still idled; assigned-row and workerId-less human paths are unchanged. touchWorker and its payload, the needsHumanReview fence, gate order and all refusals untouched. New qaVerdictHandoff.test.ts (6 tests, 3 cases x 2 tools). RED before the fix: 2 failed / 235 passed (the two repro cases). GREEN: checkRef 8 files, 237 passed, handoff ok. No docs change owed: the qa_approve and qa_reject sections in MCP_SERVER.md do not describe which seat a verdict idles (ruling msg-71db57ac).",
+  "commits": [
+    {
+      "sha": "b9205914adbb59c2730fb143d55986a3996474ce",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T05:36:10Z",
+      "paths": [
+        "packages/moe-daemon/src/tools/qaApprove.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/tools/qaVerdictHandoff.test.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T05:39:06.115Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-67c762f6@2026-11-04T05:24:04Z",
+    "at": "2026-11-04T06:51:03.826Z"
+  },
+  "completedAt": "2026-11-04T06:08:36.682Z",
+  "reviewCompletedAt": "2026-11-04T06:08:36.682Z",
+  "reviewSummary": "Reviewed completion b9205914 (kind=completion, pushed; ancestor of moe/work-2026-10-24 and control HEAD 2a1c5a36). Diff +125/-2, 3 files, under the 400 cap. qaApprove.ts and qaReject.ts change only the handoffWorkerId line (+7/-1 each, comment included, byte-identical, same position: after assertContextFetched, before the candidate gate). New value: task.assignedWorkerId || (workerId && state.getWorker(workerId)?.currentTaskId === task.id ? workerId : null). touchWorker call and payload, the needsHumanReview fence, gate order, refusals and description strings are untouched; touchWorker no-ops null/missing/DEAD ids.\nRe-ran task.verification verbatim in a snapshot outside the shared checkout (git archive HEAD, Node v24.21.0, env -i): exit 0; tsc and tsc -p tt.json clean; vitest 8 files, 242 passed (worker's 237 plus task-77e54ebb's later tests at HEAD); qaVerdictHandoff.test.ts reports exactly (6 tests), 'handoff ok'.\nMutation check in the scratch snapshot (restored after): the original `assignedWorkerId || params.workerId` fails exactly the two 'caller holds another task' cases (hunt repro case 2, both tools); the 'touch no one' mutant fails exactly the two 'caller's own pointer is on the row' cases.\nDoD 1: cases (a) and (b). DoD 2: case (c) plus unchanged qaOwnership release tests. DoD 3: identical in both tools; the 8-file suite passes. Assertions are toEqual on {status, currentTaskId}.\nNo docs owed: MCP_SERVER.md qa_approve/qa_reject sections do not describe which seat a verdict idles (grepped), ruling msg-71db57ac. Ponytail: nothing to cut. Not run: full daemon suite (architect's dry run: 281 files, 7440 passed); the plan's gate is the 8-file checkRef.",
+  "requiredCheckAtDone": null
+}

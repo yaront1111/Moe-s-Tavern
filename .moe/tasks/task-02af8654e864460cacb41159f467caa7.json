@@ -1,0 +1,211 @@
+{
+  "id": "task-02af8654e864460cacb41159f467caa7",
+  "epicId": "epic-be924fb8",
+  "title": "bug: real CI on PR #230 is red at the tip, on windows-latest only: subagent-mirror.test.mjs \"PowerShell 7: B: any other copy failure still stops the pre-flight\" matches /is denied/ against pwsh 7's ConciseView error, which the runner wraps mid-message with ANSI codes (\"...one.md' is\" / \"| denied.\"), so the Windows job stops at step 13 of 23 and steps 14-23 never run on CI",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04, from real GitHub CI, not a dry run.\n\nPROBLEM\n- ci.yml runs on PR #230 (moe/work-2026-10-24 into main) at every landing. A newer push replaces only the queued run, so a run completes about every 45-50 min.\n- Every completed run today has failed.\n  - The earlier reds have been fixed: installers (7e862808), literal paths (6b3ab9d8) and serena-ignore (e45da220).\n  - Since 2037e856 exactly ONE step is red, on windows-latest only: \"Test launcher daemon.json cap and seat re-registration\".\n- Inside that step one test fails:\n  - scripts/tests/subagent-mirror.test.mjs, case \"PowerShell 7: B: any other copy failure still stops the pre-flight\". The stack points at :192:12, which is `assert.match(r.out, engine.ext === 'sh' ? /Permission denied/ : /is denied/)`.\n  - On the runner, pwsh 7 prints the Copy-Item error in ConciseView, with ANSI colour and a \"     | \" gutter, wrapped at the console width.\n  - The runner's 8.3 temp path C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\moe-mirror-XXXXXX\\project\\.claude\\agents\\one.md pushes the break between \"is\" and \"denied.\", so the regex never matches.\n  - PowerShell 5.1 (NormalView) and Git Bash pass. Hunt #22's local Windows dry run passed this step (169 tests, 156 pass) because its temp path wraps elsewhere. A dry run cannot catch this.\n- Consequence: GitHub stops the job at the first failed step, so Windows steps 14-23 have not run on CI in any completed run today:\n  - the PowerShell .moe-agent.json read and daemon autostart arguments;\n  - the Bash, Windows PowerShell and PowerShell 7 landing guards and wrapper postflights;\n  - VS Code daemon startup, and packaging the VS Code extension.\n  Latent reds there stay hidden until this is fixed.\n\nEVIDENCE (gh.exe run view <id> --json jobs / --log-failed)\n- Run 41823611051 at 2037e856 and run 41830422144 at 060d7b8c both completed as failure. Their only failed job is \"Build (windows-latest)\", failing at \"Test launcher daemon.json cap and seat re-registration\": 169 tests, 155 pass, 1 fail, 13 skipped.\n- Run 41834653023 at 80078651: Build (windows-latest) failed at the same step. macOS, JetBrains, fresh Linux install, Build TypeScript and Test TypeScript are all green.\n- The assertion's actual input, from 41830422144, with ANSI shortened to <E>:\n  `Get-ChildItem: C:\\Users\\runneradmin\\...\\seat.ps1:25` / `Line |` / `25 | Get-ChildItem -LiteralPath $moeAgentsDir -File -Filter \"*.md\" …` / `| Access to the path 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\moe-mirror-vTPP70\\project\\.claude\\agents\\one.md' is<E>` / `<E>| <E>denied.<E>`\n  Note that the error record comes from Get-ChildItem at seat.ps1:25, not from Copy-Item.\n\nFIX DIRECTION, test-side. The wrapper's behaviour is right: the pre-flight stops.\n- Before matching, normalize the child's output for the ps1 engines:\n  - strip ANSI (/\\x1B\\[[0-9;]*[A-Za-z]/g);\n  - drop ConciseView's gutter and line breaks (for example replace /\\r?\\n\\s*\\|?\\s*/g with ' ');\n  - collapse whitespace.\n  Then match /is denied/, or /Access to the path .* is denied/.\n- Alternatively, run the fixture's pwsh with `$PSStyle.OutputRendering = 'PlainText'` and `$ErrorView = 'NormalView'`. But normalizing in the test also covers a future wrap anywhere.\n- Apply the same normalization to every other regex or includes() assertion in this file that reads pwsh error text.\n- Scan the sibling launcher tests run in the same CI step (seat-registration, daemon-json-cap) for the same pattern: a pwsh 7 error string matched across a possible wrap.\n- Do not edit scripts/moe-agent.ps1 or moe-agent.sh. CQ-M07s holds moe-agent.ps1, and the bug is in the test.\n\nREPRODUCE LOCALLY. pwsh.exe and powershell.exe are on the Windows host, and hunt #22's scripts in /mnt/d/moe-scratch/hunt-7a3640da/mine/ show the Windows clean-env setup.\n- Either force the same wrap by pointing TEMP/TMP at a directory whose path is as long as the runner's, or longer, so the message breaks before \"denied.\",\n- or add a fixture case that feeds the captured string above through the normalizer.\n- Show the red-then-green either way.",
+  "definitionOfDone": [
+    "subagent-mirror.test.mjs \"PowerShell 7: B\" passes when pwsh 7 wraps the error as on the runner. Show it failing first, then passing, with a forced long TEMP path or with the captured CI string in a fixture. PowerShell 5.1 and Git Bash B still pass.",
+    "Every assertion in subagent-mirror.test.mjs that matches PowerShell error text goes through the same ANSI and wrap normalization. The sibling tests in CI step 13 (seat-registration, daemon-json-cap) are scanned for the same pattern, and each hit is fixed or listed with file:line in the summary.",
+    "No change to scripts/moe-agent.ps1 or scripts/moe-agent.sh. The summary names the next PR #230 CI run to watch, so the governor can confirm the windows-latest job gets past step 13."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED first, then the fix, in scripts/tests/subagent-mirror.test.mjs only. Read mem:task-task-02af8654e864460cacb41159f467caa7-handoff first: it holds the verbatim code, the CI fixture literal and the measured wrap facts (reference diff, +24/-2: /mnt/d/moe-scratch/plan-02af8654/intended.diff). Load test-driven-development. (1) RED before any edit: from the task worktree root run the step-3 gate command once. On the unfixed file it must end `logs=<dir> red=1 win=1 lin=0` without GATE_OK, and win.tap must show `not ok 9 - PowerShell 7: B: any other copy failure still stops the pre-flight` with its stack at subagent-mirror.test.mjs:192:12 while Git Bash B and PowerShell 5.1 B are ok. Quote those lines in this step's complete_step summary: it is the DoD's failing-first run under a forced CI-length TEMP. (2) Edit the file with your editing tool only (no shell write: the task worktree lands every dirty path, so gate logs stay under /mnt/d/moe-scratch). (a) After the `const psq = ...` line add a short comment (pwsh 7's ConciseView colours an error record and wraps it at the console width behind a `     | ` gutter, CI run 41830422144; Windows PowerShell 5.1 wraps before a long path) and exactly: `const ANSI = /\\x1B\\[[0-9;?]*[A-Za-z]/g;` then `const plain = (out) => out.replace(ANSI, '').replace(/\\r?\\n[ \\t]*\\|?[ \\t]*/g, ' ').replace(/\\s+/g, ' ');` then `const DENIED = { sh: /Permission denied/, ps1: /Access to the path '.+' is denied\\./ };`. (b) In test B replace its two text assertions with `const text = plain(r.out);`, `assert.match(text, DENIED[engine.ext]);` and `assert.doesNotMatch(text, /@@ after mirror/);`, and keep `assert.notEqual(r.status, 0, r.out)` and the existsSync assertion unchanged. (c) After the ENGINES loop append the `CI_PWSH7` constant copied verbatim from the memory (or /mnt/d/moe-scratch/plan-02af8654/ci-fixture.js: 6 concatenated lines, ASCII, the console ellipsis written as …) under a one-line provenance comment naming CI run 41830422144, then ONE top-level, engine-independent test 'PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()' asserting, in order: the raw fixture does not match /is denied/ (the CI failure itself); the raw fixture does not match DENIED.ps1 (the normalization is load-bearing); plain(fixture) matches DENIED.ps1; plain(fixture) includes the exact runner sentence given in the memory (Access to the path '<runner one.md path>' is denied.), with the normalized text as the assert message. Why join with ONE space: both engines break at a space (pwsh 7 drops it behind its gutter; 5.1 breaks before the quoted path), and the only mid-word break is inside a word wider than the console, the quoted path, which DENIED.ps1's '.+' absorbs. Strip ANSI before the gutter join, because every ConciseView gutter line starts with SGR codes. Leave tests A, C, D, execute(), the slices and every other line unchanged: A's 'Subagents: mirrored ...' line and the '@@ after mirror' marker are Write-Host/Write-Output text, not error text. Error handling: plain() is total over any string (empty or ANSI-free output passes through unchanged), so a child that prints nothing still fails B on its DENIED match, with the normalized input in the default assertion message, instead of throwing; the existing error handling for a failed spawn, execute()'s assert.ifError(r.error), stays as it is. Never edit scripts/moe-agent.ps1 or scripts/moe-agent.sh (CQ-M07s holds moe-agent.ps1, and the wrapper's stop is correct).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "note": "RED first, under node.exe with TEMP forced to 36 chars, on unfixed base f38a17d4: red.tap showed 'ok 1 - Git Bash: B', 'ok 2 - PowerShell 5.1: B', 'not ok 3 - PowerShell 7: B' with its stack at subagent-mirror.test.mjs:192:12 (# pass 2, # fail 1). The full unfixed run gave red=1 win=1 lin=0, with only 'not ok 9 - PowerShell 7: B' failing. Fix applied: ANSI, plain() and DENIED helpers, B's text assertions run on plain(r.out), plus the CI_PWSH7 fixture and its engine-independent test. The fixture evaluates to 692 chars, equal to the planning copy, and the file is ASCII. The diff is +24/-2 in one file.",
+      "startedAt": "2026-11-04T14:20:18.301Z",
+      "completedAt": "2026-11-04T14:21:27.075Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Read-only scan for DoD 2 (no edit expected): the two sibling files CI step 13 runs with this one (.github/workflows/ci.yml:277). Re-check at the current tip, since line numbers can shift, and record the result for the completion summary. The planning pre-scan at f38a17d4 found NO hit. (a) scripts/tests/seat-registration.test.mjs reads child stdout only (:183; stderr appears only in the :184 status message). Its text checks (:190 and :192, anchored `@@` line matchers; :259, :289, :290, :295, :310, :322) all match launcher Write-Host or Write-Output lines (moe-agent.ps1:2023, :2035, :10748, :11997), never a PowerShell error record, which pwsh writes to stderr. (b) scripts/tests/daemon-json-cap.test.mjs already strips ANSI (:52, :148). Its ps1 checks match launcher Write-Host lines (assertRefused :233; :406, :416, :440) and the fixture's own Write-Output `@@ running=... err=` line (:458-566), where err= carries $Error[0].Exception.Message as a plain string, not an error-view rendering. A real hit is a regex or includes() over the rendered text of an uncaught or Write-Error record. If you find one, list it with file:line in the summary (the DoD allows fixed or listed) instead of widening this task's file scope.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Read-only scan at the current tip, no edit. There is NO hit. seat-registration.test.mjs reads stdout only (:181-183; stderr appears only in the :184 failure message). Its text checks (:259, :289, :290, :295, :310, :322) match launcher Write-Host/Write-Output lines. daemon-json-cap.test.mjs merges stderr into out (:126) but strips ANSI (:52, :148). Its checks (:233, :274-275, :288-304, :406-417, :440, :458-566) match launcher Write-Host lines, the fixture's own '@@ running=... err=' Write-Output line, or negative includes() checks. None reads a rendered PowerShell error record.",
+      "startedAt": "2026-11-04T14:21:27.525Z",
+      "completedAt": "2026-11-04T14:21:55.167Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verify: run this ONE command from the task worktree root. It is the complete_task verification command (checkRefs[0]), and QA re-runs it from the control checkout: T='D:\\moe-scratch\\t02af8654-wrap-36char'; mkdir -p $(wslpath -u $T); R=$(mktemp -d /mnt/d/moe-scratch/g.XXXX); P=$(mktemp -d); trap 'rm -rf $P' EXIT; F=scripts/tests/subagent-mirror.test.mjs; N='--test --test-reporter=tap'; E=$WSLENV:TEMP/w:TMP/w; git archive f38a17d4 scripts | tar -x -C $R && tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P && chmod +x $P/pwsh || exit 9; (cd $R; TEMP=$T TMP=$T WSLENV=$E node.exe $N --test-name-pattern 'B: any other' $F >red.tap); r=$?; TEMP=$T TMP=$T WSLENV=$E node.exe $N $F >$R/win.tap; w=$?; PATH=$P:$PATH node $N $F >$R/lin.tap; l=$?; cd $R; grep -E '^(not )?ok|^# (pass|fail|skipped) ' *.tap; echo logs=$R red=$r win=$w lin=$l; grep -q '^not ok .*PowerShell 7: B' red.tap && grep -q 'mirror.test.mjs:192:' red.tap && grep -q '^# fail 1$' red.tap && [ $w$l = 00 ] && grep -q '^# pass 11$' win.tap && grep -q '^# pass 8$' lin.tap && grep -q '^# skipped 3$' lin.tap && echo GATE_OK -- It (i) runs base f38a17d4's unfixed file under node.exe with TEMP forced to a 36-char dir, the length of the runner's C:\\Users\\RUNNER~1\\AppData\\Local\\Temp, so pwsh 7 wraps exactly as on windows-latest: RED, `not ok ... PowerShell 7: B` at subagent-mirror.test.mjs:192; (ii) runs the fixed file under node.exe with the same TEMP: the Git Bash, PowerShell 5.1 and PowerShell 7 rows plus the fixture, `# pass 11`; (iii) runs it under WSL node with Linux pwsh 7 extracted from the tarball (ubuntu-latest's leg): `# pass 8`, `# skipped 3` (the PowerShell 5.1 rows). Pass = exit 0 and a final GATE_OK line (planning dry run: red=1 win=0 lin=0, 23 s). Submit verification {command, exitCode, outputTail} with the grep lines, the logs= line and GATE_OK. Error handling for a red run: exit 9 means the snapshot or the pwsh tarball step failed (check /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz exists, mem:gotcha-launcher-ps1-rows-from-wsl). red=0 means pwsh 7 did not wrap: probe the console width (node.exe -e spawning pwsh.exe with $Host.UI.RawUI.WindowSize.Width) and report it, since the break between 'is' and 'denied.' needs width-87 < len(TEMP) <= width-79; never weaken a check or the TEMP rule. A failing win or lin leg means reading the .tap files in the printed logs= dir and fixing the test within step 1's scope. A `UtilAcceptVsock` interop line with no test output is a WSL launch failure: rerun once (mem:gotcha-qa-ps1-postflight-from-wsl). TEMP reaches node.exe only through WSLENV (mem:gotcha-pwsh7-reachable-from-wsl). If a run hangs, stop only the PID you started. The landing's qualityGate (parity-check + lint) runs on the merged tree by itself.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "note": "The gate printed GATE_OK with red=1 win=0 lin=0. RED leg (unfixed base): not ok 3 - PowerShell 7: B. Windows leg: pass 11, fail 0. Linux leg: pass 8, fail 0, skipped 3. Logs are in /mnt/d/moe-scratch/g.L5tU.",
+      "startedAt": "2026-11-04T14:21:55.809Z",
+      "completedAt": "2026-11-04T14:22:32.408Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of this task's diff (load adversarial-self-review), then the completion summary. Check: (1) `git diff --stat` against the target touches only scripts/tests/subagent-mirror.test.mjs, `git diff <target> -- scripts/moe-agent.ps1 scripts/moe-agent.sh` is empty (DoD 3), and `git status --porcelain` in the worktree shows no stray log or snapshot (gate output lives under /mnt/d/moe-scratch). (2) Mutants, in a scratch copy of scripts/ under /mnt/d/moe-scratch, never in the worktree: make plain() the identity; drop the `\\|?`; drop the ANSI strip; join with '' instead of ' '. Under WSL node each must turn `node --test --test-name-pattern ConciseView <copy>/scripts/tests/subagent-mirror.test.mjs` red (planning run: all four red in seconds, the unmutated copy green). (3) B is not weaker: it still requires a non-zero exit, the injected denial (not just any text), no '@@ after mirror' and no one.md. PowerShell 5.1 now depends on plain() too, because it breaks after 'path', and the gate's Windows leg proves it. (4) The fixture is byte-exact: it evaluates to 692 chars ending in `denied.\\x1B[0m\\n`, and the file stays ASCII. (5) Write the complete_task summary: the RED lines from step 1 and the gate's GREEN tail; the sibling-scan result with step 2's file:line list; that no wrapper changed; and the CI run to watch. That run is the first ci.yml run on PR #230 (branch moe/work-2026-10-24) at or after this task's completion commit. List the runs with `gh.exe run list -R yaront1111/Moe-s-Tavern --workflow ci.yml --branch moe/work-2026-10-24 --limit 5 --json databaseId,headSha,status,conclusion`, and always pass -R, because gh.exe's Windows git cannot read a /mnt cwd or a worktree's .git. In that run, Build (windows-latest) step 'Test launcher daemon.json cap and seat re-registration' should read 170 tests, 157 pass, 0 fail, 13 skipped (it was 169/155/1/13), and steps 14-23 should then run. Name any run already in flight at summary time as pre-fix: it still fails at step 13.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "note": "Self-review: the diff touches only scripts/tests/subagent-mirror.test.mjs (+24/-2). The diff of moe-agent.ps1 and moe-agent.sh against the target is 0 bytes. git status is clean apart from that file. The four mutants of plain() (identity, no gutter drop, no ANSI strip, join with empty) each turn the ConciseView fixture test red under WSL node, and the unmutated copy is green. B still requires a non-zero exit, the injected 'Access to the path ... is denied.' text, no '@@ after mirror' and no one.md. The fixture is 692 chars and ASCII. plain() is total over any string.",
+      "startedAt": "2026-11-04T14:22:33.015Z",
+      "completedAt": "2026-11-04T14:23:08.562Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 533.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T13:53:16.897Z",
+  "updatedAt": "2026-11-04T19:20:45.689Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T13:53:19.238Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T14:26:47.815Z",
+    "wallClockMs": 2008577
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T14:19:19.279Z",
+  "executionContract": {
+    "intendedBehavior": "scripts/tests/subagent-mirror.test.mjs's B rows match PowerShell error text only after plain(): ANSI stripped, each line break plus any ConciseView gutter joined with one space, whitespace collapsed. pwsh 7's wrapped, coloured record on windows-latest (CI run 41830422144: \"...one.md' is\" / \"     | denied.\") then passes. B still requires a non-zero exit, the injected denial text, no '@@ after mirror' and no one.md copy. A permanent engine-independent fixture test pins the normalizer to the verbatim CI bytes on every OS.",
+    "acceptanceCriteria": [
+      "Under node.exe with TEMP forced to the runner's 36-char length, base f38a17d4's file fails exactly 'PowerShell 7: B' at subagent-mirror.test.mjs:192, and the fixed file passes all 11 tests (Git Bash, PowerShell 5.1, PowerShell 7, fixture).",
+      "Under WSL node with Linux pwsh 7 on PATH the fixed file passes 8, skips 3 (the PowerShell 5.1 rows) and fails 0.",
+      "The fixture test fails for each normalizer mutant: identity, no gutter drop, no ANSI strip, join with ''.",
+      "seat-registration.test.mjs and daemon-json-cap.test.mjs are scanned, and each PowerShell-error-text assertion is fixed or listed with file:line (planning pre-scan at f38a17d4: none).",
+      "The task's diff touches only scripts/tests/subagent-mirror.test.mjs; scripts/moe-agent.ps1 and scripts/moe-agent.sh are byte-identical to the target.",
+      "The completion summary names the PR #230 ci.yml run to watch and the expected step-13 counts on windows-latest (170 tests, 0 fail, 13 skipped)."
+    ],
+    "invariants": [
+      "B still asserts a non-zero exit, the injected denial text, the absence of '@@ after mirror' and no .claude/agents/one.md",
+      "plain() is used only for text matching; the status, file and byte assertions are unchanged",
+      "ANSI is stripped before the gutter join"
+    ],
+    "compatibility": [
+      "Test names A-D and the per-engine matrix are unchanged, so CI logs and --test-name-pattern filters keep working",
+      "No wrapper, workflow or fixture-script change: the slices still come from the committed moe-agent.sh and moe-agent.ps1",
+      "Linux CI (ubuntu-latest bash and pwsh 7) and the skipped macOS leg are unaffected"
+    ],
+    "approvedScope": [
+      "scripts/tests/subagent-mirror.test.mjs: new module-level ANSI, plain() and DENIED; test B's two text assertions; a new CI_PWSH7 fixture constant and one top-level test 'PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()'",
+      "Read-only: scripts/tests/seat-registration.test.mjs and scripts/tests/daemon-json-cap.test.mjs (scan only)"
+    ],
+    "reuse": [
+      "The ANSI pattern is the one daemon-json-cap.test.mjs:52 already uses, as a local copy: no shared helper module for 3 lines",
+      "No new dependency: node:assert and node:test only"
+    ],
+    "sourceAssumptions": [
+      "scripts/tests/subagent-mirror.test.mjs:189-195 is test B and :192 the failing assert.match; :62-68 execute() returns stdout+stderr with CRLF folded",
+      "scripts/moe-agent.ps1:1186 is the Get-ChildItem | ForEach-Object pipeline: the Copy-Item stub's throw surfaces as a record from Get-ChildItem at seat.ps1:25 (pwsh 7 header 'Get-ChildItem:')",
+      ".github/workflows/ci.yml:272-277 is the step 'Test launcher daemon.json cap and seat re-registration', which runs daemon-json-cap, seat-registration and subagent-mirror on Linux and Windows, not macOS",
+      "Measured 2026-11-04 on this host: node.exe to pwsh.exe 7.6.9 has WindowSize.Width 120 and ErrorView ConciseView; powershell.exe 5.1 has width 120 and NormalView; WSL node to Linux pwsh 7.6.9 has width 80",
+      "CI run 41830422144 log lines 1840-1845 (gh.exe run view 41830422144 -R yaront1111/Moe-s-Tavern --log-failed) hold the verbatim failing input"
+    ],
+    "checkRefs": [
+      "T='D:\\moe-scratch\\t02af8654-wrap-36char'; mkdir -p $(wslpath -u $T); R=$(mktemp -d /mnt/d/moe-scratch/g.XXXX); P=$(mktemp -d); trap 'rm -rf $P' EXIT; F=scripts/tests/subagent-mirror.test.mjs; N='--test --test-reporter=tap'; E=$WSLENV:TEMP/w:TMP/w; git archive f38a17d4 scripts | tar -x -C $R && tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P && chmod +x $P/pwsh || exit 9; (cd $R; TEMP=$T TMP=$T WSLENV=$E node.exe $N --test-name-pattern 'B: any other' $F >red.tap); r=$?; TEMP=$T TMP=$T WSLENV=$E node.exe $N $F >$R/win.tap; w=$?; PATH=$P:$PATH node $N $F >$R/lin.tap; l=$?; cd $R; grep -E '^(not )?ok|^# (pass|fail|skipped) ' *.tap; echo logs=$R red=$r win=$w lin=$l; grep -q '^not ok .*PowerShell 7: B' red.tap && grep -q 'mirror.test.mjs:192:' red.tap && grep -q '^# fail 1$' red.tap && [ $w$l = 00 ] && grep -q '^# pass 11$' win.tap && grep -q '^# pass 8$' lin.tap && grep -q '^# skipped 3$' lin.tap && echo GATE_OK"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Force $PSStyle.OutputRendering='PlainText' and $ErrorView='NormalView' in the fixture script. Rejected: it changes the rendering under test, does not cover 5.1's own wrap, and needs a ps1-only branch in psScript. (2) Shorten the injected message to a leaf path. Rejected: it hides the wrap, so the forced-TEMP run could no longer prove the normalizer on a real engine. (3) Squash all whitespace before matching. Rejected: both engines break only at spaces, except inside a single word wider than the console (the quoted path), which the '.+' in DENIED.ps1 already absorbs. Squashing makes the patterns unreadable for no extra coverage. (4) A shared test-helper module for plain(). Rejected: it is 3 lines, and daemon-json-cap.test.mjs keeps its own ANSI copy. (5) Keep the governor's /is denied/. Replaced by /Access to the path '.+' is denied\\./, which ties B to the injected denial. That regex needs the normalization on 5.1 too (5.1 breaks after 'path'), which the real 5.1 rows prove.",
+    "codebaseInsights": "Measured on this host 2026-11-04; the RED reproduced locally at the CI line.\n- Consoles: node.exe launched from WSL bash gives pwsh.exe 7.6.9 a console of width 120 with ErrorView ConciseView and OutputRendering Host, which writes SGR codes into the redirected stderr. powershell.exe 5.1 has width 120 and NormalView. WSL node with Linux pwsh 7.6.9 has width 80.\n- pwsh 7 wrap: the ConciseView message line is a 7-char gutter, then \"Access to the path '\" (20) + path + \"' is denied.\" (12), wrapped at the last space before the console width. The path is TEMP + 48 chars, so at width 120 a TEMP of 34-41 chars breaks between 'is' and 'denied.'. The runner's TEMP is 36 chars. This host's default is 33, one short, which is why hunt #22's local run passed. Under a 46-char TEMP pwsh 7 breaks before the path instead and the old test passes, so the TEMP length matters.\n- 5.1 wrap: 5.1 prefixes 'Get-ChildItem : ' and, at the runner's length, breaks before the quoted path. Its FullyQualifiedErrorId line also char-breaks inside the path. So the old /is denied/ passed on 5.1 only because of where the break fell.\n- Source of the record: the stub's throw surfaces from the Get-ChildItem | ForEach-Object pipeline at moe-agent.ps1:1186, hence the 'Get-ChildItem:' header at seat.ps1:25.\n- Environment: TEMP reaches node.exe only through WSLENV (TEMP/w:TMP/w). Linux os.tmpdir() reads TMP/TEMP too, so never export them for the Linux leg.",
+    "risks": "(1) The gate's RED leg assumes width 120 under node.exe. A different console (for example a ConPTY seat) moves the wrap: probe the width and report it, never loosen a check. (2) Never leave gate logs or snapshots in the task worktree: worktree landing commits every non-DENY dirty path. (3) From WSL, gh.exe needs -R yaront1111/Moe-s-Tavern. (4) The RED leg pins base f38a17d4, so it stays red after later landings, and QA can run the same command from the control checkout. (5) isEpicFinal is the highest-order fallback on the evergreen Stability & Hardening bucket (306 siblings, each landed and QA'd on its own). So the gate is sized to the CI step this file lives in (all engines, both OS legs), not a whole-epic sweep. The next PR #230 CI run is the cross-step confirmation the governor watches. (6) Windows steps 14-23 have not run on CI today. Latent reds there are outside this task's scope; the governor's CI watch surfaces them. (7) Any test edit must keep the B, A, C and D names, which CI greps and --test-name-pattern use.",
+    "keyFiles": [
+      "scripts/tests/subagent-mirror.test.mjs (execute :62-68, test B :189-195)",
+      "scripts/tests/seat-registration.test.mjs (scan only)",
+      "scripts/tests/daemon-json-cap.test.mjs (scan only; :52 ANSI precedent)",
+      ".github/workflows/ci.yml:272-277 (CI step 13)",
+      "scripts/moe-agent.ps1:1173-1210 (the mirror block under test; read-only)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "f38a17d446cf7d94e777e617e2ebb980de3c6630",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T14:19:19.311Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T14:20:18.301Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T14:24:26Z",
+    "at": "2026-11-04T14:27:17.713Z"
+  },
+  "reviewStartedAt": "2026-11-04T14:23:25.303Z",
+  "verification": {
+    "command": "T='D:\\moe-scratch\\t02af8654-wrap-36char'; mkdir -p $(wslpath -u $T); R=$(mktemp -d /mnt/d/moe-scratch/g.XXXX); P=$(mktemp -d); trap 'rm -rf $P' EXIT; F=scripts/tests/subagent-mirror.test.mjs; N='--test --test-reporter=tap'; E=$WSLENV:TEMP/w:TMP/w; git archive f38a17d4 scripts | tar -x -C $R && tar -xzf /mnt/d/moe-scratch/pwsh/pwsh-7.6.9-linux-x64.tgz -C $P && chmod +x $P/pwsh || exit 9; (cd $R; TEMP=$T TMP=$T WSLENV=$E node.exe $N --test-name-pattern 'B: any other' $F >red.tap); r=$?; TEMP=$T TMP=$T WSLENV=$E node.exe $N $F >$R/win.tap; w=$?; PATH=$P:$PATH node $N $F >$R/lin.tap; l=$?; cd $R; grep -E '^(not )?ok|^# (pass|fail|skipped) ' *.tap; echo logs=$R red=$r win=$w lin=$l; grep -q '^not ok .*PowerShell 7: B' red.tap && grep -q 'mirror.test.mjs:192:' red.tap && grep -q '^# fail 1$' red.tap && [ $w$l = 00 ] && grep -q '^# pass 11$' win.tap && grep -q '^# pass 8$' lin.tap && grep -q '^# skipped 3$' lin.tap && echo GATE_OK",
+    "exitCode": 0,
+    "outputTail": "red.tap:not ok 3 - PowerShell 7: B: any other copy failure still stops the pre-flight\nred.tap:# pass 2\nred.tap:# fail 1\nwin.tap:ok 9 - PowerShell 7: B: any other copy failure still stops the pre-flight\nwin.tap:ok 11 - PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()\nwin.tap:# pass 11\nwin.tap:# fail 0\nwin.tap:# skipped 0\nlin.tap:ok 11 - PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()\nlin.tap:# pass 8\nlin.tap:# fail 0\nlin.tap:# skipped 3\nlogs=/mnt/d/moe-scratch/g.L5tU red=1 win=0 lin=0\nGATE_OK",
+    "reportedAt": "2026-11-04T14:23:25.303Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/subagent-mirror.test.mjs"
+  ],
+  "completionSummary": "Test-side fix in scripts/tests/subagent-mirror.test.mjs only (+24/-2). Test B now matches PowerShell error text through plain(): ANSI stripped, each line break plus any ConciseView gutter joined with one space, whitespace collapsed. It asserts DENIED.ps1 = /Access to the path '.+' is denied\\./. Still required: non-zero exit, the injected denial, no '@@ after mirror', no one.md. New engine-independent fixture test 'PowerShell 7 ConciseView: the wrapped CI error matches B only after plain()' pins the verbatim CI bytes of run 41830422144 (692 chars, ASCII). RED: unfixed base f38a17d4 under node.exe with TEMP forced to 36 chars gave 'not ok 3 - PowerShell 7: B' at subagent-mirror.test.mjs:192:12, while Git Bash B and PowerShell 5.1 B were ok. GREEN: the gate printed GATE_OK with red=1 win=0 lin=0. Windows leg pass 11 fail 0. Linux pwsh 7 leg pass 8 fail 0 skipped 3 (the PS 5.1 rows). Mutants (identity, no gutter drop, no ANSI strip, join with empty) each turn the fixture test red. Sibling scan, no hit: seat-registration.test.mjs reads stdout only (:183), its text checks (:259, :289, :290, :295, :310, :322) match launcher Write-Host/Write-Output lines. daemon-json-cap.test.mjs strips ANSI (:52, :148), and its checks (:233, :274-275, :288-304, :406-417, :440, :458-566) match launcher lines or the fixture's own '@@ running=... err=' line. No change to moe-agent.ps1 or moe-agent.sh (diff is 0 bytes). CI to watch: the first ci.yml run on PR #230 (branch moe/work-2026-10-24) at or after this task's completion commit. Run 41841148746 (head f38a17d4) was in progress at summary time; treat it as pre-fix, it still fails at step 13. In the watched run, Build (windows-latest) 'Test launcher daemon.json cap and seat re-registration' should read 170 tests, 157 pass, 0 fail, 13 skipped (was 169/155/1/13), and steps 14-23 should then run.",
+  "commits": [
+    {
+      "sha": "9463e77d4d7fb375fa8d42ed2fca6e26e4429d59",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T14:19:23Z",
+      "paths": [
+        "scripts/tests/subagent-mirror.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T14:24:21.593Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T14:26:47.815Z",
+  "reviewCompletedAt": "2026-11-04T14:26:47.815Z",
+  "reviewSummary": "Approved. Reviewed completion 9463e77d (on moe/work-2026-10-24, in control HEAD) via git show: +24/-2, scripts/tests/subagent-mirror.test.mjs only, under the 400-LOC cap. moe-agent.ps1/.sh byte-identical; file ASCII.\n\nRE-RAN task.verification gate in the foreground: GATE_OK, red=1 win=0 lin=0 (logs /mnt/d/moe-scratch/g.U2My).\n- RED, base f38a17d4, TEMP forced to 36 chars, node.exe: 'not ok 3 - PowerShell 7: B' at :192; Git Bash B and PS 5.1 B ok.\n- GREEN node.exe same TEMP: pass 11, fail 0.\n- GREEN WSL node + Linux pwsh 7.6.9: pass 8, fail 0, skipped 3 (PS 5.1 rows).\n\nMy checks:\n1. plain() mutants in a scratch copy: identity, no gutter drop, no ANSI strip, join-with-'' each turn the fixture test red; unmutated passes.\n2. Fixture equals the verbatim CI run 41830422144 --log-failed 'actual:' string (eval'd; 692 chars, equal).\n3. B not weakened: non-zero exit, injected denial (DENIED.ps1 stricter than old /is denied/), no '@@ after mirror', no one.md all still asserted. ANSI stripped before gutter join; test names unchanged.\n4. Sibling scan, no hit: seat-registration.test.mjs matches launcher Write-Host/Write-Output lines on stdout (:259, :289, :290, :295, :310, :322); daemon-json-cap.test.mjs strips ANSI (:52, :148) and matches launcher lines or the fixture's own err= line.\n\nNot verified here: real windows-latest. Watch the first ci.yml run on PR #230 at or after 9463e77d: step 'Test launcher daemon.json cap and seat re-registration' should read 170 tests / 157 pass / 0 fail / 13 skipped (was 169/155/1/13), then steps 14-23 run. Run 41841148746 (head f38a17d4) is pre-fix. Latent reds in steps 14-23 are out of scope.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

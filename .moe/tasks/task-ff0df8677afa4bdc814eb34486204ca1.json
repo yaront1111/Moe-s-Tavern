@@ -1,0 +1,239 @@
+{
+  "id": "task-ff0df8677afa4bdc814eb34486204ca1",
+  "epicId": "epic-be924fb8",
+  "title": "docs: once the agy port lands, the npm pages, the VS Code Marketplace page body and the project site still say \"Gemini CLI\"",
+  "description": "This is the sibling of task-d154d198, which fixes the plugin manifests and SCHEMA.md. architect-67c762f6 found these while planning d154d198 (comment-a9525846); they're outside that row's DoD. At edc3e937, once task-c199e177 and task-cb378fd8 have made gemini mode agy-only, these store-facing texts still say \"Gemini CLI\":\n- moe-vscode/README.md:3 and :25. vsce packs this file as the VS Code Marketplace / Open VSX page body. :3 already says \"for VS Code and Antigravity\", so a plain swap would name Antigravity twice. Use wording such as \"Antigravity (agy)\" there.\n- packages/moe-daemon/package.json:4 and packages/moe-proxy/package.json:4 (the npm descriptions).\n- packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 (the npm pages).\n- docs/index.html:21, :49 and :129 (the project site).\nOut of scope on purpose: moe-vscode/CHANGELOG.md:43 (history), .gitignore:56, and the comments in scripts/moe-agent.sh (the launcher belongs to c199e177).\nText only, no behavior change. Reuse the exact CLI naming that d154d198 lands in the manifests.",
+  "definitionOfDone": [
+    "Each listed location names the CLIs with the same wording d154d198 used in plugin.xml and moe-vscode/package.json. No location names Antigravity twice in one sentence. Every other word is unchanged.",
+    "The only files changed are the 7 listed (moe-vscode/README.md, packages/moe-daemon/package.json, packages/moe-proxy/package.json, packages/moe-daemon/README.md, packages/moe-proxy/README.md, docs/index.html), and no lockfile changes.",
+    "The gate is checkRefs[0]: a grep showing no \"Gemini CLI\" is left in the listed files, and that both package.json files still parse as JSON with an unchanged version field. It runs in a few minutes, far under the 20-min GLOBAL gate budget."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "npm descriptions and npm page bodies: swap 'Gemini CLI' for the gemini-mode name N that task-d154d198 landed, in four places, with every other byte unchanged.\nFirst read N from d154d198's landed manifests. W forks only after d154d198 is DONE, because it is in dependsOn:\n- `sed -n 's/.*for Claude Code, Codex, \\(.*\\) and Grok Build\\..*/\\1/p' moe-jetbrains/src/main/resources/META-INF/plugin.xml`\n- `sed -n 's/.*run Claude Code, Codex, \\(.*\\) and Grok.*/\\1/p' moe-vscode/package.json`\nd154d198's plan writes the bare label `Antigravity` (cb378fd8's moe.panel.provider.gemini), not 'Antigravity (agy)'. Background: mem:decision-gemini-mode-antigravity-only.\nError handling: if the two values differ, are empty or still contain Gemini, d154d198 did not land as planned. Call moe.report_blocked naming task-d154d198 (blockedOnTaskIds: []) and edit nothing. Never edit plugin.xml or moe-vscode/package.json from this row.\nThen make four Edit-tool replacements. Each old string occurs exactly once at edc3e937. Write N verbatim if it is not Antigravity:\n- packages/moe-daemon/package.json :4 description: 'coding agents (Claude Code, Codex, Gemini CLI, Grok Build) over MCP' -> 'coding agents (Claude Code, Codex, Antigravity, Grok Build) over MCP'\n- packages/moe-proxy/package.json :4 description: 'agent CLI (Claude Code, Codex, Gemini CLI, Grok Build) to the local moe-daemon' -> 'agent CLI (Claude Code, Codex, Antigravity, Grok Build) to the local moe-daemon'\n- packages/moe-daemon/README.md :3: 'task board for Claude Code, Codex, Gemini CLI and Grok Build. This package is the daemon' -> 'task board for Claude Code, Codex, Antigravity and Grok Build. This package is the daemon'\n- packages/moe-proxy/README.md :3: 'task board for Claude Code, Codex, Gemini CLI and Grok Build. This package is the MCP stdio proxy' -> 'task board for Claude Code, Codex, Antigravity and Grok Build. This package is the MCP stdio proxy'\nKeep byte-identical: the em dashes ('Moe's Tavern — AI agent task board.'), the version fields, the JSON layout and every other byte. Neither package-lock.json holds a description, so leave both alone. No npm command is needed (DoD 2). Write only with the Edit tool (GLOBAL rail: tracked files are written with the session's own editing tool).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-proxy/package.json",
+        "packages/moe-daemon/README.md",
+        "packages/moe-proxy/README.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/package.json",
+        "packages/moe-proxy/package.json",
+        "packages/moe-daemon/README.md",
+        "packages/moe-proxy/README.md"
+      ],
+      "note": "N=Antigravity, the same in both manifests (plugin.xml:8 and moe-vscode/package.json:4, landed by d154d198 as bcedcb26). Made 4 Edit-tool swaps of 'Gemini CLI' to 'Antigravity': both package.json descriptions (:4) and both package README.md files (:3). Nothing else changed. No lockfile and no npm command.",
+      "startedAt": "2026-11-04T21:05:07.252Z",
+      "completedAt": "2026-11-04T21:05:25.889Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "VS Code Marketplace / Open VSX page body (vsce packs moe-vscode/README.md) and the project site: five Edit-tool replacements. Each old string occurs exactly once at edc3e937. N is the name from step 1:\n- moe-vscode/README.md :3, the page's first line: 'Antigravity: run Claude Code, Codex, Gemini CLI and Grok Build through' -> 'Antigravity: run Claude Code, Codex, agy and Grok Build through'. This is the human's REPL decision (comment-bd7565f3). The sentence already names the Antigravity IDE ('for VS Code and Antigravity:'), and DoD 1 forbids naming Antigravity twice in one sentence. So this one spot names the CLI by its command, agy: not N and not 'Antigravity (agy)'.\n- moe-vscode/README.md :25: 'signed in: Claude Code, Codex, Gemini CLI or Grok Build' -> 'signed in: Claude Code, Codex, Antigravity or Grok Build'\n- docs/index.html :21 tagline: 'task board for Claude Code, Codex, Gemini CLI and Grok Build</p>' -> 'task board for Claude Code, Codex, Antigravity and Grok Build</p>'\n- docs/index.html :49: 'Claude Code, Codex, Gemini CLI, and Grok Build are supported out of the box.' -> 'Claude Code, Codex, Antigravity, and Grok Build are supported out of the box.'\n- docs/index.html :129: 'a coding CLI (Claude Code, Codex, Gemini CLI, or Grok Build).' -> 'a coding CLI (Claude Code, Codex, Antigravity, or Grok Build).' The earlier '.vsix</code> for VS Code and Antigravity.' ends the previous sentence, so each sentence names Antigravity once.\nLeave every other 'Antigravity' (the IDE) and every other byte alone. Out of scope on purpose (the row's description): moe-vscode/CHANGELOG.md:43 (history), .gitignore:56, and the comments in scripts/moe-agent.sh (task-c199e177's).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/README.md",
+        "docs/index.html"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/README.md",
+        "docs/index.html"
+      ],
+      "note": "Made 5 Edit-tool swaps. moe-vscode/README.md:3 now says 'agy' (the human's decision, comment-bd7565f3) and :25 says 'Antigravity'. docs/index.html :21, :49 and :129 now say 'Antigravity'. Every other byte and every other mention of the Antigravity IDE is unchanged.",
+      "startedAt": "2026-11-04T21:05:29.333Z",
+      "completedAt": "2026-11-04T21:05:48.572Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run ONCE after steps 1-2, from W's root in WSL bash: executionContract.checkRefs[0] && checkRefs[1], verbatim. Each ref is a ( ) subshell, so the chain stops at the first red ref and returns its code. Never join bare `;`-sequenced refs: `&&` would then link only the boundary commands (comment-0a43e151 on task-cb378fd8). The fresh output is the complete_task verification (command = that text, exitCode 0, outputTail).\nExpect two lines and exit 0:\n- 'gate A: no Gemini CLI, JSON parses, versions <v> <v> unchanged, scope; f=0'\n- 'gate B: wording [Antigravity] f=0'\nThe dry run took under 0.5 s, far under the GLOBAL 20-minute gate budget.\nWhat it checks:\n- B is MERGE_HEAD during a LANDING-CONFLICT or LANDING-RETRY resume (the wrapper's `merge --no-commit`), else the merge base with MOE_LAND_TARGET.\n- ref0 (DoD 3 and DoD 2): no 'Gemini CLI' in the 6 files; both package.json files parse and keep B's version; `git diff --name-only $B` plus untracked files, outside .moe/, are only the 6 files, so no lockfile changed.\n- ref1 (DoD 1): N is read from plugin.xml and moe-vscode/package.json, and must be set, equal in both and Gemini-free. Each of the 6 files must equal B's copy with 'Gemini CLI' replaced by N (by agy on the README line holding 'Antigravity: run'), so every other word is unchanged. No sentence (split at '. ') in the 6 files may name Antigravity twice.\nDry run in scratch clones with d154d198's landing simulated:\n- RED on both refs before the edits;\n- GREEN after the edits, for N=Antigravity and for N='Antigravity (agy)';\n- 13 mutants red, each on its intended leg: plain Antigravity, or 'Antigravity (agy)', at README:3; an extra word changed; a version bump; broken JSON; a lockfile byte; an untracked file; one stale line; d154d198 not landed; a wrong name; manifests that disagree;\n- a checkpoint commit with the rest still dirty: green;\n- a .moe/ change: ignored;\n- the resume path, clean and with a resolved conflict: green through MERGE_HEAD, and red when the target's side is dropped.\nError handling for a red run (fix the text, never the check):\n- printed 'file:line:...Gemini CLI' lines: a replacement was missed.\n- 'DIFF <file>' with a hunk: another byte changed or the wrong name was written. The '<' line is the expected text.\n- 'TWICE <file> <line>': README:3 got Antigravity instead of agy.\n- 'JSON/VERSION <file>': the JSON broke or the version moved.\n- '^ out of scope': a file outside the six changed, such as a lockfile or a scratch file. Undo it: use the Edit tool to restore `git show \"$B:<path>\"`'s bytes, or delete the untracked scratch file.\n- 'BAD NAME [..] [..]': this is d154d198's problem. Call moe.report_blocked naming task-d154d198; make no edit.\nQA re-run: in a `git clone --shared` detached at the completion sha, with MOE_LAND_TARGET=<sha>^ (mem:decision-doc-row-checkrefs-worktree-mode). Do not re-run in the control checkout: other seats' dirty files there trip the scope leg. The same refs at <sha>^ exit 1 (RED proof).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Gate: checkRefs[0] && checkRefs[1], taken byte-exact from the task JSON and run in W with MOE_LAND_TARGET=moe/work-2026-10-24. Exit 0 in 3.9 s. Output: 'gate A: no Gemini CLI, JSON parses, versions 0.8.0 0.8.0 unchanged, scope; f=0' and 'gate B: wording [Antigravity] f=0'.",
+      "startedAt": "2026-11-04T21:05:53.777Z",
+      "completedAt": "2026-11-04T21:06:25.623Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review (load adversarial-self-review), scoped to this row's diff: `git diff $(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"$MOE_LAND_TARGET\")` plus the working tree.\n- Exactly 6 files and 9 lines: moe-vscode/README.md -2/+2, docs/index.html -3/+3, each package.json -1/+1, each package README.md -1/+1. No .moe/ path and no lockfile.\n- Read each changed sentence as a store or npm visitor would. README:3 names the Antigravity IDE once, then the agy CLI. index.html:129's two sentences each name Antigravity once. The package.json descriptions stay single-line JSON strings.\n- Confirm N against plugin.xml:8 and moe-vscode/package.json:4 at W's base, and name d154d198's landed completion sha (`git log --format=%h -1 --grep=task-d154d198 \"$MOE_LAND_TARGET\"`).\n- The epic rail asks for regression tests. DoD 2 allows no file outside the six, so no test file can be added. The two checkRefs are this text-only row's regression check, and the summary says so.\nThen write the complete_task summary: N and its source (file:line in both manifests, plus d154d198's sha); the 9 replacements by file:line; the README:3 'agy' decision (comment-bd7565f3); and the gate's two result lines.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of git diff bcedcb26 (d154d198's completion, which is B). Exactly 6 files and 9 lines, -9/+9: README -2/+2, index.html -3/+3, each package.json -1/+1, each package README -1/+1. No .moe/ path, no lockfile, no untracked file, and no CR bytes. Read as a visitor would: README:3 names the Antigravity IDE once, then the agy CLI. Each sentence at index.html:129 names Antigravity once. Both package.json descriptions stay single-line JSON strings. Most of the concurrency, input and side-effect checklist does not apply to a text-only change. No test file can be added, because DoD 2 allows only the six files; the two checkRefs are this row's regression check. The qualityGate (parity-check.sh && npm run lint) also passes in W.",
+      "startedAt": "2026-11-04T21:06:26.540Z",
+      "completedAt": "2026-11-04T21:07:48.529Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-cb378fd8a608489c81edc56bff9c2ecc",
+    "task-d154d1983b8b4b0588fac4a54b833f41"
+  ],
+  "priority": "LOW",
+  "order": 540.7,
+  "comments": [
+    {
+      "id": "comment-e2c0afd357a74dd98512c20a40c313f9",
+      "author": "governor-e6142a94",
+      "content": "Correction from the row's author (governor-e6142a94). DoD 2 says \"the 7 listed\", but its own list names 6 files: moe-vscode/README.md, packages/moe-daemon/package.json, packages/moe-proxy/package.json, packages/moe-daemon/README.md, packages/moe-proxy/README.md and docs/index.html. Those 6 files are the allowed set. The 7 was a slip, and planner and QA should read DoD 2 as 6 files.",
+      "timestamp": "2026-11-04T18:57:41.187Z"
+    },
+    {
+      "id": "comment-bd7565f330d447d1803f4002ff4ecfb0",
+      "author": "architect-2a219562",
+      "content": "Human decision (REPL, architect-2a219562, 2026-11-04): in moe-vscode/README.md's first line, \"Gemini CLI\" becomes \"agy\": \"An AI agent task board for VS Code and Antigravity: run Claude Code, Codex, agy and Grok Build through a shared Kanban board with human plan approval.\" This follows DoD 1's rule that no sentence names Antigravity twice, and it overrides the description's \"Antigravity (agy)\" suggestion, which would have named Antigravity twice there. Every other listed location uses the exact name task-d154d198 lands in plugin.xml and moe-vscode/package.json. The plan's gate reads that name from those two manifests at run time.",
+      "timestamp": "2026-11-04T19:17:20.345Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T18:57:35.805Z",
+  "updatedAt": "2026-11-04T21:13:03.186Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T18:57:43.247Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 6,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T21:12:26.576Z",
+    "wallClockMs": 8083329
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-d2c84c0e",
+    "qa-96811257"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T19:29:11.722Z",
+  "executionContract": {
+    "intendedBehavior": "Text only, no behavior change. The npm descriptions and npm page bodies of moe-daemon and moe-proxy, the VS Code Marketplace / Open VSX page body (moe-vscode/README.md) and the project site (docs/index.html) name gemini mode's CLI exactly as task-d154d198 landed it in plugin.xml and moe-vscode/package.json (planned: the bare label Antigravity). The one exception is moe-vscode/README.md's first line, which already names the Antigravity IDE: there the CLI is 'agy' (the human's REPL decision, comment-bd7565f3), so no sentence names Antigravity twice.",
+    "acceptanceCriteria": [
+      "No 'Gemini CLI' remains in moe-vscode/README.md, docs/index.html, packages/moe-{daemon,proxy}/package.json or packages/moe-{daemon,proxy}/README.md (9 occurrences at edc3e937).",
+      "Eight of the 9 spots use N, the name read from plugin.xml ('for Claude Code, Codex, N and Grok Build.') and moe-vscode/package.json ('run Claude Code, Codex, N and Grok Build through'). moe-vscode/README.md:3 uses agy.",
+      "Each file equals its base copy with only that substitution: every other word and byte is unchanged.",
+      "No sentence in the six files names Antigravity twice.",
+      "Both package.json files parse as JSON and keep their version. Only the six files change, so no lockfile changes."
+    ],
+    "invariants": [
+      "Both package.json files keep every field but description byte-identical, including version.",
+      "moe-vscode/README.md:3 keeps 'for VS Code and Antigravity:' (the IDE) unchanged.",
+      "No .moe/ path and no lockfile in the diff."
+    ],
+    "compatibility": [
+      "npm metadata: only the description string changes. The files arrays, versions and lockfiles are untouched, so release.yml's verify-release-version.mjs and npm pack behave as before."
+    ],
+    "reuse": [
+      "d154d198's base formula (MERGE_HEAD, else the merge base with MOE_LAND_TARGET) and its map-back byte check, applied here to six files."
+    ],
+    "sourceAssumptions": [
+      "At edc3e937 'Gemini CLI' occurs exactly at moe-vscode/README.md:3,:25, docs/index.html:21,:49,:129, packages/moe-daemon/package.json:4, packages/moe-proxy/package.json:4, packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 (git grep), and in no other line of those files.",
+      "task-d154d198 (WORKING, plan rev 1) replaces 'Gemini CLI' with the bare label from MoeBundle.properties moe.panel.provider.gemini (planned Antigravity) at plugin.xml:8,:16 and moe-vscode/package.json:4, with every other byte unchanged.",
+      "vsce packs moe-vscode/README.md as the Marketplace / Open VSX page body. No test or build script reads the six files (git grep; docs/_config.yml only names the site).",
+      "All six files are LF (.gitattributes eol=lf, no CR bytes).",
+      "The worktree-mode resume merges the target with `merge --no-commit --no-ff`, which leaves MERGE_HEAD (scripts/CLAUDE.md, Resume)."
+    ],
+    "checkRefs": [
+      "(cd \"$(git rev-parse --show-toplevel)\"; f=0; B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); F=$(echo moe-vscode/README.md docs/index.html packages/moe-{daemon,proxy}/{package.json,README.md}); grep -nF 'Gemini CLI' $F && f=1; v(){ node -pe 'JSON.parse(require(\"fs\").readFileSync(0)).version'; }; for p in packages/moe-{daemon,proxy}/package.json; do a=$(v < $p) && [ \"$a\" = \"$(git show \"$B:$p\" | v)\" ] && V=\"$V $a\" || { echo \"JSON/VERSION $p\"; f=1; }; done; { git diff --name-only $B -- ':!.moe'; git ls-files -o --exclude-standard ':!.moe'; } | grep -vxF \"$(printf '%s\\n' $F)\" && { echo \"^ out of scope\"; f=1; }; echo \"gate A: no Gemini CLI, JSON parses, versions$V unchanged, scope; f=$f\"; [ $f = 0 ])",
+      "(cd \"$(git rev-parse --show-toplevel)\"; f=0; B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); F=$(echo moe-vscode/README.md docs/index.html packages/moe-{daemon,proxy}/{package.json,README.md}); X=$(sed -n 's/.*for Claude Code, Codex, \\(.*\\) and Grok Build\\..*/\\1/p' moe-jetbrains/src/main/resources/META-INF/plugin.xml); Y=$(sed -n 's/.*run Claude Code, Codex, \\(.*\\) and Grok.*/\\1/p' moe-vscode/package.json); [[ $X && $X = \"$Y\" && $X != *Gemini* ]] || { echo \"BAD NAME [$X] [$Y]\"; f=1; }; E=$(printf %s \"$X\" | sed 's/[&/\\]/\\\\&/g'); for x in $F; do git show \"$B:$x\" | sed \"/Antigravity: run/s/Gemini CLI/agy/; s/Gemini CLI/$E/g\" | diff - $x || { echo \"DIFF $x\"; f=1; }; done; awk -F'\\\\. ' '{for(i=1;i<=NF;i++)if(gsub(/Antigravity/,\"\",$i)>1){print \"TWICE\",FILENAME,FNR;e=1}}END{exit e}' $F || f=1; echo \"gate B: wording [$X] f=$f\"; [ $f = 0 ])"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- README:3 wording. (a) The description's 'Antigravity (agy)' still names Antigravity twice in the sentence that opens 'for VS Code and Antigravity:', against DoD 1. (b) A plain swap does the same. (c) Rewording 'VS Code and Antigravity' breaks 'every other word unchanged'. The human picked 'agy' in the REPL (comment-bd7565f3).\n- Hard-coding 'Antigravity' versus deriving N: d154d198 was still being planned when this row was claimed, so the gate reads N from the two landed manifests at run time. A QA-driven rename on d154d198 then re-anchors this row without a re-plan.\n- One 1249-char gate would break the 1000-char checkRef cap, so it is split into ref0 (DoD 3 plus DoD 2's scope) and ref1 (DoD 1). Each is wrapped in a ( ) subshell so that joining them with '&&' is sound.\n- Splitting the row to stay at 5 files: DoD 2 fixes the six files to this row, so the plan carries 6 and accepts the heavy tier floor.",
+    "codebaseInsights": "- isEpicFinal is true only because this row has the highest order in the open-ended Stability & Hardening bucket epic, which has no finalTaskId. The GLOBAL gate-budget rail (run only the suites that exercise the changed code) scopes the gate to these six files: no epic-wide regression run.\n- The repo qualityGate (parity-check.sh plus npm run lint) runs at landing and does not read these files.\n- The control checkout carries other seats' dirty files (docs/ARCHITECTURE.md, scripts/moe-agent.*, daemon src ...). QA must re-run in a clone, not in place.\n- The wrapper's per-seat files (.claude/, .mcp.json, .gemini/, .codex/) are gitignored, so the untracked-file scope leg sees only real strays.",
+    "risks": "- d154d198 might land a different name or shape. The gate then fails with 'BAD NAME' or 'DIFF': report_blocked naming d154d198, and never edit its two manifests here.\n- If d154d198 ever writes 'Antigravity (agy)', README:3 still stays 'agy' (the human's decision); the gate encodes that.\n- package.json is JSON: an Edit that drops a quote or comma is caught by ref0's JSON leg.\n- Line numbers shift if another row edits these files first. All anchors are text, never line numbers.\n- A LANDING-CONFLICT on index.html or a README: resolve keeping both sides. The gate judges against MERGE_HEAD (dry-run R2).",
+    "keyFiles": [
+      "moe-vscode/README.md",
+      "docs/index.html",
+      "packages/moe-daemon/package.json",
+      "packages/moe-proxy/package.json",
+      "packages/moe-daemon/README.md",
+      "packages/moe-proxy/README.md",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml (read only: N at :8)",
+      "moe-vscode/package.json (read only: N at :4)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e53f5a5c9d89b1ff61aa36a18a6c0f2c5fb96f1f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T19:29:11.754Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T21:10:10Z",
+    "at": "2026-11-04T21:13:03.186Z"
+  },
+  "workStartedAt": "2026-11-04T21:05:07.252Z",
+  "reviewStartedAt": "2026-11-04T21:08:40.595Z",
+  "verification": {
+    "command": "(cd \"$(git rev-parse --show-toplevel)\"; f=0; B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); F=$(echo moe-vscode/README.md docs/index.html packages/moe-{daemon,proxy}/{package.json,README.md}); grep -nF 'Gemini CLI' $F && f=1; v(){ node -pe 'JSON.parse(require(\"fs\").readFileSync(0)).version'; }; for p in packages/moe-{daemon,proxy}/package.json; do a=$(v < $p) && [ \"$a\" = \"$(git show \"$B:$p\" | v)\" ] && V=\"$V $a\" || { echo \"JSON/VERSION $p\"; f=1; }; done; { git diff --name-only $B -- ':!.moe'; git ls-files -o --exclude-standard ':!.moe'; } | grep -vxF \"$(printf '%s\\n' $F)\" && { echo \"^ out of scope\"; f=1; }; echo \"gate A: no Gemini CLI, JSON parses, versions$V unchanged, scope; f=$f\"; [ $f = 0 ]) && (cd \"$(git rev-parse --show-toplevel)\"; f=0; B=$(git rev-parse -q --verify MERGE_HEAD || git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\"); F=$(echo moe-vscode/README.md docs/index.html packages/moe-{daemon,proxy}/{package.json,README.md}); X=$(sed -n 's/.*for Claude Code, Codex, \\(.*\\) and Grok Build\\..*/\\1/p' moe-jetbrains/src/main/resources/META-INF/plugin.xml); Y=$(sed -n 's/.*run Claude Code, Codex, \\(.*\\) and Grok.*/\\1/p' moe-vscode/package.json); [[ $X && $X = \"$Y\" && $X != *Gemini* ]] || { echo \"BAD NAME [$X] [$Y]\"; f=1; }; E=$(printf %s \"$X\" | sed 's/[&/\\]/\\\\&/g'); for x in $F; do git show \"$B:$x\" | sed \"/Antigravity: run/s/Gemini CLI/agy/; s/Gemini CLI/$E/g\" | diff - $x || { echo \"DIFF $x\"; f=1; }; done; awk -F'\\\\. ' '{for(i=1;i<=NF;i++)if(gsub(/Antigravity/,\"\",$i)>1){print \"TWICE\",FILENAME,FNR;e=1}}END{exit e}' $F || f=1; echo \"gate B: wording [$X] f=$f\"; [ $f = 0 ])",
+    "exitCode": 0,
+    "outputTail": "gate A: no Gemini CLI, JSON parses, versions 0.8.0 0.8.0 unchanged, scope; f=0\ngate B: wording [Antigravity] f=0",
+    "reportedAt": "2026-11-04T21:08:40.595Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/package.json",
+    "packages/moe-proxy/package.json",
+    "packages/moe-daemon/README.md",
+    "packages/moe-proxy/README.md",
+    "moe-vscode/README.md",
+    "docs/index.html"
+  ],
+  "completionSummary": "Text only: 6 files, 9 lines (-9/+9). No .moe/ path, no lockfile, no test or code file.\n\nN = 'Antigravity', read from plugin.xml:8 ('for Claude Code, Codex, Antigravity and Grok Build.') and moe-vscode/package.json:4 ('run Claude Code, Codex, Antigravity and Grok Build through'), both landed by task-d154d198's completion bcedcb26, which is this row's merge base B.\n\nReplacements of 'Gemini CLI':\n- packages/moe-daemon/package.json:4 description -> Antigravity\n- packages/moe-proxy/package.json:4 description -> Antigravity\n- packages/moe-daemon/README.md:3 -> Antigravity\n- packages/moe-proxy/README.md:3 -> Antigravity\n- moe-vscode/README.md:3 -> agy (the human's REPL decision, comment-bd7565f3: this sentence already names the Antigravity IDE in 'for VS Code and Antigravity:', and DoD 1 forbids naming Antigravity twice in one sentence)\n- moe-vscode/README.md:25 -> Antigravity\n- docs/index.html:21, :49, :129 -> Antigravity. At :129 the earlier '.vsix for VS Code and Antigravity.' ends the previous sentence, so each sentence names Antigravity once.\n\nEvery other byte is unchanged, including both versions (0.8.0), the JSON layout and the em dashes. No file has CR bytes.\n\nGate: checkRefs[0] && checkRefs[1], taken byte-exact from the task record and run fresh in W with MOE_LAND_TARGET=moe/work-2026-10-24. Exit 0 in about 4 s:\n- gate A: no Gemini CLI, JSON parses, versions 0.8.0 0.8.0 unchanged, scope; f=0\n- gate B: wording [Antigravity] f=0\nThe qualityGate (parity-check.sh && npm run lint) also passes in W (PASS, lint OK).\n\nRegression check: DoD 2 allows no file outside the six, so no test file was added. The two checkRefs are this text-only row's regression check: ref1's map-back diff fails on any other changed byte, and its awk fails if a sentence names Antigravity twice.\n\nFor QA: re-run in a `git clone --shared` detached at the completion sha with MOE_LAND_TARGET=<sha>^. In the control checkout, B=HEAD makes ref1 red by design, and other seats' dirty files trip ref0's scope ",
+  "commits": [
+    {
+      "sha": "29e053afd4479cd9df8ea2bcc236b20ccb1d2cd8",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-d2c84c0e@2026-11-04T21:03:45Z",
+      "paths": [
+        "docs/index.html",
+        "moe-vscode/README.md",
+        "packages/moe-daemon/README.md",
+        "packages/moe-daemon/package.json",
+        "packages/moe-proxy/README.md",
+        "packages/moe-proxy/package.json"
+      ],
+      "recordedBy": "worker-d2c84c0e",
+      "recordedAt": "2026-11-04T21:09:37.266Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T21:12:26.576Z",
+  "reviewCompletedAt": "2026-11-04T21:12:26.576Z",
+  "reviewSummary": "Reviewed completion 29e053af (pushed; on moe/work-2026-10-24 = origin tip; tree bbcf8499 = candidate treeSha; parent bcedcb26 = candidate base = d154d198's completion). Diff: 6 files, +9/-9, text only; no .moe/, no lockfile (0 lock diff lines).\n\nGate: extracted checkRefs byte-exact from the task JSON (task.verification.command == ref0 && ref1, confirmed). Re-ran in a git clone --shared detached at the sha with MOE_LAND_TARGET=<sha>^: exit 0 in 0.6 s ('gate A: ... versions 0.8.0 0.8.0 unchanged, scope; f=0', 'gate B: wording [Antigravity] f=0'). RED proof at <sha>^: ref0 exit 1 listing all 9 'Gemini CLI' lines; ref1 exit 1 (DIFF per file). qualityGate (parity-check.sh && npm run lint) at the sha: exit 0.\n\nDoD 1: N='Antigravity' at plugin.xml:8 and moe-vscode/package.json:4 at the sha; 8 spots use it, moe-vscode/README.md:3 uses 'agy' (human decision comment-bd7565f3) and keeps 'for VS Code and Antigravity:'. Read each sentence by hand: none names Antigravity twice (index.html:129's first mention ends the earlier sentence). The map-back diff proves every other byte unchanged. DoD 2: only the 6 files (governor comment corrected '7' to 6). Both package.json: key order and every non-description field identical to the parent (node compare). No CR bytes and no BOM in any of the 6. No 'Gemini' left in them. DoD 3: met as above.\n\nEpic regression-test rail: DoD 2 allows no extra file; the checkRefs are this text-only row's regression check (RED/GREEN shown). Complexity pass: nothing to cut in a 9-line string swap. Out of scope by design: CHANGELOG.md:43, .gitignore:56, moe-agent.sh comments.",
+  "requiredCheckAtDone": null
+}

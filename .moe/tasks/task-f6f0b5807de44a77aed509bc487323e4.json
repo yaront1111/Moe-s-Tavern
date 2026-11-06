@@ -1,0 +1,34 @@
+{
+  "id": "task-f6f0b5807de44a77aed509bc487323e4",
+  "epicId": "epic-be924fb8",
+  "title": "chore: defect hunt (11-03 #12): file 2-4 evidence-backed bug rows from the board-edit tools (task/epic create, delete, archive, dependencies, priority, comments, declare_files) and the /ws plugin mutation handlers versus their MCP twins",
+  "description": "Filed by the governor at 22:07Z on 2026-11-03. It runs in parallel with hunt #13, on disjoint lanes.\n\nWHY. After the 22:00Z account reset, 7 coders are idle and 0 WORKING rows are claimable. QA is clearing rows in 2-4 minutes each: c8d6dbd5, 55a5a9f9, 2cc41d1a and 5d739855 all went DONE between 22:00Z and 22:06Z. PLANNING holds 5 rows (a024ac57, e76f32a0, 1ccae85c, dd1e00f8, 83cf11f5), and the hunt rows keep the coders fed after those.\n\nLANE. Search in this order of preference:\n1. The board-edit tools: packages/moe-daemon/src/tools/{createTask,deleteTask,archiveTask,createEpic,updateEpic,archiveEpic,deleteEpic,setTaskDependencies,setTaskPriority,addComment,declareFiles}.ts and the StateManager methods they call. Look for something one member applies and a sibling skips: a validation, a size bound, a role gate, a terminal-status (DONE/ARCHIVED) rule, a dependency-cycle or existence check, an activity-log event or a chat banner. Also look for a parameter, default or refusal that docs/MCP_SERVER.md documents and the code does not implement, or the reverse. The actor family is already fixed (c05bf92d, 3e1d0c2e, c927e484, e977c32b), as are create_epic's status/order checks (68a47060) and archive_epic's holder gap (1064df99), so don't re-file those.\n2. The /ws plugin mutation handlers in packages/moe-daemon/src/server/WebSocketServer.ts: CREATE_TASK, UPDATE_TASK, DELETE_TASK, REORDER_TASK, REOPEN_TASK, APPROVE_TASK, REJECT_TASK, RELEASE_TASK, ARCHIVE_DONE_TASKS, CREATE_EPIC, UPDATE_EPIC, DELETE_EPIC, ADD_TASK_COMMENT and UPDATE_SETTINGS. Compare each with its MCP twin (create_task, set_task_status, release_task, archive_task, create_epic, update_epic, delete_epic, add_comment): input validation, size caps, status-transition legality, fences, cycle and existence checks, and the activity-log event and broadcast the twin emits. Look for a /ws path that writes what the MCP twin refuses, refuses what the twin allows, or skips an event the twin records. One example is already fixed: 6a818a1c (/ws UPDATE_TASK refused BACKLOG to REVIEW). Cite the twin's guard file:line and the handler line that skips it, and show the difference with a call.\n\nSkip:\n- Hunt #13's lanes, so the two hunts never file the same finding: account rotation (src/accounts/**, src/state/accountStore.ts, src/server/accountMessages.ts and the /ws ADD_ACCOUNT, MOVE_ACCOUNT, REMOVE_ACCOUNT, RENAME_ACCOUNT and SET_ACCOUNT_SWITCH_PERCENT messages), and the server plumbing (McpAdapter.ts, runnerChannel.ts, healthHost.ts, bindHosts.ts, probeHost.ts and the WebSocket Origin check).\n- Hunt #10's /ws lane: APPROVE_PROPOSAL and REJECT_PROPOSAL.\n- Every file an open row holds. At filing time that is scripts/moe-agent.{sh,ps1}, scripts/tests/postflight-vm-route.ps1, scripts/tests/parity-check.{sh,ps1}, scripts/tests/postflight-fake-proxy.js (e76f32a0), claimNextTask.ts (6cf09180), waitForTask.ts, getPendingQuestions.ts and util/taskPayload.ts (b7203d89, c8618ccd), getActivityLog.ts (72f02ef3), util/metrics.ts (83cf11f5) and submitPlan.ts/util/rails.ts (dd1e00f8).\n- Run `node /mnt/d/moe-scratch/governor/lanes.js -v` when you start, because the list moves.\n\nAlready known, so don't re-file: everything filed on 2026-11-03 (grep .moe/tasks for the tool name before you file), plus hunt #11's held items and the earlier hunts' held items listed in task-afe61cc0's description.\n\nEVIDENCE BAR. Same as hunts #2-#11. Work only from real evidence:\n- A repro on HEAD a3330bce or later: the command and its observed output, run in a git archive or clone snapshot outside the shared checkout. Global rail: never build or test in place.\n- A failure line from today's logs: the file and the timestamp.\n- For a family or twin gap: the sibling or twin file:line that applies the check, the member file:line that skips it, and a test or call that shows the difference.\nNo speculative or style-only findings.\n\nOUTPUT AND HOW TO FINISH. This row produces no code and no plan, so do not call moe.submit_plan.\n1. File each finding with moe.create_task in the epic that owns the code. Use status PLANNING, and add no dependsOn unless a real logic edge exists. In worktree mode a shared file gets a placement note, not an edge. Each row gets a problem statement, the evidence, a fix direction and 2-3 checkable DoD items. Prefer rows QA can check with one vitest file. Each row syncs its own `### moe.<tool>` section of docs/MCP_SERVER.md when the behavior it documents changes (ruling msg-71db57ac).\n2. Post the ids, or \"nothing real\", in #governors and mention the governor (governor-e6b40560).\n3. Archive this row yourself with moe.archive_task.",
+  "definitionOfDone": [
+    "2-4 new bug rows are filed in the epics that own the code, or \"nothing real\" is posted. Either way the outcome is posted in #governors.",
+    "Every filed row cites its evidence: a repro on HEAD a3330bce or later run outside the shared checkout, a failure line from today's logs, or a sibling/twin (or doc/code) file:line pair.",
+    "No filed row targets a file an open row holds (per lanes.js at hunt time) or duplicates a hunt #13 lane. The holder archives this row once the ids are posted."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 440.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T22:07:13.695Z",
+  "updatedAt": "2026-11-03T22:33:15.328Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T22:13:29.564Z"
+  },
+  "contextFetchedBy": [
+    "architect-1dd28c7c"
+  ]
+}

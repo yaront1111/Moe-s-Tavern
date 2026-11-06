@@ -1,0 +1,257 @@
+{
+  "id": "task-525551023b9d4931a1cf983ce02a6cfb",
+  "epicId": "epic-5f4acf0ae5d3427facd63346f125aec5",
+  "title": "hardening: under MOE_RUNTIME_PROTECTED=1 on Windows, the agent Git guard's Node program spawns `git` by bare name, and libuv runs <cwd>\\git.exe first (it ignores NoDefaultCurrentDirectoryInExePath)",
+  "description": "Found while planning task-2f22237b. That row sets NoDefaultCurrentDirectoryInExePath=1 under the marker, which cmd.exe honours (npm .cmd shims and cmd.exe children). Node's own spawn of a bare name ignores the variable: libuv's search_path looks in the spawn's cwd (else the process cwd) first, then PATH (mem:gotcha-windows-libuv-spawn-searches-cwd-first, measured 2026-10-25).\n\nWrapper-owned site: Initialize-MoeAgentGitGuard (scripts/moe-agent.ps1 :8267 at 717c4019) runs a Node program before every CLI launch. Its `git()` helper calls `cp.spawnSync('git', ['-C', cwd, ...])` with no cwd option, so the lookup starts in the node process's cwd. That is the seat's current directory, normally the project, so a project-root git.exe runs inside a protected seat. Check whether the sh twin's guard (prepare_agent_git_guard) uses the same program under Git Bash.\n\nFix direction: under the marker, give each spawnSync an absolute git, resolved by the same trusted-PATH rule as Find-MoeProtectedFile and passed in by the wrapper, or a cwd outside the project (libuv searches the spawn's cwd option). Then plant <project>\\git.exe in a protected-agent-command row (Windows node.exe) and assert it never runs.\n\nAccepted residual, document only: the agent CLI's own Node spawns (for example claude running git or rg by bare name with the project as cwd) are outside Moe's control.",
+  "definitionOfDone": [
+    "Under MOE_RUNTIME_PROTECTED=1 on Windows, a git.exe planted at the project root never runs during the agent Git guard setup in either twin; a protected-agent-command row run through Windows node.exe proves it with a planted file.",
+    "Legacy seats are unchanged, parity-check.sh passes, and the protected-agent-command and launcher suites exit 0 on Linux and through Windows node.exe.",
+    "docs/ARCHITECTURE.md's protected control plane bullet names the remaining residual: bare-name spawns inside the agent CLI itself."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first, RED (test-driven-development). File: scripts/tests/protected-agent-command.test.mjs, edited in the task worktree with the Edit tool. A prototype that passed against the step-2 code on Linux and through Windows node.exe is at /mnt/d/moe-scratch/52555102-plan/protected-agent-command.test.mjs.proto.diff; port it.\nRead mem:gotcha-protected-agent-command-reaching-the-cli and mem:gotcha-windows-libuv-spawn-searches-cwd-first first. Re-measured on 2026-11-03: Node 22+ (libuv 1.48+) honours NoDefaultCurrentDirectoryInExePath when it is set in the SPAWNING process's own environment, and the marker already exports it. So on HEAD a project-root git.exe reached only through the current directory is already skipped. What still reaches it is a '.', relative or in-project PATH entry (any libuv), or Node 20 and older.\n(a) At the end of the file add G1, for the ps1 engines only. Skip it off Windows or without GIT_DIR, like C2.\n- Setup:\n  - `git init -q` the fixture project with GIT_DIR's git.exe, so the guard reaches its powershell.exe ACL step.\n  - Copy process.execPath to <project>\\git.exe and to <project>\\powershell.exe.\n  - Pass NODE_OPTIONS=`--require \"<logger, with / separators>\"`. The logger appends JSON {pid, ppid, exe: process.execPath, args: process.argv.slice(1)}.\n- The guard is the logged entry with args[0] === '-' and args[1] = the project (case-insensitive path compare). Assert it ran at least once.\n- The result is the deduped, lowercased basenames of planted entries (dirname = the project) whose ppid is a guard pid. A '.' entry also reaches the launcher's own PowerShell `& git` (task-3acf7f79), so never assert on the whole log.\n- Three runs, role governor, with a trusted claude.cmd stub and PATH [nodeBin, trusted, ...TAIL, GIT_DIR]:\n  - marker '1' with '.' first on PATH: result [].\n  - marker '1' without '.': result [].\n  - legacy (marker null): result ['git.exe']. This proves the plant is reachable.\n  - Both marker runs also assert exit 0 and a 'trusted claude' line in ran.log.\n(b) Add G2 for bash (the `sh` engine).\n- Plant <project>/git as a /bin/sh script that appends `ps -o args= -p \"$PPID\"` to a log and then execs realpath('/usr/bin')/git with \"$@\".\n- PATH is [fx.project, nodeBin, trusted, ...TAIL], role governor.\n- Each log line's first token basename names the parent. `ps -o comm=` prints MainThread for Node 24, so do not use it.\n- marker '1' must have no 'node' parent; legacy must have one. Both runs exit 0.\n(c) In the C1/C2 header comment, replace \"(Node's own spawn of a bare name does not)\" with an accurate clause: Node 22+ honours the variable too, which G1 covers.\nRED proof, against the unchanged wrappers:\n- G1 through Windows node.exe: the '.' run fails with actual ['git.exe'].\n- G2 on Linux fails with parents 'bash,node'.\n- Run both from a scratch copy, `git archive HEAD scripts docs package.json` plus your test file. Put the copy under /mnt/c/Users/<u>/AppData/Local/Temp for the Windows rows, and run Windows node.exe from a normal WSL shell, not env -i. Paste both RED test tails into the step notes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "note": "Ported the planner prototype into scripts/tests/protected-agent-command.test.mjs (Edit tool, task worktree), +56/-1.\n- G1 (ps1 engines, Windows + GIT_DIR only): 3 runs (marker+'.', marker, legacy). It counts only planted project-root entries whose ppid is the guard (`node - <project>`), logged via a NODE_OPTIONS --require logger.\n- G2 (bash): a planted <project>/git logs its parent's `ps -o args=`; marker must have no node parent, and legacy must have one.\n- I corrected the C1/C2 header clause to say Node 22+ (libuv 1.48+) honours the variable too, and the G1 header to the corrected libuv behaviour. The prototype's 'ignores NoDefaultCurrentDirectoryInExePath' wording was wrong per mem:gotcha-windows-libuv-spawn-searches-cwd-first.\nRED against unchanged HEAD 12d7bb62 wrappers. Scratch copies come from `git archive HEAD scripts docs package.json` plus the new test file.\n- Linux (/tmp/moe-52555102-red.*, env -i, node v24.21.0), --test-name-pattern G2: tests 1, pass 0, fail 1. 'not ok 1 - bash: G2 ...', AssertionError message 'bash,node' (actual true, expected false).\n- Windows node.exe (normal shell, copy under /mnt/c/Users/Yaron/AppData/Local/Temp/moe-52555102-red.*), --test-name-pattern G1: tests 2, pass 0, fail 2 (PS 5.1 and PS 7), 8 s. Both '.' runs fail deepEqual with actual ['git.exe'], expected []. The launch also threw MOE_AGENT_GIT_GUARD_FAILED there.",
+      "startedAt": "2026-11-03T01:13:00.786Z",
+      "completedAt": "2026-11-03T01:16:34.097Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Implementation in both wrappers (Edit tool, task worktree). The reference diffs passed G1, G2, the full gate and parity: /mnt/d/moe-scratch/52555102-plan/moe-agent.ps1.proto.diff and moe-agent.sh.proto.diff.\n(a) The guard program text, byte-identical and ASCII in both. agent-git-guard.test.mjs's twin test compares the two, and PS 5.1 pipes this text to node.\n- `const [project, temp, gitCmd] = process.argv.slice(-3)`.\n- After `const env`, a 2-line comment and `const strict = process.env.MOE_RUNTIME_PROTECTED === '1';`. The comment says nothing runs by bare name under the marker: Node looks one up in the current directory or through '.'/relative/in-project PATH entries, so the wrapper passes git's absolute path (task-52555102).\n- The `git` helper spawns gitCmd.\n- Right after the GIT_CONFIG_COUNT check: `if (strict && !path.isAbsolute(gitCmd)) throw Error('path');`.\n- In the win block: `const powershell = strict ? path.join(process.env.SystemRoot || '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell.exe';`, then `if (strict && !path.isAbsolute(powershell)) throw Error('path');`, and spawn `powershell`.\n(b) ps1 Initialize-MoeAgentGitGuard, before the OutputEncoding try:\n- `$guardGit = 'git'`.\n- Under $script:MoeRuntimeProtected:\n  - `$gitExtensions = if ($PSVersionTable.PSEdition -ne 'Core' -or $IsWindows) { @('.exe') } else { @('') }`;\n  - `$guardGit = Find-MoeProtectedFile 'git' $gitExtensions`;\n  - `if (-not $guardGit) { throw 'MOE_AGENT_GIT_GUARD_FAILED: refusing to launch an unprotected CLI' }`.\n- Pass `$guardGit` as the third native argument after `([IO.Path]::GetTempPath() + '.')`. The path ends in .exe, so PS 5.1's trailing-backslash quoting is not an issue.\n(c) sh:\n- `agent_git_guard_node() { # $1 = the git the program runs`, with \"$1\" added after \"$SECURE_TEMP_DIR\".\n- In prepare_agent_git_guard: `local entry guard_git=git`; when RUNTIME_PROTECTED = 1, `guard_git=$(protected_path_lookup git \"$(normalize_path \"$PROJECT\")\" .exe) || return 1`; then `AGENT_GIT_GUARD_ROOT=$(agent_git_guard_node \"$guard_git\") || return 1`. The `.exe` argument applies only to msys/cygwin, and Node cannot spawn a .cmd.\n(d) Correct the two NoDefaultCurrentDirectoryInExePath comments (ps1 :470-472, sh :52-54), identically. \"Node's own spawn of a bare name ignores it.\" becomes: Node 22+ (libuv 1.48+) honours it too, read from its own environment; older Node does not, and no lookup skips a '.', relative or in-project PATH entry.\nError handling: no trusted git refuses the launch with the existing MOE_AGENT_GIT_GUARD_FAILED (today a missing git fails the same way), and the program refuses a non-absolute git or powershell under the marker. Legacy passes 'git' and spawns 'powershell.exe' exactly as before.\nKeep moe-agent.ps1 UTF-8 with a BOM and LF line endings. Then run G1 and G2 (GREEN), plus `node --test scripts/tests/agent-git-guard.test.mjs` on Linux, which exercises the legacy guard paths, about 80 s.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh"
+      ],
+      "note": "Implemented per plan in both wrappers (Edit tool).\n(a) Guard program, the same in both: `const [project, temp, gitCmd] = process.argv.slice(-3)`; a 2-line comment plus `const strict = process.env.MOE_RUNTIME_PROTECTED === '1'`; the git helper spawns gitCmd; `if (strict && !path.isAbsolute(gitCmd)) throw Error('path')` right after the GIT_CONFIG_COUNT check; in the win block, under strict the program spawns `powershell` = %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe (plus an absolute-path check), else 'powershell.exe'.\n- I reworded the prototype comment to the corrected libuv fact. It now says Node can look a bare name up in the cwd or through a '.', relative or in-project PATH entry, not that Node \"ignores\" the variable.\n(b) ps1 Initialize-MoeAgentGitGuard: `$guardGit = 'git'`. Under $script:MoeRuntimeProtected it is set from `Find-MoeProtectedFile 'git' $gitExtensions` (.exe on Windows, '' on PS7/Linux), and a missing one throws the existing MOE_AGENT_GIT_GUARD_FAILED. `$guardGit` is passed as the 3rd native arg.\n(c) sh: `agent_git_guard_node` takes $1 and passes it after $SECURE_TEMP_DIR. prepare_agent_git_guard sets `guard_git=git`, or under RUNTIME_PROTECTED=1 `protected_path_lookup git \"$(normalize_path \"$PROJECT\")\" .exe || return 1`. The caller at :10139 prints MOE_AGENT_GIT_GUARD_FAILED.\n(d) Both NoDefaultCurrentDirectoryInExePath comments are identical, and now say Node 22+ (libuv 1.48+) honours it, read from its own environment; older Node does not, and no lookup skips a '.', relative or in-project PATH entry.\nChecks:\n- Twin programs are equal (5299 chars each) and ASCII.\n- ps1 BOM is ef bb bf, and both files have 0 CR.\n- bash -n is OK.\nGREEN:\n- Linux env -i, `--test-name-pattern \"G2|C1\"`: 2/2 pass.\n- Windows node.exe, `--test-name-pattern \"G1|C2\"`: 4/4 pass (PS5.1 + PS7 for each), 32 s.\n- Linux `node --test scripts/tests/agent-git-guard.test.mjs`: tests 28, pass 28, fail 0, 80 s.",
+      "startedAt": "2026-11-03T01:16:37.162Z",
+      "completedAt": "2026-11-03T01:21:12.766Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Docs (DoD 3). In docs/ARCHITECTURE.md's **Protected control plane** bullet, replace the sentence \"Both export `NoDefaultCurrentDirectoryInExePath=1` ... because libuv ignores that variable.\" (:421-423). Keep the wrap at about 118 columns. The new text says:\n- cmd.exe (an npm `.cmd` shim or any cmd.exe in the seat) and Node 22+ (libuv 1.48+, which reads the variable from the spawning process) never look a bare name up in the current directory, the project.\n- Older Node still does, and no lookup skips a `.`, relative or in-project PATH entry.\n- So the agent Git guard's Node program gets git's absolute path, from an absolute PATH entry outside the project, and runs `%SystemRoot%`'s `powershell.exe`. With no such git, the guard refuses the launch (MOE_AGENT_GIT_GUARD_FAILED).\n- The remaining residual is the agent CLI's own bare-name spawns. They inherit the variable, but Moe controls neither the CLI's PATH walk nor a CLI runtime that ignores it.\n- The launchers' own lookups through such PATH entries are open: task-0b2ea570 (sh) and task-3acf7f79 (ps1).\nUse no daemonGitDocs phrase (\"never runs git\" and similar), and check each claim against the step-2 code.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "modifiedFiles": [
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "I replaced the libuv sentence in docs/ARCHITECTURE.md's Protected control plane bullet (Edit tool, +7/-2, wrap at 112-119 cols like the bullet around it). It now says:\n- cmd.exe and Node 22+ (libuv 1.48+, which reads the variable from the spawning process) never look a bare name up in the cwd. Older Node still does, and no lookup skips a '.', relative or in-project PATH entry.\n- So the guard's Node program gets git's absolute path from an absolute PATH entry outside the project, and runs %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe. With no such git the guard refuses (MOE_AGENT_GIT_GUARD_FAILED).\n- The residual is the agent CLI's own bare-name spawns.\n- The launchers' own lookups are open in task-0b2ea570 (sh) and task-3acf7f79 (ps1).\nEvery claim was checked against the step-2 code. The ps1 throw and the sh caller at :10139 both emit MOE_AGENT_GIT_GUARD_FAILED. None of daemonGitDocs.test.ts's NEVER_RUNS_GIT phrases is used.",
+      "startedAt": "2026-11-03T01:23:39.128Z",
+      "completedAt": "2026-11-03T01:25:15.059Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification (DoD 2). Run ONE command, once and fresh, from the task worktree in a normal WSL shell: the three executionContract.checkRefs pieces joined with ' && '. Only the Linux leg runs under env -i, because the Windows node.exe leg needs the Windows PATH with git carried through interop. That joined command and its output tail are the complete_task evidence.\nThe launcher harnesses run in place; the rails allow that, and each suite sets MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER.\nPlanner dry run on the prototype at HEAD 5c5b3706:\n- Linux: 187 tests, 159 pass, 0 fail, 28 skipped, 77 s.\n- Windows: 249 tests, 208 pass, 0 fail, 41 skipped, 189 s.\n- ParseFile exit 0, parity-check PASS.\nCounts move with HEAD; exit 0 is the gate.\nThe agent-git-guard suite alone is 28 tests and about 80 s on Linux. On Windows it runs in the same leg, about 3 min. If an unrelated row fails, rerun that file alone and check `uptime` before reporting it; never edit it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I ran the three executionContract.checkRefs joined with ' && ', once and fresh, from the task worktree in a normal WSL shell. Only the Linux leg ran under env -i. The worktree held the step-1..3 bytes (ceb0b50b plus the docs edit). The host load average was 11 at the start. Overall GATE_EXIT=0, real 4m37s.\n- Linux leg: bash -n OK; node --test over 6 files: 187 tests, 159 pass, 0 fail, 28 skipped, 81.7 s.\n- Windows node.exe leg: 249 tests, 208 pass, 0 fail, 41 skipped, 190.9 s.\n- ParseFile: no errors.\n- parity-check.sh: PASS.\n- npm run lint: OK (architect 39, worker 30, qa 36 lines).\nThe counts match the planner's dry run exactly.",
+      "startedAt": "2026-11-03T01:25:15.777Z",
+      "completedAt": "2026-11-03T01:31:03.701Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review (load the adversarial-self-review skill), on `git diff \"$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\")\"` plus the working tree. Check:\n- The two program copies are identical and ASCII (run the twin test).\n- Legacy argv is unchanged apart from the extra 'git' argument.\n- A path with spaces or brackets in $projectPath, the temp dir or the git path still passes through PS 5.1 native quoting.\n- No new MOE_ code exists (parity).\n- The docs claims are exact.\nMutants, in the scratch copy. Back up once, restore and cmp before citing. Count a kill only when a row fails on its assertion:\n- M1: ps1 passes 'git' instead of $guardGit. G1 '.' run is RED.\n- M2: sh passes git instead of \"$guard_git\". G2 is RED.\n- M3: the program spawns a bare 'powershell.exe' under strict. G1 '.' run is RED, with ['powershell.exe'] as a guard child.\n- M4: Find-MoeProtectedFile is replaced with (Get-Command git).Source. G1 '.' run is RED.\n- M5: the program's strict absolute-path check is removed. It may survive (defense in depth); say so.\nSize: expect about +110 net lines, most of them the two test rows. Record the mutant table and any residual in the completion summary. Declare the four files as modifiedFiles.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs",
+        "docs/ARCHITECTURE.md"
+      ],
+      "note": "Adversarial self-review of the HEAD~1 (12d7bb62) diff plus the working tree.\nStatic checks:\n- The twin programs are equal (5299 chars) and ASCII.\n- ps1 BOM ef bb bf; 0 CR in all 4 files.\n- No new MOE_ code: the added lines use only existing MOE_AGENT_GIT_GUARD_FAILED, MOE_RUNTIME_PROTECTED and MOE_NODE_COMMAND.\n- Legacy argv only gains the trailing 'git'.\n- PS 5.1 quoting: $guardGit comes from IO.Path.Combine and ends in '.exe', so no trailing-backslash issue. Native arguments are not wildcard-expanded, so brackets are safe.\n- Fail-closed paths:\n  - SystemRoot unset under strict joins a relative path, which isAbsolute rejects: refused.\n  - No trusted git: ps1 throws MOE_AGENT_GIT_GUARD_FAILED before the OutputEncoding try, so there is no state to restore. sh returns 1 and :10139 prints the code.\nMutants: run in git-archive scratch copies (HEAD + worktree overlay), with an unmutated control first (G2 1/1, G1 2/2 pass). Each restore was cmp-verified.\n- M1 (ps1 passes 'git'): KILLED, G1 2/2 fail on the exit-code assertion (actual 1), because the strict isAbsolute check refuses. M1+M5: KILLED on deepEqual, actual ['git.exe'].\n- M2 (sh passes git): KILLED, G2 fails on exit 1. M2+M5: KILLED, parents 'bash,node'.\n- M3 (spawnSync('powershell.exe') bare): KILLED, G1 2/2 fail on exit 1. It is NOT caught via the guard-children list: a planted node.exe copy run as powershell.exe exits on '-NoProfile' (bad option) before the --require logger loads. I fixed the test comment, which wrongly said every planted copy logs itself. Recorded in mem:gotcha-protected-agent-command-reaching-the-cli.\n- M4 ((Get-Command git).Source): KILLED, G1 2/2 deepEqual actual ['git.exe'].\n- M5 (both strict isAbsolute checks removed): SURVIVES G1 and G2. This is expected: they are defense in depth, and the wrapper always passes an absolute path.\nAfter the comment fix I re-ran the full joined gate fresh: GATE_EXIT=0.\nSize +106/-16, net 90.\nScratch removed: my copies and taps. The planner's Windows Temp moe-52555102-proto and -red dirs (00:28Z) were left alone.",
+      "startedAt": "2026-11-03T01:31:04.365Z",
+      "completedAt": "2026-11-03T01:41:50.959Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Human \"move from backlog\": architect-filed protected-runtime hardening found while planning 2f22237b (libuv bare-name spawn searches cwd first).",
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 324.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T23:35:47.158Z",
+  "updatedAt": "2026-11-04T19:20:43.591Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T23:37:12.733Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-03T00:19:24.858Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T01:51:10.680Z",
+    "wallClockMs": 5505822
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-2dc72348",
+    "qa-af7be174"
+  ],
+  "dependsOn": [
+    "task-408a0ac1524b4ab4a6418dd741b53d8d"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T00:43:51.082Z",
+  "executionContract": {
+    "intendedBehavior": "Under MOE_RUNTIME_PROTECTED=1, the agent Git guard's Node program, the same text in moe-agent.ps1 and moe-agent.sh, spawns git only by the absolute path the wrapper resolved from an absolute PATH entry outside the project. That is Find-MoeProtectedFile in ps1 and protected_path_lookup in sh. On Windows it spawns powershell.exe only as %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe.\nA git.exe or powershell.exe planted at the project root therefore never runs as a child of the guard, whether it would be reached through the current directory or through a '.', relative or in-project PATH entry. With no trusted git, the launch is refused with MOE_AGENT_GIT_GUARD_FAILED.\nLegacy seats pass 'git' and spawn 'powershell.exe' exactly as before. docs/ARCHITECTURE.md states the corrected libuv behavior and the agent CLI residual.",
+    "acceptanceCriteria": [
+      "G1, on PS 5.1 and PS 7 through Windows node.exe: under the marker, with and without a '.' PATH entry, no planted git.exe or powershell.exe runs as a child of the guard, the launch exits 0 and the CLI runs. In legacy the planted git.exe does run as a guard child.",
+      "G2, bash on Linux: under the marker, a planted <project>/git reached through an in-project PATH entry never has the guard's node as its parent. In legacy it does.",
+      "The Linux and Windows launcher suites, ParseFile, parity-check and lint all exit 0.",
+      "The docs bullet names the agent CLI's own bare-name spawns as the residual and corrects the libuv claim."
+    ],
+    "invariants": [
+      "Under the marker the guard program never spawns a bare name, and it refuses a non-absolute git or powershell path.",
+      "The guard program text is byte-identical and ASCII in both wrappers.",
+      "Legacy behavior, argv apart from the extra 'git' argument, and refusal codes are unchanged. No new MOE_ code."
+    ],
+    "compatibility": [
+      "agent-git-guard.test.mjs still passes unchanged: it covers the legacy guard paths and the twin-program equality.",
+      "PS 5.1 native argument passing for paths with spaces stays intact (the new argument ends in .exe)."
+    ],
+    "approvedScope": [
+      "The guard program (gitCmd argument, strict marker check, absolute powershell), Initialize-MoeAgentGitGuard ($guardGit), agent_git_guard_node and prepare_agent_git_guard (guard_git), and the two NoDefaultCurrentDirectoryInExePath comments.",
+      "protected-agent-command.test.mjs: rows G1 and G2, and the C1/C2 header comment."
+    ],
+    "reuse": [
+      "Find-MoeProtectedFile and protected_path_lookup, rather than a new resolver.",
+      "The C2 row's fixture pattern: governor role, GIT_DIR, node.exe copies as planted files."
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1: Initialize-MoeAgentGitGuard (~:8274) pipes the program into `& node - $projectPath ([IO.Path]::GetTempPath() + '.')`. Under the marker, node is Set-Alias'd to $script:MoeNode (~:567).",
+      "scripts/moe-agent.sh: agent_git_guard_node (~:8653) runs \"$NODE_CMD\" - \"$PROJECT\" \"$SECURE_TEMP_DIR\". prepare_agent_git_guard (~:8717) is called at ~:10126, which prints MOE_AGENT_GIT_GUARD_FAILED on failure.",
+      "Find-MoeProtectedFile (ps1 ~:528) and protected_path_lookup (sh ~:537) implement the trusted-PATH rule.",
+      "libuv 1.48+ skips the cwd when NoDefaultCurrentDirectoryInExePath is in the spawning process's environment, and walks PATH entries regardless (measured 2026-11-03)."
+    ],
+    "checkRefs": [
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}'",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ]",
+      "R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Each alternative was rejected:\n(1) A spawn `cwd` outside the project. libuv still walks '.', relative and in-project PATH entries, so it does not stop a planted git.\n(2) Rewriting PATH early under the marker. That is broader (task-0b2ea570 for sh, task-3acf7f79 for ps1) and does not cover Node 20 and older, which search the cwd anyway.\n(3) Re-implementing the trusted-PATH rule in JS. That would be a third copy of Find-MoeProtectedFile and protected_path_lookup, and it would drift from task-89579137's alias fix.\n(4) Making powershell.exe absolute in legacy too. The DoD says legacy is unchanged.\n(5) A whole-log G1 assertion. A '.' entry also reaches the launcher's own PowerShell `& git`, which is filed as task-3acf7f79. Counting only the guard's children is exactly what the DoD asks.\nThe worktree-launch and board-snapshot Node programs (also bare git) are out of this DoD and are in task-3acf7f79.",
+    "codebaseInsights": "Planner measurements, 2026-11-03:\n- libuv src/win/process.c search_path has called NeedCurrentDirectoryForExePathW(L\"\") since v1.48.0 (absent in 1.47.0). It reads the CALLING process's own env, and any value, even '', turns the cwd search off.\n- Node 22.23 has libuv 1.51 and Node 24.16 has 1.52 (both honour it). Node 20.20 has 1.46 (does not).\n- The 2026-10-25 memory, and 2f22237b's comments and docs, wrongly said that libuv ignores it; that probe set it only in the child's env. Both memories are now corrected.\nHow the wrappers behave:\n- Under the marker, the ps1 aliases node to the absolute $script:MoeNode, and sh pins NODE_CMD, so only git and powershell.exe were bare inside the guard.\n- prepare_agent_git_guard failing makes the caller print MOE_AGENT_GIT_GUARD_FAILED and exit 1. The ps1 throw propagates the same way.",
+    "risks": "Test hazards:\n- NODE_OPTIONS reaches every node in the seat, so the logger must never throw. It only appends.\n- G1 needs the fixture to be a Git repository, or the guard exits before its powershell.exe step.\n- The harness PATH (TAIL) has no WindowsPowerShell, so an unfixed guard in a repository fails on ENOENT. Expected.\n- The sh twin under Git Bash cannot run in this suite (\"Git Bash rewrites PATH\"). It relies on MSYS argv conversion of '/c/...' paths, the same conversion it already relies on for $PROJECT and the temp dir.\nOverlapping rows:\n- 408a0ac1 (REVIEW) changed the same `& node -` line, hence the dependsOn.\n- 0b2ea570 and 89579137 now wait on this row (same test file and docs bullet).\n- 3acf7f79 waits on this row and on 0b2ea570.",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/moe-agent.sh",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "scripts/tests/agent-git-guard.test.mjs",
+      "docs/ARCHITECTURE.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "12d7bb6249d85360ba54cb10a4d733214e2d0adb",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T00:43:51.108Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T01:13:00.786Z",
+  "commits": [
+    {
+      "sha": "ceb0b50b63da7e478fa01ff16f96b7ff5dde7ee8",
+      "ref": "refs/heads/moe/task/task-525551023b9d4931a1cf983ce02a6cfb",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T01:11:58Z",
+      "paths": [
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T01:21:53.638Z",
+      "treeId": "018c0398d9837df4e06663221eea6403aa669028",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "01e24e878a03924a1124af679e8327827cd0981b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-2dc72348@2026-11-03T01:22:28Z",
+      "paths": [
+        "docs/ARCHITECTURE.md",
+        "scripts/moe-agent.ps1",
+        "scripts/moe-agent.sh",
+        "scripts/tests/protected-agent-command.test.mjs"
+      ],
+      "recordedBy": "worker-2dc72348",
+      "recordedAt": "2026-11-03T01:43:41.516Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/protected-agent-command.test.mjs",
+    "scripts/moe-agent.ps1",
+    "scripts/moe-agent.sh",
+    "docs/ARCHITECTURE.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T01:43:49Z",
+    "at": "2026-11-03T01:51:40.040Z"
+  },
+  "reviewStartedAt": "2026-11-03T01:42:28.850Z",
+  "verification": {
+    "command": "R=$(git rev-parse --show-toplevel) && cd \"$R\" && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/local/bin:/usr/bin:/bin\" NO_COLOR=1 bash -c 'bash -n scripts/moe-agent.sh && node --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/agent-runtime.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs scripts/tests/moe-call.test.mjs 2>&1 | tail -9; exit ${PIPESTATUS[0]}' && R=$(git rev-parse --show-toplevel) && cd \"$R\" && \"/mnt/c/Program Files/nodejs/node.exe\" --test scripts/tests/protected-agent-command.test.mjs scripts/tests/agent-git-guard.test.mjs scripts/tests/prompt-cache-launcher.test.mjs scripts/tests/usage-launcher.test.mjs 2>&1 | tr -d '\\r' | sed 's/\\x1b\\[[0-9;]*m//g' | tail -9; [ \"${PIPESTATUS[0]}\" -eq 0 ] && R=$(git rev-parse --show-toplevel) && cd \"$R\" && /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command \"\\$e=\\$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$(wslpath -w \"$R/scripts/moe-agent.ps1\")',[ref]\\$null,[ref]\\$e); if(\\$e){\\$e|Out-String|Write-Host; exit 1}\" 2>&1 && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 187\nℹ suites 0\nℹ pass 159\nℹ fail 0\nℹ cancelled 0\nℹ skipped 28\nℹ todo 0\nℹ duration_ms 77314.005878\n✔ C:/Program Files/Git/bin/bash.exe: Codex launch without a hint keeps the default argv (389.7323ms)\nℹ tests 249\nℹ suites 0\nℹ pass 208\nℹ fail 0\nℹ cancelled 0\nℹ skipped 41\nℹ todo 0\nℹ duration_ms 186424.3228\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n\nreal\t4m27.058s\nGATE_EXIT=0",
+    "reportedAt": "2026-11-03T01:42:28.850Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Under MOE_RUNTIME_PROTECTED=1, the agent Git guard's Node program spawns git only by the absolute path the wrapper resolves, and on Windows powershell.exe only as %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe.\nChanges (+106/-16, 4 files):\n- Guard program, byte-identical and ASCII in both twins (5299 chars): a gitCmd 3rd argument and a strict marker check. Under strict it refuses a non-absolute git or powershell.\n- moe-agent.ps1: $guardGit = Find-MoeProtectedFile 'git' (.exe); no trusted git throws MOE_AGENT_GIT_GUARD_FAILED.\n- moe-agent.sh: guard_git = protected_path_lookup git <project> .exe, || return 1, so :10139 prints MOE_AGENT_GIT_GUARD_FAILED.\n- Legacy passes 'git' and spawns 'powershell.exe' as before.\n- Both NoDefaultCurrentDirectoryInExePath comments and the ARCHITECTURE.md Protected control plane bullet now give the corrected libuv 1.48+ fact. The bullet names the agent CLI's own bare-name spawns as the residual, plus the open lookups (0b2ea570 sh, 3acf7f79 ps1).\nTests: G1 (PS5.1+PS7, Windows) and G2 (bash). RED on 12d7bb62: G1 '.' run actual ['git.exe']; G2 parents 'bash,node'. Now GREEN.\nGate: the joined checkRefs, run fresh on the final bytes, GATE_EXIT=0. Linux 187/159 pass/0 fail/28 skip; Windows 249/208/0/41; ParseFile OK; parity PASS; lint OK.\nMutants, in a scratch copy with a control run first:\n- M1 (ps1 'git'), M2 (sh git) and M3 (bare powershell.exe): KILLED on the exit-code assertion, because the strict check or the failed plant refuses.\n- M1+M5: KILLED, ['git.exe']. M2+M5: KILLED, 'bash,node'.\n- M4 (Get-Command git): KILLED, ['git.exe'].\n- M5 (both strict checks removed): SURVIVES, as expected for defense in depth.\nResiduals:\n- A planted powershell.exe (a node.exe copy) exits on -NoProfile before the --require logger loads. G1 sees it only as a failed launch, and the test comment now says so.\n- The sh twin under Git Bash is not exercised (suite limitation). It relies on MSYS path conversion.\n- Find-MoeProtectedFile alias forms: t",
+  "completedAt": "2026-11-03T01:51:10.680Z",
+  "reviewCompletedAt": "2026-11-03T01:51:10.680Z",
+  "reviewSummary": "Reviewed completion 01e24e87 (on moe/work-2026-10-24 and origin). Diff: 4 files, +106/-16, net 90, within approvedScope.\nRe-ran task.verification on a git archive snapshot of 01e24e87:\n- Linux leg (env -i): 187 tests, 159 pass, 0 fail, 28 skip.\n- Windows node.exe leg: 249/208/0/41.\n- G1 PS5.1+PS7, G2 bash, C1 and C2 green. ParseFile exit 0, parity PASS, lint OK.\nDoD 1:\n- Under the marker the guard program spawns only the absolute git the wrapper passes, and %SystemRoot%'s powershell.exe; a non-absolute one is refused.\n- G1 under the marker (with and without '.'): no planted guard child. Legacy: ['git.exe'] (non-vacuous).\n- My mutants: M2+M5 (sh bare git, strict check removed) fails G2 'bash,node'. M1+M5 (ps1 'git') fails G1 on both PS with ['git.exe'].\n- sh twin under Git Bash, probed directly: /mingw64/bin/git becomes 'C:/Program Files/Git/mingw64/bin/git' via MSYS conversion; isAbsolute is true and spawnSync runs the real git.\nDoD 2:\n- Legacy passes 'git' and spawns 'powershell.exe' unchanged. agent-git-guard.test.mjs is green on both legs.\n- Twin programs equal (5299 chars) and ASCII. ps1 BOM kept, 0 CR.\n- No new MOE_ code; missing git takes the existing MOE_AGENT_GIT_GUARD_FAILED path.\nDoD 3: the ARCHITECTURE bullet corrects the libuv claim and names the agent CLI's own bare-name spawns as the residual. No NEVER_RUNS_GIT phrase.\nPonytail: nothing to cut ($gitExtensions repeats $nodeExtensions, taste only).\nAccepted residuals: a planted powershell.exe is caught only via the exit code; '.' lookups stay open in task-0b2ea570 and task-3acf7f79.",
+  "requiredCheckAtDone": null
+}

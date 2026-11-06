@@ -1,0 +1,214 @@
+{
+  "id": "task-cb272f68e7a545ec806c75b98c08521a",
+  "epicId": "epic-be924fb8",
+  "title": "bug: a failed LogRotator compression can leave activity.log.rotating.tmp behind, because compressFile rejects right after destination.destroy() without waiting for the write stream to close, so rotate()'s cleanup rmSync can run before the stream's async open creates the file; LogRotator.rotateFailure.test.ts (f2) flakes under full-suite load",
+  "description": "Reported by qa-25f21f0a (msg-a7f361af, 06:05Z on 2026-11-04) while gating task-77e54ebb on tip 3500ae19 in a git-archive snapshot:\n- src/util/LogRotator.rotateFailure.test.ts case f2 (\"five failing rotations keep everything…\") failed once in the full daemon run.\n- The failure was an extra `activity.log.rotating.tmp` in the directory listing (expectSeededState, :65).\n- f2 passed 3/3 alone, and an immediate full re-run was green (286 files, 7475 tests).\nThe test came with task-1f84f4e4 (d4a387ef, DONE). Any checkRef that runs the whole daemon suite can hit it.\n\nCAUSE, read at tip 2a1c5a36 (packages/moe-daemon/src/util/LogRotator.ts):\n- rotate() (:106-137) awaits compressFile(this.logPath, pendingPath). On a rejection its catch calls fs.rmSync(pendingPath, { force: true }) and rethrows.\n- compressFile (:141+) creates the destination with fs.createWriteStream(destPath), whose open() is asynchronous. rejectOnce (:166-184) calls destination.destroy() and then reject() at once, without waiting for the destination's 'close'.\n- When the failing gzip errors on its first chunk before the destination's open has completed, rotate()'s rmSync finds nothing to delete. The late open then creates activity.log.rotating.tmp, and the file outlives the failed rotation.\n- In production this only leaves a stray tmp until the next rotation's step 1 removes it. In the test it breaks the exact listing assertion whenever the suite is busy.\n\nFIX DIRECTION: in rejectOnce, settle only after the destroyed destination has emitted 'close' (or after its open finished), so rotate()'s cleanup always runs after the file can exist. Keep the timeout and the error passthrough. Do not just loosen the test: the f1/f2 listing assertions are the contract task-1f84f4e4 added. Follow gotcha-activity-log-rotated-generations in Serena memory.",
+  "definitionOfDone": [
+    "A deterministic test fails on today's code. It makes the destination's open complete only after the gzip error, for example by delaying the open or by awaiting destination close in a spy, and shows activity.log.rotating.tmp left behind after a failed rotate(). It passes after the fix, which settles compressFile's rejection only once the destination stream has closed.",
+    "LogRotator.rotateFailure.test.ts passes 20 consecutive runs (`npx vitest run src/util/LogRotator.rotateFailure.test.ts --repeat 20` or an equivalent loop), and its f1/f2 directory-listing assertions are unchanged.",
+    "npm test and npx tsc --noEmit pass in packages/moe-daemon, run in a snapshot outside the shared checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Tests first (RED): two cases, both failing on today's code. The architect's verified version is in /mnt/d/moe-scratch/plan-cb272f68/prototype.diff. It is a reference only: apply your hunks with Edit, never with patch or cp.\n(1) DoD 1, in packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts: add '(f5) a failed rotation removes the temporary file even when the destination opens after the gzip error', just before (f4). Leave f1-f4, seed, expectSeededState and failingGzip byte-identical (DoD 2).\n- Hold the destination's open. Keep `const realCreateWriteStream = fs.createWriteStream`, then vi.spyOn(fs, 'createWriteStream') to return realCreateWriteStream(file, { fs: gatedFs }). This uses Node's documented WriteStream `fs` option. gatedFs is { open: (p, flags, mode, cb) => void openGate.then(() => fs.open(p, flags, mode, cb)), write: fs.write, writev: fs.writev, close: fs.close }. Push each stream into a destinations array.\n- vi.spyOn(zlib, 'createGzip') returns failingGzip() with `gzip.once('error', () => setImmediate(releaseOpen))`. The open then completes only after the whole rejection chain has run, because nextTick and microtasks run before setImmediate. That is the order a busy threadpool produces, made deterministic.\n- Assert: expect(await rotator.rotateIfNeeded()).toBe(false); exactly one destination; if !destination.closed, await its 'close' (the late open has landed and closed). Then expect(fs.existsSync(`${logPath}.rotating.tmp`)).toBe(false), and expectSeededState(dir, logPath, listing).\n(2) Error handling bound, in packages/moe-daemon/src/util/LogRotator.test.ts:\n- Import Writable beside PassThrough, and DESTINATION_CLOSE_WAIT_MS beside LogRotator.\n- Add 'compressFile rejects only once the destroyed destination closes, and still rejects when it never does', before the timeout case.\n- Use PassThrough source and gzip, and as destination `new Writable({ write(_c, _e, cb) { cb(); }, destroy() { /* never calls back */ } })`, an fs stream whose open hangs. Use the same three fs/zlib mockReturnValue spies as the neighbouring cases, and vi.useFakeTimers().\n- `let settled = false; const compression = (rotator as any).compressFile('source.log', 'dest.gz').finally(() => { settled = true; });`. Attach expect(compression).rejects.toThrow('read failure') before source.emit('error', new Error('read failure')).\n- advanceTimersByTimeAsync(DESTINATION_CLOSE_WAIT_MS - 1): settled is false. advanceTimersByTimeAsync(1): the rejection lands. The file's afterEach already restores mocks and real timers.\nRED, in a snapshot only (the checkRef's recipe): at base both new cases fail, 2 failed | 7 passed. f5 fails because the late open leaves activity.log.rotating.tmp ('expected true to be false'). The bound case fails because the promise has already settled. The architect measured exactly that.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.test.ts"
+      ],
+      "note": "Added (f5) to LogRotator.rotateFailure.test.ts (gates the real WriteStream open via the fs option, releases it with setImmediate after the gzip error) and the close-bound case to LogRotator.test.ts (Writable whose destroy never calls back, fake timers). f1-f4, seed, expectSeededState, failingGzip untouched. RED in a git-archive snapshot at base: 2 failed | 7 passed; f5 fails on 'expected true to be false' (tmp left behind), the bound case fails because the promise settled early.",
+      "startedAt": "2026-11-04T06:32:34.631Z",
+      "completedAt": "2026-11-04T06:33:14.197Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix packages/moe-daemon/src/util/LogRotator.ts so a failed compression settles only after its destination has closed.\n- Export `DESTINATION_CLOSE_WAIT_MS = 5_000` right after ROTATION_RETRY_DELAY_MS, with the doc line 'How long a failed compression waits for its destination to close before rejecting anyway'.\n- Error handling in compressFile's rejectOnce: keep settled, clearTimeout(timeout), unpipeStreams() and the three conditional destroy() calls exactly as they are. Replace only the final reject(...) with this:\n  - build `failure` with the same normalization (error instanceof Error ? error : new Error(String(error)));\n  - if destination.closed, reject(failure) at once;\n  - otherwise arm `const closeWait = setTimeout(() => reject(failure), DESTINATION_CLOSE_WAIT_MS)`, call closeWait.unref?.(), and add `destination.once('close', () => { clearTimeout(closeWait); reject(failure); })`.\n- Add a comment that says why. fs.createWriteStream opens its file asynchronously, and destroy() lets a pending open finish before it closes the fd. Rejecting first let rotate()'s cleanup rmSync run before the late open recreated the temporary file. The bound keeps a hung open from stalling appendActivity forever, since it awaits rotateIfNeeded under the activity mutex.\n- Every rejection path goes through this: source error, gzip error, destination error (autoDestroy closes it in the same tick, so no real wait), and the 30 s timeout.\n- Unchanged: the success path (resolve on 'finish'), rotate(), rotateIfNeeded, the error passed through, COMPRESSION_TIMEOUT_MS. No new option and no env var.\nThen both new cases pass, 9/9 across the two files.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "note": "Exported DESTINATION_CLOSE_WAIT_MS = 5_000 after ROTATION_RETRY_DELAY_MS. rejectOnce keeps settled/clearTimeout/unpipe/destroy calls and now rejects at once only if destination.closed, else on the destination's 'close', bounded by an unref'd DESTINATION_CLOSE_WAIT_MS timer cleared on close. Success path, rotate(), rotateIfNeeded untouched. Snapshot run of both LogRotator test files: 9/9 passed (was 2 failed | 7 passed at base).",
+      "startedAt": "2026-11-04T06:33:16.371Z",
+      "completedAt": "2026-11-04T06:33:27.987Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification, run once: run the plan's checkRef (executionContract.checkRefs; a copy is at /mnt/d/moe-scratch/plan-cb272f68/checkref.txt) verbatim from the worktree root. Submit its fresh output as complete_task verification.\n- It overlays the three files on a git archive of HEAD in a mktemp snapshot. The shared checkout is the live runtime, so never npm ci or npm test there.\n- It runs npm ci, tsc --noEmit, and tsc on both LogRotator test files.\n- DoD 2: `npx vitest run src/util/LogRotator.rotateFailure.test.ts --repeats 20` runs every test 21 times in one process. The DoD's `--repeat` is not a vitest option: vitest 5 refuses it with CACError 'Unknown option `--repeat`'.\n- DoD 3: `npm test`, which is the full daemon suite (vitest run). It pins LogRotator.rotateFailure.test.ts at 5 tests and LogRotator.test.ts at 4.\n- Expect 'rotator pin ok'. The architect ran it verbatim at db7a8bfd: repeats 5 passed; 289 files passed, 7510 passed | 24 skipped; rotator pin ok; exit 0.\n- Set TMPDIR on the OUTER bash if you want the snapshot somewhere you can delete.\n- qualityGate (parity-check + lint) is unaffected: no scripts or role docs change.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRef run verbatim from the worktree root (TMPDIR=/tmp/moe-gate-cb272f68): tsc --noEmit and tsc -p tt.json clean; rotateFailure --repeats 20: Tests 5 passed (5); full daemon npm test: 289 files passed, 7513 passed | 24 skipped; 'rotator pin ok'; exit 0.",
+      "startedAt": "2026-11-04T06:33:28.861Z",
+      "completedAt": "2026-11-04T06:34:48.293Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review of the diff against the merge base. This is the one review step, before complete_task. If it changes a file, re-run the checkRef and submit that output.\n- Mutants, in the gate's snapshot only: `python3 /mnt/d/moe-scratch/plan-cb272f68/mutate.py <snapshot>/packages/moe-daemon/src/util/LogRotator.ts <name>`, then run both LogRotator test files. Restore the file after each.\n  - MA_reject_immediately (today's behavior) must fail f5 and the bound case.\n  - MB_no_bound must time out the bound case at 5000 ms.\n  The architect's run failed exactly those. The script's anchors are the prototype's text; if yours differs, make the same two mutations by hand.\n- Hang safety: compressFile settles on every path within COMPRESSION_TIMEOUT_MS + DESTINATION_CLOSE_WAIT_MS. closeWait is unref'd and cleared on 'close'. A 'close' after the bound only rejects an already-settled promise.\n- No double settle: `settled` is still set before any destroy, so a late 'finish' or 'error' does nothing.\n- Windows: an open file cannot be removed there, so waiting for 'close' also stops rotate()'s rmSync racing an open fd.\n- f1-f4 and expectSeededState are unchanged (DoD 2). The existing LogRotator.test.ts cases are unchanged and still green: their PassThrough destinations close synchronously on destroy, so they reject at once.\n- No added line contains any string from project.json globalRails.forbiddenPatterns.\n- After the gate passes, edit the 'Observed flake' bullet of mem:gotcha-activity-log-rotated-generations (Serena memories are gitignored, so this lands nothing). Say the root cause is fixed by task-cb272f68 (rejectOnce waits for the destination's 'close', bounded by DESTINATION_CLOSE_WAIT_MS) and that (f5) is its deterministic case.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts",
+        "packages/moe-daemon/src/util/LogRotator.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/util/LogRotator.ts",
+        "packages/moe-daemon/src/util/LogRotator.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts"
+      ],
+      "note": "Self-review of the 3-file diff (+87/-3), no file changed so the step-3 gate output stands. Mutants in a snapshot: MA_reject_immediately fails f5 and the bound case (2 failed | 7 passed); MB_no_bound times out the bound case at 5004 ms. Checked: settled is set before any destroy so a late finish/error/close is a no-op (reject on a settled promise, clearTimeout on a fired timer); every path (source/gzip/destination error, 30 s timeout) goes through the same wait, worst case COMPRESSION_TIMEOUT_MS + DESTINATION_CLOSE_WAIT_MS; closeWait is unref'd and cleared on close so it cannot keep the process alive; destination 'error' with autoDestroy (destroyDestination false) closes on the next tick so no real wait, and a never-closing one is bounded at 5 s; the destination's error listener stays so a late open failure is not uncaught. Theoretical only: a hung open adds up to 5 s to a failed rotation, held under the activity mutex, which is the accepted bound. No forbidden patterns in the added lines. Serena 'Observed flake' bullet updated.",
+      "startedAt": "2026-11-04T06:34:49.126Z",
+      "completedAt": "2026-11-04T06:35:36.941Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 485.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:06:30.489Z",
+  "updatedAt": "2026-11-04T19:20:45.268Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:22:34.441Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-04T06:39:06.774Z",
+    "wallClockMs": 992333
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-a408f113",
+    "qa-25f21f0a"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:30:35.392Z",
+  "executionContract": {
+    "intendedBehavior": "A failed or timed-out LogRotator compression rejects only after its destination write stream has closed, bounded by DESTINATION_CLOSE_WAIT_MS (5 s). So rotate()'s cleanup always runs after the temporary file can exist, and a failed rotation never leaves activity.log.rotating.tmp behind, even when the stream's async open lands after the gzip error.",
+    "acceptanceCriteria": [
+      "(f5) A failed rotation whose destination open completes only after the gzip error leaves the directory listing unchanged and no activity.log.rotating.tmp. It fails on today's code.",
+      "A destination whose destroy never completes still rejects compressFile, at DESTINATION_CLOSE_WAIT_MS and not before.",
+      "LogRotator.rotateFailure.test.ts passes with --repeats 20, and f1-f4 are unchanged.",
+      "tsc --noEmit and the full daemon npm test pass in a snapshot."
+    ],
+    "invariants": [
+      "compressFile settles exactly once on every path",
+      "A failed rotation leaves .1-.N.gz and the live log untouched",
+      "No path can hang appendActivity: the close wait is bounded and unref'd"
+    ],
+    "compatibility": [
+      "No change to the activity-log format, the rotation order (task-1f84f4e4's tmp-first chain), rotateIfNeeded's swallow-and-retry-delay contract, the env vars, or any MCP contract."
+    ],
+    "approvedScope": [
+      "packages/moe-daemon/src/util/LogRotator.ts: compressFile's rejectOnce, plus the new export DESTINATION_CLOSE_WAIT_MS",
+      "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts: the new (f5) case only",
+      "packages/moe-daemon/src/util/LogRotator.test.ts: the new bound case, plus its Writable and DESTINATION_CLOSE_WAIT_MS imports"
+    ],
+    "reuse": [
+      "Node's WriteStream 'close' and .closed (Node >= 18; engines >= 22.22)",
+      "the existing settled flag and rejectOnce cleanup flags"
+    ],
+    "sourceAssumptions": [
+      "LogRotator.ts:164-184 rejectOnce destroys the destination and calls reject() at once",
+      "LogRotator.ts:128-134: rotate()'s catch calls fs.rmSync(pendingPath, { force: true }) and rethrows",
+      "Node fs streams defer destroy() until a pending open completes, then close the fd and emit 'close'"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C $S && cp --parents packages/moe-daemon/src/util/{LogRotator.ts,LogRotator.test.ts,LogRotator.rotateFailure.test.ts} $S && cd $S/packages/moe-daemon && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/util/LogRotator*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 sh -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/util/LogRotator.rotateFailure.test.ts --repeats 20 > ../r.log 2>&1 && grep -a \"Tests \" ../r.log && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(5 tests\\)\" ../v.log && grep -aqE \" ✓ src/util/LogRotator\\.test\\.ts \\(4 tests\\)\" ../v.log && echo \"rotator pin ok\"; }'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Fix direction followed: settle the rejection after the destination's 'close'.\n- Rejected: open the fd synchronously (fs.openSync, then createWriteStream({ fd })). LogRotator.test.ts mocks createWriteStream, so that test would create real files in cwd, and on Windows rotate()'s rmSync could still race the open fd.\n- Rejected: loosening f1/f2 to ignore the tmp file. The task forbids it.\n- Rejected: a 5 s real-time bound test. It would take 5 s for each of the 21 repeats. The fake-timer case in LogRotator.test.ts pins the bound in milliseconds instead.",
+    "codebaseInsights": "- On a real fs.WriteStream, destroy() before the open completes waits for the open, then closes the fd, then emits 'close', so .closed stays false until then. A PassThrough or plain Writable mock closes synchronously, which is why the existing LogRotator.test.ts cases keep rejecting at once.\n- Writable's `destroy` constructor option replaces _destroy; never calling its callback gives a stream that never closes.\n- vitest's default fake timers do not fake process.nextTick, so stream 'close' still fires under vi.useFakeTimers (the existing timeout case shows it).\n- The architect prototyped it all at db7a8bfd:\n  - RED at base: 2 failed | 7 passed;\n  - GREEN: 9/9;\n  - MA fails both new cases, MB times out the bound case;\n  - tsc clean;\n  - the checkRef verbatim: 289 files, 7510 passed | 24 skipped, rotator pin ok.",
+    "risks": "- QA may run the DoD's literal `--repeat 20`: vitest 5 refuses it as an unknown option. The flag is --repeats.\n- The production impact was only a stray tmp file until the next rotation. The real cost was false red gates in every full daemon run (qa-25f21f0a's report, and the architect's run on 590b98bd).\n- Keep the 'Observed flake' memory bullet in step with the fix.",
+    "keyFiles": [
+      "packages/moe-daemon/src/util/LogRotator.ts",
+      "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+      "packages/moe-daemon/src/util/LogRotator.test.ts",
+      "/mnt/d/moe-scratch/plan-cb272f68/prototype.diff"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "bb0bc17e6abbd6a9ab799297e16daffcbd1eccb5",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:30:35.435Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:32:34.631Z",
+  "reviewStartedAt": "2026-11-04T06:35:58.722Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d) && git archive HEAD | tar -x -C $S && cp --parents packages/moe-daemon/src/util/{LogRotator.ts,LogRotator.test.ts,LogRotator.rotateFailure.test.ts} $S && cd $S/packages/moe-daemon && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/util/LogRotator*.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=$HOME PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin NO_COLOR=1 sh -c 'npm ci --no-audit >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && npx vitest run src/util/LogRotator.rotateFailure.test.ts --repeats 20 > ../r.log 2>&1 && grep -a \"Tests \" ../r.log && { npm test > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; [ $r = 0 ] && grep -aqE \" ✓ src/util/LogRotator\\.rotateFailure\\.test\\.ts \\(5 tests\\)\" ../v.log && grep -aqE \" ✓ src/util/LogRotator\\.test\\.ts \\(4 tests\\)\" ../v.log && echo \"rotator pin ok\"; }'",
+    "exitCode": 0,
+    "outputTail": "npm notice run 'tsc' --noEmit\nnpm notice run 'tsc' -p tt.json\n      Tests  5 passed (5)\n Test Files  289 passed (289)\n      Tests  7513 passed | 24 skipped (7537)\nrotator pin ok\nEXIT=0\n(qualityGate also run in place: PASS parity-check.sh; npm run lint OK, exit 0)",
+    "reportedAt": "2026-11-04T06:35:58.722Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+    "packages/moe-daemon/src/util/LogRotator.test.ts",
+    "packages/moe-daemon/src/util/LogRotator.ts"
+  ],
+  "completionSummary": "LogRotator.compressFile's rejectOnce now settles a failed or timed-out compression only after the destroyed destination stream has closed (immediately if destination.closed), bounded by new export DESTINATION_CLOSE_WAIT_MS = 5000 via an unref'd timer cleared on 'close'. rotate()'s cleanup rmSync therefore always runs after a late async open could have created the file, so a failed rotation no longer leaves activity.log.rotating.tmp (the (f2) full-suite flake). Tests: new (f5) in LogRotator.rotateFailure.test.ts (open gated through the stream fs option, released after the gzip error; fails on base) and a bound case in LogRotator.test.ts (Writable that never closes, fake timers: rejects at exactly 5000 ms, not before). f1-f4 unchanged. RED at base 2 failed | 7 passed; mutants MA (reject immediately) and MB (no bound) both caught. Gate: tsc clean, rotateFailure --repeats 20 passed, full daemon suite 289 files / 7513 passed | 24 skipped, rotator pin ok; qualityGate parity-check + lint pass. Note: the DoD's --repeat is not a vitest 5 flag; --repeats is.",
+  "commits": [
+    {
+      "sha": "a0b30e9bb38eaf2ea6c2eac309d2b55747fd264b",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T06:31:11Z",
+      "paths": [
+        "packages/moe-daemon/src/util/LogRotator.rotateFailure.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.test.ts",
+        "packages/moe-daemon/src/util/LogRotator.ts"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:36:48.502Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:36:51Z",
+    "at": "2026-11-04T06:39:30.960Z"
+  },
+  "completedAt": "2026-11-04T06:39:06.774Z",
+  "reviewCompletedAt": "2026-11-04T06:39:06.774Z",
+  "reviewSummary": "Approved. Reviewed completion a0b30e9b (kind=completion, pushed; in moe/work-2026-10-24). Own diff +87/-3 in the 3 approved files; no scope creep, no forbidden patterns. Re-ran task.verification verbatim in a git-archive snapshot outside the repo (Node 24.21.0): tsc --noEmit and tsc -p tt.json clean; rotateFailure --repeats 20 'Tests 5 passed (5)'; full daemon npm test 289 files, 7513 passed | 24 skipped; 'rotator pin ok'; EXIT=0. DoD 1: confirmed RED independently by putting the base LogRotator.ts in the snapshot: 2 failed | 7 passed. (f5) fails 'expected true to be false' (tmp left behind by the late open) and the bound case fails (settled early). With the fix: 9/9 pass. DoD 2: f1-f4, seed, expectSeededState, failingGzip are byte-unchanged (f5 is a pure insertion); 20 repeats green. DoD 3: tsc and full suite green in the snapshot. Code read: rejectOnce sets settled before destroy, so late close/finish/error are no-ops. It rejects at once if destination.closed, else on 'close', bounded by an unref'd 5 s timer cleared on close, so appendActivity cannot hang. All paths (source, gzip, destination error, 30 s timeout) use it. The success path, rotate() and rotateIfNeeded are untouched. The bound test uses fake timers: not settled at 4999 ms, rejected at 5000 ms. Not verified: the real load-dependent flake cannot be forced, so (f5) gates the stream open deterministically. The DoD's --repeat is --repeats in vitest (worker disclosed). Complexity pass: nothing to cut. Scratch snapshot removed.",
+  "requiredCheckAtDone": null
+}

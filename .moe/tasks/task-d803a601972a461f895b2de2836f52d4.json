@@ -1,0 +1,244 @@
+{
+  "id": "task-d803a601972a461f895b2de2836f52d4",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the per-task reopen cap override `task.maxReopens` is documented (SCHEMA.md:495/:1118, MCP_SERVER.md:2405, qa_reject's tool description) and read (qaReject.ts:221-223), but nothing can ever write it: no MCP tool takes it, no IDE client sets it, and 0 of 1062 live task files carry it, so the docs promise a knob no one can turn",
+  "description": "Filed by the governor (governor-e6142a94) on 2026-11-04 at the human's request. Hunt #24 (task-53801f5d, architect-cd0ac706) first saw it and left it unfiled as \"a design question, not a docs fix\".\n\nPROBLEM\n- qaReject.ts:221-223 sets the reopen cap to `task.maxReopens` when it is a positive number, else MAX_REOPENS_DEFAULT (3, schema.ts:383).\n- These all describe the field as a per-task override:\n  - schema.ts:381 (\"Override per-task via `task.maxReopens`\") and :988-990 (`maxReopens?: number`);\n  - docs/SCHEMA.md:495 (`maxReopens?: number; // Per-task override of MAX_REOPENS_DEFAULT (3)`) and :1118 (`reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`);\n  - docs/MCP_SERVER.md:2405 (\"per-task override `task.maxReopens`\");\n  - qa_reject's tool description (qaReject.ts:23, \"the task's reopen cap (task.maxReopens, default 3)\").\n- But nothing writes it:\n  - no MCP tool input names it, including create_task;\n  - no daemon path assigns it (`git grep maxReopens -- packages/moe-daemon/src` outside tests finds only the read and the comments);\n  - neither moe-jetbrains/src nor moe-vscode/src mentions it;\n  - 0 of the 1062 .moe/tasks/*.json files carry the key.\n- A human or agent reading the docs would try to tune a row's cap and find no way to do it. The only way to set it is hand-editing .moe/, which is forbidden.\n- History: the field arrived in 480dd8a9 (2026-05-15) and was reworked in 1aa15463 (2026-07-05). It has never had a writer.\n\nDO NOT CONFUSE. qa_reject's REPLY also returns a `maxReopens` field: the effective cap, at qaReject.ts:360, :376, :395 and :464, and MCP_SERVER.md:2385. That reply field is correct and stays.\n\nFIX DIRECTION. The architect decides. The recommendation is (a).\n- (a) Remove the dead override:\n  - drop `maxReopens` from the Task type and its comments (schema.ts:381, :988-990);\n  - make qaReject.ts use MAX_REOPENS_DEFAULT only;\n  - reword qa_reject's description, SCHEMA.md:495 and :1118, and MCP_SERVER.md:2405 to describe a fixed cap of 3;\n  - keep the reply field.\n  Tests that set task.maxReopens directly in fixtures must be updated: qaReject.test.ts (6 refs), governanceFeatures.test.ts (3), lifecycle.e2e.test.ts (2), parkedReview.guard.test.ts (1), qaVerdictHandoff.test.ts (1) and util/taskTimeBudgetDocs.test.ts (1). Check whether each uses the reply field or the task field. If several fixtures use it to reach the cap in fewer rejections, (c) may be cheaper.\n- (b) Make it settable: an optional, bounded `maxReopens` on create_task (for example an integer from 1 to 10), with validation, the MCP_SERVER.md create_task section, SCHEMA.md and tests. Only choose this if a real consumer needs it.\n- (c) Keep it as an internal test seam, and say so in every doc that names it: no tool sets it, and it is not a supported per-task setting.\n\nSKIP. No open row holds qaReject.ts, schema.ts's Task type or these docs sections, as of 15:30Z. Re-check with `node /mnt/d/moe-scratch/governor/lanes.js -v`.\nSize: small. epic-be924fb8 has no finalTaskId, so this row reads isEpicFinal:true by the order fallback. Keep the gate narrow: the vitest files above plus the docs test.",
+  "definitionOfDone": [
+    "After the change, the code and every doc agree. Either nothing documents a per-task maxReopens override, or the override is settable through a validated tool input with tests. With option (c), every doc that names it says no tool sets it.",
+    "qa_reject's reply still returns the effective cap as `maxReopens`, and the existing reopen-cap behaviour still holds with fresh vitest results: the soft-cap re-plan at 3, then the hard-cap park with needsHumanReview at 4, and the repeated-DoD-item flip.",
+    "The vitest files that reference maxReopens (qaReject, governanceFeatures, lifecycle e2e, parkedReview.guard, qaVerdictHandoff, taskTimeBudgetDocs) pass, and the summary names the option chosen and why."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Option (a), tests first (TDD). Update the three test files whose fixtures set task.maxReopens, and add the regression test that fails against today's read (qaReject.ts:221-223). Edit tool only (global rail), inside your task worktree. Do not run the suite in this step: step 4 runs it once.\n(1) packages/moe-daemon/src/tools/qaReject.test.ts:\n a. :87 comment `// maxReopens default 3 → reopenCount 0 -> 1 stays WORKING.` becomes `// Reopen cap 3 → reopenCount 0 -> 1 stays WORKING.` Leave the comments at :99, :158 and :284 as they are: they name the effective cap, which the reply's maxReopens still reports.\n b. Directly after the test 'flips to PLANNING once at the soft cap for a single re-plan' (it ends `expect(result.exceededReopenCap).toBe(true);` + `  });` at ~:109), add this test:\n```\n  it('ignores a maxReopens key on the task file: the reopen cap stays 3', async () => {\n    // No tool writes task.maxReopens and qa_reject no longer reads it, so a stray\n    // key (a hand-edited or legacy file) still loads and cannot move the cap.\n    setupMoe(); writeEpic(); writeTask({ reopenCount: 2, maxReopens: 10 } as Partial<Task>);\n    await state.load();\n    const result = await qaRejectTool(state).handler(\n      { taskId: 'task-1', reason: 'still broken', workerId: 'qa-a' }, state,\n    ) as RejectResult & { maxReopens: number };\n    expect(result.maxReopens).toBe(3);\n    expect(result.status).toBe('PLANNING');\n    expect(result.exceededReopenCap).toBe(true);\n  });\n```\n Against today's read it fails with 'expected 10 to be 3' (architect dry run).\n c. In 'clears stale rejectionDetails after structured details are followed by reason-only rejection' (~:485), delete these lines: the blank line, the 3-line comment starting `// Raise the reopen cap so this test`, and `await h.state.updateTask('task-1', { maxReopens: 10 } as Partial<import('../types/schema.js').Task>);`. Then find the line `await h.state.updateTask('task-1', { status: 'REVIEW' });` that directly precedes `const reasonOnlyResult = await rejectTool.handler({`. That status line occurs 5 times in the file, so anchor on the two-line pair. Replace it with:\n```\n    // A third rejection would reach the reopen cap (3) and flip to PLANNING;\n    // this test is about rejectionDetails, so keep it below the cap.\n    await h.state.updateTask('task-1', { status: 'REVIEW', reopenCount: 0 });\n```\n Without this reset, the test's third rejection takes reopenCount 2 -> 3 and its final WORKING claim fails (dry-run mutant confirmed).\n(2) packages/moe-daemon/src/tools/governanceFeatures.test.ts, test 'flips to PLANNING when the same DoD item is rejected twice even before maxReopens' (~:872):\n - delete the fixture line `maxReopens: 10, // ensure reopen-cap does NOT trigger first`;\n - widen the second rejection's cast to `as { status: string; repeatedFailedDodItem?: string; exceededReopenCap: boolean };`;\n - replace the comment `// Did NOT hit the reopen cap (maxReopens=10, count=2)` with `// Did NOT hit the reopen cap (3, count=2): the repeated item caused the flip.`, followed by a new line `expect(result.exceededReopenCap).toBe(false);`. Keep the existing reopenCount-2 assertion after it.\n(3) packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts, test 'auto-flips to PLANNING when the same DoD item fails twice' (~:229): replace `// Bump maxReopens so reopen-cap does NOT trigger before same-item-twice.` and `writeTask({ maxReopens: 10 });` with three lines: `// Two rejections stay below the reopen cap (3), so the PLANNING flip`, `// below comes from the repeated DoD item.` and `writeTask();`.\nLeave parkedReview.guard.test.ts, qaVerdictHandoff.test.ts (its 'maxReopens' is the reply key) and util/taskTimeBudgetDocs.test.ts unchanged. They run in the step-4 gate as they are.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts"
+      ],
+      "note": "Tests first, edits as planned (Edit tool). qaReject.test.ts: :87 comment reworded; the new test 'ignores a maxReopens key on the task file: the reopen cap stays 3' sits after the soft-cap test; the ToolTestHarness test lost its maxReopens:10 raise and now resets reopenCount 0 before its third rejection. governanceFeatures.test.ts: the maxReopens:10 fixture line is gone, plus a new exceededReopenCap false assertion. lifecycle.e2e: writeTask() with the new comment. RED proof in a /tmp git-archive snapshot of HEAD with only these 3 test files overlaid (npm ci under env -i, node 24.21.0): 1 failed / 61 passed. The only failure is the new test, 'AssertionError: expected 10 to be 3'. The reworked fixtures already pass on the old code.",
+      "startedAt": "2026-11-04T15:48:56.426Z",
+      "completedAt": "2026-11-04T15:50:23.348Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Remove the dead override from the code. Edit tool only.\n(1) packages/moe-daemon/src/types/schema.ts:\n a. Replace the JSDoc of MAX_REOPENS_DEFAULT (~:378-382, the block ending ` * Override per-task via `task.maxReopens`.`) with:\n```\n/**\n * Cap on QA reopen cycles, the same for every task: there is no per-task override\n * (the `_DEFAULT` suffix is historical). After this many rejections, qa_reject\n * sends the task back to PLANNING for re-planning instead of WORKING.\n */\n```\n Keep `export const MAX_REOPENS_DEFAULT = 3;` with its name and value: SCHEMA.md, MCP_SERVER.md and the LIVE_TERMS 'reopen cap' guard in util/taskTimeBudgetDocs.test.ts all reference it.\n b. In `interface Task`, delete `maxReopens?: number;` and the 5-line JSDoc above it (~:985-990, 'Hard cap on QA reopen cycles before the task is auto-flipped back to PLANNING ... Defaults to MAX_REOPENS_DEFAULT (3).').\n(2) packages/moe-daemon/src/tools/qaReject.ts:\n a. Tool description (:23): replace `reaches the task\\'s reopen cap (task.maxReopens, default 3) or` with `reaches the reopen cap (3) or`. The rest of the description stays byte-identical.\n b. Escalation comment (~:205-206): replace `// Bounded escalation. Two tiers off the reopen cap (default` and `// MAX_REOPENS_DEFAULT (3), per-task override via task.maxReopens):` with `// Bounded escalation. Two tiers off the reopen cap, MAX_REOPENS_DEFAULT` and `// (3) for every task (there is no per-task override):`.\n c. Replace the 3-line ternary at ~:221-223 (`const maxReopens = typeof task.maxReopens === 'number' && task.maxReopens > 0` / `? task.maxReopens` / `: MAX_REOPENS_DEFAULT;`) with exactly `      const maxReopens = MAX_REOPENS_DEFAULT;`, with a 6-space indent, because checkRefs[0] greps the whole line. Keep the local's name: it feeds the reply's maxReopens field (:464), the three TASK_REOPENED activity payloads and the park and soft-cap chat messages, all unchanged.\nError handling: this step adds no failure path, so it adds no error handling code. The cap is a constant, so there is nothing to validate. A task file that still carries a maxReopens key loads unchanged, and the key is ignored. Do not add validation or a migration, and do not strip the key (epic rail: stay backward-compatible with existing .moe/ state files). After this step, the new step-1 test passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/types/schema.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts"
+      ],
+      "note": "Edits as planned (Edit tool).\n- schema.ts: MAX_REOPENS_DEFAULT JSDoc reworded (\"there is no per-task override\"); its name and value 3 are kept. interface Task lost maxReopens?: number and its 5-line JSDoc.\n- qaReject.ts: the description reads 'reaches the reopen cap (3) or'; the escalation comment is reworded; the ternary is now exactly `      const maxReopens = MAX_REOPENS_DEFAULT;`, and that local still feeds the reply, the TASK_REOPENED payloads and the messages.\n- git grep 'task\\.maxReopens|maxReopens\\?' over non-test packages/moe-daemon/src is now empty.\n- No migration and no key stripping. GREEN runs in the step-4 gate.",
+      "startedAt": "2026-11-04T15:50:26.739Z",
+      "completedAt": "2026-11-04T15:50:56.854Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make the docs describe the fixed cap. Edit tool only. Touch only the passages named here: checkRefs[1] strip-diffs everything outside SCHEMA.md `## Task` and `### Reopen cap`, and outside MCP_SERVER.md `### moe.qa_reject`.\n(1) docs/SCHEMA.md:\n a. In `interface Task` (~:495), delete the line `  maxReopens?: number;                          // Per-task override of MAX_REOPENS_DEFAULT (3)`.\n b. In `### Reopen cap` (~:1115-1118):\n - change ``auto-flips a task from `WORKING` back to `PLANNING` `` to read ``from `REVIEW` ``, because qa_reject only acts on REVIEW rows;\n - replace item 1, ``1. `reopenCount ≥ task.maxReopens ?? MAX_REOPENS_DEFAULT`, or``, with ``1. `reopenCount ≥ MAX_REOPENS_DEFAULT` and the task has had no cap re-plan yet (`capReplanAt` unset), or``.\n c. After the paragraph that ends ``emits a `TASK_REOPENED` activity event with the rejection history.``, add a blank line and then this paragraph: ``The cap is the same for every task: there is no per-task override. Once `capReplanAt` is set, a rejection past the cap (`reopenCount ≥ MAX_REOPENS_DEFAULT + 1`) parks the task in `REVIEW` for a human (`needsHumanReview`) instead of flipping it again.`` This matches qaReject.ts, where hardCap = maxReopens + 1 and reachedHardCap requires capReplanAt. Item 1 alone would otherwise imply that every rejection at 3 or more flips.\n(2) docs/MCP_SERVER.md, the auto-flip bullet in `### moe.qa_reject` (~:2405): replace ``(default 3 via `MAX_REOPENS_DEFAULT`; per-task override `task.maxReopens`)`` with ``(`MAX_REOPENS_DEFAULT`, 3, the same for every task: there is no per-task override)``. Keep the Returns line `reopenCount, maxReopens, exceededReopenCap: boolean,` (~:2385) unchanged: the reply field stays.\nThe exact phrase `there is no per-task override` must appear in both sections, which checkRefs[1] checks. No added line may contain a project.json globalRails.forbiddenPatterns string.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/SCHEMA.md",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Edits as planned (Edit tool).\n- SCHEMA.md: the Task interface lost its maxReopens line. In `### Reopen cap`, 'from `REVIEW`' now replaces WORKING, and item 1 reads `reopenCount ≥ MAX_REOPENS_DEFAULT` + capReplanAt unset. A new paragraph says 'there is no per-task override' and gives the hard-cap park at MAX_REOPENS_DEFAULT + 1 once capReplanAt is set.\n- MCP_SERVER.md: the qa_reject auto-flip bullet says '(`MAX_REOPENS_DEFAULT`, 3, the same for every task: there is no per-task override)'. The Returns line keeps maxReopens.\n- `git grep 'task\\.maxReopens|maxReopens\\?' -- docs` is empty. No added line holds a forbiddenPatterns string.",
+      "startedAt": "2026-11-04T15:51:22.190Z",
+      "completedAt": "2026-11-04T15:52:05.801Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Run the gate once, from your task worktree: executionContract.checkRefs[0] && checkRefs[1] && checkRefs[2], joined byte-exact with ' && ' (about 2.3k chars). Copy them from get_context's executionContract rather than retyping them.\n- [0] prints SCOPE-OK when: exactly the 7 plan files differ from the merge-base with MOE_LAND_TARGET (.moe excluded); no non-test source under packages/moe-daemon/src and no doc under docs/ names task.maxReopens or a maxReopens?: key; and the const line and the description text are in place.\n- [1] prints DOCS-OK when: both doc sections carry the phrase; the reply-field Returns line survives; and nothing outside the allowed sections changed.\n- [2] prints SNAPSHOT-OK. It builds a git-archive snapshot in /tmp, overlaid with the 7 files (global rail: never run npm in /mnt/d/projexts/moes). It runs npm ci under env -i with node 24.21.0, then vitest on qaReject, qaReject.failedDodItems, governanceFeatures, parkedReview.guard, qaVerdictHandoff, lifecycle.e2e and taskTimeBudgetDocs. Then it runs tsc -p . --noEmit: tests are excluded from tsc, so this proves no non-test code still reads Task.maxReopens.\nSubmit that joined text as complete_task verification.command, with its exit code and output tail. Architect dry run on the simulated edits: SCOPE-OK, DOCS-OK, 7 files / 110 tests passed, tsc clean, about 6 s.\nError handling for a red run:\n- SCOPE-FAIL prints the changed files: revert any file outside the 7, and treat a missing file as a skipped step.\n- OVERRIDE-STILL-NAMED prints the offending line: fix it.\n- CODE-FAIL, PHRASE-FAIL or REPLY-FIELD-FAIL means the exact line or phrase from step 2 or 3 is missing.\n- SECTION-FAIL prints the stray diff: revert it.\n- A vitest failure: fix the code or the fixture, never weaken an assertion.\n- A tsc error names a remaining reader of task.maxReopens: remove that reader.\n- If npm ci fails on network or cache, retry once. If it fails again, call moe.report_blocked with the npm error tail. Never fall back to npm in the shared checkout.\nSee mem:decision-doc-row-checkrefs-worktree-mode for the snapshot pattern.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "I ran the gate once from the task worktree, with MOE_LAND_TARGET=moe/work-2026-10-24. It was the three stored executionContract.checkRefs, extracted byte-exact with node from .moe/tasks/<id>.json and joined with ' && ' (2264 chars). Exit 0. Output:\n- SCOPE-OK, then DOCS-OK.\n- Snapshot vitest: 7 files / 110 tests passed (qaReject 30, governanceFeatures 28, qaVerdictHandoff 18, taskTimeBudgetDocs 17, failedDodItems 7, parkedReview.guard 6, lifecycle.e2e 4).\n- tsc -p . --noEmit clean, then SNAPSHOT-OK.\nThe new regression test is green now (it was RED in step 1).",
+      "startedAt": "2026-11-04T15:52:10.228Z",
+      "completedAt": "2026-11-04T15:53:14.583Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of your own diff, `git diff $(git merge-base HEAD \"$MOE_LAND_TARGET\")`. Expect about +34/-30 over the 7 files; anything much larger means scope crept. Check each point:\n(1) Every qa_reject branch still reports the effective cap 3: the return object, the TASK_REOPENED payloads, and the park and soft-cap messages.\n(2) The new test fails if the old read is restored (the dry run saw 'expected 10 to be 3').\n(3) No fixture or comment still claims a raised cap.\n(4) A legacy file with a maxReopens key still loads, and the key is ignored, never stripped and never migrated.\n(5) Two concurrent rejects: qa_reject still runs under the state mutex and the cap is a constant, so nothing new can race.\n(6) SCHEMA.md `### Reopen cap` says REVIEW, not WORKING, and its hard-cap sentence matches qaReject.ts (hardCap = 3 + 1, only with capReplanAt set).\n(7) Nothing changed outside the named passages, and nothing renames MAX_REOPENS_DEFAULT.\nIf a finding forces an edit, re-run the step-4 gate and submit that fresh run. The complete_task summary must name option (a) and why (DoD 3): the override never had a writer, and the fixtures that set it only raised the cap. They pass at the default once one reopenCount reset is added, so deleting the override cost no more than documenting it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Adversarial self-review of git diff $(git merge-base HEAD moe/work-2026-10-24): 7 files, +34/-30, as planned. No findings, so no edits, and the step-4 gate run stands.\n(1) The local `maxReopens` keeps its name and feeds the reply (:464), the 3 TASK_REOPENED payloads, and the park and soft-cap messages and text, so all report 3.\n(2) The new test was RED on the old read ('expected 10 to be 3', step 1).\n(3) A repo-wide git grep for maxReopens finds only effective-cap or reply-key uses: test names and comments at qaReject.test :99/:171/:297, parkedReview.guard :70, qaVerdictHandoff's reply-key list, the LIVE_TERMS regex, and MCP_SERVER :2385/:2405/:2407. No raised-cap fixture remains.\n(4) A legacy key still loads (the new test loads one) and is never stripped: no migration and no validator was added.\n(5) The cap is a constant inside the existing mutex-held handler, so no new race.\n(6) SCHEMA `### Reopen cap` says REVIEW, and its hard-cap sentence matches hardCap = maxReopens + 1, gated on capReplanAt.\n(7) Edits stay in the named passages (DOCS-OK strip-diff), and MAX_REOPENS_DEFAULT is unrenamed.\nThe qualityGate `bash scripts/tests/parity-check.sh && npm run lint`, run in the worktree, exits 0 (PASS parity-check.sh; role docs 39/30/36 lines).\nEpic-wide widening was skipped: isEpicFinal is only the order fallback on a 309-row epic, and the governor asked for a narrow gate.",
+      "startedAt": "2026-11-04T15:53:17.937Z",
+      "completedAt": "2026-11-04T15:54:31.161Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 536.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T15:32:11.270Z",
+  "updatedAt": "2026-11-04T19:20:45.722Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T15:32:23.499Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 7,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T16:00:03.083Z",
+    "wallClockMs": 1659584
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-593560ee",
+    "qa-25f21f0a"
+  ],
+  "tier": "heavy",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "planSizeWarnings": [
+    "Plan touches 7 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
+  ],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T15:47:33.989Z",
+  "executionContract": {
+    "intendedBehavior": "qa_reject's reopen cap is MAX_REOPENS_DEFAULT (3) for every task. The never-writable per-task override task.maxReopens is removed from the Task type, from qa_reject's read and from every doc. A task file that still carries a maxReopens key loads unchanged and the key is ignored. The qa_reject reply keeps its maxReopens field, the effective cap, which is now always 3.",
+    "acceptanceCriteria": [
+      "qa_reject on a REVIEW row at reopenCount 2 whose file carries maxReopens: 10 flips it to PLANNING, with reply maxReopens 3 and exceededReopenCap true.",
+      "These behave as before, on a fresh vitest run of the existing tests: the soft-cap re-plan when reopenCount reaches 3, the hard-cap park when it reaches 4 with capReplanAt set (REVIEW, unassigned, needsHumanReview), and the flip on the same DoD item failing twice.",
+      "No non-test source under packages/moe-daemon/src and no file under docs/ names task.maxReopens or a maxReopens?: key. SCHEMA.md `### Reopen cap` and MCP_SERVER.md `### moe.qa_reject` both say 'there is no per-task override'.",
+      "qa_reject's tool description reads 'reaches the reopen cap (3) or'; the rest of the description is unchanged."
+    ],
+    "invariants": [
+      "softCap = 3 and hardCap = 4. The hard cap applies only when capReplanAt is set. reopenCount stays monotonic.",
+      "The same-DoD-item-twice flip and capReplanAt stamping are unchanged."
+    ],
+    "compatibility": [
+      "The qa_reject reply shape is unchanged, including maxReopens (the effective cap), the TASK_REOPENED activity payloads and the chat message text. The tool inputSchema is unchanged.",
+      "Existing .moe/tasks/*.json files load unchanged. A stray maxReopens key is ignored, never stripped or migrated (0 of 1064 live files carry it).",
+      "MAX_REOPENS_DEFAULT keeps its name and its value of 3. Docs and taskTimeBudgetDocs.test.ts LIVE_TERMS reference it."
+    ],
+    "approvedScope": [
+      "schema.ts: interface Task loses maxReopens and its JSDoc; the MAX_REOPENS_DEFAULT JSDoc is reworded, and its name and value stay.",
+      "qaReject.ts: the tool description phrase, the escalation comment, and `const maxReopens = MAX_REOPENS_DEFAULT;`.",
+      "SCHEMA.md: the Task interface line and the `### Reopen cap` passage. MCP_SERVER.md: the `### moe.qa_reject` auto-flip bullet.",
+      "Test fixtures and comments in qaReject.test.ts, governanceFeatures.test.ts and lifecycle.e2e.test.ts, plus one new regression test in qaReject.test.ts."
+    ],
+    "reuse": [
+      "Reuses qaReject.test.ts's existing writeTask/setupMoe fixtures, its RejectResult type and its ToolTestHarness block. No new helper or file."
+    ],
+    "sourceAssumptions": [
+      "At 342423a3, qaReject.ts:221-223 is the only reader of task.maxReopens: git grep finds only that line, comments and test fixtures. No IDE client and no MCP tool input names it.",
+      "tsconfig.json excludes src/**/*.test.ts, so `tsc -p . --noEmit` covers every non-test reader of the Task type. vitest's include src/**/*.test.ts covers src/__e2e__.",
+      "taskTimeBudgetDocs.test.ts LIVE_TERMS 'reopen cap' /maxReopens|MAX_REOPENS_DEFAULT/ on SCHEMA.md is still satisfied by its MAX_REOPENS_DEFAULT lines (dry run green)."
+    ],
+    "checkRefs": [
+      "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && d=packages/moe-daemon/src && c=$(git diff --name-only \"$B\" -- . ':!.moe' | tr '\\n' ' ') && { [ \"$c\" = \"docs/MCP_SERVER.md docs/SCHEMA.md $d/__e2e__/lifecycle.e2e.test.ts $d/tools/governanceFeatures.test.ts $d/tools/qaReject.test.ts $d/tools/qaReject.ts $d/types/schema.ts \" ] || { echo \"SCOPE-FAIL: $c\"; exit 1; }; } && { ! git grep -nE 'task\\.maxReopens|maxReopens\\?' -- docs \"$d\" ':!*.test.ts' || { echo OVERRIDE-STILL-NAMED; exit 1; }; } && { grep -qxF '      const maxReopens = MAX_REOPENS_DEFAULT;' $d/tools/qaReject.ts && grep -qF 'reaches the reopen cap (3) or' $d/tools/qaReject.ts || { echo CODE-FAIL; exit 1; }; } && echo SCOPE-OK )",
+      "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && m=docs/MCP_SERVER.md && s=docs/SCHEMA.md && n(){ awk -v h=\"$1\" '/^#+ /{s=($0==h)} s&&/there is no per-task override/{f=1} END{exit !f}' \"$2\" || { echo \"PHRASE-FAIL: $1\"; exit 1; }; } && n '### Reopen cap' $s && n '### moe.qa_reject' $m && { grep -qF 'reopenCount, maxReopens, exceededReopenCap' $m || { echo REPLY-FIELD-FAIL; exit 1; }; } && x(){ awk -v a=\"$1\" -v b=\"$2\" '/^#+ /{s=($0==a||$0==b)} !s'; } && { diff <(git show \"$B:$s\" | x '## Task' '### Reopen cap') <(x '## Task' '### Reopen cap' < $s) && diff <(git show \"$B:$m\" | x '### moe.qa_reject' -) <(x '### moe.qa_reject' - < $m) || { echo SECTION-FAIL; exit 1; }; } && echo DOCS-OK )",
+      "( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /tmp/moe-d803a601-XXXXXX) && git archive HEAD -- . ':!.moe' | tar -x -C \"$S\" && d=packages/moe-daemon/src && cp --parents docs/{MCP_SERVER,SCHEMA}.md $d/types/schema.ts $d/tools/{qaReject,qaReject.test,governanceFeatures.test}.ts $d/__e2e__/lifecycle.e2e.test.ts \"$S/\" && cd \"$S/packages/moe-daemon\" && e(){ env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" \"$@\"; } && e npm ci --prefer-offline --no-audit --no-fund --loglevel=error && e npx vitest run src/tools/{qaReject,qaReject.failedDodItems,governanceFeatures,parkedReview.guard,qaVerdictHandoff}.test.ts src/__e2e__/lifecycle.e2e.test.ts src/util/taskTimeBudgetDocs.test.ts && e npx tsc -p . --noEmit && echo SNAPSHOT-OK )"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Option (a), remove the override: CHOSEN. Its only reader is qaReject.ts:221-223. It never had a writer: no tool input, no daemon assignment, no IDE client, and 0 of 1064 live task files carry it. Three fixtures set it, and only to RAISE the cap so that it would not fire:\n- governanceFeatures.test.ts and lifecycle.e2e.test.ts do two rejections (count 2 < 3), so the default already holds.\n- The ToolTestHarness test in qaReject.test.ts does three rejections. One reopenCount reset before its third rejection keeps it below the cap.\nSo deleting the override costs no more than documenting it. Option (b), a bounded create_task input, was rejected: no consumer needs a tunable cap, and it would add API surface plus validation. Option (c), a documented test seam, was rejected: it would print an unsupported knob in SCHEMA.md, MCP_SERVER.md and an agent-facing tool description, and keep dead flexibility.\nThe gate is narrow, though isEpicFinal is true. That is only the order fallback (epic-be924fb8 has no finalTaskId), and the governor asked for the named vitest files plus the docs test. tsc -p . --noEmit covers the shared-type blast radius of the Task field removal.",
+    "codebaseInsights": "- The qa_reject reply field `maxReopens` (qaReject.ts:464, MCP_SERVER.md:2385) is the local const, and it also feeds the TASK_REOPENED payloads at :360/:376/:395 and the park and soft-cap messages. Keep the const's name, and its value is then always 3.\n- tsconfig.json excludes src/**/*.test.ts, so test fixtures are never type-checked. tsc only proves the non-test code.\n- util/taskTimeBudgetDocs.test.ts LIVE_TERMS 'reopen cap' (/maxReopens|MAX_REOPENS_DEFAULT/, SCHEMA.md only) stays green through SCHEMA.md's MAX_REOPENS_DEFAULT lines, so it is left unchanged. The same goes for parkedReview.guard.test.ts (a comment about the cap) and qaVerdictHandoff.test.ts (the reply key).\n- SCHEMA.md's `### Reopen cap` said 'from `WORKING`' (wrong: qa_reject acts on REVIEW) and never mentioned the hard-cap park. Its item 1 is the line being changed anyway, so the plan makes that passage match qaReject.ts.\nArchitect dry run, in a scratch clone of 342423a3 with the exact edits simulated:\n- RED before the edits: ref0 SCOPE-FAIL, ref1 PHRASE-FAIL.\n- GREEN after: SCOPE-OK and DOCS-OK; ref2 7 files / 110 tests, tsc clean, SNAPSHOT-OK (about 6 s). Joined with ' && ' after a simulated checkpoint commit (MOE_LAND_TARGET = the fork sha), all three were green again.\n- All 25 qa_reject-related test files passed on the edits: 982 passed, 10 skipped.\n- Mutants, all caught: keeping the old read fails the new test ('expected 10 to be 3') and gives OVERRIDE-STILL-NAMED. Skipping the reopenCount reset fails 'clears stale rejectionDetails'. Skipping the SCHEMA.md :495 deletion, the schema.ts field removal, the MCP_SERVER.md :2405 edit or the description edit each gives OVERRIDE-STILL-NAMED (the MCP one also PHRASE-FAIL). A stray edit outside the sections in either doc gives SECTION-FAIL.\n- Diff +34/-30 over the 7 files.",
+    "risks": "- docs/MCP_SERVER.md is also declared by task-63674531 (CQ-M07v2, WORKING), which edits the get_context and seat-liveness sections. Our only hunk there is in `### moe.qa_reject`, so the worktree merge-tree squash should merge cleanly. Write with the Edit tool only, so that the hunk is TOOL-witnessed.\n- In qaReject.test.ts, `await h.state.updateTask('task-1', { status: 'REVIEW' });` occurs 5 times. Anchor the step-1c edit on the pair with the following `const reasonOnlyResult` line.\n- Do not rename MAX_REOPENS_DEFAULT, do not add a migration, and do not strip stray keys.\n- QA re-run: in the control checkout MOE_LAND_TARGET is unset, so B = HEAD and checkRefs[0] reads 'SCOPE-FAIL: ' (empty). Run the stored checkRefs byte-exact in a `git clone --shared` detached at the completion sha, with MOE_LAND_TARGET=<sha>^ (mem:decision-doc-row-checkrefs-worktree-mode). In that clone, the ref2 overlay copies the clone's own files, so no foreign dirty bytes get in.\n- ref2 needs node v24.21.0 under ~/.nvm (present) and a warm npm cache for the 342423a3 lockfile (it was warm in the dry run).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/qaReject.ts",
+      "packages/moe-daemon/src/types/schema.ts",
+      "packages/moe-daemon/src/tools/qaReject.test.ts",
+      "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+      "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+      "docs/SCHEMA.md",
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/util/taskTimeBudgetDocs.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "d36d5bb78c7de5e11ef43510beb4e5281b82b857",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T15:47:34.018Z",
+  "approvedPlanRevision": 1,
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T15:56:35Z",
+    "at": "2026-11-04T16:00:34.114Z"
+  },
+  "workStartedAt": "2026-11-04T15:48:56.426Z",
+  "reviewStartedAt": "2026-11-04T15:55:31.827Z",
+  "verification": {
+    "command": "( cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && d=packages/moe-daemon/src && c=$(git diff --name-only \"$B\" -- . ':!.moe' | tr '\\n' ' ') && { [ \"$c\" = \"docs/MCP_SERVER.md docs/SCHEMA.md $d/__e2e__/lifecycle.e2e.test.ts $d/tools/governanceFeatures.test.ts $d/tools/qaReject.test.ts $d/tools/qaReject.ts $d/types/schema.ts \" ] || { echo \"SCOPE-FAIL: $c\"; exit 1; }; } && { ! git grep -nE 'task\\.maxReopens|maxReopens\\?' -- docs \"$d\" ':!*.test.ts' || { echo OVERRIDE-STILL-NAMED; exit 1; }; } && { grep -qxF '      const maxReopens = MAX_REOPENS_DEFAULT;' $d/tools/qaReject.ts && grep -qF 'reaches the reopen cap (3) or' $d/tools/qaReject.ts || { echo CODE-FAIL; exit 1; }; } && echo SCOPE-OK ) && ( cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-HEAD}\") && m=docs/MCP_SERVER.md && s=docs/SCHEMA.md && n(){ awk -v h=\"$1\" '/^#+ /{s=($0==h)} s&&/there is no per-task override/{f=1} END{exit !f}' \"$2\" || { echo \"PHRASE-FAIL: $1\"; exit 1; }; } && n '### Reopen cap' $s && n '### moe.qa_reject' $m && { grep -qF 'reopenCount, maxReopens, exceededReopenCap' $m || { echo REPLY-FIELD-FAIL; exit 1; }; } && x(){ awk -v a=\"$1\" -v b=\"$2\" '/^#+ /{s=($0==a||$0==b)} !s'; } && { diff <(git show \"$B:$s\" | x '## Task' '### Reopen cap') <(x '## Task' '### Reopen cap' < $s) && diff <(git show \"$B:$m\" | x '### moe.qa_reject' -) <(x '### moe.qa_reject' - < $m) || { echo SECTION-FAIL; exit 1; }; } && echo DOCS-OK ) && ( cd \"$(git rev-parse --show-toplevel)\" && S=$(mktemp -d /tmp/moe-d803a601-XXXXXX) && git archive HEAD -- . ':!.moe' | tar -x -C \"$S\" && d=packages/moe-daemon/src && cp --parents docs/{MCP_SERVER,SCHEMA}.md $d/types/schema.ts $d/tools/{qaReject,qaReject.test,governanceFeatures.test}.ts $d/__e2e__/lifecycle.e2e.test.ts \"$S/\" && cd \"$S/packages/moe-daemon\" && e(){ env -i HOME=\"$HOME\" NO_COLOR=1 PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" \"$@\"; } && e npm ci --prefer-offline --no-audit --no-fund --loglevel=error && e npx vitest run src/tools/{qaReject,qaReject.failedDodItems,governanceFeatures,parkedReview.guard,qaVerdictHandoff}.test.ts src/__e2e__/lifecycle.e2e.test.ts src/util/taskTimeBudgetDocs.test.ts && e npx tsc -p . --noEmit && echo SNAPSHOT-OK )",
+    "exitCode": 0,
+    "outputTail": "SCOPE-OK\nDOCS-OK\n ✓ src/tools/qaReject.failedDodItems.test.ts (7 tests) 265ms\n ✓ src/tools/parkedReview.guard.test.ts (6 tests) 413ms\n ✓ src/util/taskTimeBudgetDocs.test.ts (17 tests) 34ms\n ✓ src/__e2e__/lifecycle.e2e.test.ts (4 tests) 664ms\n ✓ src/tools/qaVerdictHandoff.test.ts (18 tests) 857ms\n ✓ src/tools/qaReject.test.ts (30 tests) 1349ms\n ✓ src/tools/governanceFeatures.test.ts (28 tests) 1573ms\n\n Test Files  7 passed (7)\n      Tests  110 passed (110)\n   Start at  17:53:00\n   Duration  2.32s (tests 51%, transform 42%, import 7%)\n\nnpm notice run moe-daemon@0.8.0 npx\nnpm notice run 'tsc' -p . --noEmit\nSNAPSHOT-OK\n(run from the task worktree with MOE_LAND_TARGET=moe/work-2026-10-24; exit 0. qualityGate `bash scripts/tests/parity-check.sh && npm run lint` also exit 0: PASS parity-check.sh, role docs 39/30/36 lines)",
+    "reportedAt": "2026-11-04T15:55:31.827Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/qaReject.test.ts",
+    "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+    "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+    "packages/moe-daemon/src/types/schema.ts",
+    "packages/moe-daemon/src/tools/qaReject.ts",
+    "docs/SCHEMA.md",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "Option (a): the never-writable per-task override task.maxReopens is removed. Why: since 480dd8a9 it had one reader (qaReject.ts:221-223) and no writer: no MCP tool input, no daemon assignment, no IDE client, and 0 live task files carry it. The fixtures that set it only RAISED the cap. They pass at 3 once one reopenCount reset is added, so deleting the override cost no more than documenting it as a test seam (c). A create_task input (b) would add API surface no consumer needs.\nChanges (+34/-30, 7 files):\n- schema.ts: Task.maxReopens and its JSDoc are removed. MAX_REOPENS_DEFAULT keeps name and value 3, with a reworded JSDoc.\n- qaReject.ts: `const maxReopens = MAX_REOPENS_DEFAULT;`. The reply field maxReopens (the effective cap), the TASK_REOPENED payloads and the chat text are unchanged. The description reads 'reaches the reopen cap (3) or'.\n- SCHEMA.md: the Task line is removed. `### Reopen cap` now says from REVIEW and adds the capReplanAt condition, plus a hard-cap-park paragraph with 'there is no per-task override'.\n- MCP_SERVER.md: the qa_reject auto-flip bullet says the same. The Returns line is kept.\n- Tests:\n  - New regression test: a task file with maxReopens 10 at reopenCount 2 gets PLANNING, reply maxReopens 3 and exceededReopenCap true. It was RED on the old read ('expected 10 to be 3').\n  - The 3-rejection rejectionDetails test resets reopenCount before its third rejection.\n  - governanceFeatures and lifecycle.e2e dropped their maxReopens:10 fixtures. governanceFeatures also asserts exceededReopenCap false on the DoD-twice flip.\nA legacy key still loads and is ignored; nothing strips or migrates it.\nGate: the stored checkRefs joined with ' && ' gave SCOPE-OK, DOCS-OK and 7 files / 110 tests passed:\n- qaReject 30 (soft-cap re-plan at 3, hard-cap park at 4);\n- failedDodItems 7, governanceFeatures 28 and lifecycle.e2e 4 (DoD-twice flip);\n- parkedReview.guard 6, qaVerdictHandoff 18 and taskTimeBudgetDocs 17.\ntsc --noEmit was clean, then SNAPSHOT-OK, exit 0. ",
+  "commits": [
+    {
+      "sha": "951553886ebaa0b735a38b3ea6c6451b972e5e09",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T15:47:35Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "docs/SCHEMA.md",
+        "packages/moe-daemon/src/__e2e__/lifecycle.e2e.test.ts",
+        "packages/moe-daemon/src/tools/governanceFeatures.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.test.ts",
+        "packages/moe-daemon/src/tools/qaReject.ts",
+        "packages/moe-daemon/src/types/schema.ts"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T15:56:30.051Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "completedAt": "2026-11-04T16:00:03.083Z",
+  "reviewCompletedAt": "2026-11-04T16:00:03.083Z",
+  "reviewSummary": "Option (a) verified on completion 95155388 (on moe/work-2026-10-24 and origin; +34/-30 over 7 files, matches the plan; no size issue).\nRe-runs:\n- I extracted the 3 stored checkRefs byte-exact from the task file (their ' && ' join == task.verification.command). I ran them in a git clone --shared detached at 95155388 with MOE_LAND_TARGET=<sha>^. Results: SCOPE-OK, DOCS-OK, and SNAPSHOT-OK (7 files / 110 tests passed, tsc --noEmit clean). The snapshot qaReject.ts is cmp-identical to the sha.\n- RED mutant: parent qaReject.ts with the new tests gives 1 failure, the new 'ignores a maxReopens key on the task file: the reopen cap stays 3'; the rest pass.\n- Full daemon suite in the snapshot (schema.ts is a shared type, row is isEpicFinal): 293 files, 7625 passed, 24 skipped, 0 failed.\n- qualityGate in the clone: parity-check.sh && npm run lint exit 0.\nDoD:\n1. Code and docs agree. A repo-wide git grep at the sha finds no task.maxReopens / maxReopens?: outside tests, and no IDE client mentions it. Every remaining `maxReopens` is the local effective cap, the reply key, or a test name or comment. SCHEMA `### Reopen cap` and MCP_SERVER `### moe.qa_reject` both say 'there is no per-task override'. The new SCHEMA paragraph matches qaReject.ts: hardCap = cap+1, gated on capReplanAt. 'from REVIEW' is correct.\n2. The reply still returns maxReopens (local unrenamed; Returns line kept). Soft-cap re-plan at 3, hard-cap park at 4 with capReplanAt, and the DoD-twice flip all pass fresh. governanceFeatures adds exceededReopenCap false.\n3. All six named test files pass. Option (a) and why are given in completionSummary.\nCompat: the tool description changes only that phrase, inputSchema is unchanged, and a legacy key loads and is ignored (the new test loads one). No migration was added.\nPonytail: nothing to cut.",
+  "requiredCheckAtDone": "bash scripts/tests/parity-check.sh && npm run lint"
+}

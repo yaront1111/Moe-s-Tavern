@@ -1,0 +1,260 @@
+{
+  "id": "task-1c580985bedd496a82c20f72881a6f7d",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the provider lists in README, docs/PRD.md and the VS Code listing name GitHub Copilot CLI",
+  "description": "Slice 6 of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider). dependsOn task-d609eae3 (JetBrains) and task-7739d4af (VS Code), because this text says both IDEs offer Copilot.\n\nDELIVERABLE (text only):\n- README.md names GitHub Copilot CLI in the intro sentence, the works-with badge, the \"Your choice of coding CLI\" row, the install prerequisites and the account-rotation note (Copilot seats, like Codex, Antigravity and Grok seats, are unaffected). It also gains one line on installing and signing in (npm install -g @github/copilot, then copilot login, once in Windows and once in WSL), placed like the Grok Build line.\n- docs/PRD.md names it in the provider lists (about :12 and :21), and the row at about :240 that calls Copilot \"Autocomplete only\" describes the agent provider.\n- moe-vscode/package.json's description and moe-vscode/README.md (intro, prerequisites, feature list) name it.\n- packages/moe-proxy/src/utils.ts: the injectWorkerType doc comment lists COPILOT among the daemon's worker types (it reads \"CLAUDE, CODEX, GEMINI or GROK\" today).\n\nNOT IN SCOPE: scripts/CLAUDE.md, docs/CONFIGURATION.md and docs/TROUBLESHOOTING.md (the closing row task-59e1d150 writes them with its signed-in smoke facts); plugin.xml (task-d609eae3); any behavior change.\n\nVERIFICATION: npm run lint at the repo root, plus one grep the plan names showing each listed file names Copilot and PRD.md no longer says \"Autocomplete only\" for it.",
+  "definitionOfDone": [
+    "README.md names GitHub Copilot CLI in the intro, the works-with badge, the provider row, the prerequisites and the account-rotation note, and has one install-and-sign-in line for copilot",
+    "docs/PRD.md names it in its provider lists, and its Copilot row no longer says 'Autocomplete only'",
+    "moe-vscode/package.json's description and moe-vscode/README.md name GitHub Copilot CLI",
+    "packages/moe-proxy/src/utils.ts's injectWorkerType comment lists COPILOT",
+    "npm run lint passes at the repo root"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Make the root README.md edits with your own Edit tool (no shell writes, no subagent edits). Match on the anchor text; line numbers are approximate. Six edits:\n(a) :5, intro: 'Run Claude Code, Codex, Antigravity (agy), and Grok Build through' becomes 'Run Claude Code, Codex, Antigravity (agy), Grok Build, and GitHub Copilot CLI through'.\n(b) :10, works-with badge URL: '%C2%B7%20Grok%20Build-6f42c1.svg' becomes '%C2%B7%20Grok%20Build%20%C2%B7%20GitHub%20Copilot%20CLI-6f42c1.svg'. Use only %20 and %C2%B7 escapes. No raw space and no '-' may go inside the badge message.\n(c) :33, 'Your choice of coding CLI' row: 'Launch Claude Code, Codex, Antigravity (agy), or Grok Build.' becomes 'Launch Claude Code, Codex, Antigravity (agy), Grok Build, or GitHub Copilot CLI.'\n(d) :76, prerequisites: 'one coding CLI (Claude Code, Codex, Antigravity (agy), or Grok Build)' becomes 'one coding CLI (Claude Code, Codex, Antigravity (agy), Grok Build, or GitHub Copilot CLI)'.\n(e) After the Grok Build paragraph at :108 ('Grok Build is supported by the agent launchers. ... install Grok Build separately.'), add one blank line, then this new paragraph: 'GitHub Copilot CLI is supported by the agent launchers; install it separately with `npm install -g @github/copilot`, then sign in with `copilot login`. If you run agents in WSL, do both once in Windows and once inside WSL.' Leave the installer table above it unchanged: no installer accepts copilot, since task-ab323f85 keeps '-AgentCommand copilot' out of scope.\n(f) :214, account-rotation note: 'Codex, Antigravity (agy), and Grok Build seats are unaffected.' becomes 'Codex, Antigravity (agy), Grok Build, and GitHub Copilot CLI seats are unaffected.'\nChange nothing else in README.md: not the 'These examples use Claude Code' paragraph, and not the VS Code section.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "README.md"
+      ],
+      "modifiedFiles": [
+        "README.md",
+        "docs/PRD.md",
+        "moe-vscode/package.json",
+        "moe-vscode/README.md",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "All five files edited via Edit tool (README 6 edits, PRD 3, vscode pkg+README, utils.ts comment); gate run, exit 0, diff +18/-15.",
+      "startedAt": "2026-11-06T06:18:01.151Z",
+      "completedAt": "2026-11-06T06:18:46.723Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Make the docs/PRD.md edits with your own Edit tool:\n(a) :12: '(Claude Code, Codex, Gemini, Grok)' becomes '(Claude Code, Codex, Gemini, Grok, GitHub Copilot CLI)'.\n(b) :21: '(Claude Code, Codex CLI, Gemini, Grok Build)' becomes '(Claude Code, Codex CLI, Gemini, Grok Build, GitHub Copilot CLI)'.\n(c) :240, Competitive Landscape table ('Gap Moe Fills' column): replace the row '| **GitHub Copilot** | Autocomplete only, no planning |' with '| **GitHub Copilot** | Copilot CLI is an agent, but each session works alone, with no shared board, roles, or human plan approval; Moe runs it as an agent provider |'.\nKeep the PRD's own spelling elsewhere: it says 'Gemini', and this task does not rename it. No other row changes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/PRD.md"
+      ],
+      "modifiedFiles": [
+        "docs/PRD.md"
+      ],
+      "note": "PRD edits done (both lists, Copilot row).",
+      "startedAt": "2026-11-06T06:18:49.793Z",
+      "completedAt": "2026-11-06T06:18:54.513Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Make the VS Code listing edits with your own Edit tool:\n- moe-vscode/package.json:4, description: 'run Claude Code, Codex, Antigravity and Grok Build through' becomes 'run Claude Code, Codex, Antigravity, Grok Build and GitHub Copilot CLI through'. The file must stay valid JSON; the gate parses it. Edit only that string.\n- moe-vscode/README.md has four edits:\n  (a) :3, intro: 'run Claude Code, Codex, agy and Grok Build through' becomes 'run Claude Code, Codex, agy, Grok Build and GitHub Copilot CLI through'.\n  (b) :14, the Features '**Agent launcher**' bullet: 'governor agents with your chosen CLI. Closing' becomes 'governor agents with your chosen CLI: Claude Code, Codex, Antigravity, Grok Build or GitHub Copilot CLI. Closing'.\n  (c) :25, Requirements: 'signed in: Claude Code, Codex, Antigravity or Grok Build' becomes 'signed in: Claude Code, Codex, Antigravity, Grok Build or GitHub Copilot CLI'.\n  (d) Release notes: add one item as the last item under '### Unreleased', directly after the item that ends 'POSIX launch lines run in any default shell' and before '### 0.8.0': '- GitHub Copilot CLI supported as an agent CLI: the provider picker and the agent command setting offer it'. It mirrors 0.8.0's 'Grok Build (xAI) supported as an agent CLI'. The VS Code slice task-7739d4af adds the picker entry and the agentCommands datalist entry but leaves README to this task.\nThe pickers' short label is 'Copilot'; prose uses 'GitHub Copilot CLI'.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/README.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/package.json",
+        "moe-vscode/README.md"
+      ],
+      "note": "VS Code package.json description and README 4 edits done.",
+      "startedAt": "2026-11-06T06:18:55.227Z",
+      "completedAt": "2026-11-06T06:18:58.561Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Update the comment in packages/moe-proxy/src/utils.ts, the injectWorkerType doc comment at about :313-315, with your own Edit tool. Change only the comment. Rewrap its last three lines so no line passes 80 columns:\n * is sent verbatim: the daemon owns validation (CLAUDE, CODEX, GEMINI, GROK or\n * COPILOT, anything else registers as CLAUDE). Returns true if the parsed\n * object was mutated. Never throws.\nThe claim is true once task-bfadf533 lands (the daemon recognizes COPILOT), so the planner made this task depend on it. Change no code: the proxy still forwards MOE_WORKER_TYPE verbatim. Never build or test moe-proxy in the live checkout (global rail). A comment-only diff needs no build.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "utils.ts comment-only rewrap, lines <=80 cols.",
+      "startedAt": "2026-11-06T06:18:59.154Z",
+      "completedAt": "2026-11-06T06:19:02.880Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Verify once, with a fresh run from the worktree root. Run executionContract.checkRefs[0] verbatim. It is a node -e check, then `npm run lint`, which is the role-doc linter (bash scripts/lint-role-docs.sh): it runs in place and installs or builds nothing. The node check confirms:\n- Each README.md anchor line (Run Claude Code, badge/works, Your choice, one coding CLI (, unaffected, @github/copilot) exists exactly once and names GitHub Copilot CLI. The badge line must contain 'Copilot%20CLI-6f42c1', and the new install line must contain 'copilot login'.\n- The PRD's two provider lists name GitHub Copilot CLI, its '**GitHub Copilot' row mentions 'agent', and no 'Autocomplete only' remains.\n- Four moe-vscode/README.md lines (intro, Requirements, Agent launcher, the new '- GitHub Copilot' release note with 'agent CLI') name it.\n- moe-vscode/package.json parses and its description names GitHub Copilot CLI.\n- utils.ts's comment, read with line breaks joined, says 'GROK or COPILOT, anything'.\nArchitect dry runs:\n- At base, MISSING with exit 1.\n- After these exact edits in a scratch clone, exit 0 with the linter's three OK lines.\n- With only utils.ts reverted, MISSING [ 'utils' ] and exit 1.\nNo test pins these strings (checked in scripts/tests, moe-vscode/tests and packages/*/src). The command, its exit code and its output tail are the complete_task evidence.\nError handling for a red run: 'MISSING [ ... ]' names the failing anchors. An anchor counts as failing when its line is missing, appears twice, or lacks the required text. Fix the named spot and rerun the whole command. Never edit the command text. A JSON parse error means moe-vscode/package.json was broken: restore valid JSON. A lint failure names the role doc over its line cap. This task changes no role doc, so report one instead of editing it.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "checkRefs[0] verbatim: node check passed, npm run lint 3 OK lines, exit 0.",
+      "startedAt": "2026-11-06T06:19:03.725Z",
+      "completedAt": "2026-11-06T06:19:13.209Z"
+    },
+    {
+      "stepId": "step-6",
+      "description": "Run one adversarial self-review of your own diff (git diff in the worktree) before complete_task:\n- Exactly five files change. The diff stat is about +18/-15 (the dry run measured 18 insertions and 15 deletions).\n- Every hunk is one of the edits above. No neighbouring text is reworded, and nothing in docs/CONFIGURATION.md, docs/TROUBLESHOOTING.md, scripts/CLAUDE.md, plugin.xml, docs/index.html or the packages/*/README.md files changes. Those belong to task-59e1d150, task-d609eae3 and task-3a531816.\n- The utils.ts hunk touches only ' * ' comment lines, with none over 80 columns.\n- The badge URL is well-formed.\n- No sentence claims more than the slices deliver: no installer support for copilot, no VM (verified-local) copilot seats, and no account rotation for copilot.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\nIf a fix is needed, make it and rerun the step-5 command once more.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "README.md",
+        "docs/PRD.md",
+        "moe-vscode/package.json",
+        "moe-vscode/README.md",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "note": "Self-review: 5 files, +18/-15, only planned hunks, no forbidden patterns, utils.ts lines <=80, badge well-formed, no installer/VM/rotation claims.",
+      "startedAt": "2026-11-06T06:19:13.924Z",
+      "completedAt": "2026-11-06T06:19:16.469Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "DONE",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d609eae395894045ad025c65bc114ee0",
+    "task-7739d4af3daf43558dbdfbc1b959340e",
+    "task-bfadf5334c1a42538dbcf73ebd6ef532"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.6,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T21:53:59.496Z",
+  "updatedAt": "2026-11-06T06:24:54.573Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:11:24.264Z",
+    "plannedStepCount": 6,
+    "plannedDistinctFileCount": 5,
+    "executedStepCount": 6,
+    "doneAt": "2026-11-06T06:24:21.974Z",
+    "wallClockMs": 29577710
+  },
+  "contextFetchedBy": [
+    "architect-a8e13516",
+    "architect-a3d9076e",
+    "worker-b3b3db54",
+    "qa-a196fc69"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5",
+    "step-6"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:17:44.983Z",
+  "executionContract": {
+    "intendedBehavior": "Text only. The user-facing provider lists in README.md, docs/PRD.md and the VS Code listing (moe-vscode/package.json description, moe-vscode/README.md) name GitHub Copilot CLI as the fifth agent CLI. README.md gains one install-and-sign-in paragraph for copilot. The PRD's Competitive Landscape row no longer calls Copilot 'Autocomplete only'. The proxy's injectWorkerType comment lists COPILOT among the daemon's worker types. No behavior changes.",
+    "acceptanceCriteria": [
+      "README.md names GitHub Copilot CLI in the intro, the works-with badge, the 'Your choice of coding CLI' row, the prerequisites and the account-rotation note, and has one install-and-sign-in paragraph (npm install -g @github/copilot, copilot login, WSL note)",
+      "docs/PRD.md names it in both provider lists, and its GitHub Copilot row describes the agent provider without 'Autocomplete only'",
+      "moe-vscode/package.json's description and moe-vscode/README.md (intro, Agent launcher feature, Requirements, Unreleased note) name GitHub Copilot CLI",
+      "packages/moe-proxy/src/utils.ts's injectWorkerType comment lists COPILOT",
+      "checkRefs[0] exits 0, ending with npm run lint's OK lines"
+    ],
+    "invariants": [
+      "No text outside the listed sentences changes",
+      "No sentence claims installer, verified-local VM or account-rotation support for copilot"
+    ],
+    "compatibility": [
+      "No code or contract changes: moe-proxy still forwards MOE_WORKER_TYPE verbatim, and the change to utils.ts is comment-only",
+      "moe-vscode/package.json stays valid JSON; only the description string changes"
+    ],
+    "approvedScope": [
+      "Provider-list sentences in README.md, docs/PRD.md, moe-vscode/package.json (description only) and moe-vscode/README.md",
+      "The injectWorkerType doc comment in packages/moe-proxy/src/utils.ts (comment only)"
+    ],
+    "reuse": [
+      "The README's existing Grok Build paragraph is the model for the new copilot install paragraph; 0.8.0's 'Grok Build (xAI) supported as an agent CLI' is the model for the Unreleased note"
+    ],
+    "sourceAssumptions": [
+      "README.md:5 intro, :10 badge, :33 'Your choice of coding CLI', :76 prerequisites, :108 Grok Build paragraph, :214 rotation note (at 9c2129d4)",
+      "docs/PRD.md:12 and :21 provider lists, :240 '| **GitHub Copilot** | Autocomplete only, no planning |'",
+      "moe-vscode/package.json:4 description; moe-vscode/README.md:3 intro, :14 Agent launcher, :25 Requirements, Unreleased list before '### 0.8.0'",
+      "packages/moe-proxy/src/utils.ts:313-315 injectWorkerType comment: '(CLAUDE, CODEX, GEMINI or GROK, anything else registers as CLAUDE)'",
+      "Copilot facts from task-ab323f85 and task-e266a150: npm package @github/copilot, binary copilot, sign-in via `copilot login`; the IDE pickers label it 'Copilot'"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && node -e 'const t=f=>require(\"fs\").readFileSync(f,\"utf8\"),C=\"GitHub Copilot CLI\",R=\"README.md\",P=\"docs/PRD.md\",V=\"moe-vscode/README.md\",b=[[R,\"Run Claude Code\",C],[R,\"badge/works\",\"Copilot%20CLI-6f42c1\"],[R,\"Your choice\",C],[R,\"one coding CLI (\",C],[R,\"unaffected\",C],[R,\"@github/copilot\",\"copilot login\"],[P,\"direct access\",C],[P,\"face these\",C],[P,\"**GitHub Copilot\",\"agent\"],[V,\"for VS Code and\",C],[V,\"One coding CLI\",C],[V,\"Agent launcher\",C],[V,\"- GitHub Copilot\",\"agent CLI\"]].filter(([f,a,m])=>{const l=t(f).split(\"\\n\").filter(x=>x.includes(a));return l.length!=1||!l[0].includes(m)}).map(x=>x[1]);JSON.parse(t(\"moe-vscode/package.json\")).description.includes(C)||b.push(\"vsix\");t(P).includes(\"Autocomplete only\")&&b.push(\"PRD\");t(\"packages/moe-proxy/src/utils.ts\").replace(/\\n \\* /g,\" \").includes(\"GROK or COPILOT, anything\")||b.push(\"utils\");if(b.length){console.error(\"MISSING\",b);process.exit(1)}' && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "- Folding docs/index.html and the two npm READMEs (packages/moe-daemon/README.md, packages/moe-proxy/README.md) into this row: rejected. That makes 8 files (a heavy-tier floor and past the 5-file cap) and goes beyond the human's DoD. They are split out as task-3a531816 (same dependencies), and the closing row task-59e1d150 now depends on it.\n- Copying the Grok install paragraph's installer wording: rejected. No installer accepts copilot (task-ab323f85 keeps '-AgentCommand copilot' out of scope), so the new paragraph says 'install it separately', with npm and copilot login.\n- A shorter Unreleased note or none: the VS Code slice task-7739d4af leaves README to this task, so the Unreleased list is the only place the extension's changelog records the new provider.",
+    "codebaseInsights": "- The provider lists use each surface's own naming: README says 'Antigravity (agy)', the VS Code README intro says 'agy', and the PRD says 'Gemini'. Append 'GitHub Copilot CLI' last and leave the existing names alone.\n- `npm run lint` is only the role-doc linter (scripts/lint-role-docs.sh). It does not read these files, so the node -e check is the real assertion. Both are in checkRefs[0] (965 chars).\n- Anchor uniqueness matters: 'Run Claude' also matches README's '## Run Claude agents across several accounts' (:196), so the check anchors on 'Run Claude Code'.\n- No test in scripts/tests, moe-vscode/tests or packages/*/src pins these strings.",
+    "risks": "- This task now depends on task-bfadf533 (added by this planner) as well as task-d609eae3 and task-7739d4af. The proxy comment states daemon behavior that task-bfadf533 delivers.\n- README.md may change upstream before this lands (other rows). Match on anchors, not line numbers. The gate fails if an anchor line becomes duplicated.\n- Do not let the badge message pick up a '-' or a raw space: shields.io would split the label and the colour wrongly.\n- Global rails: write tracked files only with your own Edit tool; never build or test moe-proxy in the live checkout (this comment edit needs neither).",
+    "keyFiles": [
+      "README.md",
+      "docs/PRD.md",
+      "moe-vscode/package.json",
+      "moe-vscode/README.md",
+      "packages/moe-proxy/src/utils.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:17:45.019Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T06:18:01.151Z",
+  "reviewStartedAt": "2026-11-06T06:19:28.648Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && node -e '<checkRefs[0] anchor check>' && npm run lint",
+    "exitCode": 0,
+    "outputTail": "OK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)\n(qualityGate parity-check.sh: PASS, exit 0)",
+    "reportedAt": "2026-11-06T06:19:28.648Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "README.md",
+    "docs/PRD.md",
+    "moe-vscode/package.json",
+    "moe-vscode/README.md",
+    "packages/moe-proxy/src/utils.ts"
+  ],
+  "completionSummary": "GitHub Copilot CLI is now named in README.md (intro, badge, provider row, prerequisites, rotation note, plus a new install and sign-in paragraph), docs/PRD.md (both provider lists, and the Copilot row no longer says 'Autocomplete only'), moe-vscode/package.json (description), moe-vscode/README.md (intro, Agent launcher, Requirements, Unreleased note) and the injectWorkerType comment in packages/moe-proxy/src/utils.ts. Text and comment only: 5 files, +18/-15.",
+  "commits": [
+    {
+      "sha": "eab7c8450a97c28de91f72447d91a52632ad625c",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-b3b3db54@2026-11-06T06:16:37Z",
+      "paths": [
+        "README.md",
+        "docs/PRD.md",
+        "moe-vscode/README.md",
+        "moe-vscode/package.json",
+        "packages/moe-proxy/src/utils.ts"
+      ],
+      "recordedBy": "worker-b3b3db54",
+      "recordedAt": "2026-11-06T06:20:52.916Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-a196fc69@2026-11-06T06:23:13Z",
+    "at": "2026-11-06T06:24:54.573Z"
+  },
+  "completedAt": "2026-11-06T06:24:21.974Z",
+  "reviewCompletedAt": "2026-11-06T06:24:21.974Z",
+  "reviewSummary": "Reviewed completion eab7c845 (on moe/work-2026-10-24, contained in moe/control): 5 files, +18/-15 (net 3), text and comment only. Re-ran checkRefs[0] verbatim from the repo root: node anchor check exit 0, then `npm run lint` exit 0 with the three OK lines (architect 39, worker 30, qa 36 of max 40). The 5 touched paths are clean in the working tree, so the gate ran against the reviewed bytes. DoD: (1) README.md names GitHub Copilot CLI in the intro, the works-with badge (URL uses only %20/%C2%B7 escapes), the 'Your choice of coding CLI' row, the prerequisites and the account-rotation note, and gains one install and sign-in paragraph (npm install -g @github/copilot, copilot login, WSL note) after the Grok Build paragraph; (2) docs/PRD.md names it in both provider lists and the Copilot row no longer says 'Autocomplete only'; (3) moe-vscode/package.json (still valid JSON, description only) and moe-vscode/README.md (intro, Agent launcher, Requirements, Unreleased note) name it; (4) the injectWorkerType comment in packages/moe-proxy/src/utils.ts lists COPILOT, comment-only, lines at most 80 columns; (5) lint passes. Invariants: no neighbouring text reworded; no sentence claims installer, verified-local VM or rotation support for copilot (the README says 'install it separately' and that rotation leaves copilot seats unaffected). No forbidden pattern in added lines. Cross-checked that the claims are true: JetBrains AgentProvider.COPILOT, VS Code provider 'copilot' in extension.ts and SettingsPanel.ts, and daemon WORKER_TYPES includes COPILOT. Dependencies (JetBrains, VS Code and daemon slices) are all landed. moe-proxy was not built or tested: the change is comment-only and the live-checkout rail forbids it. Not run: parity-check.sh (the qualityGate) — the worker reported PASS and I did not reproduce it; this change touches no wrapper. Complexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}

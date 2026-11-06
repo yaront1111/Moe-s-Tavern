@@ -1,0 +1,244 @@
+{
+  "id": "task-3ef3321758f94dad89875a5b64792e12",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the docs say .serena/project.yml ignored_memory_patterns hides _archive/ memories, but .serena/ is gitignored and no Moe code writes that entry, so in every other Moe project QA-archived handoffs stay in list_memories and read_memory serves them (UnAI: 66 of 129 names)",
+  "description": "Filed by hunt #19 (task-443e8eac), lane 2: Serena integration. HEAD 3cd256eb.\n\nPROBLEM\n- docs/skills/moe-planning/SKILL.md:83 and docs/MEMORY.md:80 say archived memories are hidden by `.serena/project.yml` `ignored_memory_patterns: [_archive/.*]`.\n- .serena/ is gitignored (.gitignore:54 `/.serena/`), so that entry exists only in this checkout's untracked project.yml, added by hand during task-78ba155c.\n- `git grep -n ignored_memory_patterns 3cd256eb` hits only those two docs and the generated mirror (packages/moe-daemon/src/generated/skillFiles.ts:1354). No script, launcher or daemon writes the entry, and Serena's template default is [].\n- So in any other project, the archive move that qa.md:23 prescribes leaves every retired handoff in list_memories, and read_memory serves it.\n\nEVIDENCE (/mnt/d/moe-scratch/hunt-443e8eac/A/)\n- On this host:\n  - UnAI, algorun, moe-next, px4swarm and sentinal all have `ignored_memory_patterns: []`.\n  - UnAI's qa.md carries the archive rule, and its _archive/ holds 66 files.\n- A1-archive-visibility-repro.sh runs Serena 1.6.2's own MemoryManager on copies of the stores (A1-archive-visibility-out.txt):\n  UnAI: list_memories: 129 names, 66 of them under _archive/ ... read_memory('_archive/task-353db3dc...-handoff') -> SERVED\n  moes: list_memories: 1053 names, 0 of them under _archive/ ... read_memory('_archive/...') -> REFUSED\n\nFIX DIRECTION\n- scripts/moe-serena-ignore.mjs already keeps a Moe-managed block in .serena/project.local.yml on every launch. Have that block also carry ignored_memory_patterns: project.yml's own list plus \"_archive/.*\".\n  - It must merge the two, because a key in project.local.yml replaces the project.yml key.\n  - Read project.yml's list with a parser like parseIgnoredPaths. If that list cannot be read safely, emit no memory key.\n- A user's own ignored_memory_patterns in project.local.yml, outside the block, is the opt-out for that key. The block must then not emit it, because a duplicate YAML key can stop Serena loading the project.\n- Docs:\n  - MEMORY.md:80: name the launcher block as the source of the hiding, and replace \"read_file still reads the raw file\" with the host's own reader (Read or cat). Serena's read_file refuses .serena/ here, because the block's ignored_paths carries .serena.\n  - MEMORY.md:139-143: list the new key and its opt-out.\n\nFILES: scripts/moe-serena-ignore.mjs, scripts/tests/serena-ignore.test.mjs, docs/MEMORY.md (:80 and :139-143 only).\n\nPLACEMENT: shares docs/MEMORY.md with task-c1162cba (this hunt's dead-mem-pointer row). That row owns MEMORY.md:86 and moe-planning SKILL.md:82-83; this row leaves SKILL.md:83 to it. There is no dependsOn.",
+  "definitionOfDone": [
+    "A serena-ignore.test.mjs row: a project.yml with `ignored_memory_patterns: []` gets a managed block that carries _archive/.*, and a project.yml list [x] gets [x, _archive/.*]. A YAML parse of the written project.local.yml, or Serena's own MemoryManager, shows the merged list.",
+    "A serena-ignore.test.mjs row: a user's own ignored_memory_patterns outside the block is left byte-identical, and the block then emits no such key (the file parses with no duplicate key). An unreadable project.yml list emits no memory key.",
+    "`node --test scripts/tests/serena-ignore.test.mjs` passes, and `grep -c 'read_file` still reads' docs/MEMORY.md` prints 0."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (DoD 1 and 2). Load test-driven-development. Edit scripts/tests/serena-ignore.test.mjs with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use a shell write or a subagent.\n\nThe module imports gain parseStringSequence (step 2 exports it; parseIgnoredPaths stays exported and unchanged).\n\n- EXPECTED (the F1 literal, shared by F1/F2/F3/F4): after the ignored_paths items, add\n  'ignored_memory_patterns:'\n  '  - \"_archive/.*\"'\n  This fixture's project.yml has no such key. Also update the WHY comment lines to the wording step 2 writes. EXPECTED stays a literal; never build it from renderBlock.\n- U5: parseStringSequence(text, 'ignored_memory_patterns') returns:\n  - [] for an absent key and for '[]';\n  - ['x', '_archive/.*'] for a block and for a flow sequence;\n  - null for '- *alias', a duplicate key, or a regex that is unquoted and not plain, such as '- ^a|b'.\n  parseStringSequence(text, 'ignored_paths') deep-equals parseIgnoredPaths(text) on every U3 input.\n- F8, the merge, one row per project.yml memory list. Use fx.put('.serena/project.yml', ...) on top of the fixture's ignored_paths.\n  - `ignored_memory_patterns: []` gives ['_archive/.*'].\n  - `ignored_memory_patterns:\\n- x\\n` gives ['x', '_archive/.*'].\n  - A list already holding '_archive/.*' gives it once.\n  For each, parseStringSequence(read(fx.file), 'ignored_memory_patterns') deep-equals the expected list, and exactly one line of the written file starts with 'ignored_memory_patterns:'.\n- F9, the opt-outs:\n  - A user part `${U}ignored_memory_patterns: [mine]\\n` keeps its bytes exactly. The run still writes the block (an OK line), the block carries ignored_paths but no ignored_memory_patterns, and the whole file has exactly one 'ignored_memory_patterns:' line, the user's (no duplicate key).\n  - A project.yml memory list that cannot be read safely (`ignored_memory_patterns:\\n- *alias\\n`) gives a block with ignored_paths and no ignored_memory_patterns key.\n\nRun `node --test scripts/tests/serena-ignore.test.mjs` before step 2 and record the failing rows in the step note (RED).",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "note": "RED. The real file fails to load: SyntaxError, module does not provide an export named 'parseStringSequence'. In a scratch copy outside the checkout (export shimmed to throw), 26 of 51 tests fail: U5, U6, F1, F2, F5, all 6 F8 sub-rows, F8 default fixture, 5 of 6 F9 user-key rows, all 5 F9 unreadable-list rows. The rest pass because they are the unchanged invariants: U1-U4, F3 rows, F4, F6, F7 and the F9 user-ignored_paths-still-removes-block row. Added: U5 (parseStringSequence), U6 (renderBlock memory arg), F8 merge rows, F9 opt-out rows. EXPECTED stays a literal and NO_MEMORY is a literal edit of it, never built from renderBlock.",
+      "startedAt": "2026-11-04T08:15:05.494Z",
+      "completedAt": "2026-11-04T08:16:39.149Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "IMPLEMENT (DoD 1 and 2) in scripts/moe-serena-ignore.mjs, with the session's own editing tool.\n\nSerena 1.6.2 applies project.local.yml with a whole-key replace: `yaml_data.update(local_yaml_data)` in serena/config/serena_config.py:713-725, under ~/.local/share/uv/tools/serena-agent. So the block must carry project.yml's own list plus '_archive/.*'.\n\n1. Generalise the parser: `export function parseStringSequence(text, key)`.\n   - Build a KEY regex from the key: unquoted, double-quoted or single-quoted, then ':' (the current KEY at :65).\n   - Reuse scalar/flowSequence/blockSequence unchanged.\n   - Keep `export function parseIgnoredPaths(text) { return parseStringSequence(text, 'ignored_paths'); }`.\n2. `renderBlock(patterns, memoryPatterns = null)`: when memoryPatterns is an array, append 'ignored_memory_patterns:' and its items after the ignored_paths items, through the same JSON-quote and escape mapping as the ignored_paths items (factor out one item-renderer). With the default null, the output is byte-identical to today's except for the WHY lines.\n3. WHY and header comments (:1-13, :23-28): say the block also hides QA-archived memories (_archive/.*), and that setting ignored_memory_patterns yourself outside the block keeps your list. With that key, Moe leaves it out of the block instead of removing the block. Suggested extra lines:\n   '# Moe also hides QA-archived memories (_archive/.*); set ignored_memory_patterns yourself outside'\n   '# this block to keep your own list instead.'\n4. In main(): read project.yml once and give the text to collect, so both keys come from one read. Then compute the memory list:\n   - null when any line of local.user matches /^([\"']?)ignored_memory_patterns\\1[ \\t]*:(?:[ \\t]|$)/. That is the user's own key; emitting a second one would be a duplicate YAML key, and Serena's loader can refuse the project.\n   - null when parseStringSequence(yml, 'ignored_memory_patterns') returns null. Error handling: a list that cannot be read safely is never guessed at, and the block is still written for ignored_paths.\n   - otherwise the parsed list, plus '_archive/.*' appended when it is absent.\n   Pass the result to renderBlock.\n   Do NOT add ignored_memory_patterns to OWN_KEY (:140): a user's memory key must not remove the block.\n   checkUser, the skip and remove paths, the 'is up to date' byte comparison and the one-line output contract stay unchanged. The [OK] line's count is still the ignored_paths count.\n5. The module still imports only node: builtins (F7).\n\nRun the step-1 file: every row passes.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-serena-ignore.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "note": "GREEN. scripts/moe-serena-ignore.mjs: keyPattern(key) replaces the fixed KEY regex; exported parseStringSequence(text, key), with parseIgnoredPaths now a one-line delegate (U3 rows unchanged); renderBlock(patterns, memoryPatterns = null) with one shared renderList (same JSON-quote/escape mapping); WHY and header comments name the memory hiding and the opt-out; memoryPatterns(yml, user) returns null when the user has their own top-level ignored_memory_patterns outside the block (plain, quoted or BOM-led) or project.yml's list is unreadable, otherwise the list plus _archive/.*, deduped; main() reads project.yml once and hands the text to collect(). OWN_KEY is unchanged, so a user memory key never removes the block. Imports are still node: builtins only. node --test scripts/tests/serena-ignore.test.mjs: 51 of 51 pass. One fix to my step-1 test: the U5 row [y] expected ['y'], but a bare y is a YAML 1.1 boolean that the parser refuses by design (NOT_STRING), so that row is now [w] and a new row pins [y] to null.",
+      "startedAt": "2026-11-04T08:18:37.122Z",
+      "completedAt": "2026-11-04T08:20:01.291Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "DOCS in docs/MEMORY.md (DoD 3's grep), with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use Serena (it ignores docs/) or a shell write. Touch only these lines, because task-c1162cba owns :86.\n- :80, the `_archive/` convention paragraph. Replace the sentence \"`.serena/project.yml` carries `ignored_memory_patterns: [_archive/.*]`, which hides them from `list_memories`, `read_memory` and `write_memory`; `read_file` still reads the raw file.\" with one naming the launchers' managed block in `.serena/project.local.yml` (scripts/moe-serena-ignore.mjs, which adds `_archive/.*` to project.yml's own list) as the source of the hiding. Tell readers to open an archived file with their host's own reader (Read, cat). Serena's `read_file` refuses `.serena/` wherever `ignored_paths` lists it, as this checkout's does. The phrase \"read_file` still reads\" must be gone. Keep the rest of :80 (the archive command and the coreutils note) byte-identical.\n- :139-143, the \"Serena startup ignore override\" section. Say the block also carries `ignored_memory_patterns` (project.yml's own list plus `_archive/.*`, because a project.local.yml key replaces project.yml's), and that setting `ignored_memory_patterns` yourself outside the block keeps yours: the block then omits that key and is not removed.\nError handling: if an anchor sentence is not found exactly once, stop and say so in the step note.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MEMORY.md"
+      ],
+      "modifiedFiles": [
+        "docs/MEMORY.md"
+      ],
+      "note": "docs/MEMORY.md, three single-line hunks (:80, :139, :143), each anchor found exactly once. :80 now names the launchers' managed block in .serena/project.local.yml (scripts/moe-serena-ignore.mjs) as the source of the hiding (project.yml's own list plus _archive/.*), and tells readers to open an archived file with Read or cat, because Serena's read_file refuses .serena/ wherever ignored_paths lists it. The phrase \"read_file` still reads\" is gone (grep -c prints 0). :139 says the block also carries ignored_memory_patterns, why it merges (a project.local.yml key replaces project.yml's), and that an unreadable project.yml list gets no key. :143 says a user's own ignored_memory_patterns outside the block keeps their list and the block omits the key and stays. The rest of :80 (archive command, coreutils note) is byte-identical. :86 and docs/skills/ untouched (task-c1162cba owns them).",
+      "startedAt": "2026-11-04T08:20:03.399Z",
+      "completedAt": "2026-11-04T08:20:30.276Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "VERIFY (DoD 3), once. From the task worktree root, run exactly:\nnode --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md\n\nIt must exit 0. The scripts/tests harnesses may run in place; this one builds its fixtures under os.tmpdir() and strips MOE_* and GIT_* from each row's env. Its fresh output is the complete_task verification evidence: the node:test summary with every U and F row passing, and F7 (both IDE bundles ship the script) unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-serena-ignore.mjs"
+      ],
+      "note": "Fresh run from the task worktree root: `node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md` exited 0. 51 tests, 51 pass, 0 fail (U1-U6, F1-F9 incl. all F8/F9 sub-rows, F7 bundle manifest unchanged). No files modified in this step.",
+      "startedAt": "2026-11-04T08:20:32.439Z",
+      "completedAt": "2026-11-04T08:20:41.777Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "ADVERSARIAL SELF-REVIEW, once, as the final step. Load adversarial-self-review. Read the diff as a user whose project.local.yml or project.yml is unusual:\n- Can the written file ever hold two ignored_memory_patterns keys? Check a user key that is quoted, indented, in a flow mapping, or after a BOM.\n- Does an unreadable project.yml memory list ever drop the user's own entries? It must emit no key.\n- Does the block still go away on the documented opt-outs (MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or ignored_paths), and only then?\n- Is a regex such as `^task-.*` or `a|b` rendered quoted and escaped, never as a bare scalar YAML could misread?\n- With no memory change, is the output byte-identical to before apart from the WHY lines? A seat with an up-to-date block rewrites it once, then reports 'up to date'.\n- Are docs/MEMORY.md:86 and moe-planning SKILL.md untouched? task-c1162cba owns them.\nIf anything changes, re-run the step-4 command and use that fresh output for complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-serena-ignore.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-serena-ignore.mjs"
+      ],
+      "note": "Adversarial review done, one fix. FIXED: the header comment said project.yml never carries the entry, which is false for a hand-edited one; it now says only a hand-edited project.yml does. CHECKED, no change needed: (1) Two memory keys: the user check is anchored at column 0 and accepts a plain, double- or single-quoted key, spaces or tabs before the colon, a leading BOM and CRLF. An indented key is nested, not top-level; a flow-mapping or '?' complex-key user part already fails checkUser and the block is removed, so no key is written. A real ruamel.yaml parse (Serena's own venv) of the written file raised no DuplicateKeyError for a BOM-led quoted user key with CRLF, and the merged list was the user's. (2) Unreadable project.yml list: no key emitted. With a valid-YAML anchored list the written file had no memory key and the ruamel merge kept project.yml's ['x']. (3) Opt-outs: OWN_KEY is untouched, and the F9 row confirms a user ignored_paths still removes the block, with or without a memory key. (4) Regexes: ^task-.*, a|b, \\d+ and q\"\\ come out JSON double-quoted and round-trip identically under ruamel; a project.yml list already holding _archive/.* gets it once. (5) A block with no memory change differs from before only by the two WHY lines; the second run reports 'up to date'. (6) Scope: git diff vs base touches only docs/MEMORY.md (hunks :80, :139, :143), scripts/moe-serena-ignore.mjs and scripts/tests/serena-ignore.test.mjs; MEMORY.md:86, docs/skills/ and generated skillFiles.ts are untouched. THEORETICAL, left alone: renderBlock(patterns, []) would render a null `ignored_memory_patterns:` key, but main() never passes an empty list (it always appends _archive/.*) and only the tests import renderBlock; a user line led by U+2028/U+0085 is not seen as a key (OWN_KEY has the same limit, and Serena's YAML 1.2 reader does not treat them as breaks). Re-ran after the edit: the plan's step-4 command exited 0 (51/51), plus the project quality gate commands `bash scripts/tests/parity-check.sh` (PASS) and `npm run lint` (OK), both exit 0.",
+      "startedAt": "2026-11-04T08:20:44.729Z",
+      "completedAt": "2026-11-04T08:22:03.709Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 499.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T07:58:35.668Z",
+  "updatedAt": "2026-11-04T19:20:45.386Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T08:09:10.293Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-04T08:25:32.437Z",
+    "wallClockMs": 982144
+  },
+  "contextFetchedBy": [
+    "architect-cd0ac706",
+    "worker-593560ee",
+    "qa-96811257"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T08:11:27.651Z",
+  "executionContract": {
+    "intendedBehavior": "Every launch that runs scripts/moe-serena-ignore.mjs writes a managed .serena/project.local.yml block that also carries ignored_memory_patterns. The list is project.yml's own, with '_archive/.*' appended when missing, so QA-archived memories stay hidden from Serena's list_memories, read_memory and write_memory in every Moe project, not only in a checkout whose untracked project.yml was edited by hand. The block leaves that key out when the user sets ignored_memory_patterns outside the block, or when project.yml's list cannot be read safely. docs/MEMORY.md names the block as the source and stops saying that read_file still reads archived files.",
+    "acceptanceCriteria": [
+      "A project.yml with ignored_memory_patterns [] gives a block whose ignored_memory_patterns is ['_archive/.*']. A list [x] gives [x, '_archive/.*']. A list already holding '_archive/.*' holds it once.",
+      "A user's own ignored_memory_patterns outside the block stays byte-identical; the block is still written, without that key, and the file has exactly one such key.",
+      "An unreadable project.yml memory list gives a block with no memory key; ignored_paths is still written.",
+      "docs/MEMORY.md no longer says 'read_file` still reads', and names the launcher block as the source of the hiding."
+    ],
+    "invariants": [
+      "The script still exits 0 and prints exactly one line on every path, and imports only node: builtins.",
+      "A user ignored_memory_patterns key never removes the block; only MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore and a user ignored_paths do (OWN_KEY unchanged).",
+      "parseIgnoredPaths keeps its exact behaviour (U3 rows unchanged).",
+      "No duplicate YAML key is ever written.",
+      "docs/MEMORY.md:86 and docs/skills/moe-planning/SKILL.md are untouched (task-c1162cba owns them)."
+    ],
+    "compatibility": [
+      "An existing managed block is rewritten once with the new key and WHY lines, then reported up to date.",
+      "Serena's merge is a whole-key replace (serena_config.py:713-725), so project.yml's own memory patterns are kept by merging them into the block.",
+      "Both IDE bundles already ship scripts/moe-serena-ignore.mjs (F7); no bundle manifest change."
+    ],
+    "approvedScope": [
+      "scripts/moe-serena-ignore.mjs: the exported parseStringSequence(text, key), parseIgnoredPaths delegating to it, renderBlock(patterns, memoryPatterns = null), the memory-list computation in main(), and the WHY and header comments.",
+      "scripts/tests/serena-ignore.test.mjs: the EXPECTED literal and new U5, F8 and F9 rows.",
+      "docs/MEMORY.md: the :80 hiding and read_file sentence, and :139-143."
+    ],
+    "reuse": [
+      "The existing scalar, flowSequence and blockSequence YAML-subset parser (moe-serena-ignore.mjs:67-114) and renderBlock's JSON-quote escaping (:128-132).",
+      "The F-row fixture(), run() and read() helpers in serena-ignore.test.mjs."
+    ],
+    "sourceAssumptions": [
+      "At 3cd256eb, git grep finds ignored_memory_patterns only in docs/MEMORY.md:80, docs/skills/moe-planning/SKILL.md:83 and generated skillFiles.ts:1354; no code writes it.",
+      ".gitignore:54 ignores /.serena/, so project.yml is untracked, and every other Moe project on this host (UnAI, algorun, moe-next, px4swarm, sentinal) has ignored_memory_patterns: [].",
+      "Serena 1.6.2's ProjectConfig reads ignored_memory_patterns from the merged dict (serena_config.py:644), and project.local.yml keys replace project.yml keys (:713-725)."
+    ],
+    "checkRefs": [
+      "node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Write ignored_memory_patterns into .serena/project.yml at launch. Rejected: project.yml is Serena's own file, which it re-saves, and the script deliberately never touches it.\n2) Have the daemon's init write it. Rejected: .serena/ is created by Serena, not by Moe, and existing projects would never get it.\n3) Chosen: extend the block the launchers already manage in project.local.yml. It reaches every project that runs Serena under Moe, keeps the user's opt-out, and stays inside one tested script.",
+    "codebaseInsights": "- Hunt #19 evidence is in /mnt/d/moe-scratch/hunt-443e8eac/A/: A1-archive-visibility-repro.sh runs Serena's MemoryManager on store copies. In UnAI, 66 of 129 names are archived and served.\n- scripts/moe-serena-ignore.mjs already reads project.yml's ignored_paths with a YAML-subset parser that refuses anything ambiguous (aliases, tags, booleans, bad escapes). That parser generalises to any key.\n- checkUser's OWN_KEY drives the remove-the-block opt-out. The memory key needs its own, softer opt-out (omit the key, keep the block).",
+    "risks": "- A user key that the step-2 regex misses would produce a duplicate key. Cover quoted keys, and keep the check on local.user (the text outside the block).\n- Memory patterns are Python regexes: '|', '^' or '(' cannot be plain YAML scalars. parseStringSequence refuses an unquoted one, which then means no memory key.\n- Changing the WHY lines rewrites every seat's block once; that is intended.\n- task-c1162cba edits docs/MEMORY.md:86 at the same time. Keep to :80 and :139-143.",
+    "keyFiles": [
+      "scripts/moe-serena-ignore.mjs",
+      "scripts/tests/serena-ignore.test.mjs",
+      "docs/MEMORY.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "90c499e15849f8666145f159ea2c060d33bfcf6f",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T08:11:27.682Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T08:15:05.494Z",
+  "commits": [
+    {
+      "sha": "777baa4ab893abc897f05f241c7cd56bbef441a6",
+      "ref": "refs/heads/moe/task/task-3ef3321758f94dad89875a5b64792e12",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:13:59Z",
+      "paths": [
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:17:05.182Z",
+      "treeId": "0530b8d8d47117784ce2dce12cc3cb6c3ab42b5d",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "e575ececc50342caa784c40efad959ac1a487f66",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-593560ee@2026-11-04T08:17:40Z",
+      "paths": [
+        "docs/MEMORY.md",
+        "scripts/moe-serena-ignore.mjs",
+        "scripts/tests/serena-ignore.test.mjs"
+      ],
+      "recordedBy": "worker-593560ee",
+      "recordedAt": "2026-11-04T08:23:23.077Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/serena-ignore.test.mjs",
+    "scripts/moe-serena-ignore.mjs",
+    "docs/MEMORY.md"
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-96811257@2026-11-04T08:23:43Z",
+    "at": "2026-11-04T08:26:03.612Z"
+  },
+  "reviewStartedAt": "2026-11-04T08:22:27.205Z",
+  "verification": {
+    "command": "node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md",
+    "exitCode": 0,
+    "outputTail": "✔ F9: a project.yml memory list that cannot be read safely gives a block with no memory key (398.108473ms)\n✔ F7 (DoD 4): both IDE bundles ship the script, which imports only node: builtins (5.223557ms)\nℹ tests 51\nℹ suites 0\nℹ pass 51\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 4357.990279\nEXIT=0",
+    "reportedAt": "2026-11-04T08:22:27.205Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "The managed block that scripts/moe-serena-ignore.mjs keeps in .serena/project.local.yml now also carries ignored_memory_patterns: project.yml's own list plus _archive/.*, deduped, so QA-archived memories stay hidden in every Moe project, not only in this checkout's hand-edited project.yml. Serena replaces a whole key from project.local.yml, so the block merges the two lists. A user's own ignored_memory_patterns outside the block (plain, quoted or BOM-led) is left byte-identical and the block then omits that key but stays (no duplicate YAML key). An unreadable project.yml list also emits no key; ignored_paths is still written. OWN_KEY is unchanged, so only MOE_SERENA_IGNORE_OVERRIDE=0, a user ignore_all_files_in_gitignore or a user ignored_paths remove the block. Code: exported parseStringSequence(text, key) (parseIgnoredPaths delegates, U3 rows unchanged), renderBlock(patterns, memoryPatterns = null) over one renderList, memoryPatterns(yml, user) in main(), updated WHY and header comments; still node: builtins only. Tests: new U5, U6, F8, F9 rows and an updated EXPECTED literal. docs/MEMORY.md hunks :80 (the launcher block is the source of the hiding, read archived files with Read or cat, the phrase read_file still reads is gone), :139 and :143 (the new key and its opt-out); :86 and docs/skills untouched. Beyond the plan's tests, the written project.local.yml was parsed with Serena's own ruamel.yaml: no duplicate key, regexes round-trip, and the merged list was correct for the empty, user-key, anchored-list and BOM+CRLF cases. One test fix: a bare y is a YAML 1.1 boolean the parser refuses by design, so the U5 row uses [w] and a new row pins [y] to null. Quality gate commands (parity-check.sh, npm run lint) pass.",
+  "completedAt": "2026-11-04T08:25:32.437Z",
+  "reviewCompletedAt": "2026-11-04T08:25:32.437Z",
+  "reviewSummary": "Reviewed completion e575ececc (kind=completion, pushed, on moe/work-2026-10-24). 3 files, +181/-19 (net 162), within approvedScope: docs/MEMORY.md :80/:139/:143 only (:86 and docs/skills untouched), moe-serena-ignore.mjs, serena-ignore.test.mjs.\n\nRe-ran in a git-archive snapshot outside the repo: `node --test scripts/tests/serena-ignore.test.mjs && ! grep -q 'read_file` still reads' docs/MEMORY.md` -> 51/51, exit 0, grep -c = 0 (DoD 3). qualityGate: parity-check.sh PASS, npm run lint OK.\n\nDoD 1: F8 rows (empty list -> ['_archive/.*'], [x] -> [x,'_archive/.*'], already-present kept once) parse the written file back and assert exactly one memory key; EXPECTED literal pins the block bytes. DoD 2: F9 rows keep a user's plain/quoted/BOM-led/indented ignored_memory_patterns byte-identical, block still written without the key, one key in file; unreadable project.yml list (alias, unquoted regex, bare dash, continuation, duplicate key) emits no key while ignored_paths is written; user ignored_paths still removes the block (OWN_KEY unchanged). U5 asserts parseIgnoredPaths equals parseStringSequence on every U3 input; F7 keeps node: builtins only.\n\nIndependent checks: ran the script on a fresh fixture (project.yml memory list ['^keep-.*']) and parsed project.local.yml with Serena's own ruamel.yaml (duplicates disallowed): no duplicate key, merged ['^keep-.*','_archive/.*'], second run 'up to date'. Mutation-checked on a scratch snapshot: no archive append (9 fail), no user-key opt-out (7), emit key on unreadable list (11), memory key in OWN_KEY (7); all killed, restored 51/51.\n\nComplexity: nothing to cut. Not verified live: Serena MemoryManager list_memories on the written file (covered by the ruamel parse plus the whole-key-replace reading in the plan).",
+  "requiredCheckAtDone": null
+}

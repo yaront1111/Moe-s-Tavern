@@ -1,0 +1,185 @@
+{
+  "id": "task-47652916d6d84c9b927b26cd0a7a50e9",
+  "epicId": "epic-be924fb8",
+  "title": "docs: MCP_SERVER.md's moe.release_task section omits the optional attemptId/generation fence and its ATTEMPT_SUPERSEDED refusal, which releaseTask.ts has enforced since 2026-09-11 and the launchers' outage release sends",
+  "description": "Filed by defect hunt #16 (task-151a2c54, architect-2a219562) on 2026-11-04, from the execution-identity lane. Verified at b9205914.\n\nPROBLEM\nThe code fences a release; the docs say nothing about it.\n- packages/moe-daemon/src/tools/releaseTask.ts:116-126 declares two optional inputs:\n  - `attemptId` (maxLength MAX_ATTEMPT_ID_LEN): \"Optional fencing identity: the attemptId moe.claim_next_task returned. A superseded attempt (the task was re-claimed since) is refused with ATTEMPT_SUPERSEDED before anything is written. Omitted = unfenced, as before.\";\n  - `generation` (integer, minimum 1): \"checked together with attemptId\".\n- :168-170 refuses an attemptId that is too long with INVALID_INPUT.\n- :219-224 runs assertAttemptCurrent (util/enforcement.ts:183) inside the mutex, beside the ownership gates and before any write. That check is equality with the task's current attempt, so a superseded, closed or future attempt is refused STATE_CONFLICT ATTEMPT_SUPERSEDED. A malformed identity is refused INVALID_INPUT.\n- The fence was added in c7f65938 (2026-09-11).\n- The launchers rely on it. scripts/moe-agent.sh:9077-9103 (launch_outage_release) sends the pinned MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION and treats ATTEMPT_SUPERSEDED as a refusal that is not this seat's to force. Its twin is Invoke-MoeLaunchOutageRelease in moe-agent.ps1.\n- docs/MCP_SERVER.md `### moe.release_task` (:2067-2125 at b9205914):\n  - its Parameters block lists only taskId, reason, handoffNote, workerId and force;\n  - neither the intro nor the side effects mention attemptId, generation, ATTEMPT_SUPERSEDED or the malformed-identity refusal.\n  The ownership refusals RELEASE_NOT_ASSIGNEE, STEP_LEASE_HELD and NOT_ALLOWED ARE documented. A reader of the contract cannot learn that a release can be fenced.\n\nEVIDENCE\n- releaseTask.test.ts:1185, \"refuses a late generation-1 release after the same worker re-claimed as generation 2, writing nothing\", asserts code -32002, codeName ATTEMPT_SUPERSEDED and unchanged state.\n- releaseTask.test.ts:1228, \"refuses a malformed attempt identity as invalid input without releasing anything\".\n- In a git archive of b9205914, `cd packages/moe-daemon && npx vitest run src/tools/releaseTask.test.ts -t attempt` gives 14 passed.\n- A scan of the 59-line section finds no attemptId, generation, SUPERSEDED or fenc.\n\nFIX DIRECTION (docs only)\nIn `### moe.release_task`:\n- add `attemptId?` and `generation?` to the Parameters block, using the code's descriptions;\n- add one bullet: a presented identity passes the same currency check as the step tools, before any write. That means equality with the task's current attempt; a superseded, closed or future attempt is refused STATE_CONFLICT ATTEMPT_SUPERSEDED; a malformed one is refused INVALID_INPUT; omitted is the unfenced legacy path.\nEdit only that section. Use your own editor, never a shell write.\n\nFILES\n- docs/MCP_SERVER.md (### moe.release_task only)\nNo open row edits that section at 06:01Z.",
+  "definitionOfDone": [
+    "`### moe.release_task`'s Parameters block lists attemptId and generation, and the section names the ATTEMPT_SUPERSEDED refusal and the malformed-identity INVALID_INPUT, matching releaseTask.ts:116-126, :168-170 and :219-224.",
+    "The diff touches only that section of docs/MCP_SERVER.md, and npm run lint passes at the repo root.",
+    "releaseTask.test.ts passes unchanged in a snapshot outside the shared checkout: the cited cases at :1185 and :1228 pin the documented behavior."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Docs only: docs/MCP_SERVER.md, inside `### moe.release_task` (:2076-2135 at 6fbdc22f), with your own Edit tool. Never use a shell write or a subagent edit (global rail 3). The byte-exact prototype is in /mnt/d/moe-scratch/47652916-plan/proto-release_task.diff.\n(a) Parameters block: insert two lines right AFTER the `workerId?: string, ...` line and BEFORE `force?: boolean`. This keeps `force` the last field, so its line, which has no trailing comma, stays untouched:\n  `attemptId?: string,             // Optional fencing identity (≤128 chars): the attemptId moe.claim_next_task returned. Omitted = unfenced, as before`\n  `generation?: number,            // Optional fencing token (integer ≥ 1): the generation moe.claim_next_task returned, checked together with attemptId`\n(b) Add one paragraph right before the section's **Returns:** line. It starts \"**Attempt fence.**\" and says:\n  - a presented attemptId (plus generation when supplied) goes through the step tools' currency check (assertAttemptCurrent), inside the state lock beside the ownership gates and before any write;\n  - it must equal the task's current open attempt;\n  - a superseded, closed or future attempt is refused `STATE_CONFLICT` (`-32002`) `ATTEMPT_SUPERSEDED` and nothing is released;\n  - a malformed identity (a blank or non-string attemptId, one over 128 characters, or a generation that is not a positive integer) is refused `INVALID_INPUT` (`-32602`);\n  - a task with no attempt record skips the check, and an omitted identity is the unfenced legacy path;\n  - the launchers' seat-outage release (`launch_outage_release`, `Invoke-MoeLaunchOutageRelease`) sends the pinned `MOE_ATTEMPT_ID` and `MOE_ATTEMPT_GENERATION`.\nThese facts come from releaseTask.ts:116-126, :168-170 and :219-224, util/enforcement.ts:137-158 and :183-230, and scripts/moe-agent.sh:9077-9103. Re-read them before writing. Edit nothing outside this section. Error handling: re-grep both anchors first; if a peer moved them, keep the same placement relative to `workerId?` and **Returns:**.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "startedAt": "2026-11-04T06:17:39.968Z",
+      "completedAt": "2026-11-04T06:17:51.388Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verification, run once, from your worktree root. Run the two executionContract checkRefs in order. Each is byte-identical to /mnt/d/moe-scratch/47652916-plan/r0.sh and r1.sh; check that first with `sha256sum -c SHA256SUMS` in that directory. Submit as moe.complete_task verification the joined command `bash /mnt/d/moe-scratch/47652916-plan/r0.sh && bash /mnt/d/moe-scratch/47652916-plan/r1.sh`, with its fresh exit code and output tail.\n- R0 checks the section names `attemptId?: string`, `generation?: number`, ATTEMPT_SUPERSEDED and INVALID_INPUT (DoD 1). It checks that no file other than docs/MCP_SERVER.md changed, and that every diff hunk lies inside `### moe.release_task` (DoD 2).\n- R1 runs `npm run lint`, then releaseTask.test.ts in a mktemp clone of your HEAD (DoD 2 and 3; 59 tests at 6fbdc22f).\nArchitect proofs on a clone at 6fbdc22f: R0 fails on the unedited tree, on a stray SCHEMA.md edit and on a stray hunk at MCP_SERVER.md:200, and passes on the prototype; R1 passes. Never run npm ci or tests inside /mnt/d/projexts/moes or your worktree.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "R0 OK; R1 lint + releaseTask.test.ts 59 passed",
+      "startedAt": "2026-11-04T06:17:58.155Z",
+      "completedAt": "2026-11-04T06:18:12.315Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Adversarial self-review of your own diff, run once. Check:\n(1) Every claim in the new paragraph matches the code. The INVALID_INPUT cases are exactly those of validateAttemptIdentity plus the 128-char bound. A generation alone, without attemptId, is still checked. A task with no attempt records skips the check.\n(2) `force` is still the last field of the Parameters block and its line is unchanged.\n(3) The two new parameter lines align with the block's existing comment column.\n(4) No other section of docs/MCP_SERVER.md changed. R0's hunk check proves this; re-run it if you touched anything.\n(5) The paragraph names no tool or code that does not exist: grep `launch_outage_release` in scripts/moe-agent.sh and `Invoke-MoeLaunchOutageRelease` in scripts/moe-agent.ps1.\nFix anything you find, then re-run step 2's joined command and submit that fresh output.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: claims match validateAttemptIdentity; force line untouched (diff is 4 pure additions); launcher names grep-confirmed (3 hits each); R0 hunk check passed.",
+      "startedAt": "2026-11-04T06:18:13.304Z",
+      "completedAt": "2026-11-04T06:18:16.676Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 483.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-04T06:03:00.433Z",
+  "updatedAt": "2026-11-04T19:20:45.246Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-04T06:13:52.211Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 1,
+    "executedStepCount": 3,
+    "doneAt": "2026-11-04T06:20:33.576Z",
+    "wallClockMs": 401365
+  },
+  "contextFetchedBy": [
+    "architect-2a219562",
+    "worker-a408f113",
+    "qa-25f21f0a"
+  ],
+  "tier": "light",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6-luna",
+  "lowEffortEligible": true,
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-04T06:16:06.425Z",
+  "executionContract": {
+    "intendedBehavior": "docs/MCP_SERVER.md's `### moe.release_task` documents what the code already enforces:\n- the optional attemptId and generation inputs;\n- their currency check before any write, refused STATE_CONFLICT ATTEMPT_SUPERSEDED;\n- the malformed-identity INVALID_INPUT;\n- the unfenced legacy path when the identity is omitted.\nDocs only; no code changes.",
+    "acceptanceCriteria": [
+      "The Parameters block lists `attemptId?: string` and `generation?: number`, and the section names ATTEMPT_SUPERSEDED and INVALID_INPUT for a presented identity, matching releaseTask.ts:116-126, :168-170 and :219-224.",
+      "The diff is confined to `### moe.release_task` in docs/MCP_SERVER.md, and npm run lint passes.",
+      "releaseTask.test.ts passes unchanged in a mktemp clone, including the cases at :1185 (ATTEMPT_SUPERSEDED) and :1228 (malformed identity)."
+    ],
+    "invariants": [
+      "The `force` parameter line and every other section of docs/MCP_SERVER.md are unchanged.",
+      "The documented refusal codes and numeric codes match releaseTask.ts and util/enforcement.ts exactly."
+    ],
+    "compatibility": [
+      "No code, schema or wire change. The tool already accepts both fields (releaseTask.ts inputSchema), and an omitted identity stays unfenced."
+    ],
+    "approvedScope": [
+      "docs/MCP_SERVER.md, `### moe.release_task` only: two Parameters lines and one **Attempt fence.** paragraph before **Returns:**."
+    ],
+    "reuse": [
+      "The wording reuses the tool's own inputSchema descriptions (releaseTask.ts:116-126)."
+    ],
+    "sourceAssumptions": [
+      "releaseTask.ts:21 sets MAX_ATTEMPT_ID_LEN = 128. :116-126 declares attemptId (maxLength 128) and generation (integer, minimum 1). :168-170 refuses an over-long attemptId with INVALID_INPUT. :219-224 runs assertAttemptCurrent inside runExclusive before any write.",
+      "util/enforcement.ts:137-158 (validateAttemptIdentity) refuses a blank or non-string attemptId and a generation that is not a positive safe integer with INVALID_INPUT. :183-230 (assertAttemptCurrent) skips the check for a task with no attempts and refuses a mismatch with STATE_CONFLICT ATTEMPT_SUPERSEDED (-32002).",
+      "scripts/moe-agent.sh:9077-9103 (launch_outage_release) sends MOE_ATTEMPT_ID and MOE_ATTEMPT_GENERATION. Its twin in moe-agent.ps1 is Invoke-MoeLaunchOutageRelease."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git rev-parse -q --verify MERGE_HEAD || git log -1 --format=%H --invert-grep -E --grep='^(wip|sync)\\(task-' HEAD) && F=docs/MCP_SERVER.md && S=$(grep -n '^### moe\\.release_task$' $F | cut -d: -f1) && E=$(awk -v s=$S 'NR>s && /^### /{print NR; exit}' $F) && T=$(mktemp) && sed -n \"${S},${E}p\" $F > $T && for p in 'attemptId?: string' 'generation?: number' ATTEMPT_SUPERSEDED INVALID_INPUT; do grep -qF -- \"$p\" $T || { echo \"FAIL: release_task section lacks: $p\"; exit 1; }; done && X=$({ git diff --name-only $B; git ls-files -o --exclude-standard; } | grep -v '^\\.moe/' | grep -vxF $F || true) && { [ -z \"$X\" ] || { echo \"FAIL: out-of-scope change: $X\"; exit 1; }; } && git diff -U0 $B -- $F | awk -v s=$S -v e=$((E-1)) '/^@@/{split($3,a,/[+,]/); n=(a[3]==\"\"?1:a[3]); if (n>0 && (a[2]<s || a[2]+n-1>e)) {print \"FAIL: hunk outside ### moe.release_task: \" $0; bad=1}} END{exit bad}' && echo \"R0 OK: section $S-$((E-1))\"",
+      "cd \"$(git rev-parse --show-toplevel)\" && npm run lint && S=$(mktemp -d) && git clone -q --shared --no-checkout . $S/r && git -C $S/r checkout -q --detach $(git rev-parse HEAD) && cd $S/r/packages/moe-daemon && env -i HOME=$HOME NO_COLOR=1 PATH=$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin bash -c 'set -o pipefail; npm ci --no-audit -q && npx vitest run src/tools/releaseTask.test.ts'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "The new fields go before `force` rather than after it, so the `force` line (the block's last field, with no trailing comma) stays byte-identical. The fence paragraph goes before **Returns:**, as the section's refusal rules sit in its intro and side effects.",
+    "codebaseInsights": "f0ca0ff0 and 7e735953 edit other sections of MCP_SERVER.md (get_context, finalize_attempt and deregister_worker); worktree-mode merge-tree lands distinct hunks cleanly. R0's awk check confines every hunk to the section.",
+    "risks": "- Unicode ≤ and ≥ in the comments are fine, since the doc already uses typographic characters; keep ASCII elsewhere.\n- If a peer lands a change inside `### moe.release_task` first, re-grep before editing. R0 recomputes the section bounds from the live file.",
+    "keyFiles": [
+      "docs/MCP_SERVER.md",
+      "packages/moe-daemon/src/tools/releaseTask.ts",
+      "packages/moe-daemon/src/util/enforcement.ts",
+      "packages/moe-daemon/src/tools/releaseTask.test.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "6fbdc22f3dace6d1c39fc74c062e4656e078b98a",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-04T06:16:06.456Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-04T06:17:39.968Z",
+  "reviewStartedAt": "2026-11-04T06:18:19.222Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/47652916-plan/r0.sh && bash /mnt/d/moe-scratch/47652916-plan/r1.sh",
+    "exitCode": 0,
+    "outputTail": "R0 OK: section 2076-2138\n ✓ src/tools/releaseTask.test.ts (59 tests) 1772ms\n Test Files  1 passed (1)\n      Tests  59 passed (59)",
+    "reportedAt": "2026-11-04T06:18:19.222Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "docs/MCP_SERVER.md ### moe.release_task: added attemptId?/generation? to Parameters and an Attempt fence paragraph (ATTEMPT_SUPERSEDED -32002, INVALID_INPUT -32602, unfenced legacy path, launcher outage release). 4 added lines, section-only.",
+  "commits": [
+    {
+      "sha": "b93a43e1e493260bc4234802067a5a866c4dbae3",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-a408f113@2026-11-04T06:16:37Z",
+      "paths": [
+        "docs/MCP_SERVER.md"
+      ],
+      "recordedBy": "worker-a408f113",
+      "recordedAt": "2026-11-04T06:19:08.764Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-25f21f0a@2026-11-04T06:19:23Z",
+    "at": "2026-11-04T06:20:53.796Z"
+  },
+  "completedAt": "2026-11-04T06:20:33.576Z",
+  "reviewCompletedAt": "2026-11-04T06:20:33.576Z",
+  "reviewSummary": "Reviewed completion b93a43e1 (on moe/work-2026-10-24): docs-only, 1 file, +4/-0 (docs/MCP_SERVER.md). Read `git diff b93a43e1^ b93a43e1`: attemptId?/generation? Parameters lines inserted between workerId? and force? (force line untouched) plus one \"Attempt fence.\" paragraph before Returns:. Hunks at 2089-2102, all inside `### moe.release_task` (2076-2138).\nRe-ran verification: r0.sh -> \"R0 OK: section 2076-2138\" (exit 0); r1.sh -> npm run lint passes and, in a mktemp clone outside the shared checkout, releaseTask.test.ts = 59 passed (exit 0). Scratch script SHA256SUMS OK. Cited tests exist at releaseTask.test.ts:1185 (ATTEMPT_SUPERSEDED) and :1228 (malformed identity); test file and releaseTask.ts unmodified.\nCross-checked doc claims vs code: releaseTask.ts:116-126 (maxLength 128, integer>=1), :168-170 (over-long attemptId -> INVALID_INPUT), :219-224 (assertAttemptCurrent inside lock, before any write); enforcement.ts validateAttemptIdentity (blank/non-string attemptId, non-positive generation -> INVALID_INPUT) and assertAttemptCurrent (no attempt record skipped; equality vs current attempt, superseded/closed/future -> STATE_CONFLICT ATTEMPT_SUPERSEDED; omitted = unfenced); errors.ts STATE_CONFLICT -32002, INVALID_INPUT -32602 match; launch_outage_release (moe-agent.sh:9077) and Invoke-MoeLaunchOutageRelease (moe-agent.ps1) exist and send MOE_ATTEMPT_ID/GENERATION.\nDoD 1-3 met; no code/schema/wire change; other sections unchanged. Non-blocking: doc says generation must be a positive integer; code also bounds by MAX_ATTEMPT_GENERATION, immaterial for docs.",
+  "requiredCheckAtDone": null
+}

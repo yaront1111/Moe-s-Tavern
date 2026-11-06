@@ -1,0 +1,225 @@
+{
+  "id": "task-c927e48475df493d998182b8376e0b6b",
+  "epicId": "epic-be924fb8",
+  "title": "bug: archive_epic's own EPIC_UPDATED (status → ARCHIVED) records no actor, though the same call's TASK_ARCHIVED events have recorded the caller since 1064df99 (residual of the 3e1d0c2e actor fix)",
+  "description": "Filed by governor-e6b40560 from architect-24611a0a's residual note on task-3e1d0c2e (#governors msg-76075bb1, 18:59Z).\n\nPROBLEM (verified at moe/work-2026-10-24 b5f40fee)\n- packages/moe-daemon/src/tools/archiveEpic.ts:86 records the caller on each TASK_ARCHIVED: `state.updateTask(task.id, archiveUpdates(task), 'TASK_ARCHIVED', params.workerId)`, landed by 1064df99 (b9119a93).\n- The same call then archives the epic at :92 with `state.updateEpic(params.epicId, { status: 'ARCHIVED' })`, which passes no actor. So the EPIC_UPDATED event for the archive has no workerId, and get_activity_log { workerId } misses it.\n- task-3e1d0c2e (WORKING) adds an optional actorWorkerId to StateManager.updateEpic for update_epic. Once it lands, this fix is one argument plus a test.\n\nEXPLICITLY OUT OF SCOPE\nStateManager.ts:1434, the EPIC_UPDATED written when a human approves a rail proposal. The architect left it actor-less on purpose.\n\nDEPENDENCY\ndependsOn task-3e1d0c2e, because this row needs its updateEpic actor parameter. Plan against that row's plan (an assumed interface: updateEpic(epicId, updates, actorWorkerId?)). WORKING claims wait until it is DONE.\n\nGate: narrow, per the epic-be924fb8 ruling msg-bbf4f109. Run archiveEpic's test file only.",
+  "definitionOfDone": [
+    "archive_epic called with a workerId records that workerId as the actor on the epic's EPIC_UPDATED (status ARCHIVED) event, as well as on every TASK_ARCHIVED event, so get_activity_log { workerId } returns both kinds; a call without workerId still succeeds and records no actor.",
+    "A regression case in packages/moe-daemon/src/tools/archiveEpic.test.ts fails before the fix and passes after it, and the rest of archiveEpic.test.ts still passes.",
+    "The rail-proposal approval EPIC_UPDATED in StateManager is unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Write the regression test FIRST, in packages/moe-daemon/src/tools/archiveEpic.test.ts. DoD 2 names this file, so add no new test file. Use the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never cp or shell-write it into the tree, and never write it through a subagent; those leave no TOOL witness.\n\nA validated reference is /mnt/d/moe-scratch/plan-c927e484/e1-case.ts; archiveEpic.test.new.ts there is the whole file. On task-3e1d0c2e's real bytes (754d3e8d) it was RED without the fix and green with it, and it killed 5 of 5 mutants. See mem:gotcha-task-event-actor-inventory, Test pattern section.\n- Add `import { getActivityLogTool } from './getActivityLog.js';` after the archiveEpicTool import.\n- Add ONE case inside describe('moe.archive_epic'), right after the held-BLOCKED-row case. Its title must start with exactly `(e1) `, because checkRef `red` greps the FAIL line for that prefix.\n- Fixture:\n  - epic-ac (order 2), holding task-ac1 (DONE) and task-ac2 (BACKLOG, order 2);\n  - epic-nc (order 3), holding task-nc (DONE);\n  - then await h.state.load().\n- Calls, in order:\n  1. archive_epic { epicId: 'epic-ac', workerId: 'architect-c' }.\n  2. archive_epic { epicId: 'epic-nc' } with no workerId (a human).\n  3. archive_epic { epicId: 'epic-ac', workerId: 'worker-z' } again. It must toEqual { success: true, epicId: 'epic-ac', epicStatus: 'ARCHIVED', archivedTaskCount: 0, totalTasks: 2 }, because an idempotent re-archive writes nothing.\n- Then await flushActivityLog(h.state), before any log read.\n- expect.soft 1, per seat: query getActivityLogTool { workerId, limit: 100 } for 'architect-c', 'worker-z', 'unknown' and 'agent'. Keep only EPIC_UPDATED and TASK_ARCHIVED, key each as `${event}:${taskId ?? epicId}`, and sort.\n  - architect-c must equal ['EPIC_UPDATED:epic-ac', 'TASK_ARCHIVED:task-ac1', 'TASK_ARCHIVED:task-ac2'].\n  - The other three must each equal [].\n- expect.soft 2, the actor of every event:\n  - Take h.state.getActivityLog(200), keep the two kinds whose top-level epicId is epic-ac or epic-nc, and map each to a [key, workerId ?? null] pair, then sort.\n  - The result must equal exactly [['EPIC_UPDATED:epic-ac','architect-c'], ['EPIC_UPDATED:epic-nc', null], ['TASK_ARCHIVED:task-ac1','architect-c'], ['TASK_ARCHIVED:task-ac2','architect-c'], ['TASK_ARCHIVED:task-nc', null]].\n  - Use pairs, not a map, so a duplicate event shows up.\n- expect.soft 3: both EPIC_UPDATED payloads equal { epicId, changedFields: ['status'], status: 'ARCHIVED' }. That shows the event is the status → ARCHIVED write and its payload is unchanged.\n\nThen run checkRef `red` once. Expect exit 0, ' Tests  1 failed | 6 passed (7)', the (e1) FAIL line and RED-BEFORE-FIX. That is the DoD's fails-before evidence.\n\nError handling in the test: every log read follows an awaited flushActivityLog, so a pending append can never fake a pass or a fail. Leave the existing cases, and the file archiveEpic.holderActor.test.ts, unchanged.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts"
+      ],
+      "note": "Added case (e1); checkRef red: (e1) FAIL, Tests 1 failed | 6 passed (7), RED-BEFORE-FIX.",
+      "startedAt": "2026-11-03T19:21:45.934Z",
+      "completedAt": "2026-11-03T19:22:11.520Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Fix packages/moe-daemon/src/tools/archiveEpic.ts:\n- Change the epic write (~:92) to exactly `const updatedEpic = epicWasArchived ? epic : await state.updateEpic(params.epicId, { status: 'ARCHIVED' }, params.workerId);`. The third argument is the actorWorkerId parameter that the dependsOn row task-3e1d0c2e adds to StateManager.updateEpic. updateEpic passes it to appendActivity as the 7th argument.\n- Above that line, add a one-line comment: the caller is also the actor of the epic's own EPIC_UPDATED, and an idempotent re-archive writes nothing. Keep the `epicWasArchived ? epic :` short-circuit.\n- In inputSchema.properties.workerId.description (~:41), change 'recorded as the actor of each TASK_ARCHIVED, and a BLOCKED row…' to 'recorded as the actor of each TASK_ARCHIVED and of the epic\\'s EPIC_UPDATED, and a BLOCKED row…'.\n- Pass the bare params.workerId. Never use `?? 'unknown'`, `|| 'agent'` or the assignee. A caller-less call passes undefined and records no actor.\n\nDocs: in docs/MCP_SERVER.md, section `### moe.archive_epic` (~:1784-1806), make two edits:\n- The sentence 'Each `TASK_ARCHIVED` records the caller's `workerId` as its actor.' becomes 'Each `TASK_ARCHIVED`, and the epic's own `EPIC_UPDATED` (status `ARCHIVED`), records the caller's `workerId` as its actor; a call without one records none.'\n- The workerId comment in the Parameters block becomes '// Caller (auto-injected by moe-proxy); recorded as the actor of each TASK_ARCHIVED and of the epic's EPIC_UPDATED; a BLOCKED task held by another worker refuses the archive'.\n\nTouch nothing else. These stay byte-identical:\n- state/StateManager.ts, including the rail-proposal approval's `await this.updateEpic(epic.id, { epicRails: rails });` (DoD 3);\n- server/WebSocketServer.ts;\n- tools/archiveTask.ts.\n\nError handling is unchanged. missingRequired, notFound, the in-flight NOT_ALLOWED, the holder-only NOT_ALLOWED and ATTEMPT_FINALIZING keep their order and still refuse before any write. The audit append stays best-effort: appendActivity never throws into the caller.\n\nEdit both files with the session's own editing tool: Edit on a Claude seat, apply_patch on a codex exec seat. Never use Serena on docs/ (it ignores docs/), and never a shell write. The code reference is /mnt/d/moe-scratch/plan-c927e484/reference-fix.diff.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Passed params.workerId to updateEpic; schema description + docs updated.",
+      "startedAt": "2026-11-03T19:22:15.334Z",
+      "completedAt": "2026-11-03T19:22:28.049Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification gate, run once after steps 1-2. From the task worktree root, run checkRef `green` exactly as written in executionContract.checkRefs. It does three things:\n- It greps that the rail-proposal call is unchanged and prints RAIL-CALL-UNCHANGED (DoD 3).\n- It snapshots HEAD's packages/moe-daemon with mktemp and overlays archiveEpic.ts and archiveEpic.test.ts.\n- It runs npm ci, then `tsc --noEmit`, then a tsc pass over the test file through tt.json (the package tsconfig excludes tests), then vitest over archive_epic's two test files: archiveEpic.test.ts and archiveEpic.holderActor.test.ts. `tsc --noEmit` fails with TS2554 'Expected 2 arguments, but got 3' if task-3e1d0c2e's updateEpic parameter is missing.\nExpected output: RAIL-CALL-UNCHANGED, ' Test Files  2 passed (2)', ' Tests  10 passed (10)', and exit 0. This command is the complete_task verification.command, and its printed lines are the outputTail.\n\nThen run checkRef `red` once, and quote its printed lines in the completion summary: the (e1) FAIL line, ' Tests  1 failed | 6 passed (7)' and RED-BEFORE-FIX. It snapshots HEAD and overlays the working-tree test plus the unfixed archiveEpic.ts pinned at 99d390047c6b. It then requires exactly one failing test, (e1), so it stays valid for QA after landing.\n\nThe gate is narrow, per the standing epic-be924fb8 ruling (msg-bbf4f109) that the row cites. isEpicFinal:true is a max-order fallback, not an epic-final row. Never run npm in the shared checkout: both commands work only in mktemp snapshots. The 'npm notice' lines that npx prints are harmless.\n\nError handling for a red run:\n- On a nonzero exit, read ../v.log (or ../r.log) beside the snapshot's package, fix the owned files, and rerun the whole command.\n- Never cite a partial or edited command.\n- Never weaken an (e1) assertion to get green. Change one only if you can show it contradicts the DoD.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "green: RAIL-CALL-UNCHANGED, Test Files 2 passed (2), Tests 10 passed (10), exit 0. red (run after step 1, test unchanged since): (e1) FAIL, Tests 1 failed | 6 passed (7), RED-BEFORE-FIX.",
+      "startedAt": "2026-11-03T19:22:28.824Z",
+      "completedAt": "2026-11-03T19:22:42.958Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Adversarial self-review over this task's own diff only (load the adversarial-self-review skill):\n1. `git diff --stat $(git merge-base HEAD moe/work-2026-10-24)` lists exactly the 3 owned paths: tools/archiveEpic.ts, tools/archiveEpic.test.ts and docs/MCP_SERVER.md. StateManager.ts is absent, so the rail-proposal EPIC_UPDATED is unchanged (DoD 3).\n2. The archiveEpic.ts diff is only the third argument, the comment and the schema description.\n   - It adds no `?? 'unknown'`, no `|| 'agent'` and no assignee fallback.\n   - It reads no actor from the epic, a task or args other than params.workerId.\n   - No added line contains a project.json globalRails.forbiddenPatterns string.\n3. Twice or concurrently: a second archive_epic on an ARCHIVED epic writes nothing and attributes nothing; (e1) pins this. The tools run under McpAdapter's global state mutex, and nothing new is shared or cached.\n4. Null and empty: an absent workerId records no actor. An explicit '' passes through, as it does at the TASK_ARCHIVED site. Normalizing it belongs to appendActivity and is out of scope.\n5. These are unchanged: the EPIC_UPDATED payload; the return shape { success, epicId, epicStatus, archivedTaskCount, totalTasks }; the existing cases, which still pass unedited.\n6. The docs sentence and the parameter comment match the code.\nFix anything you find, then rerun checkRef `green` before complete_task.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "packages/moe-daemon/src/tools/archiveEpic.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "docs/MCP_SERVER.md"
+      ],
+      "note": "Self-review: diff is exactly the 3 owned paths; no fallback actor; StateManager untouched; green already passed on these bytes.",
+      "startedAt": "2026-11-03T19:22:43.795Z",
+      "completedAt": "2026-11-03T19:22:51.667Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "GOVERNOR",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-3e1d0c2e1979498394e4f6594c908027"
+  ],
+  "priority": "LOW",
+  "order": 405.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T19:00:17.701Z",
+  "updatedAt": "2026-11-04T19:20:44.496Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T19:01:00.305Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-03T19:25:50.169Z",
+    "wallClockMs": 1489864
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-33f67e5b",
+    "qa-7328a40d"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T19:15:04.844Z",
+  "executionContract": {
+    "intendedBehavior": "moe.archive_epic records the caller's workerId (auto-injected by moe-proxy) as the top-level workerId of the epic's own EPIC_UPDATED (status → ARCHIVED). It already does this on every TASK_ARCHIVED, so get_activity_log { workerId } returns both kinds. A call without workerId still succeeds and records no actor on either kind. An idempotent re-archive of an already-ARCHIVED epic writes nothing and so records nothing. The rail-proposal approval's EPIC_UPDATED in StateManager stays actor-less, and its code is untouched.",
+    "acceptanceCriteria": [
+      "After archive_epic { epicId, workerId: X }, get_activity_log { workerId: X } returns the epic's EPIC_UPDATED (payload { epicId, changedFields: ['status'], status: 'ARCHIVED' }) and one TASK_ARCHIVED for each task it archived.",
+      "archive_epic without workerId succeeds, and its EPIC_UPDATED and TASK_ARCHIVED events have no workerId. Seats 'unknown' and 'agent' match none of them.",
+      "A second archive_epic on the archived epic, by another seat, writes no event, and that seat's get_activity_log stays empty.",
+      "Case (e1) in packages/moe-daemon/src/tools/archiveEpic.test.ts fails against the unfixed archiveEpic.ts: checkRef red requires exactly 1 failed test. It passes after the fix, and the rest of archiveEpic.test.ts and archiveEpic.holderActor.test.ts still pass (checkRef green).",
+      "StateManager.ts's rail-proposal call `await this.updateEpic(epic.id, { epicRails: rails });` is unchanged. Green greps it, and StateManager.ts is not in the diff."
+    ],
+    "invariants": [
+      "The actor comes only from archive_epic's own params.workerId. It is never replaced by a placeholder ('unknown', 'agent', the assignee).",
+      "The EPIC_UPDATED and TASK_ARCHIVED payloads and their epicId/taskId fields are unchanged.",
+      "Refusals keep their order and codes (missingRequired, notFound, in-flight NOT_ALLOWED, holder-only NOT_ALLOWED, ATTEMPT_FINALIZING), and a refused call writes nothing.",
+      "An already-ARCHIVED epic is never rewritten. appendActivity stays best-effort."
+    ],
+    "compatibility": [
+      "archive_epic's inputSchema changes only in the workerId description text. The return shape and all error codes are unchanged.",
+      "No .moe/ format change: the event uses the existing optional top-level workerId field.",
+      "The rail-proposal updateEpic and the board's /ws epic paths stay actor-less."
+    ],
+    "approvedScope": [
+      "tools/archiveEpic.ts: the state.updateEpic call passes params.workerId as its third argument, plus a one-line comment and the workerId schema description text",
+      "tools/archiveEpic.test.ts: the getActivityLogTool import and one new case, (e1)",
+      "docs/MCP_SERVER.md, section moe.archive_epic: the actor sentence and the workerId parameter comment"
+    ],
+    "reuse": [
+      "StateManager.updateEpic(epicId, updates, actorWorkerId?), added by the dependsOn row task-3e1d0c2e. This row adds no state-layer code.",
+      "ToolTestHarness, flushActivityLog and getActivityLogTool, as in tools/createCommitActor.test.ts and tools/archiveEpic.holderActor.test.ts"
+    ],
+    "sourceAssumptions": [
+      "At 99d39004, tools/archiveEpic.ts:92 reads `const updatedEpic = epicWasArchived ? epic : await state.updateEpic(params.epicId, { status: 'ARCHIVED' });` and passes no actor. :87 already passes params.workerId to updateTask for TASK_ARCHIVED (b9119a93).",
+      "task-3e1d0c2e changes StateManager.updateEpic to (epicId, updates, actorWorkerId?: string) and passes the actor as appendActivity's 7th argument. This is verified on its task branch at 754d3e8d and in its approvedScope.",
+      "state/activityLog.ts appendActivity sets epicId = task?.epicId || epic?.id and workerId = worker?.id || proposal?.workerId || actorWorkerId. updateEpic passes the updated epic, so EPIC_UPDATED carries a top-level epicId.",
+      "tools/getActivityLog.ts queryActivityLog filters workerId on the top-level field only. state.getActivityLog returns events newest-first, so the test sorts.",
+      "state/validators.ts epicUpdatedActivityPayload(epic, { status }) returns { epicId, changedFields: ['status'], status }.",
+      "The rail-proposal approval is StateManager.ts ~:1434 `await this.updateEpic(epic.id, { epicRails: rails });`.",
+      "The package tsconfig excludes src/**/*.test.ts, so tt.json type-checks the test file."
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && grep -qF 'await this.updateEpic(epic.id, { epicRails: rails });' $P/src/state/StateManager.ts && echo RAIL-CALL-UNCHANGED && S=$(mktemp -d) && git archive HEAD $P | tar -x -C $S && cp --parents $P/src/tools/archiveEpic{,.test}.ts $S && cd $S/$P && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/archiveEpic.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/archiveEpic > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+      "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && R=$(mktemp -d) && git archive HEAD $P | tar -x -C $R && cp --parents $P/src/tools/archiveEpic.test.ts $R && git show 99d390047c6b23217ed2cbfa1aa14605842530ee:$P/src/tools/archiveEpic.ts > $R/$P/src/tools/archiveEpic.ts && cd $R/$P && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && { npx vitest run src/tools/archiveEpic.test.ts > ../r.log 2>&1; [ $? = 1 ]; } && grep -aE \"^ +Tests |^ FAIL \" ../r.log && grep -aqE \"^ +Tests +1 failed \\| [0-9]+ passed\" ../r.log && grep -aqE \"^ FAIL .*> \\(e1\\) \" ../r.log && echo RED-BEFORE-FIX'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Rejected alternatives:\n(1) A new test file, like archiveEpic.holderActor.test.ts. DoD 2 names archiveEpic.test.ts.\n(2) An actor on the rail-proposal EPIC_UPDATED. DoD 3 keeps it unchanged, and a human approves it.\n(3) A new state-layer channel. task-3e1d0c2e's updateEpic parameter already exists for this, so the fix is one argument.\n(4) A merge-base RED leg. It degenerates for QA in the control checkout (mem:gotcha-gate-checkref-rc-and-pinned-base).\n(5) Pinning RED to task-3e1d0c2e's landing commit. Its sha is unknown at plan time. Instead the leg pins the unfixed archiveEpic.ts at 99d39004, which task-3e1d0c2e does not touch, over HEAD.\n(6) Running the full package suite. The epic ruling msg-bbf4f109 rules it out; the gate runs archive_epic's two test files instead of the one the row names, which still keeps it narrow.",
+    "codebaseInsights": "archive_epic writes each TASK_ARCHIVED through updateTask(..., 'TASK_ARCHIVED', params.workerId), which has carried the caller since b9119a93. Its epic write, updateEpic(params.epicId, { status: 'ARCHIVED' }), passes no actor. It is skipped when the epic was already ARCHIVED. The EPIC_UPDATED event carries a top-level epicId, because appendActivity takes it from the epic entity.\n\nDry-runs on 2026-11-03, about 19:10Z, in a --shared scratch clone; evidence is in /mnt/d/moe-scratch/plan-c927e484/dryrun.log.\n- With the reference fix for task-3e1d0c2e committed:\n  - red: Tests 1 failed | 6 passed (7), RED-BEFORE-FIX, exit 0.\n  - green with the test only, no fix: exit 1, only (e1) failing.\n  - green with the fix: Test Files 2 passed (2), Tests 10 passed (10), exit 0.\n  - After a simulated landing commit, green exit 0 and red still RED-BEFORE-FIX, which is QA's position.\n- On task-3e1d0c2e's real checkpoint 754d3e8d: green exit 0, red RED-BEFORE-FIX.\n- Without task-3e1d0c2e, tsc --noEmit fails with TS2554.\n- Mutants (mut.sh), each killed by (e1): `?? 'unknown'`, `|| 'agent'`, an always-write re-archive, no task actor, no epic actor.\n- Each leg takes about 10s.",
+    "risks": "1. RED pins archiveEpic.ts at 99d39004. If another row changes archiveEpic.ts before this claim, RED runs the older file, and the exact '1 failed' grep would flag any extra failure. No other open row mentions archive_epic (checked 2026-11-03).\n2. Keep the `(e1) ` title prefix, because RED greps it.\n3. Write the test with the editing tool, never `cp` from /mnt/d/moe-scratch, or the path lands unwitnessed.\n4. If task-3e1d0c2e's landed updateEpic signature differs after a QA reject, green's tsc names it. Match the landed signature only.\n5. Green's overlay is an explicit list. A renamed test file must be added to it.\n6. task-3e1d0c2e sits in REVIEW, and its checkpoint 754d3e8d is not yet on moe/work-2026-10-24. WORKING claims wait for it to be DONE (dependsOn).",
+    "keyFiles": [
+      "packages/moe-daemon/src/tools/archiveEpic.ts",
+      "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+      "packages/moe-daemon/src/tools/archiveEpic.holderActor.test.ts",
+      "packages/moe-daemon/src/state/StateManager.ts",
+      "packages/moe-daemon/src/state/activityLog.ts",
+      "packages/moe-daemon/src/tools/getActivityLog.ts",
+      "docs/MCP_SERVER.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "af8ca2bb970f240214ba33a90e0d86aa56038475",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T19:15:04.877Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T19:21:45.934Z",
+  "reviewStartedAt": "2026-11-03T19:22:58.279Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && P=packages/moe-daemon && grep -qF 'await this.updateEpic(epic.id, { epicRails: rails });' $P/src/state/StateManager.ts && echo RAIL-CALL-UNCHANGED && S=$(mktemp -d) && git archive HEAD $P | tar -x -C $S && cp --parents $P/src/tools/archiveEpic{,.test}.ts $S && cd $S/$P && printf '{\"extends\":\"./tsconfig.json\",\"compilerOptions\":{\"noEmit\":true,\"types\":[\"node\"]},\"include\":[\"src/tools/archiveEpic.test.ts\"],\"exclude\":[]}' > tt.json && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" NO_COLOR=1 sh -c 'npm ci --no-audit --no-fund >/dev/null 2>&1 && npx tsc --noEmit && npx tsc -p tt.json && { npx vitest run src/tools/archiveEpic > ../v.log 2>&1; r=$?; grep -aE \"^ +(Test Files|Tests) |^ FAIL \" ../v.log; exit $r; }'",
+    "exitCode": 0,
+    "outputTail": "RAIL-CALL-UNCHANGED\n Test Files  2 passed (2)\n      Tests  10 passed (10)",
+    "reportedAt": "2026-11-03T19:22:58.279Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+    "packages/moe-daemon/src/tools/archiveEpic.ts",
+    "docs/MCP_SERVER.md"
+  ],
+  "completionSummary": "archive_epic now passes its caller's workerId as the actor of the epic's own EPIC_UPDATED (status ARCHIVED), as it already did for each TASK_ARCHIVED.\n- archiveEpic.ts: state.updateEpic(epicId, { status: 'ARCHIVED' }, params.workerId) using the actorWorkerId parameter from task-3e1d0c2e, plus a comment and the workerId schema description. A caller-less call records no actor, and the epicWasArchived short-circuit keeps an idempotent re-archive from writing or attributing anything.\n- archiveEpic.test.ts: new case (e1), plus the getActivityLogTool import. It checks get_activity_log per seat (architect-c gets EPIC_UPDATED plus both TASK_ARCHIVED; worker-z, 'unknown' and 'agent' get none), every event's actor, and the unchanged EPIC_UPDATED payloads.\n- docs/MCP_SERVER.md: the moe.archive_epic actor sentence and the workerId parameter comment.\n- StateManager.ts is untouched; the rail-proposal call `await this.updateEpic(epic.id, { epicRails: rails });` is unchanged.\n\ncheckRef green printed: RAIL-CALL-UNCHANGED, 'Test Files 2 passed (2)', 'Tests 10 passed (10)', exit 0.\ncheckRef red (unfixed archiveEpic.ts pinned at 99d39004) printed: the (e1) FAIL line, 'Tests 1 failed | 6 passed (7)', RED-BEFORE-FIX.",
+  "commits": [
+    {
+      "sha": "32929cf205da7c9bb6414edccba72f8e7f85d19e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-33f67e5b@2026-11-03T19:20:32Z",
+      "paths": [
+        "docs/MCP_SERVER.md",
+        "packages/moe-daemon/src/tools/archiveEpic.test.ts",
+        "packages/moe-daemon/src/tools/archiveEpic.ts"
+      ],
+      "recordedBy": "worker-33f67e5b",
+      "recordedAt": "2026-11-03T19:24:05.996Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "architect-24611a0a@2026-11-03T19:00:58Z",
+    "at": "2026-11-03T19:37:37.230Z"
+  },
+  "completedAt": "2026-11-03T19:25:50.169Z",
+  "reviewCompletedAt": "2026-11-03T19:25:50.169Z",
+  "reviewSummary": "APPROVED. Reviewed completion 32929cf2 (in moe/control HEAD and moe/work-2026-10-24): +51/-4, 3 owned files, ~47 net LOC; StateManager.ts not in diff.\n\nRe-ran task.verification in a git-archive snapshot: RAIL-CALL-UNCHANGED, tsc --noEmit + tsc -p tt.json clean, vitest 'Test Files 2 passed (2), Tests 10 passed (10)', exit 0. Re-ran checkRef red (unfixed archiveEpic.ts pinned at 99d39004): (e1) FAIL, 'Tests 1 failed | 6 passed (7)', RED-BEFORE-FIX.\n\nDoD: (1) archiveEpic.ts:93 passes the bare params.workerId as updateEpic's 3rd arg (signature at StateManager.ts:1287); epicWasArchived short-circuit kept, so an idempotent re-archive writes nothing; caller-less call records no actor. (e1) asserts per-seat get_activity_log (architect-c: EPIC_UPDATED + both TASK_ARCHIVED; worker-z/'unknown'/'agent': none), each event's actor (null when caller-less), and unchanged EPIC_UPDATED payloads. (2) (e1) fails before, passes after; existing cases and holderActor test pass. (3) rail-proposal `await this.updateEpic(epic.id, { epicRails: rails });` still at StateManager.ts:1437.\n\nMutants on a snapshot copy of fixed archiveEpic.ts, each killed by (e1) alone: `?? 'unknown'`, `|| 'agent'`, dropping the epicWasArchived short-circuit. Docs sentence, param comment and schema description match the code. No forbidden patterns. Quality gate (parity-check + role-doc lint) unaffected: no role docs or wrapper scripts changed. ponytail: nothing to cut. Not run: full daemon suite, per the row's narrow-gate ruling (epic-be924fb8 msg-bbf4f109).",
+  "requiredCheckAtDone": null
+}

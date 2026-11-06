@@ -1,0 +1,234 @@
+{
+  "id": "task-8b7f95602ad946b9a1eb801d77a759fe",
+  "epicId": "epic-be924fb8",
+  "title": "bug: the VS Code board's Delete and Done-column clear never fire, because they ask window.confirm(), which the webview sandbox answers false, and the clear quotes the search-filtered column while ARCHIVE_DONE_TASKS archives every DONE task in scope (twin of the DONE JetBrains fix 475e8844)",
+  "description": "Filed by defect hunt 11-03 #5 (task-b7332618). VS Code twin of task-475e8844 (JetBrains fix 76ca84ba). Today the count bug is masked by a VS Code-only defect: the confirmation never shows at all.\n\nPROBLEM\n1. Dead buttons.\n- The board webview gates two actions on window.confirm(): the card menu's Delete (moe-vscode/media/board.js:318) and the Done column's clear button (board.js:1120-1125, archiveDone).\n- VS Code's webview frames are sandboxed without allow-modals. microsoft/vscode main 73db368c, src/vs/workbench/contrib/webview/browser/webviewElement.ts:430, reads `element.sandbox.add('allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-pointer-lock', 'allow-downloads')`. The inner frame's sandboxRules are in pre/index.html:1078-1086. `allow-modals` appears in neither file; local copies are in /mnt/d/moe-scratch/hunt-b733/.\n- In such a document confirm() returns false without showing anything (HTML Standard, \"cannot show simple dialogs\"), so both buttons silently do nothing.\n- BoardViewProvider.ts:238-251 then sends DELETE_TASK / ARCHIVE_DONE_TASKS unconditionally, so the dead webview confirm is the only gate.\n- Every other VS Code confirmation is host-side, a `vscode.window.showWarningMessage(..., { modal: true }, ...)`: TaskDetailPanel.ts:517-519 (Delete), EpicDetailPanel.ts:119, AccountsTreeProvider.ts:240, ManagedVmTreeProvider.ts:46.\n\n2. Wrong count.\n- board.js:605-610 applies the board search to filteredTasks, and :621 builds each column from it.\n- :626-627 (also :667 and :699) stamps the clear button with data-count = colTasks.length.\n- archiveDone quotes that number and posts ARCHIVE_DONE_TASKS with only the epic filter: board.js:1124 → BoardViewProvider.ts:246-248 → MoeDaemonClient.ts:1325-1326.\n- The daemon archives `t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter)` (packages/moe-daemon/src/server/WebSocketServer.ts:908-912) and never sees the search.\n- Moving the confirmation host-side without fixing the count would archive more tasks than the dialog quotes.\n\nEVIDENCE\nAll runs are on 19d5e67a (the moe/work-2026-10-24 tip, past 585fedc6), in a snapshot outside the checkout. The re-run recipe is /mnt/d/moe-scratch/hunt-b733/notes.md.\n\n- NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/zz-hunt-b733-board.test.cjs (the production board.js under node:vm; output in board.output.txt):\n  - C1 is `not ok`. With 3 DONE tasks and the search \"alpha\", the dialog reads 'Archive 1 done task?' and the post is `[{\"type\":\"archiveDoneTasks\"}]`. That post carries no task list, so the daemon archives all 3.\n  - C2 is `not ok`. With confirm() answering false, the clear posts nothing (`clearPosts: 0`).\n\n- Chromium: headless Chrome on modal-probe.html, which nests VS Code's two sandbox token lists.\n  - modal-probe.dom.txt: RESULT {\"deleteConfirm\":false,\"archiveConfirm\":false,\"reopenPrompt\":null}\n  - modal-probe.stderr.txt, twice: \"Ignored call to 'confirm()'. The document is sandboxed, and the 'allow-modals' keyword is not set.\"\n\nFIX DIRECTION\n- The webview posts only the intent: deleteTask with the taskId, archiveDoneTasks with the epic filter.\n- BoardViewProvider asks with `vscode.window.showWarningMessage(text, { modal: true }, 'Delete' | 'Archive')`. It sends DELETE_TASK / ARCHIVE_DONE_TASKS only for that answer; a dismissal sends nothing.\n- Compute the archive count host-side at click time from daemonClient.currentState, using the daemon's own filter: status DONE, plus epicId = the filter when one is set, else the whole board. Quote that number; when it is 0, send nothing.\n- JetBrains does the same with DoneColumnClear.archiveCount (76ca84ba).\n- Remove window.confirm from board.js.\n\nFILES\n- moe-vscode/media/board.js: the card-menu Delete, archiveDone and the clear-button markup only.\n- moe-vscode/src/providers/BoardViewProvider.ts: its deleteTask and archiveDoneTasks cases.\n- one new moe-vscode/tests/*.test.cjs.\n\nHunk ownership, so no dependsOn is needed: task-3ab5be0d owns board.js navTask and BoardViewProvider's 'reopenTask' case. The gate snapshot must be the full tree: mem:gotcha-vscode-tests-need-full-repo-snapshot.",
+  "definitionOfDone": [
+    "`grep -n \"confirm(\" moe-vscode/media/board.js` prints nothing. Delete and the Done-column clear post only their intent. BoardViewProvider sends DELETE_TASK / ARCHIVE_DONE_TASKS only after a `{ modal: true }` vscode.window.showWarningMessage returns its confirming button; a dismissal sends nothing.",
+    "The archive dialog quotes the number of DONE tasks the daemon's ARCHIVE_DONE_TASKS filter covers (the selected epic, else the whole board), whatever the board search hides. The host computes it from the client's current state at click time, and sends nothing when it is 0.",
+    "A new moe-vscode node test covers: Delete confirmed and dismissed; a clear while a search hides some DONE tasks (the quoted count is every DONE task in scope); and an epic-filtered clear. It runs the production media/board.js under node:vm and BoardViewProvider.ts transpiled, and it passes. `npm ci && npm test && npm run compile` passes in moe-vscode in a full-repo git-archive snapshot outside the checkout."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "RED test first. Create moe-vscode/tests/board-confirmations.test.cjs with the Write tool, byte for byte from the reference /mnt/d/moe-scratch/plan-8b7f9560/board-confirmations.test.cjs (sha256 d6a93a584bce5ba51c509dd4f0cae10952151524d684efda6beeeb4ce92c636f). Rail: tracked files are written only through Edit/Write, never cp or git apply.\n\nHow the test loads things:\n- It runs the PRODUCTION media/board.js raw under node:vm. Its window.confirm and prompt answer false and null, as a VS Code webview sandbox does (mem:gotcha-vscode-webview-modals-blocked).\n- It runs the real BoardViewProvider and MoeDaemonClient transpiled, the way tests/approval-paths.test.cjs does. The client sits on a fake socket that records every daemon frame, and showWarningMessage answers with a scripted button.\n\nThe 10 rows are all named 'board-confirm <id>: ...'. Steps 4 and 5 count that prefix, so keep the names.\n- W1: the card-menu Delete posts {type:'deleteTask', taskId} and calls no page dialog.\n- W2: with the search 'alpha' hiding two of the three Done cards, the clear posts {type:'archiveDoneTasks'}.\n- W3: with epic-1 selected, the clear posts epicId 'epic-1'.\n- H1: Delete shows 'Delete \"Ship it alpha\"? This cannot be undone.' with {modal:true} and 'Delete', and sends DELETE_TASK only for 'Delete'.\n- H2: a dismissed Delete sends nothing.\n- H3: the clear quotes 'Archive 3 completed task(s)? They will be hidden from the board but remain on disk.' with 'Archive', then sends ARCHIVE_DONE_TASKS {}.\n- H4: an epic-1 clear quotes 2 and sends {epicId:'epic-1'}.\n- H5: a dismissed clear sends nothing.\n- H6: 0 DONE tasks in scope means no modal and no frame.\n- E1: the page's own post fed to the host, while the search shows 1 Done card, quotes 3.\n\nQuick test run from the worktree root. The worktree has no node_modules, so read the control checkout's TS6 JS typescript, read-only:\n`cd moe-vscode && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/board-confirmations.test.cjs`\nIt must be RED now: `# fail 10`, `# pass 0`.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "newFiles": [
+        "moe-vscode/tests/board-confirmations.test.cjs"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/tests/board-confirmations.test.cjs"
+      ],
+      "note": "Added the exact SHA-pinned 297-line regression test using main-session apply_patch editing. Approved quick command ran read-only against shared TypeScript dependencies: expected RED, exit 1, pass 0/fail 10; failures are behavior assertions (page dialogs prevent posting; host lacks modals and sends directly). No dependency install/build in repo.",
+      "startedAt": "2026-11-03T17:53:20.630Z",
+      "completedAt": "2026-11-03T17:53:49.478Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "Webview: moe-vscode/media/board.js. Copy its hunks with Edit from /mnt/d/moe-scratch/plan-8b7f9560/fix.diff (sha256 a38d2560a50b982a7fdf92191ff46e5640f15364332e4a6b420e83a55f99bc34; `git apply --check` passes against ff652048).\n\n(a) Card menu Delete (line 315-320). The click handler keeps stopPropagation and closeContextMenu, then posts `{ type: 'deleteTask', taskId: taskId }` directly. Add a one-line comment saying the extension host asks first, because a webview's sandbox cannot show a modal dialog.\n\n(b) archiveDone (line 1120-1125) becomes `function archiveDone(event)`. It does stopPropagation and posts `{ type: 'archiveDoneTasks', epicId: selectedEpicFilter || undefined }`. Give it a 2-line comment: the host asks and counts what ARCHIVE_DONE_TASKS archives, every DONE task in the epic filter, whatever the search hides.\n\n(c) Remove the now-unread `data-count=\"' + colTasks.length + '\"` from the three clear-button markups (lines 627, 667 and 699). Keep the button's visibility rule: it shows only when the visible Done column has cards.\n\n(d) The body click delegation's 'archiveDone' case (line 1233-1236) becomes `case 'archiveDone': archiveDone(e); break;`.\n\nThe substring confirm( must not appear anywhere in board.js, comments included: the DoD greps for it.\n\nDo not touch navTask, its prompt() or the left-arrow markup: task-3ab5be0d owns them and runs in parallel.\n\nRun step 1's quick test command: W1-W3 pass, and the 7 H/E rows still fail.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/media/board.js"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/media/board.js"
+      ],
+      "note": "Implemented only the approved board.js hunks: intent-only Delete/archive, removed data-count in three markups, delegated clear without count. Quick test exit 1 as expected: W1-W3 pass, seven H/E rows fail. navTask/reopen/approval/drag paths untouched.",
+      "startedAt": "2026-11-03T17:54:00.838Z",
+      "completedAt": "2026-11-03T17:54:19.211Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "Extension host and changelog: moe-vscode/src/providers/BoardViewProvider.ts and moe-vscode/CHANGELOG.md, copied with Edit from the same fix.diff hunks.\n\n(a) Below the module's dbg() helper (line 15), add an exported module function:\n`export function archiveDoneCount(tasks: ReadonlyArray<{ status?: unknown; epicId?: unknown }>, epicId: string | undefined): number`\nIt returns the number of tasks with status 'DONE' whose epicId equals epicId when one is given, else every DONE task. Give it a doc comment naming packages/moe-daemon/src/server/WebSocketServer.ts ARCHIVE_DONE_TASKS, whose filter this is.\n\n(b) After updateTaskStatus (line 91-100), add two private async methods, each with a doc comment.\n- confirmDelete(taskId: unknown):\n  - It returns at once unless taskId is a non-empty string.\n  - It awaits `vscode.window.showWarningMessage(title ? `Delete \"${title}\"? This cannot be undone.` : 'Delete this task? This cannot be undone.', { modal: true }, 'Delete')`. The title is the task's title from daemonClient.currentState; these are the JetBrains moe.message.deleteTask words.\n  - Only for 'Delete', and only while the provider is not disposed, does it call daemonClient.deleteTask(taskId).\n- confirmArchiveDone(epicId: unknown):\n  - scope = epicId when it is a non-empty string, else undefined.\n  - count = archiveDoneCount(currentState.tasks or [], scope), counted at click time. When the count is 0 it returns without asking.\n  - Otherwise it awaits `showWarningMessage(`Archive ${count} completed task(s)? They will be hidden from the board but remain on disk.`, { modal: true }, 'Archive')`; these are the JetBrains moe.message.archiveDone words.\n  - Only for 'Archive', and only while not disposed, does it call daemonClient.archiveDoneTasks(scope).\n\n(c) The 'deleteTask' and 'archiveDoneTasks' message cases (line 238-251) become `void this.confirmDelete(message.taskId); break;` and `void this.confirmArchiveDone(message.epicId); break;`.\n\n(d) CHANGELOG.md: add one bullet at the TOP of [Unreleased] > ### Fixed. It must not go at the end: task-e9a25fbf appends there, and two insertions at the same place would conflict at landing. The bullet:\n'- The board's **Delete** (card menu) and the Done column's clear button now ask in a VS Code modal and then act, as in JetBrains. Before, both did nothing, because a webview cannot show a confirmation dialog. The clear quotes every Done task it archives (the selected epic, else the whole board), not only the cards the board search shows.'\n\nError handling:\n- Each method wraps its body in try/catch and reports a failure with `vscode.window.showErrorMessage('Failed to delete task: ...' / 'Failed to archive tasks: ...')`, the same messages the old cases used. The webview message handler is synchronous and drops promises, so an unhandled rejection there would be lost.\n- A dismissed modal (undefined), any other answer, a provider disposed while the modal was open, and a malformed taskId/epicId all send nothing.\n\nRun step 1's quick test command: 10/10 ok.\nAfterwards, `LC_ALL=C grep -c -P '[^\\x00-\\x7F]' <file>` must still print board.js 6, BoardViewProvider.ts 1 and CHANGELOG.md 1, and the new test 0.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "modifiedFiles": [
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/CHANGELOG.md"
+      ],
+      "note": "Copied approved host-modal/count/error-handling hunks and top-of-Fixed changelog bullet. Quick command exit 0: all 10 regression rows pass. Existing non-ASCII line counts preserved: board 6/provider 1/changelog 1/test 0. Modal text verified against JetBrains bundle and archive filter against daemon.",
+      "startedAt": "2026-11-03T17:54:19.254Z",
+      "completedAt": "2026-11-03T17:54:29.720Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "Verification gate, once, from the task worktree root. Run checkRef 1 and then checkRef 2 from executionContract.checkRefs, verbatim. The same texts are saved as:\n- /mnt/d/moe-scratch/plan-8b7f9560/checkref-gate.txt (sha256 2db297f62d18088cd789d166d64bad4d1b1a1c85f43431ae56937536f25e8e1f);\n- /mnt/d/moe-scratch/plan-8b7f9560/checkref-red.txt (sha256 a7fc2e2e3a3c8661b1bcb5fb2a471bc320fa375a7b2c8fc4cd5583da4058173d).\n\nThe complete_task verification command is `bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-gate.txt && bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-red.txt`. Its fresh output is the evidence.\n\nWhat checkRef 1 does:\n- It snapshots the worktree's HEAD, plus the three edited source/test files, into a fresh /tmp/m8b7.* dir. A snapshot is needed because a worktree has no node_modules, the rail forbids npm ci inside the repo tree, and the shared node_modules hold only win32 tsc (mem:gotcha-vscode-gate-from-wsl, mem:gotcha-vscode-tests-need-full-repo-snapshot).\n- It runs npm ci, npm test and npm run compile under env -i with nvm node v24.21.0.\n- It requires all 10 board-confirm rows to pass.\n\nWhat checkRef 2 does:\n- It runs the new test against the merge-base board.js and BoardViewProvider.ts. Each must differ from the worktree's.\n- It requires all 10 rows to fail. This is the RED re-proof that the test catches today's page-side confirm() and the unconditional host send.\n\nPlanner dry run on an ff652048 clone with the reference files:\n- checkRef 1 exit 0: ℹ tests 706, pass 696, fail 0, skipped 10, and 'board-confirm rows passed: 10'.\n- checkRef 2 exit 0: 'RED: 10 failing, 0 ok'.\nTotals may shift by rows that other landings add.\n\nError handling for a red run:\n- If npm ci, a test or compile fails, checkRef 1 prints its snapshot path and the last 40 log lines, then exits 1. Fix the code and rerun.\n- A RED count other than 10 means a row was renamed, dropped or made vacuous. Fix the test, never the command.\n\nNever run npm ci or npm install in the worktree or the shared checkout. Afterwards, delete the /tmp/m8b7.* and /tmp/m8b7r.* dirs your runs printed, by their literal paths.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh exact verification command exited 0: snapshot npm ci/npm test/npm run compile succeeded; tests 746, pass 736, fail 0, skipped 10; board-confirm rows passed 10 (/tmp/m8b7.w7IK). Merge-base RED re-proof exited 0: 10 failing, 0 ok (/tmp/m8b7r.doHA). No installs/builds touched live checkout or worktree.",
+      "startedAt": "2026-11-03T17:54:29.748Z",
+      "completedAt": "2026-11-03T17:55:03.892Z"
+    },
+    {
+      "stepId": "step-5",
+      "description": "Adversarial self-review of this task's diff: load the adversarial-self-review skill.\n\nFrom the worktree root, run checkRef 3 (/mnt/d/moe-scratch/plan-8b7f9560/checkref-scope.txt, sha256 b1ce889e40b887aa4e08880c076fbc3213f22e9330040618d982211278b9d40e). It must exit 0. It checks that:\n- exactly the 4 planned moe-vscode paths changed: CHANGELOG.md, media/board.js, src/providers/BoardViewProvider.ts and tests/board-confirmations.test.cjs;\n- `grep -n 'confirm(' moe-vscode/media/board.js` prints nothing;\n- no added line contains a forbiddenPatterns string.\nDry run: 3 tracked files at +66/-28, plus the new test.\nQA re-runs it at the control checkout with MOE_LAND_TARGET=<completion>^ QA_TIP=<completion>, and runs checkRefs 1-2 with MOE_LAND_TARGET=<completion>^.\n\nChecklist:\n- archiveDoneCount is exactly the daemon's ARCHIVE_DONE_TASKS filter (WebSocketServer.ts:908-912). Nothing in the count reads the board search.\n- No DELETE_TASK or ARCHIVE_DONE_TASKS can leave without the confirming button, and no modal opens for 0 tasks in scope.\n- The modal strings match JetBrains MoeBundle moe.message.deleteTask and moe.message.archiveDone word for word.\n- `git diff` shows no hunk in navTask, the 'reopenTask' case, drag and drop or the approval paths.\n- The CHANGELOG bullet sits at the top of ### Fixed.\n- The non-ASCII counts from step 3 still hold.\n\nThe planner ran these mutants against the step 1 test, and each was killed (/mnt/d/moe-scratch/plan-8b7f9560/mutate.py):\n- count ignores the epic: H4 and H6 fail;\n- Delete sent whatever the answer: H2;\n- archive modal without modal:true: H3;\n- every task counted, not just DONE ones: H3, H4 and E1;\n- zero-in-scope guard dropped: H6;\n- the page still calls confirm before posting: W1.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Loaded adversarial-self-review and reviewed own scoped diff plus entire new test against concurrency/input/dependency/exit-path checklist. No scope drift: daemon filter and JetBrains words match; send requires affirmative button and non-disposed host; no count/search coupling, navTask/reopen/approval/drag changes, or added non-ASCII. Count is intentionally click-time state, wire uses current daemon scope as approved (no task-list protocol change). checkRef 3 and git diff --check exit 0. Quality gate bash scripts/tests/parity-check.sh && npm run lint exit 0. Fresh full snapshot gate: 746 tests/736 pass/0 fail/10 skipped, 10 board rows pass; merge-base RED all 10 fail. Deleted owned snapshot dirs. Serena handoff recorded. This review step modified no project files.",
+      "startedAt": "2026-11-03T17:55:03.924Z",
+      "completedAt": "2026-11-03T17:55:52.955Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 389.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-03T17:27:25.325Z",
+  "updatedAt": "2026-11-04T19:20:44.352Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-03T17:42:52.615Z",
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 4,
+    "executedStepCount": 5,
+    "doneAt": "2026-11-03T17:59:13.167Z",
+    "wallClockMs": 980552
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-fdb2af60",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4",
+    "step-5"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-03T17:51:06.894Z",
+  "executionContract": {
+    "intendedBehavior": "The VS Code board's card-menu Delete and the Done column's clear button work. A VS Code webview's sandbox has no allow-modals, so window.confirm() there answers false, and the webview therefore posts only the intent: deleteTask with the taskId, or archiveDoneTasks with the selected epic, if any. BoardViewProvider then asks with a modal vscode.window.showWarningMessage worded as JetBrains: moe.message.deleteTask 'Delete \"<title>\"? This cannot be undone.', and moe.message.archiveDone 'Archive <n> completed task(s)? They will be hidden from the board but remain on disk.'. It sends DELETE_TASK / ARCHIVE_DONE_TASKS only for the 'Delete' / 'Archive' answer. The archive count is what ARCHIVE_DONE_TASKS archives: every DONE task in the epic filter, else on the whole board. It is counted from the client's current state at click time, whatever the board search hides. When it is 0, nothing is asked or sent.",
+    "acceptanceCriteria": [
+      "The card-menu Delete posts {type:'deleteTask', taskId} and opens no page dialog. The host shows 'Delete \"<title>\"? This cannot be undone.' with { modal: true } and 'Delete', and sends DELETE_TASK {taskId} only when 'Delete' is returned.",
+      "The Done clear posts {type:'archiveDoneTasks'} (with epicId when an epic is selected) and opens no page dialog. When the search 'alpha' hides two of three DONE cards, the host still quotes 3.",
+      "An epic-filtered clear quotes and archives only that epic's DONE tasks. A clear with 0 DONE tasks in scope shows no modal and sends nothing. A dismissed modal sends nothing.",
+      "`grep -n 'confirm(' moe-vscode/media/board.js` prints nothing.",
+      "moe-vscode/tests/board-confirmations.test.cjs has 10 rows and all pass. Against the merge-base board.js and BoardViewProvider.ts, all 10 fail.",
+      "moe-vscode npm ci, npm test and npm run compile pass in a Linux full-tree snapshot, and only the 4 planned moe-vscode files change."
+    ],
+    "invariants": [
+      "No other board gesture changes. navTask and the 'reopenTask' case (task-3ab5be0d), approvals, drag and drop, and the clear button's visibility rule (shown only when the visible Done column has cards) stay as they are.",
+      "The daemon frames are unchanged: DELETE_TASK {taskId}, and ARCHIVE_DONE_TASKS {} or {epicId}.",
+      "No added line contains a project.json globalRails.forbiddenPatterns string, and no non-ASCII character is added."
+    ],
+    "compatibility": [
+      "No daemon, wire, JetBrains or .moe/ change.",
+      "The webview-to-host messages keep their names and fields (deleteTask.taskId, archiveDoneTasks.epicId). Only data-count leaves the clear-button markup, and nothing else reads it."
+    ],
+    "approvedScope": [
+      "moe-vscode/media/board.js: the card-menu Delete click handler, archiveDone, the three clear-button markups (data-count removed) and the 'archiveDone' delegation case",
+      "moe-vscode/src/providers/BoardViewProvider.ts: exported archiveDoneCount; private confirmDelete and confirmArchiveDone; the 'deleteTask' and 'archiveDoneTasks' message cases",
+      "moe-vscode/tests/board-confirmations.test.cjs: new, 10 rows",
+      "moe-vscode/CHANGELOG.md: one bullet at the top of [Unreleased] ### Fixed"
+    ],
+    "reuse": [
+      "The host-modal pattern of TaskDetailPanel.ts:517-519 (Delete), EpicDetailPanel.ts:119, AccountsTreeProvider.ts:240 and ManagedVmTreeProvider.ts:46.",
+      "JetBrains DoneColumnClear.archiveCount (moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt, 76ca84ba), and the MoeBundle strings moe.message.deleteTask (:88) and moe.message.archiveDone (:161).",
+      "The extension-host harness of tests/approval-paths.test.cjs (a real MoeDaemonClient on a frame-recording socket, real panels and provider), and the board.js node:vm loading described in mem:convention-vscode-renderer-tests."
+    ],
+    "sourceAssumptions": [
+      "moe-vscode/media/board.js:318 calls window.confirm('Delete this task?') before posting deleteTask.",
+      "moe-vscode/media/board.js:1120-1125: archiveDone(event, count) calls window.confirm with the data-count of the search-filtered column. The chain is the search filter at :605-610, colTasks at :621, data-count at :627/:667/:699, and the delegation case at :1233-1236.",
+      "moe-vscode/src/providers/BoardViewProvider.ts:238-251 sends DELETE_TASK / ARCHIVE_DONE_TASKS for those messages with no confirmation.",
+      "moe-vscode/src/services/MoeDaemonClient.ts:1180-1182 deleteTask sends DELETE_TASK {taskId}; :1325-1326 archiveDoneTasks sends ARCHIVE_DONE_TASKS with {epicId} or {}.",
+      "packages/moe-daemon/src/server/WebSocketServer.ts:908-912: ARCHIVE_DONE_TASKS archives t.status === 'DONE' && (!epicFilter || t.epicId === epicFilter).",
+      "microsoft/vscode main 73db368c: src/vs/workbench/contrib/webview/browser/webviewElement.ts:430 and pre/index.html:1078-1086 sandbox the webview without allow-modals (copies in /mnt/d/moe-scratch/hunt-b733/). Headless Chrome then returns false from confirm() (hunt-b733/modal-probe.*)."
+    ],
+    "checkRefs": [
+      "( set -o pipefail; R=$(git rev-parse --show-toplevel) && L=$(mktemp -d /tmp/m8b7.XXXX) && git -C \"$R\" archive HEAD | tar -x -C \"$L\" && cd \"$L/moe-vscode\" && for f in media/board.js src/providers/BoardViewProvider.ts tests/board-confirmations.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && env -i HOME=\"$HOME\" PATH=\"$HOME/.nvm/versions/node/v24.21.0/bin:/usr/bin:/bin\" bash -c 'umask 022; npm ci --no-audit --no-fund && npm test && npm run compile' > ../v.log 2>&1 || { echo \"$L\"; tail -40 ../v.log; exit 1; }; grep -aE '^ℹ (tests|pass|fail|skipped) [0-9]+$' ../v.log; C=$(grep -acE '^✔ board-confirm [WHE][1-6]: ' ../v.log); echo \"board-confirm rows passed: $C ($L)\"; [ \"$C\" = 10 ] )",
+      "( R=$(git rev-parse --show-toplevel) && B=$(git -C \"$R\" merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && L=$(mktemp -d /tmp/m8b7r.XXXX) && cd \"$L\" && mkdir -p media src/{providers,panels,services} tests && for f in src/panels/{PlanReview,TaskDetail}Panel.ts src/services/MoeDaemonClient.ts tests/board-confirmations.test.cjs; do cp \"$R/moe-vscode/$f\" $f || exit 1; done && for f in media/board.js src/providers/BoardViewProvider.ts; do git -C \"$R\" show \"$B:moe-vscode/$f\" > $f && ! cmp -s $f \"$R/moe-vscode/$f\" || exit 1; done && NODE_PATH=/mnt/d/projexts/moes/moe-vscode/node_modules node --test --test-reporter=tap tests/board-confirmations.test.cjs > red.log 2>&1; N=$(grep '^not ok' red.log); echo \"RED: $(grep -c . <<<\"$N\") failing, $(grep -c '^ok' red.log) ok ($L)\"; [ $(grep -c . <<<\"$N\") = 10 ] && ! grep -v ' - board-confirm [WHE][1-6]: ' <<<\"$N\" )",
+      "cd \"$(git rev-parse --show-toplevel)\" && B=$(git merge-base HEAD \"${MOE_LAND_TARGET:-moe/work-2026-10-24}\") && G=$({ git diff --name-only \"$B\" ${QA_TIP:-}; [ -n \"$QA_TIP\" ] || git ls-files -o --exclude-standard; } | LC_ALL=C sort -u) && echo \"$G\" && [ \"$G\" = \"$(printf 'moe-vscode/%s\\n' CHANGELOG.md media/board.js src/providers/BoardViewProvider.ts tests/board-confirmations.test.cjs)\" ] && git diff --stat \"$B\" ${QA_TIP:-} && ! grep -n 'confirm(' moe-vscode/media/board.js && ! git diff \"$B\" ${QA_TIP:-} | grep '^+' | grep -qiE 'ev''al\\(|inner''html|__pro''to__'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "(1) Keep the confirmation in the webview and only fix the count. Rejected: the webview cannot show the dialog at all. (2) Have the page send its visible count. Rejected: ARCHIVE_DONE_TASKS never sees the search, so the host must count from the full state, as JetBrains does. (3) A custom in-webview confirmation overlay. Rejected: it is larger and inconsistent with every other VS Code confirmation, which are host modals. (4) Chosen: the page posts its intent, and the host asks in a modal using JetBrains' words.",
+    "codebaseInsights": "confirm() and prompt() are dead in every VS Code webview (mem:gotcha-vscode-webview-modals-blocked). board.js is a top-level script: its function declarations are context properties, selectedEpicFilter is a top-level let set through vm.runInContext, and searchQuery is a var. The provider's onDidReceiveMessage handler is synchronous, so the new async methods are fired with void and must catch their own errors.",
+    "risks": "- Do not write the substring confirm( anywhere in board.js, comments included: the DoD greps for it.\n- task-3ab5be0d edits board.js navTask and the 'reopenTask' case in parallel, so keep to this row's hunks.\n- The CHANGELOG bullet goes at the TOP of ### Fixed, so it never touches the line task-e9a25fbf appends at the end.\n- Keep the modal strings exact; the test pins them.\n- board.js posts 'ready' at load, so the test clears its post log after loading. Do not 'fix' that.",
+    "keyFiles": [
+      "moe-vscode/media/board.js",
+      "moe-vscode/src/providers/BoardViewProvider.ts",
+      "moe-vscode/tests/approval-paths.test.cjs",
+      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/DoneColumnClear.kt",
+      "packages/moe-daemon/src/server/WebSocketServer.ts"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "195b656acfa3b6310fe3d940f7916210a8b3dbf3",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-03T17:51:06.922Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-03T17:53:20.630Z",
+  "reviewStartedAt": "2026-11-03T17:56:00.016Z",
+  "verification": {
+    "command": "bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-gate.txt && bash /mnt/d/moe-scratch/plan-8b7f9560/checkref-red.txt",
+    "exitCode": 0,
+    "outputTail": "ℹ tests 746\nℹ pass 736\nℹ fail 0\nℹ skipped 10\nboard-confirm rows passed: 10 (/tmp/m8b7.w7IK)\nRED: 10 failing, 0 ok (/tmp/m8b7r.doHA)",
+    "reportedAt": "2026-11-03T17:56:00.016Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "moe-vscode/tests/board-confirmations.test.cjs",
+    "moe-vscode/media/board.js",
+    "moe-vscode/src/providers/BoardViewProvider.ts",
+    "moe-vscode/CHANGELOG.md"
+  ],
+  "completionSummary": "Moved board Delete and Done clear confirmation into VS Code host modals using JetBrains wording. Archive count now matches daemon DONE/epic scope regardless of search; dismissal/zero-scope/disposal prevent sending. Preserved all unrelated board gestures, wire frames and clear visibility. Added exact 10-row regression file and top-of-Fixed changelog bullet. RED/GREEN observed (0/10 then 3/10 then 10/10), full snapshot suite 736 pass/0 fail/10 skip (746 total), compile clean, merge-base RED 10/10 fail. Scope/forbidden-pattern/non-ASCII checks and parity/lint gate pass. All five steps complete; Serena handoff saved; owned snapshots removed.",
+  "commits": [
+    {
+      "sha": "7a08e3d932cd74a7b1b8cf24a8f7b27e864d7fd7",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-fdb2af60@2026-11-03T17:51:21Z",
+      "paths": [
+        "moe-vscode/CHANGELOG.md",
+        "moe-vscode/media/board.js",
+        "moe-vscode/src/providers/BoardViewProvider.ts",
+        "moe-vscode/tests/board-confirmations.test.cjs"
+      ],
+      "recordedBy": "worker-fdb2af60",
+      "recordedAt": "2026-11-03T17:57:14.770Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-03T17:57:18Z",
+    "at": "2026-11-03T17:59:42.211Z"
+  },
+  "completedAt": "2026-11-03T17:59:13.167Z",
+  "reviewCompletedAt": "2026-11-03T17:59:13.167Z",
+  "reviewSummary": "Reviewed completion 7a08e3d9 (on moe/work-2026-10-24, in control HEAD): exactly the 4 planned moe-vscode paths, +363/-28 (net 335, under the 400 cap; 297 is the new test). DoD1: board.js has no `confirm(` (grep rc=1); Delete and archiveDone post only intent; data-count removed from the 3 clear markups; visibility rule unchanged. BoardViewProvider confirmDelete/confirmArchiveDone use showWarningMessage(..., {modal:true}, 'Delete'|'Archive'), send DELETE_TASK/ARCHIVE_DONE_TASKS only for the matching button on a non-disposed provider; dismissal sends nothing; errors go to showErrorMessage. DoD2: archiveDoneCount equals the daemon ARCHIVE_DONE_TASKS filter (WebSocketServer.ts:908-912), counted from currentState at click time, never the search-filtered column; 0 in scope = no modal, no frame. Modal strings match MoeBundle moe.message.deleteTask/archiveDone verbatim. DoD3: board-confirmations.test.cjs is byte-identical to the planner reference (sha d6a93a58), 10 rows W1-W3/H1-H6/E1, production board.js under node:vm with confirm/prompt stubbed false/null, provider+client transpiled, exact deepEqual on frames/modal text/options. Re-ran with MOE_LAND_TARGET=7a08e3d9^ in /tmp snapshots outside the repo: checkref-gate exit 0 (npm ci, npm test, npm run compile: 756 tests, 746 pass, 0 fail, 10 skipped; 10 board-confirm rows); checkref-red exit 0 (merge-base files: 10 failing, 0 ok); checkref-scope with QA_TIP=7a08e3d9 exit 0 (4 paths, no confirm(, no forbidden pattern). Quality gate parity-check.sh && npm run lint exit 0. git diff --check clean; no added non-ASCII. navTask, reopenTask, approvals, drag/drop untouched; CHANGELOG bullet at top of [Unreleased] Fixed. Snapshots removed. Non-blocking: the modal-while-disposed guard has no test row (not required by DoD); ponytail pass found nothing to cut.",
+  "requiredCheckAtDone": null
+}

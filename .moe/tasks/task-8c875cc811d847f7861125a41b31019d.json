@@ -1,0 +1,265 @@
+{
+  "id": "task-8c875cc811d847f7861125a41b31019d",
+  "epicId": "epic-be924fb8",
+  "title": "bug: PowerShell daemon autostart splits project paths containing spaces in Start-Process ArgumentList",
+  "description": "Native PS5.1 and pwsh7 probe reproduces Start-Process -ArgumentList @($daemonScript,\"start\",\"--project\",$projectPath) splitting control é [x] $;' into four argv elements; --project receives only ...\\control. The new literal-project-path real-wrapper claude cases time out with Daemon failed to start within 10s after the wildcard fix. Existing comment incorrectly says Start-Process re-quotes each array element; approved task-3ad573a7 scope forbids changing native argv.",
+  "definitionOfDone": [
+    "Preserve complete daemon-script and project paths as individual native arguments on PS5.1 and pwsh7, including spaces and the literal fixture name.",
+    "Regression test fails with current ArgumentList construction and passes with the fix.",
+    "Keep daemon start error handling and escaped current FileSystem working directory unchanged."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "TESTS FIRST (RED before the fix). Create scripts/tests/daemon-autostart-argv.test.mjs (node:test, ESM, LF, no BOM) with the Write tool and add its CI step with the Edit tool (ci.yml may be CONTESTED with task-3ad573a7 at landing; only a TOOL witness lands it). Reuse the engine detection and killTree shape of scripts/tests/protected-agent-command.test.mjs and the fake-daemon ppid trick of postflight.ps1's [protected runtime] P6 row.\n\nHeader comment: Start-Process -ArgumentList (PowerShell 5.1 and 7) joins its entries with single spaces and quotes none of them, so moe-agent.ps1's daemon autostart split the project \"control é [x] $;'\" into --project <root>\\control, é, [x], $;' and the launcher timed out with 'Daemon failed to start within 10s' (task-8c875cc8).\n\nEngines (win32 only): PowerShell 5.1 = path.join(SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'); PowerShell 7 = the absolute path `where.exe pwsh.exe` prints, resolved with the parent env because the rows run with a scrubbed PATH. Skip reasons: off win32 'Start-Process builds a native Windows command line; run this file with Windows node (node.exe from WSL)'; pwsh missing 'pwsh.exe not found'.\n\nPer test: root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-autostart-'))) (native realpath expands 8.3 names such as RUNNER~1, so argv compares exactly); t.after removes it (rmSync recursive, force, maxRetries 5, retryDelay 200). LITERAL = \"control é [x] $;'\". The fake daemon, written as fake-daemon.cjs into a given dir:\n  const fs = require('fs'), path = require('path');\n  fs.writeFileSync(process.env.FAKE_DAEMON_RECORD, JSON.stringify(process.argv.slice(1)));\n  const project = process.argv[process.argv.indexOf('--project') + 1];\n  // process.ppid is the launcher, which outlives the start poll that probes this pid.\n  if (project && fs.existsSync(path.join(project, '.moe'))) fs.writeFileSync(path.join(project, '.moe', 'daemon.json'), JSON.stringify({ pid: process.ppid, port: 1, projectPath: project }));\nChild env: process.env minus keys matching /^(MOE_|FAKE_|CLAUDE|CODEX|GEMINI|GROK|XAI|GIT_)/i and PSModulePath (an inherited 5.1/7 module path breaks the other engine); exactly one PATH key (find it case-insensitively; Windows calls it Path) = [dirname(process.execPath), System32, SystemRoot] joined by ';', so `Start-Process -FilePath \"node\"` resolves and no real agent CLI or git is reachable; HOME and USERPROFILE = path.join(root, 'home'); TEMP and TMP = path.join(root, 'tmp').\n\nRow A, per engine: '<engine>: the daemon-autostart Start-Process passes literal-name paths as whole arguments'. Node writes cases.json (UTF-8) and a BOM'd driver.ps1 into root and runs <engine> -NoProfile -NonInteractive -ExecutionPolicy Bypass -File driver.ps1 -Wrapper <scripts/moe-agent.ps1> -Cases cases.json with cwd root; assert exit 0 with stderr in the message. The driver ($ErrorActionPreference = 'Stop'): [System.Management.Automation.Language.Parser]::ParseFile the wrapper and throw on any parse error; take the CommandAst nodes whose GetCommandName() is 'Start-Process' and whose Extent.Text contains '--project' and throw unless exactly one; dot-source [scriptblock]::Create($f.Extent.Text) for every FunctionDefinitionAst whose Name is a command called inside that statement; then for each case ([IO.File]::ReadAllText | ConvertFrom-Json) set $env:FAKE_DAEMON_RECORD, $daemonScript and $projectPath and dot-source [scriptblock]::Create(<the statement's Extent.Text>). Cases: (1) script path.join(root, LITERAL, 'fake-daemon.cjs'), project path.join(root, LITERAL): the literal fixture name in BOTH arguments; (2) script path.join(root, 'plain', 'fake-daemon.cjs'), project path.join(root, 'a \"b\" c') + path.sep: spaces, double quotes and a trailing backslash (a drive root such as C:\\ is a real project path). Create the script dirs, not the projects. Poll up to 20 s until every record exists, then assert each record deepEqual [script, 'start', '--project', project]; a missing record fails as 'node never ran the daemon script: its path was split'. Probed 2026-11-02 on 5.1.26100 and 7.6.9: the AST extract-and-run works on both, and today's construction gives [..., '--project', '<root>\\control', 'é', '[x]', \"$;'\"].\n\nRow B, per engine: '<engine>: the launcher autostarts the daemon under spaced project and daemon-script paths'. project = path.join(root, \"control é $;'\"), the literal fixture name without [x], because the target's path cmdlets read brackets as wildcards until task-3ad573a7 lands; write path.join(project, '.moe', 'project.json') = {\"id\":\"proj-argv\",\"name\":\"argv\",\"settings\":{\"autoCommit\":false}}. Daemon script = path.join(root, \"daemon é $;' dir\", 'fake-daemon.cjs'). Extra env: MOE_DAEMON_PATH = that script; MOE_PROXY_PATH = an inert path.join(root, 'proxy-stub.cjs') holding only a comment; MOE_DISABLE_HEARTBEAT=1; MOE_ACCOUNT_ROTATION=off; MOE_POSTFLIGHT_TEST_ALLOW_WORKTREE_WRAPPER=1 (the suite may run from a task worktree; task-86431c31); FAKE_DAEMON_RECORD = path.join(root, 'wrapper-argv.json'). spawn(<engine>, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', <scripts/moe-agent.ps1>, '-Project', project, '-WorkerId', 'worker-autostart-argv', '-Role', 'worker', '-NoLoop'], { cwd: root, env, windowsHide: true }). Stop it with taskkill /pid <child.pid> /T /F (that recorded PID only, never a pattern kill) as soon as stdout+stderr shows 'Daemon started (waited' or 'Daemon failed to start within', or at a 90 s cap. Assert the output matches /Daemon started \\(waited/ and not /Daemon failed to start/, and the record deepEqual [script, 'start', '--project', project]. RED today: node gets the truncated <root>\\daemon as its script and the launcher gives up after 10 s.\n\nError handling in the test: every driver and launcher spawn has a cap and reports its exit code, stdout and stderr in the assertion message; a spawn error (engine missing) fails the row with that error, not a hang; a missing record names which argument was split; t.after removes root even when an assertion fails.\n\nCI: in .github/workflows/ci.yml add this step directly AFTER the 'Test launcher daemon.json cap and seat re-registration' step (task-3ad573a7 inserts its own step just above that one; leave that spot alone so both merge cleanly):\n      - name: Test PowerShell daemon autostart arguments\n        # Start-Process builds a native Windows command line (PowerShell 5.1 and 7).\n        if: runner.os == 'Windows'\n        run: node --test scripts/tests/daemon-autostart-argv.test.mjs\n\nRED proof before step 2: from the worktree root run `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` (Windows node; WSL node skips every row, mem:gotcha-launcher-ps1-rows-from-wsl). All 4 rows must FAIL: row A with case 2's split argv and no case 1 record, row B with 'Daemon failed to start within 10s'. Keep that tail for the completion evidence. Rails: shell writes only outside the checkout; kill only PIDs this test started.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        ".github/workflows/ci.yml"
+      ],
+      "newFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "modifiedFiles": [
+        "scripts/tests/daemon-autostart-argv.test.mjs",
+        ".github/workflows/ci.yml"
+      ],
+      "note": "Added scripts/tests/daemon-autostart-argv.test.mjs (Write tool) and the Windows-only CI step after 'Test launcher daemon.json cap and seat re-registration' (Edit tool). One change from the plan: row A collects every case's record and compares them in a single deepEqual, so the failure diff shows each case. RED against the pre-fix launcher (`node.exe --test scripts/tests/daemon-autostart-argv.test.mjs`): tests 4, pass 0, fail 4, skipped 0. Row A on 5.1 and 7: case 1 has no record (the script path was split), and case 2 records [..., '--project', '<root>\\a', 'b', 'c\\']. Row B on 5.1 and 7: 'Waiting for daemon... (10/10s)', then 'Daemon failed to start within 10s'. The fixture temp dirs were all removed (0 left).",
+      "startedAt": "2026-11-02T20:30:19.493Z",
+      "completedAt": "2026-11-02T20:35:01.895Z"
+    },
+    {
+      "stepId": "step-2",
+      "description": "FIX scripts/moe-agent.ps1 with the Edit tool (keep the UTF-8 BOM and LF endings; the path may be CONTESTED with task-3ad573a7 at landing, and only a TOOL witness lands it).\n(a) Insert this block after `$script:GrokEnvPrev = $null` and its blank line, before the `# daemon.json is repository content:` comment, i.e. outside daemon-json-cap.test.mjs's helper segment, which starts at `function Read-MoeDaemonJsonText(`:\n# Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single\n# spaces and quotes none of them, so a path with a space reached node as several\n# arguments. Quote every entry so the child's argv parser (the C runtime on\n# Windows, .NET on Unix) splits the line back into the same entries.\nfunction ConvertTo-MoeArgumentLine([string[]]$Arguments) {\n    @($Arguments | ForEach-Object { '\"' + ($_ -replace '(\\\\*)\"', '$1$1\\\"' -replace '(\\\\+)$', '$1$1') + '\"' }) -join ' '\n}\nBackslashes before a quote or at the end are doubled and a quote becomes backslash-quote. This exact body round-tripped, on 5.1.26100 and 7.6.9, the literal fixture name, an empty string, a \"b\" c\\, x\\\\, a tab, q\\\"r and C:\\. It calls no other wrapper function (row A defines only the functions the Start-Process statement itself calls).\n(b) At the daemon autostart, replace the two comment lines `# Pass arguments as an array so paths containing spaces or quotes survive` and `# Windows command-line escaping (Start-Process re-quotes each element).` with own-line comments (no trailing comments: task-3ad573a7's scanner masks only full-line ones) saying Start-Process quotes nothing, so the launcher passes one pre-quoted command line, and change only the -ArgumentList argument:\n        Start-Process -FilePath \"node\" -ArgumentList (ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\")) -WindowStyle Hidden\nKeep '--project' literally inside the statement (row A finds the call by it).\nError handling: the daemon start's error handling stays exactly as it is. A missing daemon script still ends with Write-Error 'Moe daemon script not found' and exit 1; a daemon that writes no live daemon.json within 10 s still ends with Write-Error 'Daemon failed to start within 10s' and exit 1; a Start-Process failure still terminates under $ErrorActionPreference = 'Stop'. Leave everything else as it is too: -FilePath \"node\", -WindowStyle Hidden, no -WorkingDirectory (task-3ad573a7 adds the escaped current FileSystem location on top of this change), and the MOE_DAEMON_PATH and global-install fallback with its Test-Path checks. moe-agent.sh already passes an argv array (DAEMON_ARGS), so there is no bash twin and no parity string to add.",
+      "status": "COMPLETED",
+      "affectedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Edited scripts/moe-agent.ps1 with the Edit tool. (a) Added ConvertTo-MoeArgumentLine, plus its 4-line comment, after `$script:GrokEnvPrev = $null` and above `function Read-MoeDaemonJsonText(`, so the daemon-json-cap segments are unchanged. The body is exactly as planned. (b) Replaced the wrong 're-quotes each element' comment with two full-line comments. Changed only the -ArgumentList argument: `(ConvertTo-MoeArgumentLine @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\"))`. -FilePath \"node\", -WindowStyle Hidden and the error handling are unchanged, and no -WorkingDirectory was added. `git diff -U0` shows the two hunks only. The BOM ef bb bf is intact and the file has 0 CRs.",
+      "startedAt": "2026-11-02T20:38:31.555Z",
+      "completedAt": "2026-11-02T20:39:10.446Z"
+    },
+    {
+      "stepId": "step-3",
+      "description": "VERIFY once, from the worktree root:\nnode.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint\nExpect node:test pass 4, fail 0, skipped 0 (a skipped pwsh row is not green: fix the engine detection), then parity-check (it also enforces moe-agent.ps1's BOM) and lint passing. This fresh output is the complete_task verification evidence. Run no npm build, install or test anywhere (global rails).",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Ran from the worktree root: `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint` → exit 0. node:test: tests 4, pass 4, fail 0, skipped 0 (rows A and B pass on both PowerShell 5.1 and 7). Then 'PASS parity-check.sh' and role-doc lint OK (architect 39, worker 30, qa 36 lines). This step needed no npm build, install or package test, and none was run.",
+      "startedAt": "2026-11-02T20:39:14.255Z",
+      "completedAt": "2026-11-02T20:39:32.832Z"
+    },
+    {
+      "stepId": "step-4",
+      "description": "ADVERSARIAL SELF-REVIEW of your own diff, then handoff.\n(1) `git diff -U0 -- scripts/moe-agent.ps1` shows only the helper and its comment, the replaced comment lines and the -ArgumentList expression, so the error handling around the start is byte-identical; `head -c3 scripts/moe-agent.ps1 | od -An -tx1` prints ef bb bf and `grep -c $'\\r' scripts/moe-agent.ps1` prints 0.\n(2) Mutation, in a scratch copy only: cp -r scripts into a new dir under /mnt/d/moe-scratch, swap the helper body there (sed on the copy) for the naive '\"' + $_ + '\"', and run node.exe --test on the copy's test file: row A case 2 (trailing backslash) must fail on both engines. Then remove only that scratch dir.\n(3) WSL `node --test scripts/tests/daemon-autostart-argv.test.mjs` skips every row with its reason and does not crash.\n(4) Walk the edges: two seats autostarting at once (independent Start-Process calls; daemon.json stays the daemon's); $projectPath is a PathInfo from Resolve-Path and \"$projectPath\" stringifies it exactly as before; a drive-root project keeps its trailing backslash; a provider-qualified UNC project path is unchanged by this task; no process outlives the test (the fake daemon exits at once; taskkill reaches only the spawned child's tree).\n(5) Serena write_memory 'task-task-8c875cc811d847f7861125a41b31019d-handoff', and edit mem:gotcha-powershell-wildcard-paths-brackets so its Start-Process -ArgumentList bullet names ConvertTo-MoeArgumentLine as the fix. Then complete_task with step 3's output.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/moe-agent.ps1"
+      ],
+      "note": "Self-review complete. No source changes were made in this step. scripts/moe-agent.ps1 is listed again because its step-2 bytes are still the only dirty path.\n(1) `git diff -U0` shows only the helper with its comment, the two replaced comment lines and the -ArgumentList expression. The BOM is ef bb bf and the file has 0 CRs.\n(2) Mutation in a scratch copy under /mnt/d/moe-scratch, helper body set to naive '\"' + $_ + '\"': row A failed on both 5.1 and 7 (case 2 arrived as `a b c\" ` and `a b c\"`). Row B passed, as expected, since its paths have no trailing backslash or quote. The scratch dir was removed.\n(3) WSL `node --test` skips all 4 rows with the reason and exits 0.\n(4) Edges: the helper is pure, so two concurrent seats each make an independent Start-Process. \"$projectPath\" stringifies the PathInfo exactly as before. A drive-root C:\\ keeps its backslash (case 2 covers the trailing backslash). A provider-qualified UNC string is unchanged, only wrapped in quotes. Afterwards there were 0 moe-autostart-* fixture dirs in %TEMP% and 0 node processes running fake-daemon.cjs. Theoretical only: the helper's '(\\\\+)$' would also match before a final LF, and Windows paths cannot contain LF.\n(5) Wrote Serena memory task-task-8c875cc8…-handoff. Edited gotcha-powershell-wildcard-paths-brackets so its Start-Process -ArgumentList bullet names ConvertTo-MoeArgumentLine as the fix.",
+      "startedAt": "2026-11-02T20:39:35.562Z",
+      "completedAt": "2026-11-02T20:40:43.399Z"
+    }
+  ],
+  "planRevision": 1,
+  "status": "ARCHIVED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": "Governor promote: a fleet-filed blocker with a native repro on PS5.1 and pwsh7. task-3ad573a7 (MEDIUM) is BLOCKED on it with an auto-unblock, because its Windows real-wrapper daemon-autostart cases time out. Planner: the fix is the daemon-autostart Start-Process -ArgumentList in scripts/moe-agent.ps1. task-3ad573a7's unlanded checkpoint (on moe/task/task-3ad573a7…) changes the same call's WorkingDirectory escaping. Keep this fix to ArgumentList quoting only, leave WorkingDirectory as it is on the target, and expect 3ad573a7 to merge on top.",
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "MEDIUM",
+  "order": 337.7,
+  "comments": [
+    {
+      "id": "comment-9241055128b048b3867eb8921773fd11",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-02T20:41:58.517Z",
+      "content": "Landing unlanded (conflict) 1 time(s) in a row; attempt attempt-2b896c00bfda484dbe332a69f6a2443d (generation 2); paths: scripts/moe-agent.ps1; rescue ref: refs/moe/rescue/task-8c875cc811d847f7861125a41b31019d/20261102T204156Z; target tip: bbf2f857f84d17aee1518e878cdd0ddb04ea0acd; task WORKING."
+    },
+    {
+      "id": "comment-2b1efca318084f5cb9a703f756cb83a2",
+      "author": "worker-26483323",
+      "content": "LANDING-CONFLICT retry: all four approved steps were already COMPLETED, so following worker.reference.md LANDING rule without reopening steps or running Git. The single scripts/moe-agent.ps1 conflict combines this task's ConvertTo-MoeArgumentLine + corrected comments with the merged target's protected $script:MoeNode FilePath selection (fallback 'node'). Preserved target interpreter pinning rather than reverting it to the plan's now-stale literal FilePath. Only scripts/moe-agent.ps1 is edited this session, via Serena replace_in_files; will rerun the exact approved verification and record fresh results.",
+      "timestamp": "2026-11-02T20:44:14.747Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-02T19:51:59.705Z",
+  "updatedAt": "2026-11-04T19:20:43.854Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-02T19:55:37.599Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-02T19:56:27.367Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4,
+    "doneAt": "2026-11-02T20:54:18.932Z",
+    "wallClockMs": 3471565
+  },
+  "contextFetchedBy": [
+    "architect-24611a0a",
+    "worker-d6c1cb7a",
+    "worker-26483323",
+    "qa-af7be174"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-opus-5-5",
+  "codexModel": "gpt-6-astra",
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-02T20:19:23.238Z",
+  "executionContract": {
+    "intendedBehavior": "On native Windows PowerShell 5.1 and pwsh 7, moe-agent.ps1's daemon autostart hands node the daemon script path and the project path as single argv entries, whatever spaces, non-ASCII letters, brackets, $ ; ' or double quotes they contain and with trailing backslashes intact, so the daemon starts for that project instead of the launcher timing out with 'Daemon failed to start within 10s'.",
+    "acceptanceCriteria": [
+      "On PS 5.1 and pwsh 7, the daemon-autostart Start-Process statement lifted from scripts/moe-agent.ps1, run with $daemonScript under a directory named \"control é [x] $;'\" and $projectPath = that directory, starts node with argv exactly [script, 'start', '--project', project].",
+      "A project argument with spaces, double quotes and a trailing backslash arrives unchanged.",
+      "The real launcher, given a spaced project and a spaced MOE_DAEMON_PATH, prints 'Daemon started (waited' and the fake daemon records exactly [script, 'start', '--project', project].",
+      "scripts/tests/daemon-autostart-argv.test.mjs fails every Windows row against the pre-fix launcher and passes 4 of 4 with none skipped after the fix."
+    ],
+    "invariants": [
+      "Start-Process keeps -FilePath \"node\" and -WindowStyle Hidden and gains no -WorkingDirectory in this task",
+      "The daemon start's error handling (the MOE_DAEMON_PATH and global-install fallback, its Test-Path checks, both Write-Error messages, the 10 s wait loop and exit 1) is unchanged",
+      "moe-agent.ps1 keeps its UTF-8 BOM and LF endings and parses on PS 5.1 and 7",
+      "No change to moe-agent.sh or to any other launcher code"
+    ],
+    "compatibility": [
+      "task-3ad573a7 merges its escaped -WorkingDirectory on top of this statement",
+      "PS 5.1 (.NET Framework) has no ProcessStartInfo.ArgumentList, so the fix stays a pre-quoted Start-Process command line"
+    ],
+    "approvedScope": [
+      "New function ConvertTo-MoeArgumentLine in scripts/moe-agent.ps1",
+      "The daemon-autostart Start-Process -ArgumentList argument and the two comment lines above it",
+      "New scripts/tests/daemon-autostart-argv.test.mjs",
+      "One Windows-only CI step in .github/workflows/ci.yml"
+    ],
+    "reuse": [
+      "Engine detection and killTree follow scripts/tests/protected-agent-command.test.mjs",
+      "The fake daemon's pid: process.ppid follows postflight.ps1's [protected runtime] P6 row",
+      "postflight.ps1's Invoke-WrapperProcess quoting is not reusable: it ignores backslashes before a quote and at the end"
+    ],
+    "sourceAssumptions": [
+      "scripts/moe-agent.ps1:845 Start-Process -FilePath \"node\" -ArgumentList @(\"$daemonScript\", \"start\", \"--project\", \"$projectPath\") -WindowStyle Hidden is the file's only Start-Process",
+      "scripts/moe-agent.ps1:406 $projectPath = Resolve-Path -Path $Project -ErrorAction SilentlyContinue (a PathInfo)",
+      "scripts/tests/daemon-json-cap.test.mjs:40 the ps1 helper segment starts at '\\nfunction Read-MoeDaemonJsonText('",
+      "Native probe 2026-11-02 (PS 5.1.26100, pwsh 7.6.9): today's construction yields '--project', '<root>\\control', 'é', '[x]', \"$;'\""
+    ],
+    "checkRefs": [
+      "node.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "1) Wrap each path in plain double quotes (postflight.ps1 Invoke-WrapperProcess idiom): a trailing backslash then escapes the closing quote (a drive-root project breaks), rejected. 2) [Diagnostics.Process]::Start with ProcessStartInfo.ArgumentList: .NET Core only (PS 5.1 runs .NET Framework) and the DoD keeps the Start-Process call and its error handling, rejected. 3) Quoted array entries vs one joined line: equivalent because Start-Process joins with single spaces; one line makes the join explicit. 4) Test: a real-wrapper row with the literal fixture name cannot pass on the target (Resolve-Path -Path and Test-Path read [x] as a wildcard until task-3ad573a7 lands), so the literal name is proven on the exact call-site statement lifted from moe-agent.ps1 by the PowerShell AST (fails today, passes after), and the end-to-end autostart on a bracket-free spaced name. 5) A new P row in postflight.ps1 [protected runtime]: its fake daemon records argv joined by spaces (hides a split) and that harness runs only in the slow Windows postflight, rejected.",
+    "codebaseInsights": "scripts/moe-agent.ps1:842-871 is the autostart (Start-Process at :845; the comment at :843-844 wrongly says Start-Process re-quotes each element). It is the file's only Start-Process. $projectPath is a PathInfo (Resolve-Path -Path at :406); \"$projectPath\" stringifies it to .Path. moe-agent.sh already passes DAEMON_ARGS as an array, so the bug is ps1-only. daemon-json-cap.test.mjs cuts and runs ps1 text between '\\nfunction Read-MoeDaemonJsonText(' and '\\nif (-not $NoStartDaemon) {', and between '\\n    if (Test-Path $daemonInfoPath) {' and '\\n    if (-not $running) {'; the helper goes above the first anchor so neither segment changes. task-3ad573a7's unlanded checkpoint e94bd62c (branch moe/task/task-3ad573a754574dfd92083b2e813c0bff) adds -WorkingDirectory ([System.Management.Automation.WildcardPattern]::Escape((Get-Location -PSProvider FileSystem).ProviderPath)) and one comment line to the same statement; its G2 scanner masks only full-line comments. Native probe 2026-11-02 (PS 5.1.26100.9711, pwsh 7.6.9): today's construction gives --project <root>\\control, é, [x], $;'; the planned helper round-trips every case; the AST extract-and-run driver finds exactly one Start-Process containing --project, with no parse errors.",
+    "risks": "Merge: this task and task-3ad573a7 edit the same statement and the adjacent comment lines; when 3ad573a7 merges on top, keep this task's -ArgumentList and that task's -WorkingDirectory and comment line. Windows-only rows: WSL node skips all of them, so RED and GREEN runs must use node.exe (mem:gotcha-launcher-ps1-rows-from-wsl). Drop PSModulePath and keep a single PATH key in child envs. Use realpathSync.native for the fixture root (8.3 names on CI). PS 5.1 Start-Process fails from a bracketed CURRENT location (mem:gotcha-powershell-wildcard-paths-brackets): keep every driver's cwd at the bracket-free root. Kill by recorded PID only. Not in scope: moe-team.ps1 passes -Command text to Start-Process powershell unquoted (a spaced scripts dir is likely broken there too).",
+    "keyFiles": [
+      "scripts/moe-agent.ps1",
+      "scripts/tests/protected-agent-command.test.mjs",
+      "scripts/tests/postflight.ps1",
+      "scripts/tests/daemon-json-cap.test.mjs",
+      ".github/workflows/ci.yml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "58c760f46d490f0f1985852b033844440e31e4ac",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-02T20:19:23.264Z",
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-02T20:30:19.493Z",
+  "lastCommitOutcome": {
+    "outcome": "nothing",
+    "kind": "checkpoint",
+    "code": "MOE_COMMIT_NOTHING_TO_COMMIT",
+    "sessionId": "qa-af7be174@2026-11-02T20:49:39Z",
+    "at": "2026-11-02T20:55:02.654Z"
+  },
+  "commits": [
+    {
+      "sha": "bc2d91e887c0d6b66c9975cb34aa2cf1beb1c15c",
+      "ref": "refs/heads/moe/task/task-8c875cc811d847f7861125a41b31019d",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T20:27:33Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T20:36:06.499Z",
+      "treeId": "001160062c28cf1c38ec6ee0eb3f20056c22735f",
+      "status": "WORKING",
+      "pushed": true
+    },
+    {
+      "sha": "9e11d95c5a7f1606296210bd6938b62d9522d55f",
+      "ref": "refs/moe/rescue/task-8c875cc811d847f7861125a41b31019d/20261102T204156Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-d6c1cb7a@2026-11-02T20:36:44Z",
+      "paths": [],
+      "recordedBy": "worker-d6c1cb7a",
+      "recordedAt": "2026-11-02T20:41:57.097Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-8c875cc811d847f7861125a41b31019d ref=refs/moe/rescue/task-8c875cc811d847f7861125a41b31019d/20261102T204156Z sha=9e11d95c5a7f1606296210bd6938b62d9522d55f reason=conflict"
+    },
+    {
+      "sha": "3e092cff5093df82bdd8748a91d9d501daf3c76e",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-26483323@2026-11-02T20:42:32Z",
+      "paths": [
+        ".github/workflows/ci.yml",
+        "scripts/moe-agent.ps1",
+        "scripts/tests/daemon-autostart-argv.test.mjs"
+      ],
+      "recordedBy": "worker-26483323",
+      "recordedAt": "2026-11-02T20:46:16.885Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "filesModified": [
+    "scripts/tests/daemon-autostart-argv.test.mjs",
+    ".github/workflows/ci.yml",
+    "scripts/moe-agent.ps1"
+  ],
+  "unattributedPaths": [],
+  "reviewStartedAt": "2026-11-02T20:45:02.652Z",
+  "verification": {
+    "command": "node.exe --test scripts/tests/daemon-autostart-argv.test.mjs && bash scripts/tests/parity-check.sh && npm run lint",
+    "exitCode": 0,
+    "outputTail": "✔ PowerShell 5.1: the daemon-autostart Start-Process passes literal-name paths as whole arguments (1184.8682ms)\n✔ PowerShell 5.1: the launcher autostarts the daemon under spaced project and daemon-script paths (3006.2003ms)\n✔ PowerShell 7: the daemon-autostart Start-Process passes literal-name paths as whole arguments (1122.3711ms)\n✔ PowerShell 7: the launcher autostarts the daemon under spaced project and daemon-script paths (3117.604ms)\nℹ tests 4\nℹ suites 0\nℹ pass 4\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 8536.0313\nPASS parity-check.sh\nnpm notice run lint\nnpm notice run npm run docs:lint\nnpm notice run docs:lint\nnpm notice run bash scripts/lint-role-docs.sh\nOK: docs/roles/architect.md has 39 lines (max 40)\nOK: docs/roles/worker.md has 30 lines (max 40)\nOK: docs/roles/qa.md has 36 lines (max 40)",
+    "reportedAt": "2026-11-02T20:45:02.652Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Resolved the single landing conflict in scripts/moe-agent.ps1, preserving ConvertTo-MoeArgumentLine/corrected comments together with the merged target's protected $script:MoeNode FilePath selection (legacy fallback 'node'). Only that file was edited this retry via Serena; no Git commands, step reopening, or replanning. Snapshot diff/byte checks confirmed all bytes outside the conflict unchanged, no markers, UTF-8 BOM intact, LF-only. Existing regression test and Windows CI step preserved. Fresh approved verification: 4/4 native Windows tests pass on PS5.1 and pwsh7, 0 failures/skips; parity and lint pass. Self-review completed and task handoff plus protected-interpreter integration gotcha saved in Serena. Wrapper still owns completion landing.",
+  "landingRetry": null,
+  "completedAt": "2026-11-02T20:54:18.932Z",
+  "reviewCompletedAt": "2026-11-02T20:54:18.932Z",
+  "reviewSummary": "Completion 3e092cff (pushed, on moe/work-2026-10-24): +186/-3, net 183 LOC, in approved scope.\n\nDoD1: the ConvertTo-MoeArgumentLine CRT escaping makes -ArgumentList one pre-quoted line. `node.exe --test scripts/tests/daemon-autostart-argv.test.mjs` on a 3e092cff snapshot: 4 pass, 0 fail, 0 skipped, 9 s. My probe of the landed helper through Start-Process round-tripped 13 edge cases with 0 mismatches on PS5.1 and pwsh7: empty, tab, embedded and lone quotes, trailing and lone backslashes, UNC, C:\\ and the literal name.\n\nDoD2: the same test against the pre-fix bbf2f857 ps1 failed 4/4 (split argv; 'Daemon failed to start within 10s').\n\nDoD3: the ps1 diff is only the helper, its comments and the -ArgumentList expression. Error handling and the wait loop are untouched; no -WorkingDirectory. -FilePath keeps the target's $script:MoeNode-or-'node' (from 64809b19) byte-identical, the correct conflict merge despite the stale plan invariant. The test covers the fallback only.\n\nInvariants: BOM ef bb bf, 0 CR, parses on both engines (row A), .sh untouched. The CI step sits after the daemon.json-cap step, Windows-only.\n\nGate `bash scripts/tests/parity-check.sh && npm run lint`: exit 0. No npm build, install or test. 0 leftover temp dirs.\n\nTiming: argv 9 s, RED 68 s, gate 4 s; 13 live seats. No gradle or git-land leases or queue at start or end. Windows process proxy (not CPU): node 13→15, powershell 10→11, java 2→2 (20:51:34Z→20:53:57Z).\n\nComplexity pass: nothing to cut.",
+  "requiredCheckAtDone": null
+}
