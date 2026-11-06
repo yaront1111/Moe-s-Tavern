@@ -11,11 +11,11 @@ import { activeChatWaiters } from './chatWait.js';
 import { listAttempts } from '../state/attemptStore.js';
 import type { ChatChannel, Team, Worker, WorkerType } from '../types/schema.js';
 
-// The seat's CLI (CLAUDE/CODEX/GEMINI/GROK) is reported by the launcher on
+// The seat's CLI (CLAUDE/CODEX/GEMINI/GROK/COPILOT) is reported by the launcher on
 // claim_next_task and join_team. Only an exact, case-sensitive name is kept;
 // everything else is recorded as CLAUDE and never refused. An omitted field is
 // "not reported": a new record gets CLAUDE and an existing one keeps its type.
-const TYPES: WorkerType[] = ['CLAUDE', 'CODEX', 'GEMINI', 'GROK'];
+const TYPES: WorkerType[] = ['CLAUDE', 'CODEX', 'GEMINI', 'GROK', 'COPILOT'];
 const FROZEN = '2026-10-26T04:44:45.000Z';
 
 describe('moe.join_team records the reported worker type', () => {
@@ -46,8 +46,9 @@ describe('moe.join_team records the reported worker type', () => {
   };
 
   it('declares an optional workerType property', () => {
-    const schema = joinTeamTool(h.state).inputSchema as { properties: Record<string, unknown>; required: string[] };
+    const schema = joinTeamTool(h.state).inputSchema as { properties: Record<string, { description: string }>; required: string[] };
     expect(schema.properties).toHaveProperty('workerType');
+    for (const t of TYPES) expect(schema.properties.workerType.description).toContain(t);
     expect(schema.required).toEqual(['teamId', 'workerId']);
   });
 
@@ -63,6 +64,9 @@ describe('moe.join_team records the reported worker type', () => {
     ['lowercase', { workerType: 'codex' }],
     ['capitalised', { workerType: 'Codex' }],
     ['padded', { workerType: ' CODEX' }],
+    ['lowercase copilot', { workerType: 'copilot' }],
+    ['capitalised copilot', { workerType: 'Copilot' }],
+    ['padded copilot', { workerType: ' COPILOT ' }],
     ['empty', { workerType: '' }],
     ['unknown name', { workerType: 'OPENAI' }],
     ['prototype name', { workerType: 'constructor' }],
@@ -89,6 +93,13 @@ describe('moe.join_team records the reported worker type', () => {
     expect(after.team.memberIds).toEqual(['worker-busy']);
     expect(h.state.getWorker('worker-busy')).toEqual({ ...before, type: 'GEMINI' });
     expect(onDisk('worker-busy')).toEqual({ ...before, type: 'GEMINI' });
+  });
+
+  it('refreshes an existing CLAUDE seat to COPILOT on rejoin and changes nothing else', async () => {
+    const before = await seed('worker-claude', 'CLAUDE');
+    await join('worker-claude', { workerType: 'COPILOT' });
+    expect(h.state.getWorker('worker-claude')).toEqual({ ...before, type: 'COPILOT' });
+    expect(onDisk('worker-claude')).toEqual({ ...before, type: 'COPILOT' });
   });
 
   it('leaves an existing seat byte-identical when a rejoin omits workerType', async () => {
@@ -183,8 +194,9 @@ describe('moe.claim_next_task records the reported worker type', () => {
   };
 
   it('declares an optional workerType property', () => {
-    const schema = claimNextTaskTool(h.state).inputSchema as { properties: Record<string, unknown>; required: string[] };
+    const schema = claimNextTaskTool(h.state).inputSchema as { properties: Record<string, { description: string }>; required: string[] };
     expect(schema.properties).toHaveProperty('workerType');
+    for (const t of TYPES) expect(schema.properties.workerType.description).toContain(t);
     expect(schema.required).toEqual(['statuses']);
   });
 
@@ -198,6 +210,9 @@ describe('moe.claim_next_task records the reported worker type', () => {
   it.each([
     ['omitted', {}],
     ['lowercase', { workerType: 'grok' }],
+    ['lowercase copilot', { workerType: 'copilot' }],
+    ['capitalised copilot', { workerType: 'Copilot' }],
+    ['padded copilot', { workerType: ' COPILOT ' }],
     ['unknown name', { workerType: 'UNKNOWN' }],
     ['null', { workerType: null }],
     ['number', { workerType: 7 }],
@@ -211,6 +226,14 @@ describe('moe.claim_next_task records the reported worker type', () => {
     expect((await claim('worker-seat', { workerType: 'GEMINI' })).hasNext).toBe(true);
     expect(h.state.getTask('task-1')?.assignedWorkerId).toBe('worker-seat');
     expect(type('worker-seat')).toBe('GEMINI');
+  });
+
+  it('refreshes an existing CLAUDE seat to COPILOT on a claim, in memory and on disk', async () => {
+    await seat('worker-seat', 'CLAUDE');
+    expect((await claim('worker-seat', { workerType: 'COPILOT' })).hasNext).toBe(true);
+    expect(h.state.getTask('task-1')?.assignedWorkerId).toBe('worker-seat');
+    expect(type('worker-seat')).toBe('COPILOT');
+    expect(JSON.parse(fs.readFileSync(diskFile('worker-seat'), 'utf-8')).type).toBe('COPILOT');
   });
 
   it('refreshes the type on an explicit resume and on alreadyAssigned, leaving the attempt alone', async () => {

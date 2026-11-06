@@ -184,7 +184,7 @@ test('C6 declaredProfile is a fresh strict read that never pins and never throws
 
 // ---- Part 2: the launcher, over a fake terminal API (protected-runtime.test.cjs's loadLauncher) ----
 const WIN = process.platform === 'win32';
-const WRAPPER = WIN ? 'scripts/moe-agent.ps1' : 'scripts/moe-agent.sh';
+const wrapperFor = win => (win ? 'scripts/moe-agent.ps1' : 'scripts/moe-agent.sh');
 const NAMES = { architect: 'Moe Planner', worker: 'Moe Coder', qa: 'Moe QA', governor: 'Moe Governor' };
 const ROLES = Object.keys(NAMES);
 
@@ -205,9 +205,9 @@ const interp = () => fs.realpathSync.native(WIN
     ? path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : '/bin/bash');
 
 /** Today's command shape for the bundled wrapper, -EncodedCommand decoded and the random worker id fixed. */
-function expectedCommand(role, ext, dir, marker, command = 'claude') {
-    const [env, wrapper] = [Object.entries(bundledEnv(ext, marker)), path.join(ext, 'bundled', WRAPPER)];
-    if (WIN) {
+function expectedCommand(role, ext, dir, marker, command = 'claude', win = WIN) {
+    const [env, wrapper] = [Object.entries(bundledEnv(ext, marker)), path.join(ext, 'bundled', wrapperFor(win))];
+    if (win) {
         return env.map(([key, value]) => `$env:${key}=${psQuote(value)}; `).join('') +
             `${marker ? `& ${psQuote(interp())}` : 'powershell'} -NoProfile -ExecutionPolicy Bypass -EncodedCommand [& ${psQuote(wrapper)} -Role ${role} ` +
             `-Project ${psQuote(dir)} -WorkerId '${role}-ID' -Command '${command}']`;
@@ -220,8 +220,11 @@ const decode = text => text
     .replace(/-EncodedCommand (\S+)$/, (_, b64) => `-EncodedCommand [${Buffer.from(b64, 'base64').toString('utf16le')}]`)
     .replace(/(architect|worker|qa|governor)-[0-9a-f]{8}/, '$1-ID');
 
-/** The launcher over a fake terminal API; setTimeout only records, so a test fires the staggers itself. */
-function loadLauncher(dir) {
+/**
+ * The launcher over a fake terminal API; setTimeout only records, so a test fires the staggers itself. `platform` (default:
+ * the host's) makes the launcher build that platform's line, as agent-launcher-controls.test.cjs does.
+ */
+function loadLauncher(dir, platform) {
     const [terminals, errors, timers] = [[], [], []];
     const createTerminal = options => {
         const terminal = { options, texts: [], sendText: text => terminal.texts.push(text), show() {} };
@@ -231,7 +234,8 @@ function loadLauncher(dir) {
     const vscode = { workspace: { workspaceFolders: [{ uri: { fsPath: dir } }] },
         window: { createTerminal, showErrorMessage: message => { errors.push(message); } } };
     const launcher = run(launcherSource, 'AgentLauncher.ts', vscode, { '../services/MoeDaemonClient': loadClient() },
-        { setTimeout: (fire, ms) => timers.push([ms, fire]) });
+        { setTimeout: (fire, ms) => timers.push([ms, fire]),
+            ...(platform && { process: Object.create(process, { platform: { value: platform } }) }) });
     const launched = () => terminals.map(t => [t.options.name, t.options.cwd, t.texts.length === 1 && decode(t.texts[0])]);
     return { launcher, terminals, errors, timers, launched };
 }
@@ -307,14 +311,142 @@ test('V4 a ready reply launches worker and QA with the installed platform wrappe
     }
 });
 
-test('V5 gemini, grok and custom CLIs are refused by name before any readiness request', async () => {
+test('V5 gemini, grok, copilot and custom CLIs are refused by name before any readiness request, worker and QA alike', async () => {
     const [ext, dir] = [extension(), project(declare('verified-local'))];
-    for (const [provider, customCommand, shown] of [['gemini', undefined, 'gemini'], ['grok', undefined, 'grok'],
+    for (const [provider, customCommand, shown] of [['gemini', undefined, 'gemini'], ['grok', undefined, 'grok'], ['copilot', undefined, 'copilot'],
         ['custom', ' my-cli ', 'my-cli'], ['custom', `x${String.fromCharCode(7)}y`, 'x?y'], ['custom', 'z'.repeat(250), 'z'.repeat(200)]]) {
-        const [f, ask] = [loadLauncher(dir), source({ answered: READY })];
-        await f.launcher.launchAgent('worker', provider, ext, { customCommand, readiness: ask });
-        assert.deepEqual([f.errors, f.terminals.length, ask.calls], [[CLI_REFUSAL(shown)], 0, 0]);
+        for (const role of ['worker', 'qa']) {
+            const [f, ask] = [loadLauncher(dir), source({ answered: READY })];
+            await f.launcher.launchAgent(role, provider, ext, { customCommand, readiness: ask });
+            assert.deepEqual([f.errors, f.terminals.length, ask.calls], [[CLI_REFUSAL(shown)], 0, 0], `${provider} ${role}`);
+        }
     }
+});
+
+test('V5 launchAllAgents with copilot under verified-local: one shared refusal, no readiness request, only architect and governor start', async () => {
+    const [f, ask] = [loadLauncher(project(declare('verified-local'))), source({ answered: READY })];
+    f.launcher.launchAllAgents('copilot', extension(), { readiness: ask });
+    for (const [, fire] of f.timers) { fire(); await flush(); }
+    assert.deepEqual([f.terminals.map(t => t.options.name), f.errors, ask.calls], [[NAMES.architect, NAMES.governor], [CLI_REFUSAL('copilot')], 0]);
+});
+
+// Slice 5 of task-59e1d150: the wrapper's -Command/--command already takes any CLI name, so a copilot launch is the generic
+// line. The expected text is written out per platform (expectedCommand), never read back from the launcher under test.
+for (const [platform, text] of [['linux', declare('legacy')], ['linux', declare('observe')], ['win32', declare('legacy')], ['win32', declare('observe')]]) {
+    test(`V7 a copilot launch on ${platform} (${JSON.parse(text).settings.executionProfile}) passes the generic -Command/--command line for every role`, () => {
+        const [ext, dir, win] = [extension(), project(text), platform === 'win32'];
+        for (const role of ROLES) {
+            const [f, ask] = [loadLauncher(dir, platform), source({ answered: READY })];
+            f.launcher.launchAgent(role, 'copilot', ext, { readiness: ask });
+            const options = { name: NAMES[role], cwd: dir, ...(win && { shellPath: 'powershell.exe' }) };
+            assert.deepEqual(f.terminals.map(t => plain(t.options)), [options], `${platform} ${role} terminal options`);
+            assert.deepEqual(f.launched(), [[NAMES[role], dir, expectedCommand(role, ext, dir, false, 'copilot', win)]], `${platform} ${role}`);
+            assert.ok(f.launched()[0][2].includes(win ? "-Command 'copilot'" : "--command 'copilot'"), `${platform} ${role} passes the command word`);
+            assert.doesNotMatch(f.launched()[0][2], /(^|\s)-{1,2}(copilot[\w-]*|exec|interactive|no-interactive)(\s|$|=|:)/i, `${platform} ${role} adds no provider flag`);
+            assert.deepEqual([f.errors, ask.calls], [[], 0], `${platform} ${role} never asks readiness`);
+        }
+    });
+}
+
+/** The members of an exported string-literal union alias in a source file, read from its AST (types erase at runtime). */
+function unionMembers(file, name) {
+    const sourceFile = ts.createSourceFile(file, fs.readFileSync(path.join(__dirname, '../src', file), 'utf8'), ts.ScriptTarget.ES2020, true);
+    const aliases = sourceFile.statements.filter(s => ts.isTypeAliasDeclaration(s) && s.name.text === name
+        && (ts.getCombinedModifierFlags(s) & ts.ModifierFlags.Export) !== 0);
+    assert.equal(aliases.length, 1, `exactly one exported type ${name} in ${file}`);
+    assert.ok(ts.isUnionTypeNode(aliases[0].type), `${name} is a union`);
+    return aliases[0].type.types.map(t => {
+        assert.ok(ts.isLiteralTypeNode(t) && ts.isStringLiteral(t.literal), `${name} member ${t.getText()} is a string literal`);
+        return t.literal.text;
+    });
+}
+
+test('V8 WorkerType and AgentProvider each gain exactly one copilot member and keep every old one', () => {
+    const worker = unionMembers('types/moe.ts', 'WorkerType');
+    assert.equal(worker.filter(m => m === 'COPILOT').length, 1, 'COPILOT appears exactly once in WorkerType');
+    for (const old of ['CLAUDE', 'CODEX', 'GEMINI', 'GROK']) { assert.ok(worker.includes(old), `WorkerType keeps ${old}`); }
+    const provider = unionMembers('util/AgentLauncher.ts', 'AgentProvider');
+    assert.equal(provider.filter(m => m === 'copilot').length, 1, 'copilot appears exactly once in AgentProvider');
+    for (const old of ['claude', 'codex', 'gemini', 'grok', 'custom']) { assert.ok(provider.includes(old), `AgentProvider keeps ${old}`); }
+    assert.ok(provider.indexOf('copilot') < provider.indexOf('custom'), 'copilot is listed before custom');
+});
+
+/**
+ * extension.ts's own pickProvider: nested in activate() and closed over only vscode and its ctx argument, so its actual
+ * source text is cut out by AST and run, not copied. Fails loudly if the function is renamed, duplicated or reshaped.
+ */
+function productionPickProvider(vscode) {
+    const file = path.join(__dirname, '../src/extension.ts');
+    const text = fs.readFileSync(file, 'utf8');
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.ES2020, true);
+    const found = [];
+    const visit = node => {
+        if (ts.isFunctionDeclaration(node) && node.name && node.name.text === 'pickProvider') { found.push(node); }
+        ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+    assert.equal(found.length, 1, 'exactly one function declaration named pickProvider in extension.ts');
+    assert.ok(found[0].body, 'pickProvider has a body');
+    const js = ts.transpileModule(`export ${found[0].getText()}`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+    // In extension.ts `vscode` is the module's import binding, so here it is the one free variable the function reads.
+    const { pickProvider } = run(js, 'pickProvider.ts', vscode, {}, { vscode });
+    assert.equal(typeof pickProvider, 'function');
+    return pickProvider;
+}
+
+/** pickProvider over recorders: `choose` receives the quick-pick items and returns the picked one (or undefined to cancel). */
+function pickerHarness(saved, choose) {
+    const [shown, inputs, updates] = [[], [], []];
+    const vscode = { window: {
+        showQuickPick: async (items, options) => { shown.push({ items: plain(items), options: plain(options) }); return choose(items); },
+        showInputBox: async options => { inputs.push(plain(options)); return undefined; }
+    } };
+    const ctx = { workspaceState: { get: (key, fallback) => (key in saved ? saved[key] : fallback),
+        update: async (key, value) => { updates.push([key, value]); } } };
+    return { pick: () => productionPickProvider(vscode)(ctx), shown, inputs, updates };
+}
+
+test('P1 the real provider picker lists Copilot exactly once, before Custom..., and picking it saves and returns provider copilot', async () => {
+    const h = pickerHarness({}, items => items.find(item => item.provider === 'copilot'));
+    assert.deepEqual(plain(await h.pick()), { provider: 'copilot' });
+    const items = h.shown[0].items;
+    assert.equal(h.shown.length, 1);
+    assert.equal(items.filter(item => item.provider === 'copilot').length, 1, 'one Copilot entry');
+    assert.equal(items.filter(item => item.label === 'Copilot').length, 1, 'labelled Copilot');
+    assert.deepEqual(items.find(item => item.provider === 'copilot'), { label: 'Copilot', description: '', provider: 'copilot' });
+    assert.equal(items.findIndex(item => item.provider === 'copilot') + 1, items.findIndex(item => item.provider === 'custom'),
+        'Copilot sits directly before Custom...');
+    assert.deepEqual(items.map(item => item.provider), ['claude', 'codex', 'gemini', 'grok', 'copilot', 'custom'], 'every other provider is kept in order');
+    assert.deepEqual([h.inputs, h.updates], [[], [['moe.lastProvider', 'copilot']]], 'no custom command is asked, and the choice is saved');
+});
+
+test('P2 a saved copilot provider moves to the top marked Last used; cancelling returns undefined and saves nothing', async () => {
+    const cancelled = pickerHarness({ 'moe.lastProvider': 'copilot' }, () => undefined);
+    assert.equal(await cancelled.pick(), undefined);
+    const items = cancelled.shown[0].items;
+    assert.deepEqual(items[0], { label: 'Copilot', description: 'Last used', provider: 'copilot' });
+    assert.deepEqual(items.map(item => item.provider), ['copilot', 'claude', 'codex', 'gemini', 'grok', 'custom']);
+    assert.deepEqual([cancelled.inputs, cancelled.updates], [[], []]);
+    const again = pickerHarness({ 'moe.lastProvider': 'copilot' }, list => list[0]);
+    assert.deepEqual(plain(await again.pick()), { provider: 'copilot' });
+    assert.deepEqual(again.updates, [['moe.lastProvider', 'copilot']]);
+});
+
+test('S1 the Settings page\'s agentCommand datalist offers copilot exactly once and keeps claude, codex, gemini and grok', () => {
+    const vscode = { Uri: { joinPath: (base, ...parts) => ({ base, parts }) }, window: {} };
+    const { SettingsPanel } = run(transpile('panels/SettingsPanel.ts'), 'SettingsPanel.ts', vscode);
+    const panel = Object.create(SettingsPanel.prototype);
+    panel.extensionUri = { fsPath: '/ext' };
+    panel.panel = { webview: { asWebviewUri: () => 'vscode-resource:/ext/media/settings.js', cspSource: 'vscode-resource:' } };
+    const html = SettingsPanel.prototype.getWebviewContent.call(panel, 'nonce', undefined);
+    const lists = [...html.matchAll(/<datalist id="agentCommands">([\s\S]*?)<\/datalist>/g)];
+    assert.equal(lists.length, 1, 'one agentCommands datalist is emitted');
+    assert.match(html, /<input type="text" id="agentCommand"[^>]* list="agentCommands" \/>/, 'the free-text input still points at it');
+    const body = lists[0][1];
+    const options = [...body.matchAll(/<option value="([^"]*)">/g)].map(match => match[1]);
+    assert.equal(body.replace(/<option value="[^"]*">/g, '').trim(), '', 'the datalist holds options only');
+    assert.equal(options.filter(option => option === 'copilot').length, 1, 'copilot is offered exactly once');
+    assert.deepEqual(options, ['claude', 'codex', 'gemini', 'grok', 'copilot']);
 });
 
 test('V6 a refusal shows at most 32 ids of at most 64 characters; only ready verified-local launches', () => {

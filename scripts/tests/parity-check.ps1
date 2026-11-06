@@ -42,7 +42,9 @@ $dynamicPatterns = @(
     'MOE_VERIFIED_LOCAL_[A-Z_]+',
     'MOE_SEAT_[A-Z_]+',
     'MOE_VM_[A-Z_]+',
-    'MOE_CHECK_DISPATCH_[A-Z_]+'
+    'MOE_CHECK_DISPATCH_[A-Z_]+',
+    # The GitHub Copilot CLI seat's coded stop lines and its model/effort env names.
+    'MOE_COPILOT_[A-Z_]+'
 )
 # $shOnly names a printed code whose condition only moe-agent.sh can meet: the
 # verified-local WSL refusal (a ps1 seat never runs inside WSL). Keep it in BOTH
@@ -138,7 +140,16 @@ $required = [ordered]@{
     # both wrappers - its config dir is a DENY-tier attribution prefix, its
     # cliType literal exists, and its mode/config banners are grep-stable.
     'cli config dirs' = @('.codex/', '.gemini/', '.grok/')
-    'cli types' = @('"grok"', '"codex"')
+    'cli types' = @('"grok"', '"codex"', '"copilot"')
+    # GitHub Copilot CLI seat vocabulary: the model and effort env names, the coded
+    # stop lines (not found, config write failed, signed out, rejected argv), the
+    # sign-in evidence and token names, the routed effort flag and the mode banners,
+    # spelled identically. The mode banners are pinned as prefixes (the headless one
+    # carries a '(stdin prompt)' suffix). Copilot's MCP config is private and
+    # per-launch (no pre-flight 'config written to' line, no .copilot/ DENY prefix).
+    'copilot vocabulary' = @('MOE_COPILOT_MODEL', 'MOE_COPILOT_EFFORT', 'MOE_COPILOT_NOT_FOUND', 'MOE_COPILOT_CONFIG_FAILED', 'MOE_COPILOT_SIGNED_OUT',
+        'MOE_CLI_ARGV_REJECTED: the installed copilot (', 'GitHub Copilot CLI not found:', 'No authentication information found',
+        'COPILOT_GITHUB_TOKEN', '--reasoning-effort', 'Copilot mode: headless', 'Copilot mode: interactive')
     # Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX
     # accepts and the fallback warning, spelled identically.
     'codex vocabulary' = @('read-only', 'workspace-write', 'danger-full-access', 'approvals_reviewer=user', 'MOE_CLI_ARGV_REJECTED', 'MOE_DISABLE_ARGV_PROBE', 'is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access.', 'default_tools_approval_mode = "approve"', "rejects the wrapper's launch argv")

@@ -483,10 +483,10 @@ if ($script:MoeRuntimeProtected) { $env:NoDefaultCurrentDirectoryInExePath = '1'
 # or grok runs, by bare name and with no -CommandArgs, resolved by
 # Resolve-MoeProtectedCli below. Lines are byte-identical in moe-agent.sh.
 function Stop-MoeProtectedAgent([string]$Line) { [Console]::Error.WriteLine($Line); exit 1 }
-if ($script:MoeRuntimeProtected -and ($CommandArgs.Count -ne 0 -or $Command -cnotin @('claude', 'codex', 'gemini', 'grok'))) {
+if ($script:MoeRuntimeProtected -and ($CommandArgs.Count -ne 0 -or $Command -cnotin @('claude', 'codex', 'gemini', 'grok', 'copilot'))) {
     $moeShown = ((@($Command) + @($CommandArgs)) -join ' ') -replace '\p{Cc}', '?'
     if ($moeShown.Length -gt 200) { $moeShown = $moeShown.Substring(0, 200) }
-    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '$moeShown' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start."
+    Stop-MoeProtectedAgent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '$moeShown' is not one of claude, codex, gemini, grok, copilot; the protected runtime runs only these agent CLIs by name. Refusing to start."
 }
 # Protected runtime gate, before the exit handler, any MCP config, daemon, proxy
 # RPC or CLI. The refusal names the variable, never its value; byte-identical in
@@ -844,6 +844,8 @@ $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFil
 # the outer finally on every exit path) and the pre-launch values of the GROK_*
 # env the branch overrides (restored in the same finally).
 $script:GrokPromptFile = $null
+$script:CopilotPromptFile = $null
+$script:CopilotMcpFile = $null
 $script:GrokEnvPrev = $null
 
 # Start-Process (PowerShell 5.1 and 7) joins -ArgumentList entries with single
@@ -1227,6 +1229,7 @@ $cmdBase = [System.IO.Path]::GetFileNameWithoutExtension($cmdForDetect)
 if ($cmdBase -eq "codex") { $cliType = "codex" }
 elseif ($cmdBase -eq "gemini" -or $cmdBase -eq "agy") { $cliType = "gemini" }
 elseif ($cmdBase -eq "grok") { $cliType = "grok" }
+elseif ($cmdBase -eq "copilot") { $cliType = "copilot" }
 # The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
 # Replaces an inherited value (the in-process hot reload keeps env).
 $env:MOE_WORKER_TYPE = $cliType.ToUpperInvariant()
@@ -1321,6 +1324,7 @@ $claudeInteractive = ($cliType -eq "claude") -and $Interactive
 # default: $Interactive is already resolved above (architect/governor true,
 # worker/qa false, an explicit switch wins), and -GrokExec forces headless.
 $grokInteractive = ($cliType -eq "grok") -and $Interactive -and (-not $GrokExec)
+$copilotInteractive = ($cliType -eq "copilot") -and $Interactive
 
 # For codex: write project-scoped .codex/config.toml instead of global registration
 # (-Root: the control or the task worktree; MOE_PROJECT_PATH stays the control)
@@ -3689,6 +3693,7 @@ try {
             'codex' { Write-MoeCodexConfig -Root $script:cliRoot -SerenaProject $serenaProject }
             'gemini' { Write-MoeGeminiConfig -Root $script:cliRoot -SerenaProject $serenaProject }
             'grok' { Write-MoeGrokConfig -Root $script:cliRoot -SerenaProject $serenaProject }
+            'copilot' { $script:MoeCopilotSerena = $serenaProject }
         }
         # Claude's temp --mcp-config, for this launch only: the loop top writes the shared one back.
         $what = 'cannot write the claude MCP config'; $at = $mcpConfigFile
@@ -9061,7 +9066,11 @@ if ($moeTasklessWaitSec -lt 5) { $moeTasklessWaitSec = 5 }
 if ($moeTasklessWaitSec -gt 600) { $moeTasklessWaitSec = 600 }
 $moeTasklessPollSec = 5
 if ($moeTasklessPollSec -gt $moeTasklessWaitSec) { $moeTasklessPollSec = $moeTasklessWaitSec }
-if ($codexInteractive -or $geminiInteractive -or $grokInteractive) {
+if ($cliType -eq 'copilot') {
+    if ($copilotInteractive) { Write-Host 'Copilot mode: interactive' }
+    else { Write-Host 'Copilot mode: headless (stdin prompt)' }
+}
+if ($codexInteractive -or $geminiInteractive -or $grokInteractive -or $copilotInteractive) {
     # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
     # interactive mode is fine to loop: each iteration spawns a fresh CLI
@@ -9503,6 +9512,59 @@ try {
         [IO.File]::ReadAllText((Join-Path $script:AgentGitGuardRoot "env.json")) | ConvertFrom-Json
     } else { $null }
 }
+function Stop-MoeCopilot([string]$Message) {
+    Write-Host "[ERROR] $Message" -ForegroundColor Red
+    $channel = if ($generalChannelId) { $generalChannelId } else { 'general' }
+    try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $channel; workerId = $WorkerId; content = "@governors ${WorkerId}: $Message" } | Out-Null } catch {}
+    Stop-HeartbeatSidecar
+    $script:MoeExitStatus = 1
+    exit 1
+}
+
+function New-MoeCopilotLog {
+    if (-not $script:CopilotLogRoot) {
+        $root = Join-Path $env:TEMP ('moe-copilot-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root -ErrorAction Stop | Out-Null
+        $script:CopilotLogRoot = $root # Cleanup owns it only after creation succeeds.
+        # Direct .NET avoids Security module autoload under a redirected USERPROFILE (5.1).
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new([Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'))
+        if ($PSVersionTable.PSVersion.Major -ge 6) { [IO.FileSystemAclExtensions]::SetAccessControl([IO.DirectoryInfo]::new($script:CopilotLogRoot), $acl) }
+        else { [IO.Directory]::SetAccessControl($script:CopilotLogRoot, $acl) }
+    }
+    $dir = Join-Path $script:CopilotLogRoot ('copilot-log.' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+    return $dir
+}
+
+function Test-MoeCopilotLog([string]$Directory, [string]$Phrase) { # this launch's own log dir, a fixed phrase
+    foreach ($file in @(Get-ChildItem -LiteralPath $Directory -Filter '*.log' -File -ErrorAction SilentlyContinue)) {
+        if (-not ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -and (Select-String -LiteralPath $file.FullName -SimpleMatch -CaseSensitive -Pattern $Phrase -Quiet -ErrorAction SilentlyContinue)) { return $true }
+    }
+    return $false
+}
+
+function Test-MoeCopilotArgv([string[]]$LaunchArgs) {
+    if ($script:CopilotArgvProbed -or $env:MOE_DISABLE_ARGV_PROBE -eq '1') { return }
+    $script:CopilotArgvProbed = $true
+    $previousEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue' # 5.1 must capture native stderr without throwing.
+        $probeOut = @(@() | Invoke-MoeGuardedCommand @CommandArgs @LaunchArgs --help 2>&1 | ForEach-Object { "$_" })
+        $probeExit = $LASTEXITCODE
+        if ($probeExit -ne 0 -and ($probeOut -join "`n") -match 'unexpected argument|invalid value|unrecognized') {
+            $probeLine = ($probeOut | Where-Object { $_ -match 'error|unexpected argument|invalid value|unrecognized' } | Select-Object -First 1).Trim()
+            $copilotVersion = 'unknown'
+            try {
+                $versionOut = @(@() | Invoke-MoeGuardedCommand @CommandArgs --version 2>&1 | ForEach-Object { "$_" })
+                if ($LASTEXITCODE -eq 0 -and $versionOut.Count -gt 0 -and $versionOut[0].Trim()) { $copilotVersion = $versionOut[0].Trim() }
+            } catch {}
+            Stop-MoeCopilot "MOE_CLI_ARGV_REJECTED: the installed copilot ($copilotVersion) rejects the wrapper's launch argv -- $probeLine. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+        }
+    } finally { $ErrorActionPreference = $previousEap }
+}
+
 function Invoke-MoeGuardedCommand {
     $saved = @{}
     try {
@@ -9510,7 +9572,7 @@ function Invoke-MoeGuardedCommand {
             $saved[$p.Name] = [Environment]::GetEnvironmentVariable($p.Name)
             [Environment]::SetEnvironmentVariable($p.Name, $p.Value)
         }
-        & $Command @args
+        if ($MyInvocation.ExpectingInput) { $input | & $Command @args } else { & $Command @args }
         $code = $LASTEXITCODE
     } finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
@@ -9806,17 +9868,47 @@ function Send-MoeVmCredentialAnnounce([string]$Detail) {
     $channel = if ($generalChannelId) { $generalChannelId } else { 'general' }
     try { Invoke-MoeRpc -Tool 'chat_send' -Args @{ channel = $channel; workerId = $WorkerId; content = "@governors ${WorkerId}: MOE_VM_CREDENTIAL_UNAVAILABLE - $Detail" } 6>$null | Out-Null } catch {}
 }
+# The claude words the signin-state probe passes after a failed run ("$COMMAND_BIN"
+# "${COMMAND_ARGV[@]}" in the sh twin). A protected CLI probes extensionless, so
+# the helper resolves PATHEXT in the trusted dir only.
+function Get-MoeClaudeProbeWords {
+    if ($script:MoeProtectedCli) { return @([IO.Path]::Combine([IO.Path]::GetDirectoryName($Command), [IO.Path]::GetFileNameWithoutExtension($Command))) }
+    return @($Command) + @($CommandArgs | Where-Object { $null -ne $_ })
+}
+# A VM job gets only the access token, never the refresh token, so the job
+# cannot outlive that token. Claude renews only in the token's last 5 minutes,
+# so a token with less than an hour left waits for that window instead of
+# starting a job that would die partway.
+$script:VmJobMinTokenSec = 3600
 # Twin: seat_wait_credential. Wait outside launch timing. Re-lease and recheck the
 # pinned attempt after each wait, like the account loop: a released task never
 # launches stale. $false: launch nothing; the caller re-runs pre-flight.
+# vm-credential-state never prints a credential, so its reply may be logged.
 function Wait-MoeVmCredential {
     $sec = 0
     if (-not [int]::TryParse("$(Invoke-MoeAccountHelper -HelperArgs @('retry-sec'))", [ref]$sec) -or $sec -lt 1) { $sec = 300 }
     $escalated = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    while (-not ($script:AccountLeasedId -and (Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId)))) {
+    while ($true) {
+        $reason = 'no-lease'
+        if ($script:AccountLeasedId) {
+            $state = Invoke-MoeAccountHelper -HelperArgs (@('vm-credential-state', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))
+            if ($state -ceq 'minted') { Write-Host "[seat] VM credential account=$($script:AccountLeasedId) source=minted"; return $true }
+            if ($state -cmatch '^signin\t(.*)\z') {
+                $iso = $Matches[1]; $reason = 'unknown'; $t = [datetime]::MinValue
+                if ($iso -cmatch '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z\z' -and [datetime]::TryParseExact($iso, "yyyy-MM-dd'T'HH:mm:ss.fff'Z'",
+                        [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AssumeUniversal, AdjustToUniversal', [ref]$t)) {
+                    if ([long][Math]::Floor(($t - [datetime]::UtcNow).TotalSeconds) -ge $script:VmJobMinTokenSec) {
+                        Write-Host "[seat] VM credential account=$($script:AccountLeasedId) source=signin expires=$iso"; return $true
+                    }
+                    $reason = 'short-life'
+                }
+            } elseif ($state -cmatch '^unavailable\t(.*)\z') { $reason = $Matches[1] }
+            else { $reason = 'unknown' }
+        }
+        if ($reason -cnotmatch '^[a-z][a-z-]{0,31}\z') { $reason = 'unknown' }
         $account = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
-        Write-Host "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
-        if ($escalated.Add($account)) { Send-MoeVmCredentialAnnounce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." }
+        Write-Host "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account reason=$reason; retrying in ${sec}s (Ctrl+C to stop)"
+        if ($escalated.Add($account)) { Send-MoeVmCredentialAnnounce "account=$account reason=$reason; sign the account in again on this host (Accounts tab, or 'accounts login <id>'), or set an optional VM token ('accounts vm-token <id>'). The task stays held." }
         Start-Sleep -Seconds $sec
         $script:AccountLeaseWaited = $true
         if (-not (Test-MoeAccountWaitAttempt)) { return $false }
@@ -9855,10 +9947,12 @@ function Invoke-MoeVmJob {
         if ($cliType -eq 'codex') {
             $name = if ($env:OPENAI_API_KEY) { 'OPENAI_API_KEY' } else { 'CODEX_API_KEY' }
             $token = [Environment]::GetEnvironmentVariable($name)
-        } elseif ($script:AccountLeasedId) { $token = Invoke-MoeAccountHelper -HelperArgs @('vm-credential', $script:AccountLeasedId) }
+        } elseif ($script:AccountLeasedId) {
+            $token = Invoke-MoeAccountHelper -HelperArgs (@('vm-credential', $script:AccountLeasedId, $script:AccountLeasedDir) + (Get-MoeClaudeProbeWords))
+        }
         if (-not $token) {
             $id = if ($script:AccountLeasedId) { $script:AccountLeasedId } else { 'none' }
-            Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "account $id has no VM token; mint one with 'accounts vm-token <id>' (Accounts tab)."
+            Stop-MoeVerifiedLocalSeat MOE_VM_CREDENTIAL_UNAVAILABLE "account $id gave no VM credential (no VM token, and its sign-in gave none); see MOE_VM_CREDENTIAL_UNAVAILABLE in TROUBLESHOOTING."
         }
         if (-not $script:MoeAttemptId -or -not $script:MoeAttemptGeneration) { Stop-MoeVerifiedLocalSeat MOE_SEAT_JOB_INPUT_MISSING 'attempt identity' }
         if ($Role -eq 'worker') {
@@ -10129,6 +10223,7 @@ do {
     $preflightTaskId = ""
     $script:MoeWtMode = 'shared'; $script:MoeWtPath = ''; $script:MoeWtBranch = ''; $script:MoeWtTarget = ''; $script:MoeWtDirtList = ''; $script:MoeWtCompletion = $false
     $script:cliRoot = "$projectPath"; Remove-Item Env:MOE_WORKTREE_PATH, Env:MOE_TASK_BRANCH, Env:MOE_LAND_TARGET -ErrorAction SilentlyContinue
+    $script:MoeCopilotSerena = $serenaProject
     if ($script:cliRootPushed) { Pop-Location; $script:cliRootPushed = $false }
     if ($script:MoeMcpConfigDirty) { $mcpConfigObj | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $mcpConfigFile -Encoding UTF8; $script:MoeMcpConfigDirty = $false }
     # Per-task launch hint from claim_next_task (reset so a tier never leaks into the next task).
@@ -10913,7 +11008,7 @@ $mentionsJson
                 # that for TUIs too. The sh twin resolves this identically.
                 $architectSessionTasks = 0
                 if (-not ("$env:MOE_ARCHITECT_TASKS_PER_SESSION" -match '^\d+$' -and [int]::TryParse("$env:MOE_ARCHITECT_TASKS_PER_SESSION", [ref]$architectSessionTasks)) -or $architectSessionTasks -lt 1) { $architectSessionTasks = 10 }
-                if ((($cliType -eq 'claude' -and $Interactive) -or $codexInteractive -or $geminiInteractive -or $grokInteractive) -and $architectSessionTasks -gt 1) {
+                if ((($cliType -eq 'claude' -and $Interactive) -or $codexInteractive -or $geminiInteractive -or $grokInteractive -or $copilotInteractive) -and $architectSessionTasks -gt 1) {
                     "Task $preflightTaskId is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $architectSessionTasks tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WorkerId'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $architectSessionTasks tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                 } else {
                     "Task $preflightTaskId is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$preflightTaskId-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
@@ -10957,11 +11052,12 @@ $mentionsJson
         'codex' { -not $codexInteractive }
         'gemini' { -not $geminiInteractive }
         'grok' { -not $grokInteractive }
+        'copilot' { -not $copilotInteractive }
         default { -not $Interactive }
     }
     if ($claimPromptBody -and $oneShotSession -and $Role -ne 'governor' -and -not $notificationPrompt) {
         $claimPromptBody += " One-shot session: this CLI process exits when you end your turn, and any background jobs/builds/tests die with it, so a completion notification cannot arrive after you stop. Never end your turn to 'wait for' a background task: run it in the foreground or poll it to completion first. End your turn only after your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded."
-    } elseif ($cliType -in @('claude', 'grok', 'codex', 'gemini') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
+    } elseif ($cliType -in @('claude', 'grok', 'codex', 'gemini', 'copilot') -and $AutoClaim -and $preflightOk -and $claimPromptBody -and $Role -ne 'governor' -and -not $notificationPrompt) {
         # An interactive TUI stays open after the agent stops, and the wrapper
         # claims the next task only once the CLI exits: without this line the
         # seat parks after every task until the operator notices.
@@ -11487,6 +11583,119 @@ $mentionsJson
                 Stop-HeartbeatSidecar
             }
         }
+    } elseif ($cliType -eq 'copilot') {
+        if (-not (Get-Command $Command -ErrorAction SilentlyContinue)) {
+            [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $Command. Install it (npm install -g @github/copilot), then sign in with copilot login.")
+            $script:MoeExitStatus = 1; exit 1
+        }
+        $copilotModel = $env:MOE_COPILOT_MODEL
+        if ($Model) { $copilotModel = $Model }
+        elseif ($projConfig -and $projConfig.settings -and $projConfig.settings.models -and $projConfig.settings.models.$Role) { $copilotModel = [string]$projConfig.settings.models.$Role }
+        $copilotEffort = if ($env:MOE_COPILOT_EFFORT) { $env:MOE_COPILOT_EFFORT } else { $taskLaunchEffort }
+        $copilotOptions = @()
+        if ($copilotModel) { $copilotOptions += @('--model', $copilotModel) }
+        if ($copilotEffort) { $copilotOptions += @('--reasoning-effort', $copilotEffort) }
+        if ($claimPromptBody) { $copilotDirective = $claimPromptBody }
+        elseif ($AutoClaim) { $copilotDirective = "If a routed_mentions block is present in the session context above, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc." }
+        else {
+            $roleWorkflow = switch ($Role) {
+                'architect' { 'Workflow: join chat -> read messages -> claim task -> get_context -> read Serena memory -> explore codebase -> submit_plan -> write Serena memory (handoff + learnings) -> announce in chat' }
+                'worker' { 'Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> start_step -> implement -> complete_step -> complete_task -> write Serena memory (handoff + learnings) -> announce in chat' }
+                'qa' { 'Workflow: join chat -> read messages -> claim task -> read task chat -> get_context -> read Serena memory -> review code and tests -> qa_approve or qa_reject -> write Serena memory (handoff + learnings) -> announce in chat' }
+                default { 'Workflow: claim task -> get_context -> read Serena memory -> complete task -> write Serena memory handoff' }
+            }
+            $copilotDirective = "You are a $Role agent. Use ONLY Moe MCP tools (moe.*). $roleWorkflow. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+        }
+        $copilotFileBody = $systemAppend
+        if ($dynamicContext) { $copilotFileBody += "`n`n# Session Context (per-iteration)`n" + $dynamicContext }
+        $copilotFileBody += "`n`n" + $copilotDirective
+        $script:CopilotPromptFile = Join-Path $env:TEMP "moe-copilot-prompt-$Role-$myPid.md"
+        $script:CopilotMcpFile = Join-Path $env:TEMP "moe-copilot-mcp-$Role-$myPid.json"
+        $copilotWritePath = $script:CopilotPromptFile
+        try {
+            [IO.File]::WriteAllText($copilotWritePath, $copilotFileBody, [Text.UTF8Encoding]::new($false))
+            $copilotWritePath = $script:CopilotMcpFile
+            $copilotEnv = @{ MOE_PROJECT_PATH = "$projectPath"; MOE_TOOL_NAME_STYLE = 'underscore'; MOE_WORKER_ID = $WorkerId }
+            $copilotKeys = @('MOE_WORKER_TYPE', 'MOE_SESSION_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_DAEMON_HOST')
+            if (-not [string]::IsNullOrWhiteSpace($env:MOE_ATTEMPT_ID) -and -not [string]::IsNullOrWhiteSpace($env:MOE_ATTEMPT_GENERATION)) { $copilotKeys += @('MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION') }
+            foreach ($key in $copilotKeys) {
+                $value = [Environment]::GetEnvironmentVariable($key)
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $copilotEnv[$key] = $value }
+            }
+            $copilotMoe = $mcpConfigObj.mcpServers.moe
+            $copilotServers = @{ moe = @{ type = 'local'; command = $copilotMoe.command; args = $copilotMoe.args; env = $copilotEnv; tools = @('*'); timeout = 780000 } }
+            if ($serenaPath -and $script:MoeCopilotSerena) {
+                $copilotServers.serena = @{ type = 'local'; command = $serenaPath; tools = @('*'); args = @('start-mcp-server', '--context', 'agent', '--project', $script:MoeCopilotSerena, '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false') }
+            }
+            [IO.File]::WriteAllText($copilotWritePath, (ConvertTo-Json -InputObject @{ mcpServers = $copilotServers } -Depth 6), [Text.UTF8Encoding]::new($false))
+        } catch {
+            [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_CONFIG_FAILED: cannot write $copilotWritePath; refusing to launch copilot without its prompt and moe server.")
+            $script:MoeExitStatus = 1; exit 1
+        }
+        Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+        try {
+            Push-Location -LiteralPath $script:cliRoot
+            try {
+                if ($copilotInteractive) {
+                    $copilotPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CopilotPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
+                    Write-Host "Command: $Command $($CommandArgs -join ' ') -C `"$script:cliRoot`" --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" $($copilotOptions -join ' ') -i `"<prompt>`""
+                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" @copilotOptions -i "$copilotPointerPrompt"
+                    $script:CliExitCode = $LASTEXITCODE
+                } else {
+                    try { $copilotLogDir = New-MoeCopilotLog } catch {
+                        [Console]::Error.WriteLine('[ERROR] Cannot create private Copilot log directory; refusing to launch.')
+                        $script:MoeExitStatus = 1; exit 1
+                    }
+                    $copilotArgs = @('-C', "$script:cliRoot", '--allow-all', '--no-ask-user', '--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($script:CopilotMcpFile)") + $copilotOptions + @('--log-dir', $copilotLogDir)
+                    Test-MoeCopilotArgv $copilotArgs
+                    Write-Host "Command: $Command $($CommandArgs -join ' ') $($copilotArgs -join ' ')"
+                    # This launch's private stderr copy, beside (never inside) its log dir.
+                    $copilotErrFile = "$copilotLogDir.stderr"
+                    try { $copilotErrWriter = New-Object IO.StreamWriter($copilotErrFile, $true, (New-Object Text.UTF8Encoding($false))) } catch {
+                        [Console]::Error.WriteLine("[ERROR] Cannot create private Copilot stderr copy $copilotErrFile; refusing to launch.")
+                        Remove-Item -LiteralPath $copilotLogDir, $copilotErrFile -Recurse -Force -ErrorAction SilentlyContinue
+                        $script:MoeExitStatus = 1; exit 1
+                    }
+                    $previousOutputEncoding = $global:OutputEncoding; $previousConsoleEncoding = [Console]::OutputEncoding
+                    $previousCopilotEap = $ErrorActionPreference
+                    try {
+                        $ErrorActionPreference = 'Continue' # 5.1 throws NativeCommandError on redirected stderr under Stop.
+                        $global:OutputEncoding = New-Object Text.UTF8Encoding($false)
+                        [Console]::OutputEncoding = $global:OutputEncoding
+                        # stderr is shown live and copied; stdout passes through. Nothing in here may throw:
+                        # a throw inside ForEach-Object would stop copilot.
+                        & { $copilotFileBody | Invoke-MoeGuardedCommand @CommandArgs @copilotArgs; $script:CliExitCode = $LASTEXITCODE } 2>&1 | ForEach-Object {
+                            if ($_ -is [Management.Automation.ErrorRecord]) {
+                                $copilotErrLine = $_.Exception.Message # never "$_": 5.1 renders a blank line as RemoteException
+                                try { [Console]::Error.WriteLine($copilotErrLine) } catch {}
+                                try { $copilotErrWriter.WriteLine($copilotErrLine) } catch {}
+                            } else { try { $_ | Out-Host } catch {} }
+                        }
+                    } finally {
+                        try { $copilotErrWriter.Dispose() } catch {}
+                        $global:OutputEncoding = $previousOutputEncoding; [Console]::OutputEncoding = $previousConsoleEncoding; $ErrorActionPreference = $previousCopilotEap
+                    }
+                    # One coded stop per launch: signed out, then not entitled (both from this launch's
+                    # own log, nonzero exit only), then the moe server blocked (its stderr copy, any exit).
+                    $copilotFatal = ''
+                    if ($script:CliExitCode -ne 0 -and (Test-MoeCopilotLog $copilotLogDir 'No authentication information found')) {
+                        $copilotFatal = 'MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+                    } elseif ($script:CliExitCode -ne 0 -and (Test-MoeCopilotLog $copilotLogDir 'not authorized to use this Copilot feature')) {
+                        $copilotFatal = 'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+                    } else {
+                        $copilotErrText = ''
+                        try { $copilotErrText = [IO.File]::ReadAllText($copilotErrFile, [Text.Encoding]::UTF8) } catch {}
+                        if ($copilotErrText -cmatch "Third-party MCP servers are disabled|blocked by policy.*'moe'") {
+                            $copilotFatal = 'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+                        } elseif ($copilotErrText -cmatch "blocked by policy.*'serena'") {
+                            Write-Host '[WARN] The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.' -ForegroundColor Yellow
+                        }
+                    }
+                    Remove-Item -LiteralPath $copilotLogDir, $copilotErrFile -Recurse -Force -ErrorAction SilentlyContinue
+                    if ($copilotFatal) { Stop-MoeCopilot $copilotFatal }
+                }
+            } finally { Pop-Location }
+        } finally { Stop-HeartbeatSidecar }
     } else {
         # Enable Claude Code subagents for all Moe roles by default. Architects
         # benefit hugely from Explore-style parallel research during planning;
@@ -12268,6 +12477,10 @@ $mentionsJson
     if ($script:GrokPromptFile -and (Test-Path -LiteralPath $script:GrokPromptFile)) {
         Remove-Item -LiteralPath $script:GrokPromptFile -Force -ErrorAction SilentlyContinue
     }
+    foreach ($copilotFile in @($script:CopilotPromptFile, $script:CopilotMcpFile)) {
+        if ($copilotFile) { Remove-Item -LiteralPath $copilotFile -Force -ErrorAction SilentlyContinue }
+    }
+    if ($script:CopilotLogRoot) { Remove-Item -LiteralPath $script:CopilotLogRoot -Recurse -Force -ErrorAction SilentlyContinue }
     foreach ($moeAccountFile in @($script:AccountSampleFile, $script:AccountSettingsFile)) {
         if ($moeAccountFile) { Remove-Item -LiteralPath $moeAccountFile -Force -ErrorAction SilentlyContinue }
     }

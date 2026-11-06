@@ -33,10 +33,10 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     foreach ($a in $WrapperArgs) {
         if ($a -match '[\s"]') { $quoted += ('"' + ($a -replace '"', '\"') + '"') } else { $quoted += $a }
     }
-    if ($WrapperArgs -contains '-AutoClaim:$false') {
+    if (@($WrapperArgs | Where-Object { $_ -match '^-[A-Za-z]+:\$false$' }).Count) {
         # 5.1 -File cannot bind an explicit false switch; use a literal command.
-        $words = @($wrapper) + @($WrapperArgs | Where-Object { $_ -cne '-AutoClaim:$false' })
-        $invoke = '& ' + (($words | ForEach-Object { if ($_ -match '^-[A-Za-z]+$') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' ') + ' -AutoClaim:$false; exit $LASTEXITCODE'
+        $words = @($wrapper) + $WrapperArgs
+        $invoke = '& ' + (($words | ForEach-Object { if ($_ -match '^-[A-Za-z]+(:\$false)?$') { $_ } else { "'" + $_.Replace("'", "''") + "'" } }) -join ' ') + '; exit $LASTEXITCODE'
         $quoted = @('-NoProfile', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($invoke)))
     }
     if ($script:VmjInterrupt) {
@@ -45,7 +45,8 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     }
     $errFile = "$OutFile.err"
     Remove-Item -LiteralPath $OutFile, $errFile -Force -ErrorAction SilentlyContinue
-    $p = Start-Process -FilePath $psExe -ArgumentList $quoted -RedirectStandardOutput $OutFile -RedirectStandardError $errFile -PassThru -NoNewWindow
+    $stdinArgs = @{}; if ($script:VmrStdin) { $stdinArgs.RedirectStandardInput = $script:VmrStdin }
+    $p = Start-Process -FilePath $psExe -ArgumentList $quoted -RedirectStandardOutput $OutFile -RedirectStandardError $errFile -PassThru -NoNewWindow @stdinArgs
     $null = $p.Handle
     if (-not $p.WaitForExit($TimeoutSec * 1000)) {
         try { & taskkill /T /F /PID $p.Id 2>&1 | Out-Null } catch {}
@@ -61,7 +62,7 @@ function Invoke-WrapperProcess([string[]]$WrapperArgs, [string]$OutFile, [int]$T
     return $code
 }
 function Invoke-VmrRow([string]$Row, [string]$Role, [string]$Cli, [string]$Readiness, [string]$Mode) {
-    Remove-Item -LiteralPath $project, $runTmp, $homeDir, $rec, "$rec.context", $calls -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $project, $runTmp, $homeDir, $rec, "$rec.context", "$rec.copilot", $calls -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path (Join-Path $project '.moe\messages'), $runTmp, $homeDir | Out-Null
     $settings = '"autoCommit":false'
     switch -CaseSensitive ($Mode) {
@@ -125,10 +126,199 @@ function Get-VmrNormalized {
     return ($normalized -join "`n")
 }
 
+function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project, [string]$Model = '', [string]$Effort = '') {
+    if ($R.Code -ne 0 -or -not $R.Ran) { Stop-Vmr $R 'copilot did not launch' }
+    $rcli = [IO.File]::ReadAllText($rec) | ConvertFrom-Json; $tui = $Mode -eq 'tui'
+    $cliRoot = $rcli.argv[[Array]::IndexOf($rcli.argv, '-C')+1]
+    $expected = @(if ($rcli.env.FAKE_CP_PREFIX) { '--prefix-test' }) + @('-C', $cliRoot) + @(if (-not $tui) { '--allow-all'; '--no-ask-user' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @(if ($Model) { '--model'; $Model }; if ($Effort) { '--reasoning-effort'; $Effort }) + @(if ($tui) { '-i'; $rcli.argv[-1] } else { '--log-dir'; $rcli.argv[-1] })
+    if (($rcli.argv -join "`0") -cne ($expected -join "`0") -or $rcli.env.MOE_WORKER_TYPE -cne 'COPILOT') { Stop-Vmr $R 'argv/worker type' }
+    foreach ($p in @($rcli.cwd, $cliRoot)) { if ([IO.Path]::GetFullPath($p) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'CLI root' } }
+    $text = if ($tui) { $rcli.pointerText } else { $rcli.stdin }
+    foreach ($s in @($(if ($rcli.env.FAKE_CLAIM_MODE -eq 'resume') { 'task-resume' } else { 'task-postflight' }), '# Session Context (per-iteration)') + @(if ($tui) { 'INTERACTIVE session:'; 'This interactive session may plan up to' } else { 'One-shot session:'; [string][char]0x2014 })) {
+        if (-not $text.Contains($s)) { Stop-Vmr $R "prompt lacks $s" }
+    }
+    if ($Mode -eq 'worker' -and -not $text.StartsWith('Role: worker.')) { Stop-Vmr $R 'role prompt' }
+    $m = $rcli.mcp.mcpServers.moe; $e = $m.env; $s = $rcli.mcp.mcpServers.serena
+    if ($m.type -cne 'local' -or ($m.tools -join ',') -cne '*' -or $m.timeout -ne 780000 -or ($m.args -join ',') -cne $fakeProxy -or -not $m.command -or $e.MOE_PROJECT_PATH -cne "$project" -or $e.MOE_TOOL_NAME_STYLE -cne 'underscore' -or $e.MOE_WORKER_ID -cne $rcli.env.MOE_WORKER_ID) { Stop-Vmr $R 'moe MCP shape' }
+    foreach ($k in @('MOE_WORKER_TYPE', 'MOE_SESSION_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_DAEMON_HOST')) { if ($rcli.env.$k -and $e.$k -cne $rcli.env.$k) { Stop-Vmr $R "MCP identity $k" } }
+    foreach ($k in @('MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION')) { $want = if ($rcli.env.MOE_ATTEMPT_ID -and $rcli.env.MOE_ATTEMPT_GENERATION) { $rcli.env.$k } else { $null }; if ($e.$k -cne $want) { Stop-Vmr $R "MCP pair $k" } }
+    $wantSerena = @('start-mcp-server', '--context', 'agent', '--project', $s.args[4], '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false')
+    if ($s.type -cne 'local' -or $s.command -cne $env:MOE_SERENA_PATH -or ($s.tools -join ',') -cne '*' -or ($s.args -join "`0") -cne ($wantSerena -join "`0") -or [IO.Path]::GetFullPath($s.args[4]) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'Serena MCP shape/root' }
+    if ($rcli.mcpFile.StartsWith($project) -or (Test-Path -LiteralPath $rcli.mcpFile)) { Stop-Vmr $R 'MCP temp location/cleanup' }
+    if (-not $tui -and (Test-Path -LiteralPath $rcli.argv[-1])) { Stop-Vmr $R 'log cleanup' }
+    $probes = @(Get-Content "$rec.copilot" | ConvertFrom-Json | Where-Object kind -eq probe)
+    $want = if ($tui -or $env:MOE_DISABLE_ARGV_PROBE -eq '1') { 0 } else { 1 }
+    if ($probes.Count -ne $want) { Stop-Vmr $R 'probe count' }
+    if ($want -and ($probes[0].stdin -cne '' -or ($probes[0].argv -join "`0") -cne (($rcli.argv + @('--help')) -join "`0"))) { Stop-Vmr $R 'probe stdin/argv' }
+}
+function Invoke-CopilotProbeRows {
+    $script:VmrStdin = "$tempRoot\cp-stdin"; [IO.File]::WriteAllText($script:VmrStdin, 'inherited stdin sentinel')
+    try {
+        foreach ($phrase in @('Unexpected Argument', 'invalid value', 'unrecognized', 'version-failure')) {
+            $env:FAKE_CP_PROBE = if ($phrase -eq 'version-failure') { 'unrecognized' } else { $phrase }
+            $env:FAKE_CP_PROBE_EXIT = '1'; $env:FAKE_CP_VERSION_EXIT = if ($phrase -eq 'version-failure') { '1' } else { '0' }
+            $r = Invoke-VmrRow CP-reject worker copilot '' off
+            $v = if ($phrase -eq 'version-failure') { 'unknown' } else { 'copilot-test 1.0' }
+            $rows = @(Get-Content "$rec.copilot" | ConvertFrom-Json)
+            $msg = @(Get-Content $calls | ConvertFrom-Json | Where-Object { $_.tool -eq 'chat_send' -and $_.args.content.Contains('MOE_CLI_ARGV_REJECTED') -and $_.args.channel -eq 'chan-general' })
+            if ($r.Code -ne 1 -or $r.Ran -or ($rows.kind -join ',') -cne 'probe,version' -or $rows[0].stdin -cne '' -or $rows[1].stdin -cne '' -or $msg.Count -ne 1 -or $r.Tools -notcontains 'deregister_worker') { Stop-Vmr $r 'rejection lifecycle/stdin' }
+            if ([regex]::Matches($r.Text, 'MOE_CLI_ARGV_REJECTED').Count -ne 1 -or -not $r.Text.Contains("copilot ($v)") -or -not $r.Text.Contains($env:FAKE_CP_PROBE) -or $r.Text.Contains('ignored version tail') -or $r.Text.Contains('ignored help tail') -or $r.Text.Contains('[launch-failure]') -or (Test-Path -LiteralPath (Split-Path $rows[0].argv[-2]))) { Stop-Vmr $r 'rejection message/cleanup' }
+        }
+        foreach ($mode in @('skip', 'accepted', 'unrelated')) {
+            $env:FAKE_CP_PROBE = if ($mode -eq 'unrelated') { 'network unavailable' } else { 'invalid value' }
+            $env:FAKE_CP_PROBE_EXIT = if ($mode -eq 'accepted') { '0' } else { '1' }
+            $env:MOE_DISABLE_ARGV_PROBE = if ($mode -eq 'skip') { '1' } else { '' }
+            $r = Invoke-VmrRow "CP-$mode" worker copilot '' off; Assert-CopilotRow $r worker
+            if ($r.Text.Contains('MOE_CLI_ARGV_REJECTED')) { Stop-Vmr $r 'false rejection' }
+        }
+    } finally { $script:VmrStdin = $null; Remove-Item Env:\FAKE_CP_PROBE, Env:\FAKE_CP_PROBE_EXIT, Env:\FAKE_CP_VERSION_EXIT, Env:\MOE_DISABLE_ARGV_PROBE -ErrorAction SilentlyContinue }
+}
+function Invoke-CopilotRows {
+    $runTmp = Join-Path $tempRoot 'copilot temp'
+    $saved = @{}; foreach ($k in @('MOE_SERENA_PATH', 'FAKE_CLAIM_WORKSPACE', 'FAKE_CTX_WORKSPACE', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM')) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        New-Item -ItemType Directory -Path "$tempRoot\serena-bin" | Out-Null
+        $env:MOE_SERENA_PATH = "$tempRoot\serena-bin\serena.cmd"
+        [IO.File]::WriteAllText($env:MOE_SERENA_PATH, "@exit /b 0`r`n")
+        $r = Invoke-VmrRow CP-H worker copilot '' off; Assert-VmrLaunched $r; Assert-CopilotRow $r worker
+        if (-not $r.Text.Contains('Copilot mode: headless (stdin prompt)')) { Stop-Vmr $r 'banner' }
+        $script:VmrLoop = @('-PollInterval', '1'); $r = Invoke-VmrRow CP-A architect copilot '' off; Assert-CopilotRow $r tui
+        foreach ($s in @('Copilot mode: interactive', 'Interactive mode: polling disabled', 'Loop: False')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r $s } }
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @('-Interactive:$false')
+        $r = Invoke-VmrRow CP-AN architect copilot '' off; Assert-CopilotRow $r headless; $script:VmjExtraArgs = @()
+        $env:FAKE_CLAIM_MODE = 'resume'; $env:FAKE_TASK_STATUS = 'WORKING'; $env:FAKE_CLAIM_LAUNCH = '{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
+        $r = Invoke-VmrRow CP-route worker copilot '' off; Assert-CopilotRow $r worker $project '' xhigh
+        $env:MOE_COPILOT_MODEL = 'env-model'; $env:MOE_COPILOT_EFFORT = 'max'
+        $r = Invoke-VmrRow CP-env worker copilot '' off; Assert-CopilotRow $r worker $project env-model max
+        $script:VmrSetup = { $f = "$project\.moe\project.json"; $p = Get-Content -Raw $f | ConvertFrom-Json; $p.settings | Add-Member models @{worker='settings-model';architect='settings-model'}; [IO.File]::WriteAllText($f, (ConvertTo-Json $p -Depth 6)) }
+        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-settings worker copilot '' off; Assert-CopilotRow $r worker $project settings-model none
+        $script:VmjExtraArgs = @('-Model', 'cli-model'); $env:MOE_COPILOT_EFFORT = 'minimal'
+        $script:VmrCommand = "$tempRoot\copilot.cmd --prefix-test"; $env:FAKE_CP_PREFIX = '1'
+        $r = Invoke-VmrRow CP-cli worker copilot '' off; Assert-CopilotRow $r worker $project cli-model minimal
+        $script:VmrCommand = ''; Remove-Item Env:\FAKE_CP_PREFIX
+        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-tui architect copilot '' off; Assert-CopilotRow $r tui $project cli-model none
+        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_TASK_STATUS, Env:\FAKE_CLAIM_LAUNCH, Env:\MOE_COPILOT_MODEL, Env:\MOE_COPILOT_EFFORT; $script:VmrSetup = $null; $script:VmjExtraArgs = @()
+        Invoke-CopilotProbeRows
+        Invoke-CopilotAuthRows
+        Invoke-CopilotPolicyRows
+        foreach ($name in @('copilot', 'copilot.exe', 'copilot.cmd')) {
+            $script:VmrCommand = "$tempRoot\missing\$name"; $r = Invoke-VmrRow CP-NF worker copilot '' off
+            $lines = @($r.Text -split '\r?\n' | Where-Object { $_.Contains('MOE_COPILOT_NOT_FOUND') })
+            if ($r.Code -ne 1 -or $r.Ran -or $lines.Count -ne 1 -or $lines[0] -cne "[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $script:VmrCommand. Install it (npm install -g @github/copilot), then sign in with copilot login.") { Stop-Vmr $r 'missing CLI refusal' }
+        }
+        $script:VmrCommand = ''; $env:GIT_CONFIG_GLOBAL = "$tempRoot\cp-gitconfig"; $env:GIT_CONFIG_NOSYSTEM = '1'
+        [IO.File]::WriteAllText($env:GIT_CONFIG_GLOBAL, "[user]`n name = Test`n email = test@example.com`n")
+        $script:VmrSetup = {
+            [IO.File]::WriteAllText("$project\.gitignore", ".moe/`n.worktrees/`n.mcp.json`n.serena/`n")
+            Invoke-VmcGit $project @('init', '-q', '-b', 'main') | Out-Null; Invoke-VmcGit $project @('add', '.gitignore') | Out-Null
+            Invoke-VmcGit $project @('commit', '-qm', 'seed') | Out-Null; Invoke-VmcGit $project @('checkout', '-qb', 'moe/control') | Out-Null
+            New-Item -ItemType Directory -Force -Path "$project\.serena\memories" | Out-Null
+            $env:FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; $env:FAKE_CTX_WORKSPACE = $env:FAKE_CLAIM_WORKSPACE
+        }
+        $r = Invoke-VmrRow CP-W worker copilot '' on; Assert-CopilotRow $r worker "$project\.worktrees\task-postflight"
+        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
+    } finally {
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @(); $script:VmrCommand = ''; $script:VmrSetup = $null
+        foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
+}
+
+function Invoke-CopilotAuthRows {
+    $keys = @('COPILOT_GITHUB_TOKEN','GH_TOKEN','GITHUB_TOKEN','FAKE_CP_LOG','FAKE_CP_EXIT','FAKE_CLAIM_MODE','FAKE_CLAIM_ONCE','FAKE_MENTION','FAKE_CLAIM_LAUNCH','FAKE_TASK_STATUS'); $saved = @{}
+    foreach ($k in $keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        $env:COPILOT_GITHUB_TOKEN='secret-copilot-token'; $env:GH_TOKEN='secret-gh-token'; $env:GITHUB_TOKEN='secret-github-token'
+        & { # Exercise the production allocator's throwing path without changing the wrapper's environment.
+            . ([scriptblock]::Create([regex]::Match([IO.File]::ReadAllText($wrapper), '(?ms)^function New-MoeCopilotLog \{.*?^\}').Value))
+            & {
+                function New-Item { throw 'fixture: creation failed' }
+                $script:CopilotLogRoot = $null; $failed = $false
+                try { New-MoeCopilotLog | Out-Null } catch { $failed = $true }
+                if (-not $failed -or $script:CopilotLogRoot) { throw 'Failed root creation claimed an unowned cleanup path' }
+            }
+            $script:CopilotLogRoot = "$tempRoot\not-a-directory"; [IO.File]::WriteAllText($script:CopilotLogRoot,'')
+            $failed = $false; try { New-MoeCopilotLog | Out-Null } catch { $failed = $true }
+            if (-not $failed) { throw 'Copilot log allocator did not throw' }; $script:CopilotLogRoot = $null
+        }
+        foreach ($mode in @('auth','unrelated','missing','stdout','stale','fatal','two')) {
+            $fatal = $mode -in @('fatal','two'); $count = if ($mode -eq 'two') { 2 } else { 1 }
+            $env:FAKE_CP_LOG = if ($mode -eq 'fatal') { 'auth' } else { $mode }; $env:FAKE_CP_EXIT = if ($mode -eq 'auth') { '0' } else { '1' }
+            if ($fatal) { $script:VmrLoop = @('-PollInterval','1') }
+            if ($mode -eq 'two') { $env:FAKE_CLAIM_ONCE='1'; $env:FAKE_MENTION='1'; $env:FAKE_CLAIM_MODE='resume'; $env:FAKE_TASK_STATUS='WORKING'; $env:FAKE_CLAIM_LAUNCH='{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5"}' }
+            $r = Invoke-VmrRow "CP-log-$mode" worker copilot '' off; $all = @(Get-Content "$rec.copilot" | ConvertFrom-Json); $runs = @($all | Where-Object kind -eq run)
+            $msg = @(Get-Content $calls | ConvertFrom-Json | Where-Object { $_.tool -eq 'chat_send' -and $_.args.content.Contains('MOE_COPILOT_SIGNED_OUT') -and $_.args.channel -eq 'chan-general' })
+            if ($r.Code -ne [int]$fatal -or $runs.Count -ne $count -or @($all | Where-Object kind -eq probe).Count -ne 1 -or $msg.Count -ne [int]$fatal -or [regex]::Matches($r.Text,'MOE_COPILOT_SIGNED_OUT').Count -ne [int]$fatal -or $r.Tools -notcontains 'deregister_worker') { Stop-Vmr $r 'auth lifecycle' }
+            if ($fatal) { foreach ($s in @('copilot login','COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN','Windows and WSL sign in separately')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r 'auth remediation' } }; if ($r.Text.Contains('[launch-failure]')) { Stop-Vmr $r 'auth retried' } }
+            $dirs = @($runs | ForEach-Object { $_.argv[[Array]::IndexOf($_.argv,'--log-dir')+1] })
+            if (@($dirs | Select-Object -Unique).Count -ne $count) { Stop-Vmr $r 'shared log directory' }
+            foreach ($d in $dirs) { if (-not [IO.Path]::IsPathRooted($d) -or -not (Split-Path $d -Leaf).StartsWith('copilot-log.') -or (Test-Path -LiteralPath $d) -or (Test-Path -LiteralPath (Split-Path $d))) { Stop-Vmr $r 'log isolation/cleanup' } }
+            if ($count -eq 2 -and ($runs[0].argv[[Array]::IndexOf($runs[0].argv,'--reasoning-effort')+1] -cne 'xhigh' -or $runs[1].argv -contains '--reasoning-effort' -or @($runs | Where-Object { $_.argv -contains '--model' }).Count)) { Stop-Vmr $r 'stale routed hint' }
+            foreach ($x in $runs) { if (-not $x.copyExists -or (Test-Path -LiteralPath "$($x.logDir).stderr")) { Stop-Vmr $r 'stderr copy/cleanup' } }
+            if (($count -eq 2 -and -not $runs[1].priorGone) -or @($r.Text -split '\r?\n' | Where-Object { $_.Contains('The Copilot policy of this account blocked the serena MCP server') }).Count -ne ($count - 1)) { Stop-Vmr $r 'per-launch copy/serena WARN' }
+            foreach ($s in @('secret-copilot-token','secret-gh-token','secret-github-token')) { if (($r.Text + [IO.File]::ReadAllText($calls)).Contains($s)) { Stop-Vmr $r 'credential leaked' } }
+        }
+    } finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k,$saved[$k]) }; $script:VmrLoop = @('-NoLoop','-PollInterval','0') }
+}
+
+# [copilot policy]: a 403 in this launch's own log (nonzero exit only) or a moe server blocked
+# on this launch's stderr (any exit) stops the seat once; a blocked serena only warns.
+function Assert-CopilotPolicy($R, [int]$Want, [int]$Runs, [string]$Coded, [int]$Warns, [bool]$LaunchFailure) {
+    $lines = @($R.Text -split '\r?\n'); $rpc = Read-VmeJsonl $calls
+    $runRows = @(Get-Content "$rec.copilot" | ConvertFrom-Json | Where-Object kind -eq run)
+    $texts = @{
+        NE = 'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+        MB = 'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+    }
+    if ($R.Code -ne $Want -or $runRows.Count -ne $Runs) { Stop-Vmr $R "exit $($R.Code), launches $($runRows.Count)" }
+    foreach ($k in @('NE', 'MB')) {
+        $n = if ($Coded -ceq $k) { 1 } else { 0 }; $id = $texts[$k].Split(':')[0]
+        if (@($lines | Where-Object { $_.Contains($id) }).Count -ne $n -or @($lines | Where-Object { $_.Contains($texts[$k]) }).Count -ne $n) { Stop-Vmr $R "$id line" }
+        if (@($rpc | Where-Object { $_.tool -ceq 'chat_send' -and $_.args.channel -ceq 'chan-general' -and "$($_.args.content)".Contains('@governors') -and "$($_.args.content)".Contains($id) }).Count -ne $n) { Stop-Vmr $R "$id escalation" }
+    }
+    $fatal = if ($Coded -ceq '-') { 0 } else { 1 }
+    if ((Get-VmeCount $rpc 'chat_send' 'MOE_COPILOT_') -ne $fatal -or ($fatal -and $R.Tools -notcontains 'deregister_worker')) { Stop-Vmr $R 'one escalation and deregistration' }
+    if (@($lines | Where-Object { $_.Contains('The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.') }).Count -ne $Warns) { Stop-Vmr $R 'serena WARN' }
+    if ($R.Text.Contains('[launch-failure]') -ne $LaunchFailure) { Stop-Vmr $R 'launch-failure line' }
+    foreach ($s in @(("$env:FAKE_CP_STDERR" -split '\\n') + ("$env:FAKE_CP_STDOUT" -split '\\n') | Where-Object { $_ })) {
+        if (@($lines | Where-Object { $_ -ceq $s }).Count -ne 1) { Stop-Vmr $R "not shown exactly once: $s" }
+    }
+    $phrase = [regex]::Escape('not authorized to use this Copilot feature')
+    if ($R.Text.Contains('sentinel-log-line') -or ($R.Text -split $phrase).Count -ne ("$env:FAKE_CP_STDOUT" -split $phrase).Count) { Stop-Vmr $R 'log echoed' }
+    foreach ($x in $runRows) { if (-not $x.copyExists -or (Test-Path -LiteralPath $x.logDir) -or (Test-Path -LiteralPath "$($x.logDir).stderr")) { Stop-Vmr $R 'stderr copy/cleanup' } }
+}
+function Set-CopilotFake([hashtable]$Knobs) {
+    foreach ($k in @('FAKE_CP_STDERR', 'FAKE_CP_STDOUT', 'FAKE_CP_LOGTEXT', 'FAKE_CP_STALE', 'FAKE_CP_EXIT')) { [Environment]::SetEnvironmentVariable($k, $Knobs[$k]) }
+}
+function Invoke-CopilotPolicyRows {
+    $l403 = '[ERROR] Error loading models: Error: 403 "unauthorized: not authorized to use this Copilot feature\n"'
+    $third = " ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available."
+    $blocked = " ! 1 MCP server was blocked by policy: '{0}' (Could not verify server against any configured registry)"
+    try {
+        $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
+        $script:VmrLoop = @('-Loop', '-PollInterval', '1')
+        Set-CopilotFake @{ FAKE_CP_LOGTEXT = ('sentinel-log-line\n' + $l403); FAKE_CP_STDERR = ('Error: Access denied by policy settings (Request ID: test)\n' + $third); FAKE_CP_EXIT = '1' }
+        $r = Invoke-VmrRow CP-NE worker copilot '' off; Assert-CopilotPolicy $r 1 1 NE 0 $false
+        Set-CopilotFake @{ FAKE_CP_STDERR = $third }
+        $r = Invoke-VmrRow CP-MB0 worker copilot '' off; Assert-CopilotPolicy $r 1 1 MB 0 $false
+        Set-CopilotFake @{ FAKE_CP_STDERR = ($blocked -f 'moe'); FAKE_CP_EXIT = '1' }
+        $r = Invoke-VmrRow CP-MB1 worker copilot '' off; Assert-CopilotPolicy $r 1 1 MB 0 $false
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+        Set-CopilotFake @{ FAKE_CP_STDERR = ($blocked -f 'serena'); FAKE_CP_LOGTEXT = $l403 }
+        $r = Invoke-VmrRow CP-SER worker copilot '' off; Assert-VmrLaunched $r; Assert-CopilotPolicy $r 0 1 '-' 1 $false
+        Set-CopilotFake @{ FAKE_CP_EXIT = '1'; FAKE_CP_LOGTEXT = 'unrelated error'; FAKE_CP_STALE = $l403; FAKE_CP_STDOUT = ('not authorized to use this Copilot feature\n' + $third + '\n' + ($blocked -f 'moe')) }
+        $r = Invoke-VmrRow CP-NEG worker copilot '' off; Assert-CopilotPolicy $r 0 1 '-' 0 $true
+        Write-Host '[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG'
+    } finally {
+        Set-CopilotFake @{}; Remove-Item Env:\MOE_LAUNCH_BACKOFF_BASE_SEC, Env:\MOE_LAUNCH_BACKOFF_MAX_SEC -ErrorAction SilentlyContinue
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+    }
+}
+
 # --- [vm seat] CQ-M07n3: port of af8ca2bb's seat-job rows; shared stub only. ---
 function Initialize-VmjFixture {
     New-Item -ItemType Directory -Force -Path "$tempRoot\accounts\claude-vm-tokens", "$tempRoot\accounts\acct-1" | Out-Null
     [IO.File]::WriteAllText("$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken)
+    Remove-Item -LiteralPath "$tempRoot\accounts\acct-1\.credentials.json" -Force -ErrorAction SilentlyContinue
     [IO.File]::WriteAllText("$project\.gitignore", ".moe/`n.worktrees/`n.mcp.json`n")
     [IO.File]::WriteAllText("$project\seed.txt", "seed`n")
     Invoke-VmcGit $project @('init', '-q', '-b', 'main') | Out-Null
@@ -250,20 +440,117 @@ function Invoke-VmeSignalRow([string]$Row, [string]$Cmd, [int]$Count, [string]$T
     if ($r.Code -notin @(0, 130) -or $r.Ran) { Stop-Vmr $r "interrupt exit $($r.Code), CLI ran=$($r.Ran)" }
     return $r
 }
-# A background poller that writes the token once FILE holds N MOE_VM_CREDENTIAL_UNAVAILABLE lines.
-function Start-VmeTokenRestore([int]$N) {
-    Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
-    Start-Job -ArgumentList $out, "$tempRoot\accounts\claude-vm-tokens\acct-1.token", $vmjToken, $N -ScriptBlock {
-        param($o, $f, $t, $n)
+# A background poller that writes CONTENT to FILE (the minted token by default) once the
+# wrapper output holds N MOE_VM_CREDENTIAL_UNAVAILABLE matches, or N whole lines equal to
+# LINE. It replaces FILE in one rename, and writes $tempRoot\restore.state:
+# 'seat-job-before-credential' when the seat had already run a job by then, else 'restored'
+# (a file, not job output: 5.1's Receive-Job throws 'The Persistence Path does not exist.'
+# once USERPROFILE points at the run's home).
+function Start-VmeTokenRestore([int]$N, [string]$File = "$tempRoot\accounts\claude-vm-tokens\acct-1.token", [string]$Content = $vmjToken, [string]$Line = '') {
+    Remove-Item -LiteralPath $out, "$tempRoot\restore.state" -ErrorAction SilentlyContinue
+    $pattern = if ($Line) { '(?m)^' + [regex]::Escape($Line) + '\r?$' } else { 'MOE_VM_CREDENTIAL_UNAVAILABLE' }
+    Start-Job -ArgumentList $out, $File, $Content, $N, $pattern, "$project\.moe\evidence-rpcs.jsonl", "$tempRoot\restore.state" -ScriptBlock {
+        param($o, $f, $t, $n, $p, $ev, $st)
+        function Read-Shared([string]$Path) {
+            try { $s = [IO.File]::Open($Path, 'Open', 'Read', 'ReadWrite'); try { return (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() } } catch { return '' }
+        }
         for ($i = 0; $i -lt 3000; $i++) {
-            $text = ''; try { $s = [IO.File]::Open($o, 'Open', 'Read', 'ReadWrite'); try { $text = (New-Object IO.StreamReader($s)).ReadToEnd() } finally { $s.Dispose() } } catch {}
-            if ([regex]::Matches($text, 'MOE_VM_CREDENTIAL_UNAVAILABLE').Count -ge $n) { [IO.File]::WriteAllText($f, $t); return }
+            if ([regex]::Matches((Read-Shared $o), $p).Count -ge $n) {
+                $early = (Read-Shared $ev).Contains('"cmd":"seat-job"')
+                [IO.File]::WriteAllText("$f.tmp", $t)
+                try { if (Test-Path -LiteralPath $f) { [IO.File]::Replace("$f.tmp", $f, $null) } else { [IO.File]::Move("$f.tmp", $f) } } catch { [IO.File]::WriteAllText($f, $t) }
+                [IO.File]::WriteAllText($st, $(if ($early) { 'seat-job-before-credential' } else { 'restored' })); return
+            }
             Start-Sleep -Milliseconds 100
         }
     }
 }
+# --- [seat sign-in] task-98053b89, the twin of postflight-vm-route.sh: no minted token, so
+# the job runs on the leased account's own sign-in (slice A's real helper), renewed only by
+# the host claude. Canaries live in files, never in an environment variable (seats log env).
+# Get-SiJson ACCESS REFRESH SECONDS-LEFT: claude's sign-in file shape.
+function Get-SiJson([string]$Access, [string]$Refresh, [int]$Seconds) {
+    $exp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + [long]1000 * $Seconds
+    return '{"claudeAiOauth":{"accessToken":"' + $Access + '","refreshToken":"' + $Refresh + '","expiresAt":' + $exp + ',"scopes":["user:inference"],"subscriptionType":"max"}}'
+}
+# Test-SiClean ROW CANARY...: no canary in the wrapper output, the RPC, seat and chat records,
+# the project, the run's temp or home. It names the file, never the value, and runs before
+# any Stop-Vmr, which prints the output.
+function Test-SiClean([string]$Row, [string[]]$Canary) {
+    $files = @($out, $calls, "$tempRoot\renew.jsonl") + @(Get-ChildItem -LiteralPath $project, $runTmp, $homeDir -Recurse -File -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $hits = @(foreach ($f in $files) {
+        if (-not (Test-Path -LiteralPath $f -PathType Leaf)) { continue }
+        $text = [IO.File]::ReadAllText($f)
+        if (@($Canary | Where-Object { $text.Contains($_) }).Count) { $f }
+    })
+    if ($hits.Count) { throw "VM ROUTE FAILED ($Row): a credential canary appears in: $($hits -join ' ')" }
+}
+# Assert-SiWait R STATE LINE NEEDLE: LINE at least twice and no seat-job before the credential
+# came (STATE from Start-VmeTokenRestore), then the job; one escalation holding NEEDLE and the
+# remedy, one claim, a re-lease per wait.
+function Assert-SiWait($R, [string]$State, [string]$Line, [string]$Needle) {
+    if ($R.Code -ne 0) { Stop-Vmr $R "retry failed: exit $($R.Code)" }
+    if ($State -cne 'restored') { Stop-Vmr $R "credential restore: '$State'" }
+    if ([regex]::Matches($R.Text, '(?m)^' + [regex]::Escape($Line) + '\r?$').Count -lt 2) { Stop-Vmr $R "fewer than two lines '$Line'" }
+    Assert-VmjRows $R happy; $c = Read-VmeJsonl $calls
+    $sent = @($c | Where-Object { $_.tool -ceq 'chat_send' -and "$($_.args.content)".Contains('MOE_VM_CREDENTIAL_UNAVAILABLE') })
+    if ($sent.Count -ne 1 -or -not $sent[0].args.content.Contains($Needle) -or -not $sent[0].args.content.Contains('sign the account in again') -or
+        (Get-VmeCount $c claim_next_task) -ne 1 -or (Get-VmeCount $c lease_account) -lt 3) { Stop-Vmr $R 'escalation, claim or re-lease count' }
+}
+function Invoke-SiRows {
+    Write-Host '[seat sign-in] a claude VM seat with no minted token uses the leased account sign-in'
+    $siRefresh = 'sk-ant-ort01-vmRefreshCanaryNeverLeavesTheFile0123'
+    $siOld = 'sk-ant-oat01-vmOldAccessCanaryNeverReachesAJob01234'
+    $siRefresh2 = 'sk-ant-ort01-vmRenewedRefreshCanaryNeverLeaves012'
+    $siFile = "$tempRoot\accounts\acct-1\.credentials.json"; $renewLog = "$tempRoot\renew.jsonl"; $renewPair = "$tempRoot\renew-pair.json"
+    # $siSeed = @(ACCESS, SECONDS-LEFT) seeds a sign-in file holding $siRefresh too; $null seeds none.
+    $script:VmrSetup = {
+        Initialize-VmjFixture; Remove-Item -LiteralPath "$tempRoot\accounts\claude-vm-tokens\acct-1.token", $renewLog -ErrorAction SilentlyContinue
+        if ($siSeed) { [IO.File]::WriteAllText($siFile, (Get-SiJson $siSeed[0] $siRefresh $siSeed[1])); $script:SiSha = Get-VmcSha256 $siFile }
+    }
+    try {
+        Write-Host '[seat sign-in] SI-signin: the job gets the sign-in access token; no host claude, file unchanged'
+        $siSeed = @($vmjToken, 7200)
+        $r = Invoke-VmrRow SI-signin worker claude $ready on
+        Test-SiClean SI-signin @($vmjToken, $siRefresh)
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy
+        if ((Get-VmcSha256 $siFile) -cne $script:SiSha) { Stop-Vmr $r 'the sign-in file changed' }
+        if ($r.Text -cnotmatch '(?m)^\[seat\] VM credential account=acct-1 source=signin expires=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\.[0-9]{3}Z\r?$') { Stop-Vmr $r 'no source=signin line' }
+        if (Test-Path -LiteralPath $renewLog) { Stop-Vmr $r 'a renewal ran' }
+
+        Write-Host '[seat sign-in] SI-renew: a token 60 s from expiry is renewed by one host claude run first'
+        [IO.File]::WriteAllText($renewPair, ('{"accessToken":"' + $vmjToken + '","refreshToken":"' + $siRefresh2 + '"}'))
+        $siSeed = @($siOld, 60); $env:FAKE_RENEW_FILE = $renewPair
+        try { $r = Invoke-VmrRow SI-renew worker claude $ready on } finally { Remove-Item Env:\FAKE_RENEW_FILE }
+        Test-SiClean SI-renew @($vmjToken, $siOld, $siRefresh, $siRefresh2)
+        if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy
+        $renew = @(Read-VmeJsonl $renewLog); $argv = if ($renew.Count) { @($renew[0].argv) } else { @() }; $t = [Array]::IndexOf($argv, '--tools')
+        $cwd = if ($renew.Count) { [IO.Path]::GetFullPath($renew[0].cwd).TrimEnd('\') } else { $project }
+        if ($renew.Count -ne 1 -or -not ($argv -ccontains '-p') -or $t -lt 0 -or $argv.Count -le $t + 1 -or "$($argv[$t + 1])" -cne '' -or
+            @($argv | Where-Object { "$_".Contains('task-postflight') }).Count -or $cwd -ieq $project -or $cwd.StartsWith("$project\", [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFullPath($renew[0].configDir).TrimEnd('\') -ine "$tempRoot\accounts\acct-1" -or $renew[0].hasMoeWorkerId -ne $false -or $renew[0].hasPluginDirs -ne $false) {
+            Stop-Vmr $r 'not one renewal run with the renewal argv, cwd and env'
+        }
+
+        $env:MOE_ACCOUNT_RETRY_SEC = '1'
+        foreach ($c in @('SI-none|no-signin-file|', "SI-short|short-life|600")) {
+            $a = $c -split '\|'
+            Write-Host $(if ($a[0] -ceq 'SI-none') { '[seat sign-in] SI-none: no credential holds the task with one escalation; a sign-in then runs it' }
+                else { '[seat sign-in] SI-short: under an hour left waits; no renewal at 10 minutes, the job never gets it' })
+            $siSeed = if ($a[2]) { @($siOld, [int]$a[2]) } else { $null }
+            $warn = "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=$($a[1]); retrying in 1s (Ctrl+C to stop)"
+            $job = Start-VmeTokenRestore 2 $siFile (Get-SiJson $vmjToken $siRefresh 7200) $warn
+            try { $r = Invoke-VmrRow $a[0] worker claude $ready on } finally { Stop-Job $job; Remove-Job $job -Force }
+            $state = if (Test-Path -LiteralPath "$tempRoot\restore.state") { [IO.File]::ReadAllText("$tempRoot\restore.state") } else { 'never restored' }
+            Test-SiClean $a[0] @($vmjToken, $siOld, $siRefresh)
+            Assert-SiWait $r $state $warn "reason=$($a[1])"
+            if (Test-Path -LiteralPath $renewLog) { Stop-Vmr $r 'a renewal ran' }
+        }
+        Write-Host '[seat sign-in] ok SI-signin, SI-renew, SI-none, SI-short'
+    } finally { Remove-Item Env:\MOE_ACCOUNT_RETRY_SEC, Env:\FAKE_RENEW_FILE -ErrorAction SilentlyContinue; $script:VmrSetup = { Initialize-VmjFixture } }
+}
 function Invoke-VmeRows {
-    $noToken = { Initialize-VmjFixture; Remove-Item "$tempRoot\accounts\claude-vm-tokens\acct-1.token" }
+    $noToken ={ Initialize-VmjFixture; Remove-Item "$tempRoot\accounts\claude-vm-tokens\acct-1.token" }
     $script:VmrLoop = @('-NoLoop', '-PollInterval', '1')
     foreach ($c in @('capacity|[{"exit":75,"code":"SEAT_CAPACITY_FULL"},{"exit":75,"code":"SEAT_CAPACITY_LOCK_BUSY"}]|', 'failure|[{"exit":1,"code":"SEAT_PROVISION_FAILED"}]|SEAT_PROVISION_FAILED',
         'usage|[{"exit":2,"code":"SEAT_USAGE"}]|SEAT_USAGE', 'unreadable|[{"exit":1,"code":"never echo arbitrary text"}]|exit 1')) {
@@ -293,13 +580,8 @@ function Invoke-VmeRows {
     if ($r.Code -ne 1 -or (Get-VmeCount (Read-VmeJsonl $calls) chat_send) -ne 1 -or
         -not $r.Text.Contains("[ERROR] MOE_VM_CREDENTIAL_UNAVAILABLE: codex needs OPENAI_API_KEY or CODEX_API_KEY in the wrapper's environment")) { Stop-Vmr $r 'codex no-key refusal' }
     $env:OPENAI_API_KEY = 'outer-OPENAI_API_KEY'; $env:CODEX_API_KEY = 'outer-CODEX_API_KEY'
-    $script:VmrSetup = $noToken; $env:MOE_ACCOUNT_RETRY_SEC = '1'; $job = Start-VmeTokenRestore 2
-    try { $r = Invoke-VmrRow VE-missing worker claude $ready on } finally { Stop-Job $job; Remove-Job $job -Force; $script:VmrSetup = { Initialize-VmjFixture } }
-    if ($r.Code -ne 0) { Stop-Vmr $r "exit $($r.Code)" }; Assert-VmjRows $r happy; $c = Read-VmeJsonl $calls
-    if ((Get-VmeCount $c chat_send 'MOE_VM_CREDENTIAL_UNAVAILABLE') -ne 1 -or (Get-VmeCount $c claim_next_task) -ne 1 -or (Get-VmeCount $c lease_account) -lt 3 -or
-        [regex]::Matches($r.Text, [regex]::Escape('[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1; retrying in 1s (Ctrl+C to stop)')).Count -lt 2) { Stop-Vmr $r 'missing-token wait' }
-    Remove-Item Env:\MOE_ACCOUNT_RETRY_SEC
-    Write-Host '[seat credentials] ok OPENAI_API_KEY and CODEX_API_KEY canaries, no-key, missing token'
+    Write-Host '[seat credentials] ok OPENAI_API_KEY and CODEX_API_KEY canaries, no-key'
+    Invoke-SiRows
     $script:VmrLoop = @('-Loop', '-PollInterval', '1'); $env:MOE_LAUNCH_BACKOFF_BASE_SEC = '1'; $env:MOE_LAUNCH_BACKOFF_MAX_SEC = '1'
     $fail = '{"exit":1,"outcome":{"seatJob":1,"ok":false,"code":"SEAT_JOB_SESSION_FAILED","vm":"kept"}}'
     foreach ($c in @("failed|[$fail]", 'missing|[{"exit":0}]', ('false|[' + $fail.Replace('"exit":1', '"exit":0') + ']'), "stop-failed|[$fail]", 'streak|[{"exit":1},{"exit":1},{"exit":1}]')) {
@@ -1376,7 +1658,36 @@ try {
     $body = @'
 const fs = require('node:fs');
 const [cli, ...argv] = process.argv.slice(2);
-if (cli !== 'normalize') {
+const e = process.env;
+if (cli === 'claude' && e.FAKE_RENEW_FILE && argv.includes('-p') && argv.includes('--tools')) {
+  // [seat sign-in] renewal: rewrite the account's .credentials.json from that file's
+  // {accessToken, refreshToken}, 8 h left, as claude's refresh would; log renew.jsonl
+  // beside the record and never write the record (no task CLI ran).
+  const d = e.CLAUDE_CONFIG_DIR;
+  fs.writeFileSync(d + '/.credentials.json', JSON.stringify({claudeAiOauth: {...JSON.parse(fs.readFileSync(e.FAKE_RENEW_FILE, 'utf8')),
+    expiresAt: Date.now() + 288e5, scopes: ['user:inference'], subscriptionType: 'max'}}));
+  fs.appendFileSync(require('node:path').dirname(RECORD) + '/renew.jsonl', JSON.stringify({argv, cwd: process.cwd(), configDir: d,
+    hasMoeWorkerId: 'MOE_WORKER_ID' in e, hasPluginDirs: 'CLAUDE_CODE_PLUGIN_DIRS' in e}) + '\n');
+} else if (cli === 'copilot') {
+  const i=argv.indexOf('-i'),kind=argv.includes('--version')?'version':argv.includes('--help')?'probe':'run',stdin=i<0?fs.readFileSync(0,'utf8'):'';
+  const ld=argv.indexOf('--log-dir'),logDir=kind!=='run'||ld<0?'':argv[ld+1];
+  const prior=logDir&&fs.existsSync(RECORD+'.copilot')?fs.readFileSync(RECORD+'.copilot','utf8').trim().split('\n').map(JSON.parse).filter(x=>x.logDir):[];
+  fs.appendFileSync(RECORD+'.copilot',JSON.stringify({kind,argv,stdin,logDir,copyExists:!!logDir&&fs.existsSync(logDir+'.stderr'),priorGone:prior.every(x=>!fs.existsSync(x.logDir)&&!fs.existsSync(x.logDir+'.stderr'))})+'\n');
+  if(kind!=='run'){console.error(kind==='version'?'copilot-test 1.0\nignored version tail':(e.FAKE_CP_PROBE||'help')+'\nignored help tail');process.exit(Number(e[kind==='version'?'FAKE_CP_VERSION_EXIT':'FAKE_CP_PROBE_EXIT']||0))}
+  const mcpFile=argv[argv.indexOf('--additional-mcp-config')+1].slice(1);
+  fs.writeFileSync(RECORD,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,'utf8')),stdin,pointerText:i<0?'':fs.readFileSync(argv[i+1].split(' is in ')[1].split(' - read it.')[0],'utf8')}));
+  const mode=e.FAKE_CP_LOG,dir=argv[argv.indexOf('--log-dir')+1],auth='[ERROR] No authentication information found.',n=fs.readFileSync(RECORD+'.copilot','utf8').trim().split('\n').map(JSON.parse).filter(x=>x.kind==='run').length;
+  if(mode==='stdout')console.log(auth);
+  if(mode==='stale')fs.writeFileSync(require('path').dirname(dir)+'/stale.log',auth);
+  if(dir&&['auth','two','unrelated'].includes(mode))fs.writeFileSync(dir+'/process-test-'+process.pid+'.log',mode==='unrelated'?'unrelated error':auth+'\nsecret-copilot-token');
+  const t=k=>e[k].split('\\n').join('\n');
+  if(mode==='two'&&n===1)console.error(" ! 1 MCP server was blocked by policy: 'serena' (Could not verify server against any configured registry)");
+  if(e.FAKE_CP_STDOUT)console.log(t('FAKE_CP_STDOUT'));
+  if(e.FAKE_CP_STDERR)console.error(t('FAKE_CP_STDERR'));
+  if(e.FAKE_CP_LOGTEXT&&logDir)fs.writeFileSync(logDir+'/process-test-'+process.pid+'.log',t('FAKE_CP_LOGTEXT'));
+  if(e.FAKE_CP_STALE)for(const d of [require('path').dirname(logDir)+'/copilot-log.stale',e.USERPROFILE+'/.copilot/logs']){fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+'/process-old.log',t('FAKE_CP_STALE'))}
+  process.exit(mode==='two'?(n===1?0:1):Number(e.FAKE_CP_EXIT||0));
+} else if (cli !== 'normalize') {
   fs.writeFileSync(RECORD, JSON.stringify({cli, argv, cwd:process.cwd(), env:process.env}));
   // PS 5.1 routes a quoted prompt through a private context file, not argv.
   const pointer = argv.join(' ').match(/First read the private session context file at (.+?)\. It contains/);
@@ -1395,11 +1706,12 @@ if (cli !== 'normalize') {
 }
 '@
     [IO.File]::WriteAllText($recorder, ('const RECORD = ' + (ConvertTo-Json $rec) + ";`n" + $body))
-    foreach ($cli in @('claude', 'codex', 'gemini', 'grok')) {
+    foreach ($cli in @('claude', 'codex', 'gemini', 'grok', 'copilot')) {
         Set-Content -LiteralPath (Join-Path $tempRoot "$cli.cmd") -Encoding ASCII -Value "@echo off`r`nnode `"$recorder`" $cli %*`r`nexit /b %errorlevel%"
     }
     $bytes = [IO.File]::ReadAllBytes($wrapper)
     if ($bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) { throw 'wrapper lost its UTF-8 BOM' }
+    Invoke-CopilotRows
     Invoke-VmcSections
     Invoke-VmjSections
     Invoke-SgSections
@@ -1474,6 +1786,8 @@ if (cli !== 'normalize') {
     $rows = @(
         "C1|worker|gemini|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat.",
         "C2|qa|grok|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat.",
+        "C3|worker|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.",
+        "C4|qa|copilot|$vlFalse|off|CLI_UNSUPPORTED|$vl, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat.",
         "S1|worker|claude|$vlFalse|off|SHARED_MODE_UNSUPPORTED|$shared is 'off'; refusing to start this seat.",
         "S2|worker|claude|$vlFalse|`"ON`"|SHARED_MODE_UNSUPPORTED|$shared is invalid (`"ON`"); refusing to start this seat.",
         "S3|worker|claude|$vlFalse|-|SHARED_MODE_UNSUPPORTED|$shared is unset, which resolves to 'off' while settings.qualityGate is blank; refusing to start this seat.",
@@ -1490,7 +1804,7 @@ if (cli !== 'normalize') {
         $r = Invoke-VmrRow $a[0] $a[1] $a[2] $a[3] $a[4]
         Assert-VmrRefused $r "MOE_VERIFIED_LOCAL_$($a[5])" $a[6]
     }
-    Write-Host '[vm route] ok refusals (C1/C2, S1-S6, N1-N4; R1/R2 in vm seat)'
+    Write-Host '[vm route] ok refusals (C1/C2/C3/C4, S1-S6, N1-N4; R1/R2 in vm seat)'
     foreach ($seat in @('A1|architect', 'G1|governor')) {
         $a = $seat -split '\|'
         $r = Invoke-VmrRow $a[0] $a[1] claude $vlFalse off

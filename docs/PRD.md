@@ -9,7 +9,7 @@ Status note: This PRD is a forward-looking product vision. See `CLAUDE.md`, `doc
 **Moe** is an AI Workforce Command Center—a project management system purpose-built for AI-assisted coding ("vibe coding"). It bridges the gap between human project planning and AI code execution by providing:
 
 1. A **JetBrains IDE Plugin** (PyCharm, IntelliJ, WebStorm) with a Jira-like project board
-2. A **Moe daemon** that gives AI CLI tools (Claude Code, Codex, Gemini, Grok) direct access to project state via a proxy
+2. A **Moe daemon** that gives AI CLI tools (Claude Code, Codex, Gemini, Grok, GitHub Copilot CLI) direct access to project state via a proxy
 3. A **Handshake Protocol** that enforces "plan before code" discipline
 
 ---
@@ -18,7 +18,7 @@ Status note: This PRD is a forward-looking product vision. See `CLAUDE.md`, `doc
 
 ### Current State of Vibe Coding
 
-Today, developers using AI CLI tools (Claude Code, Codex CLI, Gemini, Grok Build) face these problems:
+Today, developers using AI CLI tools (Claude Code, Codex CLI, Gemini, Grok Build, GitHub Copilot CLI) face these problems:
 
 | Problem | Impact |
 |---------|--------|
@@ -237,7 +237,7 @@ moe.report_blocked(reason)  // Signal blocked state
 | Product | Gap Moe Fills |
 |---------|---------------|
 | **Cursor** | No project management, no persistent task state |
-| **GitHub Copilot** | Autocomplete only, no planning |
+| **GitHub Copilot** | Copilot CLI is an agent, but each session works alone, with no shared board, roles, or human plan approval; Moe runs it as an agent provider |
 | **Jira/Linear** | Not connected to AI tools |
 | **Claude Code** | Great CLI, but no persistent memory |
 

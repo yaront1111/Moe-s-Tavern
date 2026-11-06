@@ -4,7 +4,7 @@ import * as path from 'path';
 import { declaredProfile, defaultFoldCase, installedArtifact, installedExecutable, installedRoot, runtimeProfile } from '../services/MoeDaemonClient';
 import type { ArtifactSelection, DeclaredProfile, ReadinessFailure, ReadinessReply } from '../services/MoeDaemonClient';
 
-export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'custom';
+export type AgentProvider = 'claude' | 'codex' | 'gemini' | 'grok' | 'copilot' | 'custom';
 export type AgentRole = 'architect' | 'worker' | 'qa' | 'governor';
 type ReadinessSource = () => Promise<ReadinessReply>;
 type LaunchOptions = {

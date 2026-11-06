@@ -590,10 +590,23 @@ only the daemon's evaluation of a certified report counts.
   - WSL: under verified-local, worker and QA seats run the native PowerShell wrapper with Windows Multipass. JetBrains
     Start Agent picks it even with "Run Agents in WSL" on, and `moe-agent.sh` refuses verified-local inside WSL
     (`MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED`). Architect and governor seats keep their usual launch, WSL included.
-  - Credentials: a claude seat sends the leased account's VM token (`accounts vm-token <id>`, read through
-    `moe-account-lease.mjs vm-credential <id>`) to `seat-job` on stdin only, and it reaches the guest only in the job
-    frame, as `CLAUDE_CODE_OAUTH_TOKEN`. Rotation stays on. A codex seat sends `OPENAI_API_KEY` or `CODEX_API_KEY` from
-    the wrapper's own environment, else it stops with `MOE_VM_CREDENTIAL_UNAVAILABLE` before claiming.
+  - Credentials: a claude seat sends the leased account's VM credential, read through
+    `moe-account-lease.mjs vm-credential <id> <configDir> <claude command>`: a minted VM token when one is stored
+    (`accounts vm-token <id>`, optional, valid about a year), else the short-lived access token of the account's own
+    host sign-in, read-only from `.credentials.json` in its Claude config folder. It goes to `seat-job` on stdin only
+    and reaches the guest only in the job frame, as `CLAUDE_CODE_OAUTH_TOKEN`. The refresh token never leaves the
+    host: Moe never uses, sends or writes it, and never writes that file. When 5 minutes or less are left, the host's
+    own claude renews the sign-in first (claude's own refresh, under its own lock, as when a host seat starts on that
+    account), so host seats keep their sign-in. The access token lasts 8 hours from claude's last renewal and the
+    guest cannot renew it, so a job cannot outlive it. The wrapper sends a sign-in token only when at least an hour is
+    left. With less, the seat waits with the task held (`MOE_VM_CREDENTIAL_UNAVAILABLE`, reason `short-life`) until
+    the host's claude renews the token in its last 5 minutes. A job that still runs past the expiry ends with claude's
+    authentication error, and its work lands as for any nonzero exit: a worker's candidate commit, while a QA job
+    leaves the row in REVIEW. The next job gets a renewed token. A minted token avoids this. With no usable
+    credential, the seat prints `MOE_VM_CREDENTIAL_UNAVAILABLE` with a reason, waits with the task held and never
+    falls back to the host. macOS keeps the sign-in in the login Keychain, which Moe does not read, so a macOS host
+    needs a minted token. Rotation stays on. A codex seat sends `OPENAI_API_KEY` or `CODEX_API_KEY` from the
+    wrapper's own environment, else it stops with `MOE_VM_CREDENTIAL_UNAVAILABLE` before claiming.
   - Only claude and codex run in a seat VM: a gemini or grok worker or QA seat is refused
     (`MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED`), and so is shared mode (`MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED`).
 - **Check lifecycle** (`check-lifecycle.mjs`, `check-session.mjs`, `check-dispatch.mjs`). Each run gets a fresh VM:

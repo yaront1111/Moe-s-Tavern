@@ -33,9 +33,13 @@ cp "$ROOT_DIR/scripts/tests/postflight-fake-proxy.js" "$FAKE_PROXY"
 printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$NODE" > "$SHIM/node"
 printf '%s\n' "require('fs').appendFileSync('$TMP_DIR/daemon-ran','ran\\n');process.exit(1);" > "$TMP_DIR/fake-daemon.js"
 # Each fake CLI writes {cli, argv, cwd, env} to the one record file baked in here.
+# With FAKE_RENEW_FILE set, a claude `-p … --tools` run is instead the sign-in
+# renewal ([seat sign-in]): it rewrites the account's .credentials.json from that
+# file's {accessToken, refreshToken}, 8 h left, as claude's refresh would, logs
+# renew.jsonl beside the record, and never writes the record (no task CLI ran).
 for cli in claude codex gemini grok; do
   printf '#!/usr/bin/env bash\nexec %q -e %q %q %q "$@"\n' "$NODE" \
-    'const [rec,cli,...argv]=process.argv.slice(1);require("fs").writeFileSync(rec,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env}));' \
+    'const [rec,cli,...argv]=process.argv.slice(1),fs=require("fs"),e=process.env;if(cli==="claude"&&e.FAKE_RENEW_FILE&&argv.includes("-p")&&argv.includes("--tools")){const d=e.CLAUDE_CONFIG_DIR;fs.writeFileSync(d+"/.credentials.json",JSON.stringify({claudeAiOauth:{...JSON.parse(fs.readFileSync(e.FAKE_RENEW_FILE,"utf8")),expiresAt:Date.now()+288e5,scopes:["user:inference"],subscriptionType:"max"}}));fs.appendFileSync(require("path").dirname(rec)+"/renew.jsonl",JSON.stringify({argv,cwd:process.cwd(),configDir:d,hasMoeWorkerId:"MOE_WORKER_ID" in e,hasPluginDirs:"CLAUDE_CODE_PLUGIN_DIRS" in e})+"\n")}else fs.writeFileSync(rec,JSON.stringify({cli,argv,cwd:process.cwd(),env:process.env}));' \
     "$REC" "$cli" > "$BIN/$cli"
   chmod +x "$BIN/$cli"
 done
@@ -50,7 +54,7 @@ VMR_ARGS=(--no-loop --poll-interval 0)
 vmr_run() {
   local row="$1" role="$2" cli="$3" readiness="$4" wt="$5" seam="$6" settings='"autoCommit":false'; shift 6
   case "$wt" in -) ;; gate) settings="$settings,\"qualityGate\":\"true\"" ;; on|off) settings="$settings,\"worktreeMode\":\"$wt\"" ;; *) settings="$settings,\"worktreeMode\":$wt" ;; esac
-  rm -rf "$PROJECT" "$RUN_TMP" "$TMP_DIR/home" "$REC" "$CALLS" "$TMP_DIR/daemon-ran"
+  rm -rf "$PROJECT" "$RUN_TMP" "$TMP_DIR/home" "$REC" "$REC.copilot" "$CALLS" "$TMP_DIR/daemon-ran"
   mkdir -p "$PROJECT/.moe/messages" "$RUN_TMP" "$TMP_DIR/home"
   printf '{"id":"proj-vmr","name":"postflight-vm-route","settings":{%s}}\n' "$settings" > "$PROJECT/.moe/project.json"
   : > "$PROJECT/.moe/messages/chan-general.jsonl"
@@ -67,7 +71,7 @@ vmr_run() {
       MOE_AGY_COMMAND="$BIN/gemini" MOE_DISABLE_HEARTBEAT=1 MOE_TASKLESS_WAIT_SEC=5 "$@" timeout "${POSTFLIGHT_TIMEOUT_SEC}s" "$WRAPPER" \
       --project "$PROJECT" --worker-id "$role-vmr" --role "$role" --team Smoke --no-start-daemon \
       --command "${VMR_CMD:-$BIN/$cli}" "${VMR_ARGS[@]}"
-  ) >"$OUT" 2>&1
+  ) < "${VMR_STDIN:-/dev/null}" >"$OUT" 2>&1
   VMR_CODE=$?
   VMR_CMD=""
   set -e
@@ -116,6 +120,180 @@ const walk = (v) => typeof v === "string" ? mask(v) : Array.isArray(v) ? v.map(w
 process.stdout.write(JSON.stringify(walk(rec), null, 1));
 ' "$REC" "$RUN_TMP"
 }
+
+# --- [copilot]: only this fake reads stdin, and never for a TUI.
+mkdir -p "$TMP_DIR/serena-bin"
+printf '#!/bin/sh\nexit 0\n' > "$TMP_DIR/serena-bin/serena"; chmod +x "$TMP_DIR/serena-bin/serena"
+printf '#!/usr/bin/env bash\nexec %q -e %q %q "$@"\n' "$NODE" '
+const fs=require("fs"),[rec,...argv]=process.argv.slice(1),i=argv.indexOf("-i"),kind=argv.includes("--version")?"version":argv.includes("--help")?"probe":"run";
+const stdin=i<0?fs.readFileSync(0,"utf8"):"",ld=argv.indexOf("--log-dir"),logDir=kind!=="run"||ld<0?"":argv[ld+1];
+const prior=logDir&&fs.existsSync(rec+".copilot")?fs.readFileSync(rec+".copilot","utf8").trim().split("\n").map(JSON.parse).filter(x=>x.logDir):[];
+fs.appendFileSync(rec+".copilot",JSON.stringify({kind,argv,stdin,logDir,copyExists:!!logDir&&fs.existsSync(logDir+".stderr"),priorGone:prior.every(x=>!fs.existsSync(x.logDir)&&!fs.existsSync(x.logDir+".stderr"))})+"\n");
+if(kind!=="run"){console.error(kind==="version"?"copilot-test 1.0\nignored version tail":(process.env.FAKE_CP_PROBE||"help")+"\nignored help tail");process.exit(Number(process.env[kind==="version"?"FAKE_CP_VERSION_EXIT":"FAKE_CP_PROBE_EXIT"]||0))}
+const mcpFile=argv[argv.indexOf("--additional-mcp-config")+1].slice(1);
+fs.writeFileSync(rec,JSON.stringify({cli:"copilot",argv,cwd:process.cwd(),env:process.env,mcpFile,mcp:JSON.parse(fs.readFileSync(mcpFile,"utf8")),stdin,pointerText:i<0?"":fs.readFileSync(argv[i+1].split(" is in ")[1].split(" - read it.")[0],"utf8")}));
+const e=process.env,mode=e.FAKE_CP_LOG,dir=argv[argv.indexOf("--log-dir")+1],auth="[ERROR] No authentication information found.",n=fs.readFileSync(rec+".copilot","utf8").trim().split("\n").map(JSON.parse).filter(x=>x.kind==="run").length;
+if(mode==="stdout")console.log(auth);
+if(mode==="stale")fs.writeFileSync(require("path").dirname(dir)+"/stale.log",auth);
+if(dir&&["auth","two","unrelated"].includes(mode))fs.writeFileSync(dir+"/process-test-"+process.pid+".log",mode==="unrelated"?"unrelated error":auth+"\nsecret-copilot-token");
+const t=k=>e[k].split("\\n").join("\n");
+if(mode==="two"&&n===1)console.error(" ! 1 MCP server was blocked by policy: \x27serena\x27 (Could not verify server against any configured registry)");
+if(e.FAKE_CP_STDOUT)console.log(t("FAKE_CP_STDOUT"));
+if(e.FAKE_CP_STDERR)console.error(t("FAKE_CP_STDERR"));
+if(e.FAKE_CP_LOGTEXT&&logDir)fs.writeFileSync(logDir+"/process-test-"+process.pid+".log",t("FAKE_CP_LOGTEXT"));
+if(e.FAKE_CP_STALE)for(const d of [require("path").dirname(logDir)+"/copilot-log.stale",e.HOME+"/.copilot/logs"]){fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+"/process-old.log",t("FAKE_CP_STALE"))}
+process.exit(mode==="two"?(n===1?0:1):Number(e.FAKE_CP_EXIT||0));' "$REC" > "$BIN/copilot"
+chmod +x "$BIN/copilot"; cp "$BIN/copilot" "$BIN/copilot.exe"; cp "$BIN/copilot" "$BIN/copilot.cmd"
+cp_assert() {
+  [ "$VMR_CODE" = 0 ] && [ -f "$REC" ] || vmr_fail "$VMR_ROW" "copilot did not launch: $VMR_CODE"
+  "$NODE" - "$REC" "$PROJECT" "$1" "${2:-$PROJECT}" "$FAKE_PROXY" "$TMP_DIR/serena-bin/serena" "${3:-}" "${4:-}" <<'JS' || vmr_fail "$VMR_ROW" 'copilot contract'
+const [file,project,mode,root,proxy,serena,model,effort]=process.argv.slice(2),fs=require('fs'),a=require('assert/strict'),r=JSON.parse(fs.readFileSync(file)),tui=mode==='tui';
+a.equal(r.env.MOE_WORKER_TYPE,'COPILOT'); a.equal(r.cwd,root);
+a.deepEqual(r.argv,[...(r.env.FAKE_CP_PREFIX?['--prefix-test']:[]),'-C',root,...(tui?[]:['--allow-all','--no-ask-user']),'--no-auto-update','--disable-builtin-mcps','--additional-mcp-config','@'+r.mcpFile,...(model?['--model',model]:[]),...(effort?['--reasoning-effort',effort]:[]),...(tui?['-i',r.argv.at(-1)]:['--log-dir',r.argv.at(-1)])]);
+if(!tui)a.ok(!fs.existsSync(r.argv.at(-1)),'log cleanup');
+const text=tui?r.pointerText:r.stdin;
+for(const s of [r.env.FAKE_CLAIM_MODE==='resume'?'task-resume':'task-postflight','# Session Context (per-iteration)',tui?'INTERACTIVE session:':'One-shot session:']) a.ok(text.includes(s),s);
+if(tui) a.ok(text.includes('This interactive session may plan up to')); else a.ok(text.includes('\u2014'));
+if(mode==='worker') a.ok(text.startsWith('Role: worker.'));
+const m=r.mcp.mcpServers.moe,e=m.env;
+a.equal(m.type,'local'); a.deepEqual(m.tools,['*']); a.equal(m.timeout,780000); a.deepEqual(m.args,[proxy]); a.ok(m.command);
+a.equal(e.MOE_PROJECT_PATH,project); a.equal(e.MOE_TOOL_NAME_STYLE,'underscore'); a.equal(e.MOE_WORKER_ID,r.env.MOE_WORKER_ID);
+for(const k of ['MOE_WORKER_TYPE','MOE_SESSION_ID','MOE_RUNNER_PROCESS_STARTED_AT','MOE_RUNNER_HOST','MOE_DAEMON_HOST']) if(r.env[k]) a.equal(e[k],r.env[k]);
+for(const k of ['MOE_ATTEMPT_ID','MOE_ATTEMPT_GENERATION']) a.equal(e[k],r.env.MOE_ATTEMPT_ID&&r.env.MOE_ATTEMPT_GENERATION?r.env[k]:undefined);
+a.deepEqual(r.mcp.mcpServers.serena,{type:'local',command:serena,tools:['*'],args:['start-mcp-server','--context','agent','--project',root,'--enable-web-dashboard','false','--enable-gui-log-window','false']});
+a.ok(!r.mcpFile.startsWith(project+'/')); a.ok(!fs.existsSync(r.mcpFile),'temp cleanup');
+const calls=fs.readFileSync(file+'.copilot','utf8').trim().split('\n').map(JSON.parse),probes=calls.filter(c=>c.kind==='probe');
+a.equal(probes.length,tui||r.env.MOE_DISABLE_ARGV_PROBE==='1'?0:1);
+if(probes.length){a.equal(probes[0].stdin,'');a.deepEqual(probes[0].argv,[...r.argv,'--help']);}
+JS
+}
+cp_rejected() {
+  [ "$VMR_CODE" = 1 ] && [ ! -e "$REC" ] || vmr_fail "$VMR_ROW" 'rejection launched or wrong exit'
+  "$NODE" - "$REC.copilot" "$OUT" "$CALLS" "$1" "$2" <<'JS' || vmr_fail "$VMR_ROW" 'rejection evidence'
+const fs=require('fs'),a=require('assert/strict'),[f,o,c,phrase,version]=process.argv.slice(2),rows=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse),r=rows(f),text=fs.readFileSync(o,'utf8'),rpc=rows(c);
+a.deepEqual(r.map(x=>x.kind),['probe','version']);a.equal(r[0].stdin,'');a.equal(r[1].stdin,'');
+a.equal(text.split('\n').filter(l=>l.includes('MOE_CLI_ARGV_REJECTED')).length,1);a.ok(text.includes('copilot ('+version+')'));a.ok(text.includes(phrase));a.ok(!text.includes('ignored version tail'));a.ok(!text.includes('ignored help tail'));a.ok(!fs.existsSync(require('path').dirname(r[0].argv.at(-2))));
+a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_CLI_ARGV_REJECTED')&&x.args.channel==='chan-general').length,1);a.ok(rpc.some(x=>x.tool==='deregister_worker'));a.ok(!text.includes('[launch-failure]'));
+JS
+}
+cp_auth_assert() {
+  "$NODE" - "$REC.copilot" "$OUT" "$CALLS" "$VMR_CODE" "$1" "$2" <<'JS' || vmr_fail "$VMR_ROW" 'auth lifecycle'
+const fs=require('fs'),a=require('assert/strict'),p=require('path'),[f,o,c,code,fatal,count]=process.argv.slice(2),rows=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse),all=rows(f),r=all.filter(x=>x.kind==='run'),text=fs.readFileSync(o,'utf8'),rpc=rows(c),msg='MOE_COPILOT_SIGNED_OUT';
+a.equal(Number(code),fatal==='1'?1:0);a.equal(r.length,Number(count));a.equal(all.filter(x=>x.kind==='probe').length,1);
+a.equal(text.split('\n').filter(l=>l.includes(msg)).length,Number(fatal));a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes(msg)&&x.args.channel==='chan-general').length,Number(fatal));a.ok(rpc.some(x=>x.tool==='deregister_worker'));
+if(fatal==='1'){a.ok(!text.includes('[launch-failure]'));for(const s of ['copilot login','COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN','Windows and WSL sign in separately'])a.ok(text.includes(s));}
+const dirs=r.map(x=>x.argv[x.argv.indexOf('--log-dir')+1]);a.equal(new Set(dirs).size,r.length);for(const d of dirs){a.ok(p.isAbsolute(d));a.ok(p.basename(d).startsWith('copilot-log.'));a.ok(!fs.existsSync(d));a.ok(!fs.existsSync(p.dirname(d)));}
+if(r.length===2){a.equal(r[0].argv[r[0].argv.indexOf('--reasoning-effort')+1],'xhigh');a.ok(!r[1].argv.includes('--reasoning-effort'));a.ok(!r.some(x=>x.argv.includes('--model')));a.ok(r[1].priorGone,'earlier log dir and copy removed');}
+for(const x of r){a.ok(x.copyExists,'stderr copy');a.ok(!fs.existsSync(x.logDir+'.stderr'));}
+a.equal(text.split('\n').filter(l=>l.includes('The Copilot policy of this account blocked the serena MCP server')).length,r.length===2?1:0,'serena WARN');
+for(const s of ['secret-copilot-token','secret-gh-token','secret-github-token'])a.ok(!(text+fs.readFileSync(c,'utf8')).includes(s));
+JS
+}
+cp_fixture() {
+  printf '.moe/\n.worktrees/\n.mcp.json\n.serena/\n' > "$PROJECT/.gitignore"
+  git -C "$PROJECT" init -q -b main; git -C "$PROJECT" add .gitignore
+  git -C "$PROJECT" commit -qm seed; git -C "$PROJECT" checkout -qb moe/control
+  mkdir -p "$PROJECT/.serena/memories"
+  export FAKE_CLAIM_WORKSPACE='{"mode":"worktree","target":"main"}' FAKE_CTX_WORKSPACE='{"mode":"worktree","target":"main"}'
+}
+(
+  export MOE_SERENA_PATH="$TMP_DIR/serena-bin/serena"
+  RUN_TMP="$TMP_DIR/copilot temp"
+  vmr_run CP-H worker copilot - off -; vmr_launched CP-H; cp_assert worker
+  grep -Fq 'Copilot mode: headless (stdin prompt)' "$OUT" || vmr_fail CP-H banner
+  for ext in exe cmd; do VMR_CMD="$BIN/copilot.$ext"; vmr_run CP-X worker copilot - off -; cp_assert worker; done
+  VMR_ARGS=(--poll-interval 1); vmr_run CP-A architect copilot - off -; cp_assert tui
+  grep -Fq 'Copilot mode: interactive' "$OUT" && grep -Fq 'Interactive mode: polling disabled' "$OUT" || vmr_fail CP-A polling
+  VMR_ARGS=(--no-loop --poll-interval 0 --no-interactive); vmr_run CP-AN architect copilot - off -; cp_assert headless
+  VMR_ARGS=(--no-loop --poll-interval 0)
+  export FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING FAKE_CLAIM_LAUNCH='{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
+  vmr_run CP-route worker copilot - off -; cp_assert worker '' '' xhigh
+  vmr_run CP-env worker copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=max; cp_assert worker '' env-model max
+  cp_models() { "$NODE" -e 'const f=process.argv[1],fs=require("fs"),p=JSON.parse(fs.readFileSync(f));p.settings.models={worker:"settings-model",architect:"settings-model"};fs.writeFileSync(f,JSON.stringify(p))' "$PROJECT/.moe/project.json"; }
+  VMR_SETUP=cp_models
+  vmr_run CP-settings worker copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=none; cp_assert worker '' settings-model none
+  VMR_ARGS+=(--model cli-model)
+  VMR_CMD="$BIN/copilot --prefix-test"
+  vmr_run CP-cli worker copilot - off - FAKE_CP_PREFIX=1 MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=minimal; cp_assert worker '' cli-model minimal
+  vmr_run CP-tui architect copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=none; cp_assert tui '' cli-model none
+  unset FAKE_CLAIM_MODE FAKE_TASK_STATUS FAKE_CLAIM_LAUNCH VMR_SETUP; VMR_ARGS=(--no-loop --poll-interval 0)
+  printf 'inherited stdin sentinel' > "$TMP_DIR/cp-stdin"; VMR_STDIN="$TMP_DIR/cp-stdin"
+  for phrase in 'Unexpected Argument' 'invalid value' 'unrecognized'; do
+    vmr_run CP-reject worker copilot - off - FAKE_CP_PROBE="$phrase" FAKE_CP_PROBE_EXIT=1; cp_rejected "$phrase" 'copilot-test 1.0'
+  done
+  vmr_run CP-version worker copilot - off - FAKE_CP_PROBE=unrecognized FAKE_CP_PROBE_EXIT=1 FAKE_CP_VERSION_EXIT=1; cp_rejected unrecognized unknown
+  for mode in skip accepted unrelated; do
+    extra=(FAKE_CP_PROBE=unrecognized FAKE_CP_PROBE_EXIT=1)
+    case "$mode" in skip) extra+=(MOE_DISABLE_ARGV_PROBE=1);; accepted) extra=(FAKE_CP_PROBE='invalid value' FAKE_CP_PROBE_EXIT=0);; unrelated) extra=(FAKE_CP_PROBE='network unavailable' FAKE_CP_PROBE_EXIT=1);; esac
+    vmr_run "CP-$mode" worker copilot - off - "${extra[@]}"; cp_assert worker
+    ! grep -q MOE_CLI_ARGV_REJECTED "$OUT" || vmr_fail "$VMR_ROW" 'false rejection'
+  done
+  unset VMR_STDIN
+  export COPILOT_GITHUB_TOKEN=secret-copilot-token GH_TOKEN=secret-gh-token GITHUB_TOKEN=secret-github-token
+  for mode in auth unrelated missing stdout stale; do
+    vmr_run "CP-log-$mode" worker copilot - off - FAKE_CP_LOG="$mode" FAKE_CP_EXIT="$([ "$mode" = auth ] && echo 0 || echo 1)"; cp_auth_assert 0 1
+  done
+  VMR_ARGS=(--poll-interval 1)
+  vmr_run CP-auth worker copilot - off - FAKE_CP_LOG=auth FAKE_CP_EXIT=1; cp_auth_assert 1 1
+  vmr_run CP-two worker copilot - off - FAKE_CP_LOG=two FAKE_CLAIM_ONCE=1 FAKE_MENTION=1 FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING 'FAKE_CLAIM_LAUNCH={"tier":"standard","effort":"xhigh","model":"claude-opus-5-5"}'; cp_auth_assert 1 2
+  unset COPILOT_GITHUB_TOKEN GH_TOKEN GITHUB_TOKEN; VMR_ARGS=(--no-loop --poll-interval 0)
+  REAL_MKTEMP=$(command -v mktemp)
+  cp_no_log() { printf '#!/bin/bash\ncase "$*" in *copilot-log*) exit 1;; esac\nexec %q "$@"\n' "$REAL_MKTEMP" > "$BIN/mktemp"; chmod +x "$BIN/mktemp"; }
+  VMR_SETUP=cp_no_log; vmr_run CP-logfail worker copilot - off -
+  [ "$VMR_CODE" = 1 ] && [ ! -e "$REC.copilot" ] && grep -Fq 'Cannot create private Copilot log directory; refusing to launch.' "$OUT" || vmr_fail CP-logfail 'directory failure launched'
+  rm "$BIN/mktemp"; unset VMR_SETUP
+  for name in copilot copilot.exe copilot.cmd; do
+    missing="$TMP_DIR/missing/$name"; VMR_CMD="$missing"; vmr_run CP-NF worker copilot - off -
+    [ "$VMR_CODE" = 1 ] && [ ! -e "$REC" ] && [ "$(grep -c MOE_COPILOT_NOT_FOUND "$OUT")" = 1 ] &&
+      grep -Fq "MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $missing. Install it (npm install -g @github/copilot), then sign in with copilot login." "$OUT" || vmr_fail CP-NF refusal
+  done
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$TMP_DIR/cp-gitconfig"
+  printf '[user]\n name = Test\n email = test@example.com\n' > "$GIT_CONFIG_GLOBAL"
+  VMR_SETUP=cp_fixture; vmr_run CP-W worker copilot - on -; cp_assert worker "$PROJECT/.worktrees/task-postflight"
+)
+echo '[copilot] ok CP-H, CP-X, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
+
+# --- [copilot policy]: a 403 in this launch's own log (nonzero exit only) or a moe server
+# blocked on this launch's stderr (any exit) stops the seat once; a blocked serena only warns.
+# cp_policy WRAPPER_EXIT RUNS CODED(NE|MB|-) WARNS LAUNCH_FAILURE(0|1)
+cp_policy() {
+  "$NODE" - "$REC" "$REC.copilot" "$OUT" "$CALLS" "$VMR_CODE" "$@" <<'JS' || vmr_fail "$VMR_ROW" 'copilot policy'
+const fs=require('fs'),a=require('assert/strict'),[rec,f,o,c,code,want,runs,coded,warns,lf]=process.argv.slice(2),rows=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse);
+const r=rows(f).filter(x=>x.kind==='run'),text=fs.readFileSync(o,'utf8'),lines=text.split('\n'),rpc=rows(c),env=JSON.parse(fs.readFileSync(rec)).env,cp=rpc.filter(x=>x.tool==='chat_send'&&/MOE_COPILOT_/.test(x.args.content));
+const texts={NE:'MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.',MB:'MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'};
+a.equal(code,want,'wrapper exit');a.equal(r.length,Number(runs),'launches');
+for(const k of ['NE','MB']){const n=coded===k?1:0,id=texts[k].split(':')[0];a.equal(lines.filter(l=>l.includes(id)).length,n,id);a.equal(lines.filter(l=>l.includes(texts[k])).length,n,id+' text');
+  a.equal(cp.filter(x=>x.args.channel==='chan-general'&&x.args.content.includes('@governors')&&x.args.content.includes(id)).length,n,id+' escalation');}
+a.equal(cp.length,coded==='-'?0:1,'one escalation');if(coded!=='-')a.ok(rpc.some(x=>x.tool==='deregister_worker'));
+a.equal(lines.filter(l=>l.includes('The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them.')).length,Number(warns),'serena WARN');
+a.equal(text.includes('[launch-failure]'),lf==='1','launch-failure');
+const shown=[...(env.FAKE_CP_STDERR||'').split('\\n'),...(env.FAKE_CP_STDOUT||'').split('\\n')].filter(Boolean),phrase='not authorized to use this Copilot feature';
+for(const s of shown)a.equal(lines.filter(l=>l===s).length,1,'shown once: '+s);
+a.ok(!text.includes('sentinel-log-line'));a.equal(text.split(phrase).length,(env.FAKE_CP_STDOUT||'').split(phrase).length,'log never echoed');
+for(const x of r){a.ok(x.copyExists,'stderr copy');a.ok(!fs.existsSync(x.logDir));a.ok(!fs.existsSync(x.logDir+'.stderr'));}
+JS
+}
+(
+  export MOE_SERENA_PATH="$TMP_DIR/serena-bin/serena" MOE_LAUNCH_BACKOFF_BASE_SEC=1 MOE_LAUNCH_BACKOFF_MAX_SEC=1
+  RUN_TMP="$TMP_DIR/copilot temp"
+  L403='[ERROR] Error loading models: Error: 403 "unauthorized: not authorized to use this Copilot feature\n"'
+  THIRD=" ! Third-party MCP servers are disabled by your organization's Copilot policy. Only built-in servers are available."
+  BLOCKED=" ! 1 MCP server was blocked by policy: '%s' (Could not verify server against any configured registry)"
+  VMR_ARGS=(--poll-interval 1)
+  vmr_run CP-NE worker copilot - off - FAKE_CP_LOGTEXT="sentinel-log-line\n$L403" FAKE_CP_STDERR="Error: Access denied by policy settings (Request ID: test)\n$THIRD" FAKE_CP_EXIT=1
+  cp_policy 1 1 NE 0 0
+  vmr_run CP-MB0 worker copilot - off - FAKE_CP_STDERR="$THIRD"; cp_policy 1 1 MB 0 0
+  vmr_run CP-MB1 worker copilot - off - FAKE_CP_STDERR="$(printf "$BLOCKED" moe)" FAKE_CP_EXIT=1; cp_policy 1 1 MB 0 0
+  VMR_ARGS=(--no-loop --poll-interval 0)
+  vmr_run CP-SER worker copilot - off - FAKE_CP_STDERR="$(printf "$BLOCKED" serena)" FAKE_CP_LOGTEXT="$L403"; vmr_launched CP-SER; cp_policy 0 1 - 1 0
+  vmr_run CP-NEG worker copilot - off - FAKE_CP_EXIT=1 FAKE_CP_LOGTEXT='unrelated error' FAKE_CP_STALE="$L403" \
+    FAKE_CP_STDOUT="not authorized to use this Copilot feature\n$THIRD\n$(printf "$BLOCKED" moe)"; cp_policy 0 1 - 0 1
+  REAL_MKTEMP=$(command -v mktemp)
+  cp_no_copy() { printf '#!/bin/bash\nd=$(%q "$@") || exit\ncase "$*" in *copilot-log*) mkdir "$d.stderr";; esac\necho "$d"\n' "$REAL_MKTEMP" > "$BIN/mktemp"; chmod +x "$BIN/mktemp"; }
+  VMR_SETUP=cp_no_copy; vmr_run CP-copyfail worker copilot - off -; rm "$BIN/mktemp"
+  [ "$VMR_CODE" = 1 ] && [ ! -e "$REC.copilot" ] && grep -Fq 'Cannot create private Copilot stderr copy' "$OUT" || vmr_fail CP-copyfail 'launched without its stderr copy'
+)
+echo '[copilot policy] ok CP-NE, CP-MB0, CP-MB1, CP-SER, CP-NEG'
 
 echo "[vm route] today's path: every non-verified-local answer launches the same CLI"
 LEGACY='{"profile":"legacy","ready":true,"missingCapabilities":[],"evaluatedAt":"2026-11-01T00:00:00.000Z"}'
@@ -217,6 +395,8 @@ REFUSAL_ROWS=(
   "W1|worker|gemini|$VL_FALSE|off|1|MOE_VERIFIED_LOCAL_WSL_UNSUPPORTED|$VL, whose worker and QA seats run natively on Windows (moe-agent.ps1), never inside WSL; refusing to start this seat."
   "C1|worker|gemini|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs gemini; refusing to start this seat."
   "C2|worker|grok|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs grok; refusing to start this seat."
+  "C3|worker|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat."
+  "C4|qa|copilot|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED|$VL, whose worker and QA seats run only claude or codex; this seat runs copilot; refusing to start this seat."
   "S1|worker|claude|$VL_FALSE|off|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is 'off'; refusing to start this seat."
   "S2|worker|claude|$VL_FALSE|\"ON\"|0|MOE_VERIFIED_LOCAL_SHARED_MODE_UNSUPPORTED|$SHARED is invalid (\"ON\"); refusing to start this seat."
   "$S3_ROW" "$S4_ROW"
@@ -228,7 +408,7 @@ for r in "${REFUSAL_ROWS[@]}"; do
   vmr_run "$row" "$role" "$cli" "$readiness" "$wt" "$seam"
   vmr_refused "$row" "$code" "$detail"
 done
-echo "[vm route] ok refusals (W1, C1, C2, S1-S4, N1, N2; R1/R2 in the seat-job block)"
+echo "[vm route] ok refusals (W1, C1, C2, C3, C4, S1-S4, N1, N2; R1/R2 in the seat-job block)"
 
 echo "[vm route] architect and governor seats never read readiness"
 for r in A1:architect G1:governor; do
@@ -278,6 +458,7 @@ export ANTHROPIC_API_KEY=outer-a ANTHROPIC_AUTH_TOKEN=outer-b CLAUDE_CODE_OAUTH_
 vmj_fixture() {
   mkdir -p "$TMP_DIR/accounts/claude-vm-tokens" "$TMP_DIR/accounts/acct-1"
   printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
+  rm -f "$TMP_DIR/accounts/acct-1/.credentials.json" # only [seat sign-in] seeds one
   printf '.moe/\n.worktrees/\n.mcp.json\n' > "$PROJECT/.gitignore"
   printf 'seed\n' > "$PROJECT/seed.txt"
   git -C "$PROJECT" init -q -b main
@@ -381,23 +562,100 @@ vmr_run VE-no-key worker codex "$READY" on 0 OPENAI_API_KEY= CODEX_API_KEY=
 [ "$VMR_CODE" = 1 ] && grep -q MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || vmr_fail VE-no-key 'not refused'
 vmj_rows none
 [ "$(vmr_calls | grep -cx chat_send)" = 1 ] || vmr_fail VE-no-key 'not one escalation'
-echo '[seat credentials] claude waits holding the task; one escalation across repeated missing tokens'
 vmj_missing_fixture() { vmj_fixture; rm -f "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"; }
-VMR_SETUP=vmj_missing_fixture
-vmj_background VE-missing worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
-for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do
-  [ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" 2>/dev/null || true)" -ge 2 ] 2>/dev/null && break
-  sleep 1
-done
-[ "$(grep -c MOE_VM_CREDENTIAL_UNAVAILABLE "$OUT" || true)" -ge 2 ] || vmr_fail VE-missing 'did not retry'
-printf %s "$TOKEN" > "$TMP_DIR/accounts/claude-vm-tokens/acct-1.token"
-wait "$VMJ_PID"
-[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail VE-missing 'retry failed'; vmj_rows happy
-"$NODE" - "$CALLS" <<'JS'
-const fs=require('fs'),a=require('node:assert/strict'),r=fs.readFileSync(process.argv[2],'utf8').trim().split('\n').map(JSON.parse);
-a.equal(r.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_VM_CREDENTIAL_UNAVAILABLE')).length,1);
-a.equal(r.filter(x=>x.tool==='claim_next_task').length,1); a.ok(r.filter(x=>x.tool==='lease_account').length>=3);
+
+# --- [seat sign-in] task-98053b89: no minted token, so the job runs on the leased
+# account's own sign-in (slice A's real helper), renewed only by the host claude.
+echo '[seat sign-in] a claude VM seat with no minted token uses the leased account sign-in'
+REFRESH=sk-ant-ort01-vmRefreshCanaryNeverLeavesTheFile0123
+OLD=sk-ant-oat01-vmOldAccessCanaryNeverReachesAJob01234
+REFRESH2=sk-ant-ort01-vmRenewedRefreshCanaryNeverLeaves012
+SIGNIN="$TMP_DIR/accounts/acct-1/.credentials.json"; RENEW_LOG="$TMP_DIR/renew.jsonl"; RENEW_PAIR="$TMP_DIR/renew-pair.json"
+# si_write ACCESS REFRESH SECONDS-LEFT: claude's sign-in file shape, replaced in one rename.
+si_write() {
+  "$NODE" -e 'const fs=require("fs"),[f,a,r,s]=process.argv.slice(1);fs.writeFileSync(f+".tmp",JSON.stringify({claudeAiOauth:{accessToken:a,refreshToken:r,expiresAt:Date.now()+Number(s)*1000,scopes:["user:inference"],subscriptionType:"max"}}));fs.renameSync(f+".tmp",f)' "$SIGNIN" "$@"
+}
+si_sha() { "$NODE" -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(process.argv[1])).digest("hex"))' "$SIGNIN"; }
+# SI_FILE="ACCESS SECONDS-LEFT" seeds a sign-in file holding REFRESH too; empty seeds none.
+si_fixture() {
+  vmj_missing_fixture; rm -f "$RENEW_LOG"
+  if [ -n "$SI_FILE" ]; then si_write "${SI_FILE% *}" "$REFRESH" "${SI_FILE#* }"; si_sha > "$TMP_DIR/si.sha"; fi
+}
+# si_clean ROW CANARY...: no canary in the wrapper output, the RPC, seat and chat
+# records, the project, the run's temp or home. It names the file, never the value,
+# and runs before any vmr_fail, which prints OUT.
+si_clean() {
+  local row="$1" c hits pats=(); shift
+  for c in "$@"; do pats+=(-e "$c"); done
+  hits=$(grep -rlF "${pats[@]}" -- "$OUT" "$CALLS" "$PROJECT" "$RUN_TMP" "$TMP_DIR/home" "$RENEW_LOG" 2>/dev/null || true)
+  [ -z "$hits" ] || { echo "VM ROUTE FAILED ($row): a credential canary appears in: $(echo $hits)" >&2; exit 1; }
+}
+# si_wait_warn ROW LINE: at least two exact WARN lines, and no seat-job yet.
+si_wait_warn() {
+  local n
+  for n in $(seq 1 "$POSTFLIGHT_TIMEOUT_SEC"); do
+    [ "$(grep -Fxc -- "$2" "$OUT" 2>/dev/null || true)" -ge 2 ] 2>/dev/null && break
+    sleep 1
+  done
+  [ "$(grep -Fxc -- "$2" "$OUT" || true)" -ge 2 ] || vmr_fail "$1" "fewer than two lines '$2'"
+  ! grep -q '"cmd":"seat-job"' "$PROJECT/.moe/evidence-rpcs.jsonl" 2>/dev/null || vmr_fail "$1" 'a seat-job ran with no credential'
+}
+# si_calls NEEDLE...: one escalation holding every needle, one claim, a re-lease per wait.
+si_calls() {
+  "$NODE" - "$CALLS" "$@" <<'JS'
+const fs=require('fs'),a=require('node:assert/strict'),[f,...needles]=process.argv.slice(2),r=fs.readFileSync(f,'utf8').trim().split('\n').map(JSON.parse);
+const sent=r.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_VM_CREDENTIAL_UNAVAILABLE'));
+a.equal(sent.length,1,'not one escalation'); for(const n of needles) a.ok(sent[0].args.content.includes(n),'escalation lacks '+n);
+a.equal(r.filter(x=>x.tool==='claim_next_task').length,1); a.ok(r.filter(x=>x.tool==='lease_account').length>=3,'no re-lease per wait');
 JS
+}
+VMR_SETUP=si_fixture
+
+echo '[seat sign-in] SI-signin: the job gets the sign-in access token; no host claude, file unchanged'
+SI_FILE="$TOKEN 7200"
+vmr_run SI-signin worker claude "$READY" on 0
+si_clean SI-signin "$TOKEN" "$REFRESH"
+[ "$VMR_CODE" = 0 ] || vmr_fail SI-signin "exit $VMR_CODE"; vmj_rows happy
+[ "$(si_sha)" = "$(cat "$TMP_DIR/si.sha")" ] || vmr_fail SI-signin 'the sign-in file changed'
+grep -Eq '^\[seat\] VM credential account=acct-1 source=signin expires=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}\.[0-9]{3}Z$' "$OUT" \
+  || vmr_fail SI-signin 'no source=signin line'
+[ ! -e "$RENEW_LOG" ] || vmr_fail SI-signin 'a renewal ran'
+
+echo '[seat sign-in] SI-renew: a token 60 s from expiry is renewed by one host claude run first'
+"$NODE" -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({accessToken:process.argv[2],refreshToken:process.argv[3]}))' "$RENEW_PAIR" "$TOKEN" "$REFRESH2"
+SI_FILE="$OLD 60"
+vmr_run SI-renew worker claude "$READY" on 0 FAKE_RENEW_FILE="$RENEW_PAIR"
+si_clean SI-renew "$TOKEN" "$OLD" "$REFRESH" "$REFRESH2"
+[ "$VMR_CODE" = 0 ] || vmr_fail SI-renew "exit $VMR_CODE"; vmj_rows happy
+"$NODE" - "$RENEW_LOG" "$PROJECT" "$TMP_DIR/accounts/acct-1" <<'JS' || vmr_fail SI-renew 'not one renewal run with the renewal argv, cwd and env'
+const fs=require('fs'),path=require('path'),a=require('node:assert/strict'),[log,project,dir]=process.argv.slice(2);
+const rows=fs.readFileSync(log,'utf8').trim().split('\n').map(JSON.parse); a.equal(rows.length,1);
+const r=rows[0],t=r.argv.indexOf('--tools'); a.ok(r.argv.includes('-p')&&t>=0&&r.argv[t+1]==='');
+a.ok(!r.argv.some(x=>x.includes('task-postflight'))); const rel=path.relative(project,r.cwd); a.ok(rel.startsWith('..')||path.isAbsolute(rel));
+a.equal(r.configDir,dir); a.equal(r.hasMoeWorkerId,false); a.equal(r.hasPluginDirs,false);
+JS
+
+echo '[seat sign-in] SI-none: no credential holds the task with one escalation; a sign-in then runs it'
+SI_FILE=""
+vmj_background SI-none worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
+si_wait_warn SI-none '[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=no-signin-file; retrying in 1s (Ctrl+C to stop)'
+si_write "$TOKEN" "$REFRESH" 7200
+wait "$VMJ_PID"
+si_clean SI-none "$TOKEN" "$REFRESH"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail SI-none 'retry failed'; vmj_rows happy
+si_calls 'reason=no-signin-file' 'sign the account in again' || vmr_fail SI-none 'escalation, claim or re-lease count'
+
+echo '[seat sign-in] SI-short: under an hour left waits; no renewal at 10 minutes, the job never gets it'
+SI_FILE="$OLD 600"
+vmj_background SI-short worker claude "$READY" on 0 MOE_ACCOUNT_RETRY_SEC=1
+si_wait_warn SI-short '[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=acct-1 reason=short-life; retrying in 1s (Ctrl+C to stop)'
+si_write "$TOKEN" "$REFRESH" 7200
+wait "$VMJ_PID"
+si_clean SI-short "$TOKEN" "$OLD" "$REFRESH"
+[ "$(cat "$TMP_DIR/bg.code")" = 0 ] || vmr_fail SI-short 'retry failed'; vmj_rows happy
+[ ! -e "$RENEW_LOG" ] || vmr_fail SI-short 'a renewal ran at 10 minutes'
+si_calls 'reason=short-life' 'sign the account in again' || vmr_fail SI-short 'escalation, claim or re-lease count'
+echo '[seat sign-in] ok SI-signin, SI-renew, SI-none, SI-short'
 VMR_SETUP=vmj_fixture
 
 echo '[seat failures] failed or missing outcome stops VM, then resumes with a fresh instance'

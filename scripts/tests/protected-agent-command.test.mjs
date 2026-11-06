@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 
 // With MOE_RUNTIME_PROTECTED exactly '1' (the JetBrains protected launch), the
 // agent command can come from repository content (.moe/project.json
-// settings.agentCommand). Both launchers then run only claude, codex, gemini or
-// grok, by bare name, resolved from an absolute PATH entry outside the project.
+// settings.agentCommand). Both launchers then run only claude, codex, gemini,
+// grok or copilot, by bare name, resolved from an absolute PATH entry outside the project.
 // Each row runs the REAL launcher in a temp project. The runtime paths point at
 // an inert stub that logs every call to rpc.log, and each CLI stub logs to
 // ran.log, so a row proves what never ran. Without the marker nothing changes.
@@ -17,7 +17,7 @@ const windows = process.platform === 'win32';
 const SH = fileURLToPath(new URL('../moe-agent.sh', import.meta.url));
 const PS1 = fileURLToPath(new URL('../moe-agent.ps1', import.meta.url));
 const CAP_MS = 20_000;
-const refusedLine = (shown) => `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '${shown}' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start.`;
+const refusedLine = (shown) => `[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '${shown}' is not one of claude, codex, gemini, grok, copilot; the protected runtime runs only these agent CLIs by name. Refusing to start.`;
 const notFoundLine = (name) => `[ERROR] MOE_PROTECTED_AGENT_CLI_NOT_FOUND: ${name} was not found on an absolute PATH entry outside the project; refusing to start.`;
 const infoLine = (name, file) => `[INFO] MOE_PROTECTED_AGENT_CLI: ${name} -> ${file}`;
 const interpreterNotFound = (name) => `[ERROR] MOE_PROTECTED_INTERPRETER_NOT_FOUND: ${name} was not found on an absolute PATH entry outside the project; refusing to start.`;
@@ -347,6 +347,12 @@ for (const engine of ENGINES) {
     const file = cliStub(fx, fx.trusted, 'codex', 'trusted');
     const r = await run(engine, fx, { command: 'codex', pathEntries: [fx.empty, fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:' });
     assertResolved(fx, r, 'codex', file);
+  });
+  test(name('CP1 resolves copilot from a trusted absolute PATH entry'), opts, async (t) => {
+    const fx = fixture(t);
+    const file = cliStub(fx, fx.trusted, 'copilot', 'trusted');
+    const r = await run(engine, fx, { command: 'copilot', pathEntries: [fx.empty, fx.trusted, ...TAIL], stopOn: 'MOE_PROTECTED_AGENT_CLI:' });
+    assertResolved(fx, r, 'copilot', file);
   });
   const notFound = [['an empty entry', () => ''], ['a dot entry', () => '.'], ['a relative entry', () => 'bin']];
   for (const [label, entry] of notFound) {
@@ -806,6 +812,13 @@ for (const engine of ENGINES) {
     const fx = fixture(t);
     typedStub(fx, fx.trusted, 'gemini', 'trusted');
     assertRefused(engine, fx, await run(engine, fx, { command: 'gemini', pathEntries: [fx.trusted, ...TAIL] }), notFoundLine('agy'));
+  });
+  test(name('CP2 under the marker a governor seat runs the trusted copilot as COPILOT'), opts, async (t) => {
+    const fx = fixture(t);
+    typedStub(fx, fx.trusted, 'copilot', 'trusted');
+    const r = await run(engine, fx, { command: 'copilot', role: 'governor', pathEntries: [nodeBin(fx), fx.trusted, ...TAIL, ...(GIT_DIR ? [GIT_DIR] : [])], env: { MOE_NODE_COMMAND: undefined } });
+    assert.equal(r.code, 0, show(r));
+    assert.equal(ranText(fx), 'trusted copilot COPILOT\n', show(r));
   });
   test(name('AG7 gemini mode: under the marker agy itself is refused'), opts, async (t) => {
     const fx = fixture(t);

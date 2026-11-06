@@ -621,10 +621,10 @@ protected_pin_interpreters() {
 }
 if [ "$RUNTIME_PROTECTED" = 1 ]; then
     case "$COMMAND" in
-        claude|codex|gemini|grok) ;;
+        claude|codex|gemini|grok|copilot) ;;
         *)
             PROTECTED_SHOWN="${COMMAND//[[:cntrl:]]/?}"
-            refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '${PROTECTED_SHOWN:0:200}' is not one of claude, codex, gemini, grok; the protected runtime runs only these agent CLIs by name. Refusing to start."
+            refuse_protected_agent "[ERROR] MOE_PROTECTED_AGENT_COMMAND_REFUSED: '${PROTECTED_SHOWN:0:200}' is not one of claude, codex, gemini, grok, copilot; the protected runtime runs only these agent CLIs by name. Refusing to start."
             ;;
     esac
 fi
@@ -640,10 +640,12 @@ elif [ "$CMD_BASE" = "gemini" ] || [ "$CMD_BASE" = "agy" ]; then
     CLI_TYPE="gemini"
 elif [ "$CMD_BASE" = "grok" ]; then
     CLI_TYPE="grok"
+elif [ "$CMD_BASE" = "copilot" ]; then
+    CLI_TYPE="copilot"
 fi
 # The seat's worker.type: moe-proxy forwards it on claim_next_task/join_team.
 # Replaces an inherited value (a hot reload keeps env). Bash 3.2 has no ${x^^}.
-case "$CLI_TYPE" in codex) MOE_WORKER_TYPE=CODEX ;; gemini) MOE_WORKER_TYPE=GEMINI ;; grok) MOE_WORKER_TYPE=GROK ;; *) MOE_WORKER_TYPE=CLAUDE ;; esac
+case "$CLI_TYPE" in codex) MOE_WORKER_TYPE=CODEX ;; gemini) MOE_WORKER_TYPE=GEMINI ;; grok) MOE_WORKER_TYPE=GROK ;; copilot) MOE_WORKER_TYPE=COPILOT ;; *) MOE_WORKER_TYPE=CLAUDE ;; esac
 export MOE_WORKER_TYPE
 
 # Codex is interactive (TUI) for every role unless --codex-exec opts the seat
@@ -700,6 +702,10 @@ fi
 GROK_INTERACTIVE=false
 if [ "$CLI_TYPE" = "grok" ] && [ "$INTERACTIVE" = true ] && [ "$GROK_EXEC" = false ]; then
     GROK_INTERACTIVE=true
+fi
+COPILOT_INTERACTIVE=false
+if [ "$CLI_TYPE" = "copilot" ] && [ "$INTERACTIVE" = true ]; then
+    COPILOT_INTERACTIVE=true
 fi
 
 # Auto-detect python3 from common installation locations
@@ -1444,6 +1450,46 @@ GEMINIEOF
     fi
 }
 if [ "$CLI_TYPE" = "gemini" ]; then write_gemini_config "$PROJECT" "$SERENA_PROJECT" || exit 1; fi
+
+copilot_fatal() {
+    local message="$1" args
+    printf '[ERROR] %s\n' "$message" >&2
+    args=$($PYTHON_CMD -c 'import json,sys; print(json.dumps(dict(channel=sys.argv[1],workerId=sys.argv[2],content="@governors " + sys.argv[2] + ": " + sys.argv[3])))' "${GENERAL_CHANNEL_ID:-general}" "$WORKER_ID" "$message")
+    moe_rpc chat_send "$args" >/dev/null 2>&1 || true
+    stop_heartbeat_sidecar
+    exit 1
+}
+
+copilot_log_has() { # $1 = this launch's own log dir, $2 = fixed phrase
+    local file
+    for file in "$1"/*.log; do
+        [ -f "$file" ] && [ ! -L "$file" ] && grep -Fq -- "$2" "$file" 2>/dev/null && return 0
+    done
+    return 1
+}
+
+write_copilot_mcp_config() {
+    $PYTHON_CMD - "$1" "$PROJECT" "$PROXY_CMD" "$PROXY_ARGS" "$SERENA_CMD" "$2" "$WORKER_ID" << 'COPILOTEOF'
+import json, os, sys
+file, project, proxy, arg, serena, root, worker = sys.argv[1:]
+env = {'MOE_PROJECT_PATH': project, 'MOE_TOOL_NAME_STYLE': 'underscore', 'MOE_WORKER_ID': worker}
+keys = ['MOE_WORKER_TYPE', 'MOE_SESSION_ID', 'MOE_RUNNER_PROCESS_STARTED_AT', 'MOE_RUNNER_HOST', 'MOE_DAEMON_HOST']
+pair = ['MOE_ATTEMPT_ID', 'MOE_ATTEMPT_GENERATION']
+if all(os.environ.get(k, '').strip() for k in pair):
+    keys += pair
+env.update({k: os.environ[k] for k in keys if os.environ.get(k, '').strip()})
+moe = {'type': 'local', 'command': proxy, 'env': env, 'tools': ['*'], 'timeout': 780000}
+if arg:
+    moe['args'] = [arg]
+servers = {'moe': moe}
+if serena and root:
+    servers['serena'] = {'type': 'local', 'command': serena, 'tools': ['*'],
+        'args': ['start-mcp-server', '--context', 'agent', '--project', root,
+                 '--enable-web-dashboard', 'false', '--enable-gui-log-window', 'false']}
+with open(file, 'w', encoding='utf-8') as f:
+    json.dump({'mcpServers': servers}, f)
+COPILOTEOF
+}
 
 # Print this seat's `mcp_servers.moe=<inline table>` codex override: the
 # [mcp_servers.moe] and [mcp_servers.moe.env] tables of $1 (.codex/config.toml)
@@ -2418,7 +2464,14 @@ if [ "$CLI_TYPE" = "grok" ]; then
         echo "Grok mode: headless (--prompt-file --yolo)"
     fi
 fi
-if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ]; then
+if [ "$CLI_TYPE" = "copilot" ]; then
+    if [ "$COPILOT_INTERACTIVE" = true ]; then
+        echo "Copilot mode: interactive"
+    else
+        echo "Copilot mode: headless (stdin prompt)"
+    fi
+fi
+if [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ] || [ "$COPILOT_INTERACTIVE" = true ]; then
     # Codex / Gemini / Grok TUIs hold a single long-lived REPL session — looping them
     # would just respawn the same TUI on top of the previous one. Claude's
     # interactive mode is fine to loop: each iteration spawns a fresh CLI
@@ -3696,6 +3749,7 @@ Before testing a package in this worktree, run npm ci --prefer-offline in that p
     SERENA_CMD="${serena:+$SERENA_CMD}" write_project_mcp_json "$CLI_ROOT" "$serena" \
         || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the MCP config ($CLI_ROOT/.mcp.json)"
     case "$CLI_TYPE" in
+        copilot) COPILOT_SERENA_ROOT="$serena" ;;
         codex|gemini|grok)
             SERENA_CMD="${serena:+$SERENA_CMD}" "write_${CLI_TYPE}_config" "$CLI_ROOT" "$serena" \
                 || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the $CLI_TYPE config ($CLI_ROOT/.$CLI_TYPE)" ;;
@@ -9964,7 +10018,8 @@ seat_credential_stream() {
             builtin printf %s "$OPENAI_API_KEY" | seat_credential_json OPENAI_API_KEY
         else builtin printf %s "${CODEX_API_KEY:-}" | seat_credential_json CODEX_API_KEY; fi
     else
-        (set -o pipefail; "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" 2>/dev/null | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN)
+        (set -o pipefail; "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null \
+            | seat_credential_json CLAUDE_CODE_OAUTH_TOKEN)
     fi
 }
 seat_credential_announce() {
@@ -9973,19 +10028,46 @@ seat_credential_announce() {
         "${GENERAL_CHANNEL_ID:-general}" "$WORKER_ID" "@governors $WORKER_ID: MOE_VM_CREDENTIAL_UNAVAILABLE - $1" 2>/dev/null) || return 0
     moe_rpc chat_send "$args" >/dev/null 2>&1 || true
 }
+# A VM job gets only the access token, never the refresh token, so the job
+# cannot outlive that token. Claude renews only in the token's last 5 minutes,
+# so a token with less than an hour left waits for that window instead of
+# starting a job that would die partway.
+VM_JOB_MIN_TOKEN_SEC=3600
 # Wait outside launch timing. Re-lease and recheck the pinned attempt after each
 # wait, just like the account loop: a released task must never launch stale.
+# vm-credential-state never prints a credential, so its reply may be logged.
 seat_wait_credential() {
-    local escalated=' ' account sec
+    local escalated=' ' account sec state reason iso left
     sec=$("$NODE_CMD" "$ACCOUNT_HELPER" retry-sec 2>/dev/null) || sec=300
     case "$sec" in ''|*[!0-9]*) sec=300 ;; esac
     [ "$sec" -ge 1 ] || sec=300
-    while ! { [ -n "$ACCOUNT_LEASED_ID" ] && "$NODE_CMD" "$ACCOUNT_HELPER" vm-credential "$ACCOUNT_LEASED_ID" >/dev/null 2>&1; }; do
+    while :; do
+        reason=no-lease
+        if [ -n "$ACCOUNT_LEASED_ID" ]; then
+            state=$("$NODE_CMD" "$ACCOUNT_HELPER" vm-credential-state "$ACCOUNT_LEASED_ID" "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null) || state=""
+            case "$state" in
+                minted) echo "[seat] VM credential account=$ACCOUNT_LEASED_ID source=minted"; return 0 ;;
+                signin$'\t'*)
+                    iso="${state#signin$'\t'}"; left=""; reason=unknown
+                    if [[ $iso =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$ ]]; then
+                        left=$($PYTHON_CMD -c 'import sys,datetime as d; u=d.timezone.utc; print(int((d.datetime.strptime(sys.argv[1],"%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=u)-d.datetime.now(u)).total_seconds()))' "$iso" 2>/dev/null) || left=""
+                    fi
+                    if [[ $left =~ ^-?[0-9]+$ ]]; then
+                        if [ "$left" -ge "$VM_JOB_MIN_TOKEN_SEC" ]; then
+                            echo "[seat] VM credential account=$ACCOUNT_LEASED_ID source=signin expires=$iso"; return 0
+                        fi
+                        reason=short-life
+                    fi ;;
+                unavailable$'\t'*) reason="${state#unavailable$'\t'}" ;;
+                *) reason=unknown ;;
+            esac
+        fi
+        [[ $reason =~ ^[a-z][a-z-]{0,31}$ ]] || reason=unknown
         account="${ACCOUNT_LEASED_ID:-none}"
-        echo "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account; retrying in ${sec}s (Ctrl+C to stop)"
+        echo "[WARN] MOE_VM_CREDENTIAL_UNAVAILABLE account=$account reason=$reason; retrying in ${sec}s (Ctrl+C to stop)"
         case "$escalated" in *" $account "*) ;; *)
             escalated="$escalated$account "
-            seat_credential_announce "account=$account; mint a token with 'accounts vm-token <id>' and enable account rotation. The task stays held." ;;
+            seat_credential_announce "account=$account reason=$reason; sign the account in again on this host (Accounts tab, or 'accounts login <id>'), or set an optional VM token ('accounts vm-token <id>'). The task stays held." ;;
         esac
         idle_wait "$sec"
         ACCOUNT_LEASE_WAITED=true; account_wait_recheck || return 1
@@ -10405,6 +10487,7 @@ while [ "$LOOP_RUNNING" = true ]; do
     MOE_TOP=""
     MOE_WT_MODE=shared; MOE_WT_PATH=""; MOE_WT_BRANCH=""; MOE_WT_TARGET=""; MOE_WT_DIRT_LIST=""; MOE_WT_COMPLETION=""; LAND_WT_INTERNAL=""
     CLI_ROOT=""; unset MOE_WORKTREE_PATH MOE_TASK_BRANCH MOE_LAND_TARGET
+    COPILOT_SERENA_ROOT="$SERENA_PROJECT"
     MOE_REL=""
     MOE_GITDIR=""
     MOE_BASELINE_PATH=""
@@ -11385,7 +11468,7 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
                     ARCHITECT_SESSION_TASKS="${MOE_ARCHITECT_TASKS_PER_SESSION:-10}"
                     case "$ARCHITECT_SESSION_TASKS" in ''|*[!0-9]*) ARCHITECT_SESSION_TASKS=10 ;; esac
                     if [ "$ARCHITECT_SESSION_TASKS" -lt 1 ]; then ARCHITECT_SESSION_TASKS=10; fi
-                    if { [ "$CLAUDE_INTERACTIVE" = true ] || [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ]; } && [ "$ARCHITECT_SESSION_TASKS" -gt 1 ]; then
+                    if { [ "$CLAUDE_INTERACTIVE" = true ] || [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ] || [ "$COPILOT_INTERACTIVE" = true ]; } && [ "$ARCHITECT_SESSION_TASKS" -gt 1 ]; then
                         PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $ARCHITECT_SESSION_TASKS tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WORKER_ID'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $ARCHITECT_SESSION_TASKS tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     else
                         PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
@@ -11428,10 +11511,11 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
     # Governor is excluded: its prompt is a chat_wait loop, not a finish-and-
     # stop task (and governors default to interactive anyway). Headless grok
     # (--prompt-file --yolo) is the same one-shot shape and gets it too.
-    if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
+    if { { [ "$CLI_TYPE" = "claude" ] && [ "$CLAUDE_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = false ]; } || { [ "$CLI_TYPE" = copilot ] && [ "$COPILOT_INTERACTIVE" = false ]; }; } && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
         PROMPT_BODY="$PROMPT_BODY One-shot session: this CLI process exits when you end your turn, and any background jobs/builds/tests die with it, so a completion notification cannot arrive after you stop. Run verification in the foreground or poll it to completion. Do not call moe.wait_for_task at the end of the task: end your turn once your terminal moe.* call for this task (submit_plan / complete_task / qa_approve / qa_reject / report_blocked) has succeeded — the wrapper respawns a fresh session for the next task."
     elif { { [ "$CLI_TYPE" = claude ] && [ "$CLAUDE_INTERACTIVE" = true ]; } ||
            { [ "$CLI_TYPE" = grok ] && [ "$GROK_INTERACTIVE" = true ]; } ||
+           { [ "$CLI_TYPE" = copilot ] && [ "$COPILOT_INTERACTIVE" = true ]; } ||
            { [ "$CLI_TYPE" = codex ] && [ "$CODEX_INTERACTIVE" = true ]; } ||
            { [ "$CLI_TYPE" = gemini ] && [ "$GEMINI_INTERACTIVE" = true ]; }; } &&
          [ "$AUTO_CLAIM" = true ] && [ "$PREFLIGHT_OK" = true ] && [ "$ROLE" != "governor" ] && [ -n "$PROMPT_BODY" ] && [ -z "$NOTIFICATION_PROMPT" ]; then
@@ -11943,6 +12027,92 @@ $PROMPT_BODY"
 
             CLI_EXIT_CODE=$?
 
+            set -e
+        fi
+    elif [ "$CLI_TYPE" = "copilot" ]; then
+        if ! command -v "$COMMAND_BIN" &> /dev/null; then
+            printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $COMMAND_BIN. Install it (npm install -g @github/copilot), then sign in with copilot login." >&2
+            exit 1
+        fi
+        COPILOT_MODEL="${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-}}"
+        COPILOT_EFFORT="${MOE_COPILOT_EFFORT:-${TASK_LAUNCH_EFFORT:-}}"
+        COPILOT_OPTIONS=()
+        [ -z "$COPILOT_MODEL" ] || COPILOT_OPTIONS+=(--model "$COPILOT_MODEL")
+        [ -z "$COPILOT_EFFORT" ] || COPILOT_OPTIONS+=(--reasoning-effort "$COPILOT_EFFORT")
+        COPILOT_PROMPT_BODY="$PROMPT"
+        if [ "$AUTO_CLAIM" != true ]; then
+            case $ROLE in
+                architect) ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → get_context → read Serena memory → explore codebase → submit_plan → write Serena memory (handoff + learnings) → announce in chat" ;;
+                worker)    ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → start_step → implement → complete_step → complete_task → write Serena memory (handoff + learnings) → announce in chat" ;;
+                qa)        ROLE_WORKFLOW="Workflow: join chat → read messages → claim task → read task chat → get_context → read Serena memory → review code and tests → qa_approve or qa_reject → write Serena memory (handoff + learnings) → announce in chat" ;;
+                *)         ROLE_WORKFLOW="Workflow: claim task → get_context → read Serena memory → complete task → write Serena memory handoff" ;;
+            esac
+            COPILOT_PROMPT_BODY="You are a $ROLE agent. Use ONLY Moe MCP tools (moe.*). $ROLE_WORKFLOW. First: join #general via moe.chat_channels, moe.chat_join, and moe.chat_send. Then moe.chat_read to catch up on messages. Then call moe.claim_next_task to get your next task."
+        fi
+        COPILOT_PROMPT_FILE="$(create_secure_temp)/copilot-prompt.md"
+        COPILOT_MCP_FILE="$(create_secure_temp)/copilot-mcp.json"
+        COPILOT_FAILED_FILE=""
+        if [ -z "$PROXY_CMD" ]; then
+            COPILOT_FAILED_FILE=moe-proxy
+        elif ! printf '%s\n\n# Session Context (per-iteration)\n%s' "$SYSTEM_APPEND" "$COPILOT_PROMPT_BODY" > "$COPILOT_PROMPT_FILE"; then
+            COPILOT_FAILED_FILE="$COPILOT_PROMPT_FILE"
+        elif ! write_copilot_mcp_config "$COPILOT_MCP_FILE" "$COPILOT_SERENA_ROOT"; then
+            COPILOT_FAILED_FILE="$COPILOT_MCP_FILE"
+        fi
+        if [ -n "$COPILOT_FAILED_FILE" ]; then
+            printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_COPILOT_CONFIG_FAILED: cannot write $COPILOT_FAILED_FILE; refusing to launch copilot without its prompt and moe server." >&2
+            exit 1
+        fi
+        if [ "$COPILOT_INTERACTIVE" = false ]; then
+            if ! COPILOT_LOG_DIR="$(mktemp -d "$SECURE_TEMP_DIR/copilot-log.XXXXXX")"; then
+                printf '[ERROR] Cannot create private Copilot log directory; refusing to launch.\n' >&2
+                exit 1
+            fi
+            # This launch's private stderr copy, beside (never inside) its log dir.
+            COPILOT_ERR_FILE="$COPILOT_LOG_DIR.stderr"
+            if ! { : > "$COPILOT_ERR_FILE"; } 2>/dev/null; then
+                printf '[ERROR] Cannot create private Copilot stderr copy %s; refusing to launch.\n' "$COPILOT_ERR_FILE" >&2
+                exit 1
+            fi
+            COPILOT_ARGS=(-C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" --log-dir "$COPILOT_LOG_DIR")
+            if [ "${COPILOT_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != 1 ]; then
+                COPILOT_ARGV_PROBED=true
+                PROBE_EXIT=0
+                PROBE_OUT="$(cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" --help < /dev/null 2>&1)" || PROBE_EXIT=$?
+                if [ "$PROBE_EXIT" -ne 0 ] && printf '%s\n' "$PROBE_OUT" | grep -qiE 'unexpected argument|invalid value|unrecognized'; then
+                    PROBE_LINE="$(printf '%s\n' "$PROBE_OUT" | grep -iE 'error|unexpected argument|invalid value|unrecognized' | sed -n '1{s/\r//g;p;}')"
+                    COPILOT_VERSION=unknown
+                    if VERSION_OUT="$(agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" --version < /dev/null 2>&1)"; then
+                        COPILOT_VERSION="$(printf '%s\n' "$VERSION_OUT" | sed -n '1{s/\r//g;p;}')"
+                    fi
+                    copilot_fatal "MOE_CLI_ARGV_REJECTED: the installed copilot (${COPILOT_VERSION:-unknown}) rejects the wrapper's launch argv -- $PROBE_LINE. Rebuild and reinstall the Moe plugin (or pin the copilot version); relaunching cannot succeed, so this seat exits instead of looping. MOE_DISABLE_ARGV_PROBE=1 skips this check."
+                fi
+            fi
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} ${COPILOT_ARGS[*]}"
+            set +e
+            # stderr is shown live and copied (tee); stdout stays the terminal (fd 3).
+            { (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" "${COPILOT_ARGS[@]}" < "$COPILOT_PROMPT_FILE") 2>&1 1>&3 3>&- | tee -a "$COPILOT_ERR_FILE" >&2 3>&-; CLI_EXIT_CODE=${PIPESTATUS[0]}; } 3>&1
+            set -e
+            # One coded stop per launch: signed out, then not entitled (both from this launch's
+            # own log, nonzero exit only), then the moe server blocked (its stderr copy, any exit).
+            COPILOT_FATAL=""
+            if [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_log_has "$COPILOT_LOG_DIR" 'No authentication information found'; then
+                COPILOT_FATAL='MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.'
+            elif [ "$CLI_EXIT_CODE" -ne 0 ] && copilot_log_has "$COPILOT_LOG_DIR" 'not authorized to use this Copilot feature'; then
+                COPILOT_FATAL='MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.'
+            elif grep -qE "Third-party MCP servers are disabled|blocked by policy.*'moe'" "$COPILOT_ERR_FILE" 2>/dev/null; then
+                COPILOT_FATAL='MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. Use an account or organization whose Copilot policy allows MCP servers (github.com/settings/copilot); moe and serena are local stdio servers, and no MCP registry allowlist may exclude them. This seat exits instead of looping.'
+            elif grep -qE "blocked by policy.*'serena'" "$COPILOT_ERR_FILE" 2>/dev/null; then
+                echo -e "${YELLOW}[WARN]${NC} The Copilot policy of this account blocked the serena MCP server, so this run had no Serena tools (moe was not blocked). Allow MCP servers in the Copilot policy to restore them."
+            fi
+            rm -rf -- "$COPILOT_LOG_DIR" "$COPILOT_ERR_FILE" 2>/dev/null || true
+            [ -z "$COPILOT_FATAL" ] || copilot_fatal "$COPILOT_FATAL"
+        else
+            COPILOT_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $COPILOT_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" ${COPILOT_OPTIONS[*]} -i \"<prompt>\""
+            set +e
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" -i "$COPILOT_POINTER_PROMPT")
+            CLI_EXIT_CODE=$?
             set -e
         fi
     else

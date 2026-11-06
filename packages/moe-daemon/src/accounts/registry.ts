@@ -9,9 +9,13 @@
 // (claude-accounts/<id>) that Claude's own `claude auth login` signs in. Moe only
 // creates that directory and hands its path to claude as CLAUDE_CONFIG_DIR:
 // neither this module, the daemon nor the accounts CLI opens a file inside it.
-// The one exception is the wrapper helper scripts/moe-account-lease.mjs: for an
-// interactive claude seat only, it sets projects[<key>].hasTrustDialogAccepted in
-// that account's .claude.json.
+// There are two exceptions, both in the wrapper helper
+// scripts/moe-account-lease.mjs: for an interactive claude seat only, it sets
+// projects[<key>].hasTrustDialogAccepted in that account's .claude.json; and
+// for a verified-local VM seat's job credential, its vm-credential command
+// reads .credentials.json read-only and takes only the short-lived access
+// token, never the refresh token, and writes nothing (renewal is left to the
+// host's own claude; human directive 2026-11-05, task-a200486f).
 //
 // Every mutation re-reads the file, applies one change and writes it back
 // atomically (tmp + rename), so the daemons and the CLI never tear it. Two
@@ -76,7 +80,7 @@ export function registryFilePath(env: NodeJS.ProcessEnv = process.env): string {
   return override ? path.resolve(override) : path.join(os.homedir(), '.moe', 'claude-accounts.json');
 }
 
-/** The account's Claude config directory. Moe creates it and passes its path to claude; it never reads inside it (only the wrapper's scripts/moe-account-lease.mjs touches .claude.json, for an interactive seat's folder trust). */
+/** The account's Claude config directory. Moe creates it and passes its path to claude; it never reads inside it (only the wrapper's scripts/moe-account-lease.mjs touches .claude.json, for an interactive seat's folder trust, and its vm-credential reads .credentials.json read-only for a VM seat's access token, never the refresh token). */
 export function accountConfigDir(registryFile: string, id: string): string {
   return path.join(path.dirname(registryFile), 'claude-accounts', id);
 }

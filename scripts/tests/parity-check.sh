@@ -43,7 +43,7 @@ extract_codes() { # $1 = file, $2 = prefix regex
 # (its hot-reload plumbing), so section 2 requires its codes by name.
 for prefix in 'MOE_COMMIT_' 'MOE_ATTR_' 'MOE_CHECKPOINT_' 'MOE_ATTRIBUTION_' 'MOE_ACCOUNT_' \
   'MOE_WORKTREE_' 'MOE_LAND_' 'MOE_CONTROL_' 'MOE_BOARD_' 'MOE_PUSH_' 'MOE_MIGRATION_' \
-  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_' 'MOE_CHECK_DISPATCH_'; do
+  'MOE_VERIFIED_LOCAL_' 'MOE_SEAT_' 'MOE_VM_' 'MOE_CHECK_DISPATCH_' 'MOE_COPILOT_'; do
   sh_set="$(extract_codes "$SH" "$prefix")"
   ps_set="$(extract_codes "$PS1" "$prefix")"
   only_sh="$(comm -23 <(printf '%s\n' "$sh_set") <(printf '%s\n' "$ps_set") | sed '/^$/d' || true)"
@@ -180,8 +180,19 @@ done
 for cfg_dir in '.codex/' '.gemini/' '.grok/'; do
   require_both "cli config dir" "$cfg_dir"
 done
-for cli_type in '"grok"' '"codex"'; do
+for cli_type in '"grok"' '"codex"' '"copilot"'; do
   require_both "cli type" "$cli_type"
+done
+# GitHub Copilot CLI seat vocabulary: the model and effort env names, the coded
+# stop lines (not found, config write failed, signed out, rejected argv), the
+# sign-in evidence and token names, the routed effort flag and the mode banners,
+# spelled identically. The mode banners are pinned as prefixes (the headless one
+# carries a '(stdin prompt)' suffix). Copilot's MCP config is private and
+# per-launch (no pre-flight 'config written to' line, no .copilot/ DENY prefix).
+for copilot_lit in MOE_COPILOT_MODEL MOE_COPILOT_EFFORT MOE_COPILOT_NOT_FOUND MOE_COPILOT_CONFIG_FAILED MOE_COPILOT_SIGNED_OUT \
+  'MOE_CLI_ARGV_REJECTED: the installed copilot (' 'GitHub Copilot CLI not found:' 'No authentication information found' \
+  COPILOT_GITHUB_TOKEN '--reasoning-effort' 'Copilot mode: headless' 'Copilot mode: interactive'; do
+  require_both "copilot vocabulary" "$copilot_lit"
 done
 # Codex headless launch vocabulary: the sandbox modes MOE_CODEX_SANDBOX accepts
 # and the fallback warning, spelled identically.

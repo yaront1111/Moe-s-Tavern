@@ -1700,7 +1700,7 @@ os.chown = lambda path, uid, gid, chown=os.chown: print('chown', path, uid, gid,
       const [argv, outFd, inFd, socket, agentUid, realPeer, job] = calls[index];
       const home = job.env.HOME;
       assert.deepEqual([argv, outFd, inFd, socket, agentUid, realPeer], [launchArgv(cli, role, home), 1, 0, '/run/moe/agent.sock', uid, true]);
-      assert.deepEqual(job, { env: { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: home, USER: 'moe-agent', LOGNAME: 'moe-agent', LANG: 'C.UTF-8',
+      assert.deepEqual(job, { env: { PATH: '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin', HOME: home, USER: 'moe-agent', LOGNAME: 'moe-agent', LANG: 'C.UTF-8',
         MOE_ROLE: role, [credential.name]: SECRET, ...(cli === 'codex' ? { CODEX_HOME: join(home, '.codex') } : {}) },
       spawn: { user: uid, group: process.getgid(), extra_groups: [], umask: 0o077, cwd: join(run.dir, 'ws') } });
       assert.equal(dirname(home), run.sessions);
@@ -1734,7 +1734,7 @@ print(json.dumps({'env': dict(entry.split('=', 1) for entry in environ if entry)
                   'nnp': [line for line in status if line.startswith('NoNewPrivs:')],
                   'cmdlines': [cmdline(pid) for pid in (me, parent(me), parent(parent(me)), parent(parent(parent(me))))]}))
 `;
-const HELD = groups => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
+const HELD = (groups, extra = '') => `data = b''.join(iter(lambda: os.read(0, 65536), b''))
 r, w = os.pipe()
 os.write(w, data)
 os.dup2(r, 0)
@@ -1744,7 +1744,7 @@ with open(probe, 'w') as f:
 os.chmod(probe, 0o700)
 jobs = {cli: (probe, names) for cli, (_, names) in m.JOBS.items()}
 sys.exit(m.main(['bridge'], geteuid=lambda: 0, workspace=workspace, sessions=sessions, identity=(os.getuid(), os.getgid(), ${groups}),
-                jobs=jobs, agent_socket=None))
+                jobs=jobs, agent_socket=None${extra}))
 `;
 
 test('J4 the job gets exactly the allowlisted environment and its one credential, the workspace, umask 077 and NoNewPrivs, and no argv holds the credential',
@@ -1758,7 +1758,7 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
     const probe = JSON.parse(stdout);
     const homes = readdirSync(join(dir, 'kept', 'sessions'));
     assert.equal(homes.length, 1);
-    assert.deepEqual(probe.env, { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
+    assert.deepEqual(probe.env, { PATH: '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin', HOME: join(dir, 'kept', 'sessions', homes[0]), USER: 'moe-agent',
       LOGNAME: 'moe-agent', LANG: 'C.UTF-8', MOE_ROLE: 'qa', CODEX_API_KEY: SECRET, CODEX_HOME: join(dir, 'kept', 'sessions', homes[0], '.codex') });
     assert.deepEqual([probe.cwd, probe.umask, probe.nnp], [realpathSync(join(dir, 'kept', 'ws')), 0o077, ['NoNewPrivs:\t1']]);
     // The parent is GUARD's init, a fork of GUARD and so the same cmdline, and the grandparent is GUARD.
@@ -1769,6 +1769,34 @@ test('J4 the job gets exactly the allowlisted environment and its one credential
       const groups = held('dropped', '[]', jobFrame(JOB));
       assert.equal(groups.status, 71, String(groups.stderr));
       assert.deepEqual(decodeAll([groups.stdout]).map(parseGuestFrame), [HELLO]);
+    }
+  });
+
+// task-ccbff5c6: a worker or QA job runs the pinned Node toolchain, which a shadow node ahead of the rest of PATH cannot beat.
+test('J5 a worker or QA job runs node and npm from the toolchain bin, npm through its env shebang, ahead of the rest of its PATH',
+  { skip: NO_GUEST, timeout: 30_000 }, t => {
+    const dir = mkdtempSync(join(tmpdir(), 'moe-ccbf-'));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    const toolchain = join(dir, 'toolchain'), shadow = join(dir, 'shadow');
+    const stub = (file, text) => { mkdirSync(dirname(file), { recursive: true }); writeFileSync(file, text, { mode: 0o755 }); };
+    stub(join(toolchain, 'bin', 'node'), '#!/bin/sh\necho "toolchain node $*"\n');
+    stub(join(toolchain, 'bin', 'npm'), '#!/usr/bin/env node\n');
+    for (const name of ['node', 'npm']) stub(join(shadow, name), `#!/bin/sh\necho "shadow ${name}"\n`);
+    const probe = `import os, shutil, subprocess
+print(os.environ['PATH'])
+print(shutil.which('node'), shutil.which('npm'))
+for argv in (['node', 'one'], ['npm', 'two']):
+    print(subprocess.run(argv, capture_output=True, text=True, check=True).stdout, end='')
+`;
+    for (const [index, frame] of [JOB, QA_JOB].entries()) {
+      // shadow stands where a node in /usr/local/bin would; a non-root test cannot write there.
+      const code = `${LOAD}${JOB_DIRS}m.JOB_PATH = sys.argv[5] + ':' + m.JOB_PATH\n${HELD('None', ', toolchain=sys.argv[6]')}`;
+      const run = spawnSync('python3', ['-I', '-B', '-c', code, SUPERVISOR, join(dir, `run${index}`), 'ws', probe, shadow, toolchain],
+        { input: jobFrame(frame), maxBuffer: 64 << 20, timeout: 30_000, killSignal: 'SIGKILL' });
+      const { exit, stdout } = session(run);
+      assert.deepEqual(exit, EXIT, String(run.stderr));
+      assert.equal(String(stdout), `${toolchain}/bin:${shadow}:/usr/local/bin:/usr/bin:/bin\n${toolchain}/bin/node ${toolchain}/bin/npm\n`
+        + `toolchain node one\ntoolchain node ${toolchain}/bin/npm two\n`);
     }
   });
 

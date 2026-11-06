@@ -456,6 +456,7 @@ export class SettingsPanel {
             <option value="codex">
             <option value="gemini">
             <option value="grok">
+            <option value="copilot">
         </datalist>
         <div class="hint">CLI command used to launch AI agents</div>
     </div>
