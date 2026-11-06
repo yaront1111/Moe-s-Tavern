@@ -5333,8 +5333,8 @@ const EXPORT_BASE = [fileOf('a.txt', 'A'), fileOf('bin/run', '#!/bin/sh\n', true
 const exportData = bytes => Array.from({ length: Math.ceil(Buffer.from(bytes).length / 65_536) },
   (_, at) => ({ kind: 'data', data: Buffer.from(bytes).subarray(at * 65_536, (at + 1) * 65_536).toString('base64') }));
 const mkfifo = file => assert.equal(spawnSync('mkfifo', [file]).status, 0);
-function workspaceIn(t) {
-  const run = materializeIn(scratch(t), framesOf([...hostFrames(workspaceEntries(snapshotOf(EXPORT_BASE)))]));
+function workspaceIn(t, base = EXPORT_BASE) {
+  const run = materializeIn(scratch(t), framesOf([...hostFrames(workspaceEntries(snapshotOf(base)))]));
   assert.equal(run.status, 0, String(run.stderr));
   return run;
 }
@@ -5461,6 +5461,50 @@ os.lstat = lstat`;
   for (const [label, setup, extra] of [['a swapped-in file', swap, outside], ['a swapped-in FIFO', swap, 'fifo'],
     ...(process.getuid() === 0 ? [] : [['an unreadable file', 'os.chmod(sys.argv[2] + "/a.txt", 0)', '']])]) {
     refused(exportIn(workspaceIn(t), setup, 'lambda: None', extra), 74, label);
+  }
+});
+
+// task-ccbff5c6: an install's untracked node_modules never leaves the seat VM; a tracked one is walked as before.
+test('X8 export skips a real node_modules directory that holds no manifest path: no entry, delete, byte or visit past its name', { skip: NOT_POSIX }, t => {
+  const paths = workspaceIn(t);
+  for (const root of ['node_modules', 'src/node_modules']) {
+    const at = name => path.join(paths.workspace, root, name);
+    mkdirSync(at('dep/node_modules/deep'), { recursive: true });
+    writeFileSync(at('dep/index.js'), 'module.exports = 1;\n');
+    writeFileSync(at('dep/node_modules/deep/x.js'), 'x');
+    mkdirSync(at('.bin'));
+    symlinkSync('../dep/index.js', at('.bin/dep'));
+  }
+  const run = exportIn(paths);
+  assert.deepEqual([run.status, createFrameDecoder().push(run.stdout)], [0, [{ kind: 'end', entries: 0 }]], String(run.stderr));
+  // EXPORT_BASE's 6 names plus each skipped node_modules name, never a name inside one.
+  for (const [limit, status] of [[8, 0], [7, 65]]) assert.equal(exportIn(paths, `m.WALK_LIMIT = ${limit}`).status, status, `limit ${limit}`);
+});
+
+test('X9 a node_modules holding a manifest path is walked as before; a node_modules symlink, file or other name still exports', { skip: NOT_POSIX }, t => {
+  const end = entries => ({ kind: 'end', entries });
+  const file = (name, size) => ({ kind: 'file', path: name, executable: false, size });
+  const vendored = [...EXPORT_BASE, fileOf('lib/node_modules/kept/a.js', 'A'), fileOf('node_modules/kept/index.js', 'K')];
+  for (const [label, base, change, frames] of [
+    ['an edit in a tracked node_modules', vendored, at => writeFileSync(at('node_modules/kept/index.js'), 'KK'),
+      [file('node_modules/kept/index.js', 2), ...exportData('KK'), end(1)]],
+    ['an edit in a tracked node_modules under a package directory', vendored, at => writeFileSync(at('lib/node_modules/kept/a.js'), 'B'),
+      [file('lib/node_modules/kept/a.js', 1), ...exportData('B'), end(1)]],
+    ['a delete in a tracked node_modules', vendored, at => rmSync(at('node_modules/kept/index.js')),
+      [{ kind: 'delete', path: 'node_modules/kept/index.js' }, end(1)]],
+    ['a new sibling in a tracked node_modules', vendored, at => writeFileSync(at('node_modules/new.js'), 'N'),
+      [file('node_modules/new.js', 1), ...exportData('N'), end(1)]],
+    ['an untracked node_modules nested in a tracked one', vendored,
+      at => { mkdirSync(at('node_modules/kept/node_modules/x'), { recursive: true }); writeFileSync(at('node_modules/kept/node_modules/x/i.js'), 'I'); }, [end(0)]],
+    ['a node_modules symlink', EXPORT_BASE, at => symlinkSync('src', at('node_modules')), [{ kind: 'symlink', path: 'node_modules' }, end(1)]],
+    ['a regular file named node_modules', EXPORT_BASE, at => writeFileSync(at('node_modules'), 'F'), [file('node_modules', 1), ...exportData('F'), end(1)]],
+    ['directories not named exactly node_modules', EXPORT_BASE, at => ['Node_modules', 'node_modules.old'].forEach(dir => { mkdirSync(at(dir)); writeFileSync(at(`${dir}/f`), 'F'); }),
+      [file('Node_modules/f', 1), ...exportData('F'), file('node_modules.old/f', 1), ...exportData('F'), end(2)]],
+  ]) {
+    const paths = workspaceIn(t, base);
+    change(name => path.join(paths.workspace, name));
+    const run = exportIn(paths);
+    assert.deepEqual([run.status, createFrameDecoder().push(run.stdout)], [0, frames], `${label} ${run.stderr}`);
   }
 });
 

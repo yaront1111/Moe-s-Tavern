@@ -6,7 +6,8 @@
 # Modes: 'bridge' (CQ-R08b/c; CQ-R10b: one host job frame on stdin, then that agent CLI job as the AGENT_IDENTITY
 # account, CQ-R10d4: fixed headless argv and private shim-only MCP config), 'materialize' (CQ-R09c: one snapshot from
 # host frames on stdin into WORKSPACE) and 'export' (CQ-R09:
-# WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account).
+# WORKSPACE's changes against its manifest, as frames on stdout, walked as the AGENT_IDENTITY account; a real
+# node_modules directory that holds no manifest path is skipped whole).
 # Exit codes: 0 relay, materialization or export complete; 64 usage; 65 malformed or mismatched snapshot stream, an
 # unreadable export manifest or workspace root, an export over its bounds, a malformed or disallowed job frame, or a
 # codex job's workspace holding .codex; 66 no materialized workspace for the job; 71 the job could not start,
@@ -793,11 +794,17 @@ def drop_to_agent():
 class Export:
     """One depth-first walk through directory fds only, each directory's names in byte order. It emits file (then its
     data) for each regular file whose [executable, size, sha256] is not the manifest's, symlink and special for the
-    rest, then a delete per manifest path with no non-directory left at it, then end."""
+    rest, then a delete per manifest path with no non-directory left at it, then end. A real directory named exactly
+    node_modules is skipped whole (never walked, listed or emitted past its name) unless a manifest path lies under it:
+    an install's dependency tree is neither a candidate's change nor a QA job's empty candidate. A node_modules symlink
+    or regular file is not skipped, so it still exports as 'symlink' or 'file'."""
 
     def __init__(self, out_fd, known):
         self.out_fd, self.known, self.seen = out_fd, known, set()
         self.entries = self.bytes = self.visited = 0
+        # The node_modules directories that hold a manifest path (a tracked one is walked as before).
+        self.vendored = {'/'.join(parts[:at + 1]) for parts in (path.split('/') for path in known)
+                         for at, part in enumerate(parts[:-1]) if part == 'node_modules'}
 
     def emit(self, frame):
         self.entries += 1
@@ -821,6 +828,8 @@ class Export:
             # Never strict UTF-8: encode_frame carries an undecodable byte's escape to the host, which refuses it.
             path = raw.decode('utf-8', 'surrogateescape')
             if stat.S_ISDIR(info.st_mode):
+                if name == 'node_modules' and path not in self.vendored:
+                    continue  # nothing under it is opened or counted; a manifest path under it would have kept it
                 child = os.open(name, WALK, dir_fd=fd)
                 try:
                     self.directory(child, raw + b'/')
@@ -908,7 +917,7 @@ LAUNCH = {
               '[mcp_servers.moe]\ncommand = "' + SHIM + '"\nenv_vars = ["MOE_ROLE"]\ndefault_tools_approval_mode = "approve"\n'),
 }
 JOB_PATH = '/usr/local/bin:/usr/bin:/bin'
-TOOLCHAIN = '/opt/moe/toolchain'  # CQ-R11e2's 'toolchain' mode installs Node here; a check job's PATH puts its bin first
+TOOLCHAIN = '/opt/moe/toolchain'  # CQ-R11e2's 'toolchain' mode installs Node here; agent and check PATHs lead with it
 SESSIONS = '/var/lib/moe/sessions'
 CREDENTIAL = re.compile(r'[\x21-\x7e]{1,4096}')
 
@@ -979,12 +988,15 @@ def prepare_launch(cli, role, home, uid, gid, exe):
 # One bridge session runs one agent CLI job. The host's first frame, read before hello, picks the CLI, the role and the
 # one credential, which reaches the job only through its environment; argv uses only the role's fixed prompt. identity is
 # (uid, gid, groups): by default the AGENT_IDENTITY account with groups [], which is setgroups([]); None keeps the
-# caller's groups, for a non-root test only. workspace, sessions, identity, jobs, agent_socket and peer_uid are
-# injectable from Python only (tests). A refusal writes no frame, starts no job and echoes nothing from the frame: 74
-# host EOF, 65 a malformed or disallowed frame or a codex workspace holding .codex, 71 no account, 66 no workspace owned by
-# the job uid, 71 no home or config.
+# caller's groups, for a non-root test only. workspace, sessions, identity, jobs, agent_socket, peer_uid and toolchain
+# are injectable from Python only (tests). The job's PATH puts toolchain/bin first, as a check job's does: that bin
+# holds the pinned Node, which agent-seat.mjs installs at seat start through the 'toolchain' mode, so a worker or QA
+# job's bare node, npm and npx run from it (npm's '#!/usr/bin/env node' shebang finds that node through the same
+# PATH). A refusal writes no frame, starts no job and echoes nothing from the frame: 74 host EOF, 65 a malformed or
+# disallowed frame or a codex workspace holding .codex, 71 no account, 66 no workspace owned by the job uid, 71 no home
+# or config.
 def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=None, jobs=JOBS, agent_socket=AGENT_SOCKET,
-              peer_uid=peer_uid):
+              peer_uid=peer_uid, toolchain=TOOLCHAIN):
     try:
         frame = read_job(in_fd, jobs)
     except (EOFError, OSError):
@@ -1014,8 +1026,8 @@ def start_job(in_fd, out_fd, workspace=WORKSPACE, sessions=SESSIONS, identity=No
     except OSError:
         return os.EX_OSERR
     secret = frame['credential']
-    env = {'PATH': JOB_PATH, 'HOME': home, 'USER': AGENT_IDENTITY, 'LOGNAME': AGENT_IDENTITY, 'LANG': 'C.UTF-8',
-           'MOE_ROLE': frame['role'], secret['name']: secret['value'], **extra_env}
+    env = {'PATH': toolchain + '/bin:' + JOB_PATH, 'HOME': home, 'USER': AGENT_IDENTITY, 'LOGNAME': AGENT_IDENTITY,
+           'LANG': 'C.UTF-8', 'MOE_ROLE': frame['role'], secret['name']: secret['value'], **extra_env}
     spawn = {'user': uid, 'group': gid, 'extra_groups': groups, 'umask': 0o077, 'cwd': workspace}
     return relay(argv, out_fd, in_fd, agent_socket, uid, peer_uid, job={'env': env, 'spawn': spawn})
 

@@ -124,6 +124,8 @@ const canonical = (report: Report) => `${JSON.stringify(report)}\n`;
 const MISMATCHES: Array<[string, Report | string | Buffer]> = [
   ['INJECTED', injected], ['UNCERTIFIED', failedNative], ['PLATFORM', valid({ platform: other(host.platform, 'linux', 'win32') })],
   ['ARCH', valid({ arch: other(host.arch, 'x64', 'arm64') })], ['SUPERVISOR', valid({ supervisorSha256: 'e'.repeat(64) })],
+  // The supervisor before task-ccbff5c6 (its PATH lacked the toolchain bin and its export walked node_modules): refused.
+  ['SUPERVISOR', valid({ supervisorSha256: '616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e' })],
   ['IMAGE', valid({ image: { sourceSha256: 'd'.repeat(64), providerImageHash: 'b'.repeat(64) } })],
   ['PROVIDER_VERSION', provider(`1.16.0${host.versionSuffix}`)], ['PROVIDER_VERSION', provider(`1.17.0${other(host.versionSuffix, '+win', '+mac')}`)],
   ['SCHEMA', valid({ signature: null })], ['SCHEMA', without(valid(), 'executionReady')], ['CHECKS', swapped],
