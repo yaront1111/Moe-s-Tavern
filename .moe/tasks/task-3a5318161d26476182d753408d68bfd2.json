@@ -1,0 +1,120 @@
+{
+  "id": "task-3a5318161d26476182d753408d68bfd2",
+  "epicId": "epic-be924fb8",
+  "title": "docs: the project site (docs/index.html) and the moe-daemon and moe-proxy npm READMEs name GitHub Copilot CLI",
+  "description": "Slice 6b of task-59e1d150 (GitHub Copilot CLI as a fifth agent provider). The planner of task-1c580985 split it from that row on 2026-11-06, so that row stays within the 5-file cap. Like task-1c580985, it dependsOn task-d609eae3 (JetBrains) and task-7739d4af (VS Code), because the site says the agent CLIs are supported out of the box.\n\nOBJECTIVE. Five sentences on public listing surfaces still name only four CLIs, and task-1c580985 does not cover them:\n- docs/index.html:21, the tagline: \"An AI agent task board for Claude Code, Codex, Antigravity and Grok Build\".\n- docs/index.html:49: \"Claude Code, Codex, Antigravity, and Grok Build are supported out of the box.\"\n- docs/index.html:129, in the install paragraph: \"a coding CLI (Claude Code, Codex, Antigravity, or Grok Build)\".\n- packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3: \"an AI agent task board for Claude Code, Codex, Antigravity and Grok Build\".\n\nDELIVERABLE (text only): each of those five sentences names GitHub Copilot CLI as the fifth CLI, in the sentence's own style: a serial comma only where the sentence already uses one. In docs/index.html:21 and :49, use the closing word the sentence already has. Nothing else in the three files changes.\n\nNOT IN SCOPE:\n- README.md, docs/PRD.md, the VS Code listing and the injectWorkerType comment in moe-proxy (task-1c580985).\n- plugin.xml (task-d609eae3).\n- scripts/CLAUDE.md, docs/CONFIGURATION.md, docs/TROUBLESHOOTING.md and the WorkerType NOTE in docs/SCHEMA.md (the closing row, task-59e1d150).\n- Any behavior change.\n\nVERIFICATION, from the repo root (npm run lint runs the role-doc linter in place; nothing is installed or built):\n[ \"$(grep -o 'GitHub Copilot CLI' docs/index.html | wc -l)\" -ge 3 ] && grep -q 'GitHub Copilot CLI' packages/moe-daemon/README.md && grep -q 'GitHub Copilot CLI' packages/moe-proxy/README.md && ! grep -nE 'Antigravity,? (and|or) Grok Build' docs/index.html packages/moe-daemon/README.md packages/moe-proxy/README.md && npm run lint",
+  "definitionOfDone": [
+    "docs/index.html names GitHub Copilot CLI in the tagline (:21), the 'supported out of the box' sentence (:49) and the coding-CLI list of the install paragraph (:129)",
+    "packages/moe-daemon/README.md and packages/moe-proxy/README.md name GitHub Copilot CLI in their opening sentence (:3)",
+    "git diff of the three files changes only those five sentences",
+    "The verification command in the description exits 0 at the repo root (the grep checks plus npm run lint)"
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Edit the five sentences with your own Edit tool (no shell writes, no subagent edits). Each is one exact replacement. Match on the text; the line numbers are approximate:\n- docs/index.html:21 (tagline): 'for Claude Code, Codex, Antigravity and Grok Build</p>' becomes 'for Claude Code, Codex, Antigravity, Grok Build and GitHub Copilot CLI</p>' (no serial comma, as before).\n- docs/index.html:49: 'Claude Code, Codex, Antigravity, and Grok Build are supported out of the box.' becomes 'Claude Code, Codex, Antigravity, Grok Build, and GitHub Copilot CLI are supported out of the box.'\n- docs/index.html:129 (install paragraph, a long single line): 'a coding CLI (Claude Code, Codex, Antigravity, or Grok Build)' becomes 'a coding CLI (Claude Code, Codex, Antigravity, Grok Build, or GitHub Copilot CLI)'.\n- packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3: 'for Claude Code, Codex, Antigravity and Grok Build.' becomes 'for Claude Code, Codex, Antigravity, Grok Build and GitHub Copilot CLI.'\nChange nothing else in the three files: no markup, no other sentence and no whitespace. No test pins these sentences (checked: scripts/tests, packages/*/src, .github/workflows).",
+      "status": "PENDING",
+      "affectedFiles": [
+        "docs/index.html",
+        "packages/moe-daemon/README.md",
+        "packages/moe-proxy/README.md"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Verify once, with a fresh run from the worktree root. Run executionContract.checkRefs[0] verbatim; it is the command in the task description. It checks:\n- docs/index.html names GitHub Copilot CLI at least 3 times;\n- each npm README names it;\n- no four-CLI list ('Antigravity and/or Grok Build', with an optional comma) is left in the three files;\n- then npm run lint (the role-doc linter; it runs in place and installs or builds nothing).\nArchitect dry run: exit 1 at base. In a scratch clone after exactly these five edits: exit 0, a 3-file diff of +5/-5, and the linter's OK lines. The command, its exit code and its output tail are the complete_task evidence.\nError handling for a red run:\n- If the check prints a matching line, that sentence still has the old four-CLI ending; fix that sentence.\n- If the count check fails, one of the three docs/index.html sentences was missed.\n- If lint fails, it names a role doc over its cap. This task touches none, so report that instead of editing it.\nRerun the whole command after a fix. Never edit the command text.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Run one self-review of your own diff (git diff in the worktree) before complete_task:\n- Exactly 3 files change, with exactly five changed lines (+5/-5). Each changed line differs only by the inserted ', Grok Build' reordering and 'GitHub Copilot CLI'.\n- The HTML stays well-formed: the tagline still ends in '</p>', and no tag or attribute changes.\n- Each sentence keeps its own comma style.\n- No added line contains a project.json globalRails.forbiddenPatterns string.\n- Nothing in README.md, docs/PRD.md, moe-vscode/, plugin.xml or packages/moe-proxy/src changes (other slices own those).",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-d609eae395894045ad025c65bc114ee0",
+    "task-7739d4af3daf43558dbdfbc1b959340e"
+  ],
+  "priority": "MEDIUM",
+  "order": 546.65,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-05T22:14:14.665Z",
+  "updatedAt": "2026-11-05T22:18:47.790Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:17:55.187Z",
+    "plannedStepCount": 3,
+    "plannedDistinctFileCount": 3
+  },
+  "contextFetchedBy": [
+    "architect-a8e13516"
+  ],
+  "tier": "standard",
+  "effort": "medium",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:18:47.756Z",
+  "executionContract": {
+    "intendedBehavior": "Text only: the project site (docs/index.html tagline, 'supported out of the box' sentence, install-paragraph CLI list) and the opening sentence of the moe-daemon and moe-proxy npm READMEs name GitHub Copilot CLI as the fifth agent CLI.",
+    "acceptanceCriteria": [
+      "docs/index.html names GitHub Copilot CLI at :21, :49 and :129",
+      "packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 name it",
+      "The diff is exactly those five lines",
+      "checkRefs[0] exits 0"
+    ],
+    "invariants": [
+      "Only the five sentences change"
+    ],
+    "compatibility": [
+      "No code, markup or contract changes; npm pages pick up the README text at the next publish"
+    ],
+    "approvedScope": [
+      "Five provider-list sentences in docs/index.html, packages/moe-daemon/README.md and packages/moe-proxy/README.md"
+    ],
+    "sourceAssumptions": [
+      "docs/index.html:21 tagline, :49 'supported out of the box', :129 'a coding CLI (Claude Code, Codex, Antigravity, or Grok Build)' (at 9c2129d4)",
+      "packages/moe-daemon/README.md:3 and packages/moe-proxy/README.md:3 end 'for Claude Code, Codex, Antigravity and Grok Build.'"
+    ],
+    "checkRefs": [
+      "cd \"$(git rev-parse --show-toplevel)\" && [ \"$(grep -o 'GitHub Copilot CLI' docs/index.html | wc -l)\" -ge 3 ] && grep -q 'GitHub Copilot CLI' packages/moe-daemon/README.md && grep -q 'GitHub Copilot CLI' packages/moe-proxy/README.md && ! grep -nE 'Antigravity,? (and|or) Grok Build' docs/index.html packages/moe-daemon/README.md packages/moe-proxy/README.md && npm run lint"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Split out of task-1c580985 to keep that row at 5 files. Its planner created this row with the same dependsOn (d609eae3 + 7739d4af), and the closing row task-59e1d150 now depends on it.",
+    "codebaseInsights": "These are the only remaining four-CLI lists outside task-1c580985, plugin.xml (task-d609eae3) and the closing row's docs. Checked by grepping for 'Antigravity,? (and|or) Grok Build' across tracked docs.",
+    "risks": "- docs/index.html:129 is one very long line; replace only the parenthesized list.\n- Global rail: write tracked files only with your own Edit tool.",
+    "keyFiles": [
+      "docs/index.html",
+      "packages/moe-daemon/README.md",
+      "packages/moe-proxy/README.md"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:18:47.790Z",
+  "approvedPlanRevision": 1
+}

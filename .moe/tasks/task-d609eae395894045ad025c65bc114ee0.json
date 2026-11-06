@@ -11,9 +11,41 @@
     "./gradlew test passes, with the focused TerminalAgentLauncherTest and VerifiedLocalLaunchTest run first"
   ],
   "taskRails": [],
-  "implementationPlan": [],
-  "planRevision": 0,
-  "status": "PLANNING",
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Goal: expose Copilot through the existing enum-driven JetBrains launcher without inventing a new provider path. Read task-ab323f85's landed wrapper contract first (this task depends on it), then use test-driven-development in TerminalAgentLauncherTest. Add `COPILOT(\"Copilot\", \"copilot\"),` immediately before CUSTOM. Keep fromCommand's exact-name semantics, PROTECTED_AGENT_COMMANDS derived from enum entries, and shouldLaunchClaudeInteractive strictly CLAUDE-only. In buildPowerShellCommand's codexExec when expression add `AgentProvider.COPILOT -> \" -Interactive:\\$false\"` (escape Kotlin interpolation); in buildBashCommand add `AgentProvider.COPILOT -> \" --no-interactive\"`. WSL already delegates to bash construction: reuse it. No -CopilotExec and no -CodexExec for Copilot. Preserve all historical fallback/provider cases. Update the nearby comment that enumerates provider-native behavior to explain Copilot relies on wrapper role polarity and generic negative Interactive override.\nTests: exact enum displayName/command/fromCommand; COPILOT immediately precedes CUSTOM and CUSTOM remains last. Using existing decodedPowerShellCommand and bash/WSL build...ForTest helpers, table-drive worker/qa/architect/governor for copilot with codexExec false: command contains -Command 'copilot' / --command 'copilot' and no Interactive/exec override. With codexExec true assert exactly -Interactive:$false / --no-interactive, with no positive -Interactive/--interactive and no Codex/Gemini/Grok/CopilotExec flags. Use token-aware checks so -Interactive:$false isn't falsely rejected as a positive switch. Keep project/script/team path quoting coverage (spaces and apostrophes) and interpreter/worker ID assertions. Add copilot to the protected-host accepted-name table and update protectedRefusal's expected enum-derived list to 'claude, codex, gemini, grok, copilot'. Error handling: retain refusal for arbitrary paths/arguments/case variants, test protected 'copilot --flag' and path variants as refused. Add copilot to the existing VM-seat-refused table (both explicit/setting), assert VerifiedLocalLaunch.agentRefusal(\"copilot\") refuses and VM_AGENT_COMMANDS remains exactly setOf(\"claude\",\"codex\"). Do not change VerifiedLocalLaunch production code or enable Copilot VM execution.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-2",
+      "description": "Expose labels and listing text using existing resources, with assertions in the same test file. Add `moe.panel.provider.copilot=Copilot` between grok and custom, and make moe.settings.agentCommandHint list 'claude, codex, gemini, grok, copilot, or custom path'. MoeSettingsDialog already derives choices from AgentProvider.entries and the Agents popup already uses those entries, so no new UI file/edit is needed. In plugin.xml's opening description paragraph replace the four-provider list with 'Claude Code, Codex, Antigravity, Grok Build and GitHub Copilot CLI'; in its Your choice of CLI feature line list 'Claude Code, Codex, Antigravity, Grok Build or GitHub Copilot CLI'. Preserve surrounding CDATA/XML, version and unrelated wording.\nExtend the existing Properties-resource test pattern: load /messages/MoeBundle.properties, assert COPILOT label equals 'Copilot', the hint contains the complete five-command list, and every enum entry still has its provider label. Load /META-INF/plugin.xml through the test resource classloader and assert GitHub Copilot CLI occurs in BOTH the opening description and the Your choice of CLI feature line, not merely anywhere in the file. Example: `assertEquals(\"Copilot\", bundle.getProperty(\"moe.panel.provider.copilot\"))`. Keep tests localized and avoid changing docs/, worker-type JSON parsing, VS Code or build configuration.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+        "moe-jetbrains/src/main/resources/META-INF/plugin.xml",
+        "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt"
+      ]
+    },
+    {
+      "stepId": "step-3",
+      "description": "Verification — acquire the exact shared resource `jetbrains-gradle` via Moe before the run and release it in finally, including on failure. If unavailable, use the resource wait/block workflow, never start a competing build. From the task root run exactly: timeout 1200s bash -c 'cd moe-jetbrains && ./gradlew test --tests \"com.moe.util.TerminalAgentLauncherTest\" --tests \"com.moe.util.VerifiedLocalLaunchTest\" && ./gradlew test --rerun-tasks'. This is one gate: focused launcher/verified-local tests FIRST, then the full plugin regression as required by DoD and the enum/shared surface. --rerun-tasks makes the final full test execution fresh; record counts from build/test-results/test XML, exit code, output tail and elapsed wall time for complete_task. Gate must finish in <=20 minutes. In-place Gradle is allowed under that lease; an isolated exact-tree/commit snapshot is also allowed. If plugin preparation complains about daemon/proxy dist freshness, prepare dependencies only in an external snapshot, never run npm build/clean/install or package npm tests in the live checkout. Error handling for a red run: fix the declared implementation/test defect, rerun this same gate, and report unrelated environment failures rather than claiming a pass. Do not skip the full plugin test or run a real Copilot/sign-in session here.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-4",
+      "description": "Final adversarial self-review — load adversarial-self-review and inspect this task's diff: does CUSTOM stay last, do settings and popup inherit exactly one Copilot entry, can the old default else arm accidentally still pass -CodexExec, is the Kotlin dollar sign escaped, does a test mistake the negative PS switch for the positive one, and do bash/WSL/Windows quoting paths agree? Confirm protected host acceptance does NOT widen the VM allowlist or custom-command acceptance; task routing/role polarity is delegated to the wrapper rather than duplicated here. Confirm both listing locations and localization resources are asserted, existing providers retain behavior, no generated files or live dist were edited, and no leases remain held. Address defects and rerun the single gate if changed; complete_task with fresh evidence. The existing Copilot final row owns the docs and signed-in integration sweep; no manual Git writes.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,5 +61,74 @@
   "comments": [],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:34.737Z",
-  "updatedAt": "2026-11-05T21:53:34.737Z"
+  "updatedAt": "2026-11-05T22:10:16.976Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-05T22:08:40.745Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 4
+  },
+  "contextFetchedBy": [
+    "architect-a3d9076e"
+  ],
+  "tier": "standard",
+  "effort": "xhigh",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-05T22:10:16.943Z",
+  "executionContract": {
+    "intendedBehavior": "JetBrains lists and launches Copilot using existing enum-driven UI, wrapper-native role defaults, and generic explicit headless overrides; verified-local VM seats still refuse Copilot.",
+    "acceptanceCriteria": [
+      "AgentProvider has COPILOT(\"Copilot\", \"copilot\") directly before CUSTOM, fromCommand(\"copilot\") returns COPILOT and MoeBundle.properties has moe.panel.provider.copilot=Copilot, proven by TerminalAgentLauncherTest",
+      "The PowerShell and bash launch lines for a copilot seat pass -Command 'copilot' / --command 'copilot', add no -Interactive for architect or governor, and with codexExec add -Interactive:$false / --no-interactive instead of -CodexExec, proven by TerminalAgentLauncherTest",
+      "Under the protected profile agentCommandFor runs copilot, and VerifiedLocalLaunch refuses a copilot VM seat, proven by tests",
+      "plugin.xml's description and CLI feature line name GitHub Copilot CLI",
+      "./gradlew test passes, with the focused TerminalAgentLauncherTest and VerifiedLocalLaunchTest run first"
+    ],
+    "invariants": [
+      "CUSTOM is last; Copilot exact bare name is a protected host CLI only.",
+      "shouldLaunchClaudeInteractive remains CLAUDE-only; VM_AGENT_COMMANDS remains claude/codex.",
+      "Both PowerShell and bash/WSL command builders preserve existing quoting and other providers.",
+      "Gradle runs under jetbrains-gradle lease or isolated snapshot, <=20 minutes, never rebuilding shared live daemon/proxy dist."
+    ],
+    "approvedScope": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+    ],
+    "reuse": [
+      "AgentProvider.entries drives both menu/settings choices and PROTECTED_AGENT_COMMANDS.",
+      "Existing decodedPowerShellCommand, bash/WSL ForTest helpers and resource loading tests.",
+      "Existing VerifiedLocalLaunch.agentRefusal is unchanged; extend its caller's refusal test table."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash -c 'cd moe-jetbrains && ./gradlew test --tests \"com.moe.util.TerminalAgentLauncherTest\" --tests \"com.moe.util.VerifiedLocalLaunchTest\" && ./gradlew test --rerun-tasks'"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Four-file enum/resource/command-map change; reuse existing providers and UI instead of touching popup/settings implementations. Keep all regression rows in TerminalAgentLauncherTest.",
+    "codebaseInsights": "AgentProvider around :205; execArg branches :765/:868; protected allowlist is derived. Existing test protectedRefusal helper hardcodes the provider list and must gain copilot; VM-refusal table near :941 must gain copilot but production VM list stays unchanged. Resource tests already use classloader Properties.",
+    "risks": "Kotlin interpolation of $false; tests must distinguish negative from positive Interactive switch. Full Gradle not run by architect because its role cannot acquire the lease. Worker/QA use exact gate and record XML test counts.",
+    "keyFiles": [
+      "moe-jetbrains/src/main/kotlin/com/moe/util/TerminalAgentLauncher.kt",
+      "moe-jetbrains/src/test/kotlin/com/moe/util/TerminalAgentLauncherTest.kt",
+      "moe-jetbrains/src/main/resources/messages/MoeBundle.properties",
+      "moe-jetbrains/src/main/resources/META-INF/plugin.xml"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "9c2129d4db2bc80feb339f43afe84fb9d3ee5ae4",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-05T22:10:16.976Z",
+  "approvedPlanRevision": 1
 }

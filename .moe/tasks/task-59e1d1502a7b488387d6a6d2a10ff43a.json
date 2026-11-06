@@ -14,7 +14,7 @@
   "taskRails": [],
   "implementationPlan": [],
   "planRevision": 0,
-  "status": "PLANNING",
+  "status": "BLOCKED",
   "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
@@ -29,7 +29,8 @@
     "task-e266a1501d534ac99b8e556f1f89cbff",
     "task-d609eae395894045ad025c65bc114ee0",
     "task-7739d4af3daf43558dbdfbc1b959340e",
-    "task-1c580985bedd496a82c20f72881a6f7d"
+    "task-1c580985bedd496a82c20f72881a6f7d",
+    "task-3a5318161d26476182d753408d68bfd2"
   ],
   "priority": "MEDIUM",
   "order": 546.7,
@@ -39,15 +40,33 @@
       "author": "governor-913c7930",
       "content": "Governor note for the next architect, 22:00Z. architect-fe831cde's terminal closed at 21:59Z (terminal_closed), after it had finished this row's breakdown. The six slices are filed and wired, all PLANNING with no plan yet:\n- bfadf533: daemon, COPILOT worker.type. No deps.\n- ab323f85: wrappers, the launch. After slice B 98053b89.\n- e266a150: wrappers, the guards. After ab323f85.\n- d609eae3: JetBrains. After ab323f85.\n- 7739d4af: VS Code. After ab323f85.\n- 1c580985: docs. After d609eae3 and 7739d4af.\nThis row is the integration row, and its dependsOn lists all six plus 98053b89. Plan the slices first (bfadf533 can start at once), then this row. The `copilot` CLI is still not installed on this host; the human installs it and signs in before any real-CLI smoke.",
       "timestamp": "2026-11-05T21:59:45.134Z"
+    },
+    {
+      "id": "comment-d3920d98656b45d0adfb8cbeed88e9c1",
+      "author": "architect-a8e13516",
+      "content": "Note from the planner of slice 1 (task-bfadf533, COPILOT as a worker.type). That plan adds COPILOT to docs/SCHEMA.md's WorkerType union and to the six worker-type lists in docs/MCP_SERVER.md (claim_next_task, list_workers, join_team, chat_who). It deliberately leaves alone the NOTE under the union (docs/SCHEMA.md about :1177-1183). That note says the launchers export MOE_WORKER_TYPE as CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE), which stays true until the wrapper slice task-ab323f85 lands. No slice's scope covers that sentence: the wrapper slice and the docs slice task-1c580985 both exclude it. Please add COPILOT to it in this closing row, next to the docs/CONFIGURATION.md MOE_WORKER_TYPE rows (:43 and :55) you already own.",
+      "timestamp": "2026-11-05T22:11:13.858Z"
+    },
+    {
+      "id": "comment-ec379a09458e49a1be41f3a571a79698",
+      "author": "architect-a3d9076e",
+      "content": "Planning handoff: submitted e266a150 (parity + combined guard gate), new runtime guard producer 49d4a565 (wrapper twins + vm-route twins), d609eae3 (JetBrains), and 7739d4af (VS Code). Existing Copilot integration dependency chain preserved; no DoD removed. Read governor's 21:59 note and a8e13516's 22:11 docs NOTE request in full. Closing docs scope must include scripts/CLAUDE.md, docs/CONFIGURATION.md agentCommand + both MOE_WORKER_TYPE rows + Copilot model/effort, and docs/SCHEMA.md's launcher NOTE (daemon slice only changes its type union); README/PRD listing stays with 1c580985. The final plan must retain real signed-in Windows+WSL claim/work/complete smoke, moe+Serena tool proof, worker.type COPILOT observed before deregistration/board evidence, no TOOL-witness claim unless observed, and the <=20-minute gate rail (full postflight forbidden even here). Current factual external constraint: command -v copilot returns no path in this session; Windows powershell.exe discovery exists but executing it fails exit 126, Exec format error. Thus this seat cannot settle the task's explicitly required INSTALLED-CLI contract or native signed-in smoke. Human installation/sign-in and access to runnable native Windows + WSL environments are required, not plan approval or a response to the optional REPL question. Do not fabricate real-CLI evidence from the recording fakes.",
+      "timestamp": "2026-11-05T22:15:56.835Z"
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T19:28:29.466Z",
-  "updatedAt": "2026-11-05T21:59:45.135Z",
+  "updatedAt": "2026-11-05T22:15:56.924Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T19:29:03.136Z"
   },
   "contextFetchedBy": [
-    "architect-fe831cde"
-  ]
+    "architect-fe831cde",
+    "architect-a3d9076e"
+  ],
+  "blockedReason": "The task explicitly requires its plan to settle flags/MCP/auth/model/effort against the INSTALLED CLI and retain a real signed-in Windows+WSL claim/work/complete smoke. Governor comment confirms human installation/sign-in is outstanding. Current direct checks: command -v copilot returns no executable; the available Windows powershell.exe path cannot execute from this session (exit 126, Exec format error), so Windows availability cannot be established here either. This is a concrete external tool/runtime prerequisite, not REPL silence or a plan-approval wait. Earlier measured 1.0.105 parser facts and fake harnesses suffice for the submitted slice plans, not the missing native signed-in integration contract. Human setup and runnable native Windows/WSL access are needed before this row can be planned without inventing evidence. Preserve all original DoD and existing code dependencies; full handoff and missing closing-doc NOTE are in the latest task comment and Serena handoff.",
+  "blockedOnTaskIds": null,
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-11-05T22:15:56.924Z"
 }
