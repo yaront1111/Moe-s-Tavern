@@ -1,0 +1,43 @@
+{
+  "id": "task-ccbff5c686c44501a376539bc9e54804",
+  "epicId": "epic-b8c6bbda4def46cbb8d1b351f8ea3eeb",
+  "title": "fix(guest-supervisor): a verified-local agent job can run the pinned Node toolchain: node/npm first on its PATH, with untracked node_modules kept out of the candidate export (prerequisite of task-7d154d34)",
+  "description": "Carved out of task-7d154d34 (architect-3669a6f6, 2026-11-06) so the code lands before that row records the governor's re-certify. task-7d154d34 dependsOn this row and keeps the docs, the CERTIFICATION.md table, the re-certify of both hosts and the DoD 8 re-run.\n\n(1) OBJECTIVE. In a verified-local seat VM, a worker or QA agent job can run the project's Node toolchain in place. The governor's DoD 8 Windows real-VM run (task-1a8f1d0e, 2026-11-06) found the agent reporting \"no node or npm in this workspace\" (exit 127). Cause, in scripts/local-runner/guest-supervisor.py:\n- JOB_PATH = '/usr/local/bin:/usr/bin:/bin' (:910) is the agent job's whole PATH (start_job :986, env at :1017).\n- agent-seat.mjs installs the pinned toolchain at seat-start into TOOLCHAIN '/opt/moe/toolchain' (:911), and only check_job puts its bin first: `'PATH': toolchain + '/bin:' + JOB_PATH` (:1434).\nThe same fix must keep what an in-place `npm ci` writes out of the candidate. Export (class :793, export() :867) walks the whole workspace with no ignore rule, so node_modules would be exported: thousands of entries, and the node_modules/.bin symlinks that the host import refuses (SNAPSHOT_SYMLINK_DENIED, or SNAPSHOT_LIMIT_EXCEEDED past 10,000 entries). And any exported byte refuses a QA job (SEAT_JOB_QA_CANDIDATE_REFUSED, agent-seat.mjs:273: a QA candidate must be empty).\n\n(2) DELIVERABLE.\n- start_job gains `toolchain=TOOLCHAIN` (injectable from Python only, like check_job's) and sets the agent job env PATH to `toolchain + '/bin:' + JOB_PATH`, the check job's exact form. Worker and QA jobs both go through start_job, so this one change covers both roles.\n- Export skips a directory named exactly `node_modules` (a real directory by lstat, never a symlink) when no manifest path lies under it. Such a directory is neither walked nor emitted, so it adds no entry, delete, byte or visit past its own name.\n  - A node_modules directory that holds a manifest path is walked exactly as today.\n  - A node_modules symlink still exports as 'symlink', and a regular file named node_modules as 'file'.\n- The supervisor's comments say both: the bridge job's PATH, and the export mode's skip.\n- CERTIFICATION_PINS.supervisorSha256 (packages/moe-daemon/src/delivery/certificationEvidence.ts:28, today 616463b7…) moves to the new file's sha256 in the same diff (mem:decision-certification-evidence-pins), so readiness accepts only reports of the new supervisor.\n- After this lands, every host's stored certification report stops matching. Verified-local readiness then stays not-ready on Windows and WSL until the governor re-certifies (task-7d154d34). That is expected.\n\n(3) NOT IN SCOPE.\n- The role docs, docs/ARCHITECTURE.md and the docs/CERTIFICATION.md table, the re-certify runs and the DoD 8 re-run: all task-7d154d34's.\n- check_job and every other supervisor mode.\n- The toolchain install, any scripts/local-runner/*.mjs, the host import and admission, and the check VMs' offline installs.\n- The agent job's network: still no netns, the guest's own network, unlike check jobs.\n- No .gitignore handling or other directory names: only node_modules.\n\n(4) VERIFICATION. Run one gate in a git-archive snapshot of the full tree (never npm in the shared checkout: global rail), under a Linux-only Node 24 PATH:\n- `node --test scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs scripts/tests/local-runner-check.test.mjs scripts/tests/local-runner-guard.test.mjs`;\n- `npx vitest run src/delivery/certificationEvidence.test.ts` in the snapshot's packages/moe-daemon, after npm ci there.\nThe planner pins the exact checkRef inside the 20-minute gate budget.",
+  "definitionOfDone": [
+    "scripts/tests/local-runner-bridge.test.mjs: J3 and J4 expect the agent job's PATH '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin' for the worker (claude) and QA (codex) jobs. A new J row injects a toolchain whose bin holds a stub `node` and a `#!/usr/bin/env node` `npm`, and proves a job's bare `node` and `npm` both resolve to that bin (npm through its env shebang), ahead of any node in /usr/local/bin.",
+    "scripts/tests/local-runner.test.mjs export rows: an untracked node_modules tree (files, a .bin symlink and a nested node_modules, at the workspace root and under a package directory) exports nothing. A manifest path under node_modules still exports its edit, its delete and a new sibling file. A node_modules symlink still exports as 'symlink', and a regular file named node_modules as 'file'.",
+    "CERTIFICATION_PINS.supervisorSha256 equals the sha256 of the new guest-supervisor.py, so the certificationEvidence.test.ts drift row is green. A new row refuses a report that carries the previous pin 616463b7d33cf5d0efa79d5540d0911a5c56a6899b63b244ce60116e1aec0c0e with CERTIFICATION_REPORT_SUPERVISOR.",
+    "The diff touches exactly scripts/local-runner/guest-supervisor.py, the two local-runner test files, packages/moe-daemon/src/delivery/certificationEvidence.ts and its test. In the supervisor, check_job and every mode other than the bridge job and export are byte-unchanged.",
+    "The snapshot gate (the four local-runner test files and certificationEvidence.test.ts) passes fresh, and its output is the complete_task evidence."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "PLANNING",
+  "assignedWorkerId": "architect-ec70c5f6",
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "priority": "HIGH",
+  "order": 539.65,
+  "comments": [
+    {
+      "id": "comment-6724903161f244f6852a12c697772a29",
+      "author": "architect-3669a6f6",
+      "content": "@architect-ec70c5f6 Context from architect-3669a6f6, who carved this row out of task-7d154d34. Its plan, rev 1, is TURBO-approved and dependsOn this row.\n\n7d154d34's gate re-runs this row's tests, so two things need to hold:\n- The gate runs `node --test --test-name-pattern='^[JX][0-9]+ ' scripts/tests/local-runner-bridge.test.mjs scripts/tests/local-runner.test.mjs` from a git-archive snapshot (11 tests, 7 s at fb142d89). Please name the new rows J<n> and X<n> (a digit after the letter, then a space, e.g. J5 and X8), or they are not re-run there.\n- The gate requires the literal '/opt/moe/toolchain/bin:/usr/local/bin:/usr/bin:/bin' in local-runner-bridge.test.mjs, which is your DoD 1's J3/J4 expectation.\n\nFacts I checked at fb142d89:\n- J3 is at :1687 and pins PATH at :1703. J4 is at :1750 and pins PATH at :1761.\n- X2 (:5359) is a table of [label, change, frames, setup] rows that new cases can extend.\n- EXPORT_BASE (:5332) is fixed, so the tracked-node_modules case needs its own base. Snapshots allow node_modules paths: CONTROL_SEGMENTS in source-snapshot.mjs:22 does not list it.\n- TOOLCHAIN (:911) is defined above start_job (:986), so it can serve as a default argument.\n- main() passes **seams to start_job (:1745).\n- The drift row is certificationEvidence.test.ts:88, and the SUPERVISOR refusal list is at :126.\n- The skip only drops bytes. A symlink named node_modules must still emit 'symlink', because the host's SNAPSHOT_SYMLINK_DENIED is the fail-closed path for a `node_modules -> elsewhere` trick.",
+      "timestamp": "2026-11-06T07:59:27.094Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-06T07:50:08.825Z",
+  "updatedAt": "2026-11-06T07:59:27.094Z",
+  "metrics": {
+    "firstClaimAt": "2026-11-06T07:55:46.657Z"
+  },
+  "contextFetchedBy": [
+    "architect-ec70c5f6"
+  ]
+}

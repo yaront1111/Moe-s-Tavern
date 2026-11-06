@@ -15,11 +15,18 @@
     {
       "stepId": "step-1",
       "description": "Goal: finish the Copilot guard slice by enforcing cross-platform vocabulary; the runtime and vm-route cases are delivered by prerequisite task-49d4a565b0084eef98b076b11abe839d, itself after task-ab323f85. Read their landed context/evidence and Copilot blocks before editing; do not implement them twice or weaken their tests. All original DoD remains binding: items 1-3 are re-proven by the combined gate, item 4 by this change and the mutation rows. Extend existing extract_codes/require_both and $dynamicPatterns/$required, not a new parser: add 'MOE_COPILOT_' to the bash compared families and 'MOE_COPILOT_[A-Z_]+' to PowerShell; require the literal '\"copilot\"', MOE_COPILOT_MODEL, MOE_COPILOT_EFFORT, MOE_COPILOT_NOT_FOUND, MOE_COPILOT_SIGNED_OUT, and 'MOE_CLI_ARGV_REJECTED: the installed copilot (' in both wrappers. Pin the producer's matching Copilot mode and MCP-config banners (coordinated contract: 'Copilot mode: headless', 'Copilot mode: interactive', 'Copilot MCP config written to:'); take exact landed strings if the producer settles different wording and record them in the tests. Example additions: require_both 'copilot vocabulary' 'MOE_COPILOT_EFFORT'; $required['copilot vocabulary'] = @('MOE_COPILOT_MODEL','MOE_COPILOT_EFFORT','MOE_CLI_ARGV_REJECTED: the installed copilot (', ...the exact landed banners). Keep existing empty-family refusal, BOM checking and other CLI pins. Do not add a .copilot/ attribution/config directory requirement: the MCP config is private per-launch, not project state. Error handling: missing/asymmetric tokens still accumulate diagnostics and exit 1; do not exempt the new family. No wrapper, docs or IDE edits in this parent.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [
         "scripts/tests/parity-check.sh",
         "scripts/tests/parity-check.ps1"
       ],
+      "modifiedFiles": [
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Pinned the copilot vocabulary in both validators: MOE_COPILOT_ is a compared family (bash prefix loop + PS $dynamicPatterns); '\"copilot\"' cli type; a 'copilot vocabulary' group (MODEL, EFFORT, NOT_FOUND, CONFIG_FAILED, SIGNED_OUT, 'MOE_CLI_ARGV_REJECTED: the installed copilot (', 'GitHub Copilot CLI not found:', 'No authentication information found', COPILOT_GITHUB_TOKEN, --reasoning-effort, 'Copilot mode: headless', 'Copilot mode: interactive'). Banner strings taken from landed wrappers (headless banner is 'Copilot mode: headless (stdin prompt)', pinned as prefix). No 'Copilot MCP config written to:' pin: neither landed wrapper prints it (per architect-32d0a5be comment). parity-check.sh PASS on the worktree; ASCII-only ps1 additions, parity-check.ps1 itself is verified in the step-3 gate on 5.1.",
+      "startedAt": "2026-11-06T07:50:06.660Z",
+      "completedAt": "2026-11-06T07:50:50.227Z",
       "amendments": [
         {
           "amendmentId": "amend-1",
@@ -34,28 +41,45 @@
     {
       "stepId": "step-2",
       "description": "Add one executable, bounded gate/test script for this slice, invoked as `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` from the task root under WSL on a Windows drive. It owns the focused parity regression cases and combines the exact requested engines, not whole postflight. Resolve root from BASH_SOURCE; require bash, node, python3, powershell.exe (5.1), pwsh.exe (7) and wslpath; missing engines are a hard failure, never SKIP. Scrub inherited MOE_*, CLAUDE* and FAKE_* before setting MOE_POSTFLIGHT_TIMEOUT_SEC=360 and WSLENV=MOE_POSTFLIGHT_TIMEOUT_SEC. Launch three independent gate legs with separate logs and recorded PIDs; aggregate every exit code (one failure fails the gate), and print each log tail plus named PASS counts. Bash leg: bash -n scripts/moe-agent.sh; bash scripts/tests/postflight-vm-route.sh; bash scripts/tests/parity-check.sh; npm run lint. Each Windows leg: pwsh.exe -nop -c 'cmd /c <engine> -nop -ep Bypass -f scripts/tests/postflight-vm-route.ps1' using powershell and pwsh respectively, then ParseFile of scripts/moe-agent.ps1 with errors initialized, printed and converted to nonzero (`$x=$null; [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/moe-agent.ps1),[ref]$null,[ref]$x); \"$x\"; exit !!$x`); parity-check.ps1 MUST also run on 5.1 (7 may run it too). Preserve native exit status in every bridge. Require exactly three real `PASS postflight-vm-route` summaries so a skipped bash harness cannot count green. No package npm tests/build/install and no full postflight.{sh,ps1}.\nIn the same script, exercise copied validators and wrappers in a unique scratch directory OUTSIDE the checkout on a Windows-mounted drive, with trap cleanup. Copy only scripts/moe-agent.{sh,ps1}, scripts/tests/parity-check.{sh,ps1}, scripts/tests/postflight.{sh,ps1}, scripts/tests/postflight-fake-proxy.js (the last three are read-only parity fixtures, never executed). First require a pristine pass with bash parity and Windows PowerShell 5.1 parity. For each wrapper independently, reset its copy from pristine, replace every occurrence of the pinned 'Copilot mode: headless' banner with 'removed-copilot-banner' (or its exact landed counterpart), assert replacement count >0, and require both validators to exit 1 with that missing literal and mutated wrapper named. Also append `# MOE_COPILOT_TEST_ONLY` to just one wrapper and require both to fail on that token, proving dynamic family comparison rather than only fixed pins. Finally remove MOE_COPILOT_EFFORT from BOTH copies and require both validators to reject, proving symmetric disappearance cannot pass. Use literal byte-preserving replacements (UTF-8 BOM retained), e.g. `assert(s.includes(needle)); writeFileSync(file,s.split(needle).join(replacement))`, never edit source wrappers. Distinguish a real assertion failure from process launch/timeout errors. Bound each child execution, never pattern-kill; on interruption stop only recorded gate-owned PIDs, allow existing harness owned-child cleanup, and retain/report logs on failure. End with `PASS copilot-guards-gate` only after every leg and mutation assertion passes.",
-      "status": "PENDING",
+      "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
         "scripts/tests/copilot-guards-gate.sh"
-      ]
+      ],
+      "modifiedFiles": [
+        "scripts/tests/copilot-guards-gate.sh"
+      ],
+      "note": "Added scripts/tests/copilot-guards-gate.sh (201 lines): hard requirement checks (no SKIP), MOE_*/CLAUDE*/FAKE_* scrub, four parallel logged legs (bash, 5.1, pwsh 7, mutants) with recorded PIDs and per-command timeouts, aggregated statuses, evidence counts (exactly 3 'PASS postflight-vm-route', 3 parity PASS, 2 PARSE_OK, 4 LEG_OK, 16 mutant checks) and 'PASS copilot-guards-gate' only if all hold. Mutants run in a scratch dir on D: (copied wrappers + validators + 3 read-only fixtures; byte-preserving latin1 replacement; BOM asserted): pristine passes; banner and argv-rejected pins removed from ONE wrapper; MOE_COPILOT_TEST_ONLY in one wrapper (both directions); MOE_COPILOT_EFFORT removed from both. Each is run through parity-check.sh and parity-check.ps1 on 5.1, requiring rc=1 + 'FAIL parity-check' (rc 0 / 124 / 127 are distinguished) and a line naming the literal and wrapper. Dev check with the three heavy legs stubbed in a scratch copy: 16/16 mutant checks, 29 s; negative control (effort pin deleted from the scratch validators) made the gate fail. Scratch dirs removed.",
+      "startedAt": "2026-11-06T07:50:51.392Z",
+      "completedAt": "2026-11-06T07:55:25.249Z"
     },
     {
       "stepId": "step-3",
       "description": "Verification — run exactly `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` once from the task worktree (Windows-drive WSL cwd); save fresh exit code, output tail, engine/row counts and wall time as complete_task evidence. This covers all five original DoD items, including the unchanged prerequisite launch tests and Windows PowerShell 5.1 parity. Error handling for a red run: diagnose the named failing leg, do not suppress it or replace it with a smaller green command; any fix invalidates evidence and requires the same fresh gate. The gate must finish within 20 minutes. If the prerequisite lacks required runtime behavior, return that concrete issue through Moe rather than quietly adding wrapper files to this plan. Existing task-59e1d150 owns signed-in integration and the docs sweep.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Fresh `timeout 1200s bash scripts/tests/copilot-guards-gate.sh` from the task worktree: CHAIN_EXIT=0, 602 s wall at load ~3. COUNTS: vm-route PASS=3, parity PASS=3 (bash, 5.1, pwsh 7), ParseFile OK=2, legs OK=4, mutant checks=16/16, vm-route [copilot] rows=3; final line `PASS copilot-guards-gate`. Scratch dir removed on success.",
+      "startedAt": "2026-11-06T07:55:26.309Z",
+      "completedAt": "2026-11-06T08:05:40.561Z"
     },
     {
       "stepId": "step-4",
       "description": "Final adversarial self-review, scoped to this slice plus its prerequisite interface: load adversarial-self-review. Read the diff as a reviewer: do both parity engines fail for the same removed literal, does an empty/symmetric missing family fail, is a comment-only fake marker sufficient only for the intended dynamic-family test, can missing engines/SKIP/nonzero child status be mistaken for success, does PS 5.1 preserve the BOM and report ParseFile errors, and are temporary paths with spaces safely quoted? Confirm mutation tests only touch owned scratch copies, no secrets enter gate output, no concurrent seat is signalled, and no acceptance criterion was dropped during the split. Address defects and rerun the one gate if anything changes; then complete_task with its fresh evidence, no manual Git writes.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "modifiedFiles": [
+        "scripts/tests/copilot-guards-gate.sh",
+        "scripts/tests/parity-check.sh",
+        "scripts/tests/parity-check.ps1"
+      ],
+      "note": "Adversarial review of the diff (3 files, +26/-4 in the validators, 208-line new gate). One real defect fixed: the first interrupt path used pgrep -P plus kill, which resembles the forbidden kill $(pgrep ...) pattern and, because GNU timeout regroups its child, would not have reached the inner commands anyway; replaced by a per-leg trap that forwards TERM to the one recorded child (bounded()/leg_trap), gate signals only recorded leg PIDs. Tested: TERM to a stubbed gate left no sleep children and kept the scratch dir. Also fixed in dev: a ':' in a scratch dir name (NTFS), mutant counter lost in the leg subshell (now counted from the log), grep -q under pipefail. Checked OK: missing engines hard-fail (no SKIP); exactly 3 vm-route PASS + 3 parity PASS + 2 PARSE_OK + 4 LEG_OK + 16 mutant checks required; ParseFile errors are printed and made nonzero; both validators (bash + 5.1) must reject each mutant with rc=1 and a line naming the literal and wrapper (rc 0/124/127 distinguished); empty and symmetric disappearance fail (effort removed from both wrappers; existing empty-family guards cover the new prefix); byte-preserving latin1 mutation, BOM asserted on staged ps1; mutations touch only scratch copies, wrappers in the checkout never edited; env scrubbed of MOE_/CLAUDE/FAKE_, no secrets printed; quoting safe for spaces; no peer signalled. Negative control (effort pin deleted from scratch validators) made the gate fail. Final fresh gate after the last edit: exit 0, 579 s. No acceptance criterion dropped.",
+      "startedAt": "2026-11-06T08:05:42.419Z",
+      "completedAt": "2026-11-06T08:17:38.192Z"
     }
   ],
   "planRevision": 2,
-  "status": "WORKING",
-  "assignedWorkerId": "worker-db9d247b",
+  "status": "REVIEW",
+  "assignedWorkerId": null,
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
@@ -84,11 +108,12 @@
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T21:53:24.584Z",
-  "updatedAt": "2026-11-06T07:49:26.681Z",
+  "updatedAt": "2026-11-06T08:18:57.892Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T22:00:15.534Z",
     "plannedStepCount": 4,
-    "plannedDistinctFileCount": 3
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 4
   },
   "contextFetchedBy": [
     "architect-a3d9076e",
@@ -101,7 +126,12 @@
   "model": "claude-sonnet-5-5",
   "codexModel": "gpt-6.1-sol",
   "lowEffortEligible": true,
-  "stepsCompleted": [],
+  "stepsCompleted": [
+    "step-1",
+    "step-2",
+    "step-3",
+    "step-4"
+  ],
   "failedDodItems": [],
   "planSubmittedAt": "2026-11-05T22:05:52.949Z",
   "executionContract": {
@@ -157,5 +187,45 @@
     "planRevision": 1
   },
   "planApprovedAt": "2026-11-05T22:05:52.978Z",
-  "approvedPlanRevision": 1
+  "approvedPlanRevision": 1,
+  "workStartedAt": "2026-11-06T07:50:06.660Z",
+  "reviewStartedAt": "2026-11-06T08:17:52.767Z",
+  "verification": {
+    "command": "timeout 1200s bash scripts/tests/copilot-guards-gate.sh",
+    "exitCode": 0,
+    "outputTail": "=== powershell: exit 0 ... PASS postflight-vm-route.ps1 / PARSE_OK / PASS parity-check.ps1 / LEG_OK powershell\n=== pwsh: exit 0 ... PASS postflight-vm-route.ps1 / PARSE_OK / PASS parity-check.ps1 / LEG_OK pwsh\n=== bash: exit 0 ... OK: docs/roles/architect.md has 39 lines (max 40) ... LEG_OK bash\n=== mutants: exit 0 ... [mutants] ok MOE_COPILOT_EFFORT removed from both wrappers (sh) / (ps) / LEG_OK mutants\nCOUNTS: vm-route PASS=3 (need 3), parity PASS=3 (need 3), ParseFile OK=2 (need 2), legs OK=4 (need 4), mutant checks=16 (need 16), vm-route [copilot] rows=3, wall=579s\nPASS copilot-guards-gate\nCHAIN_EXIT=0",
+    "reportedAt": "2026-11-06T08:17:52.767Z",
+    "source": "agent-reported"
+  },
+  "filesModified": [
+    "scripts/tests/parity-check.sh",
+    "scripts/tests/parity-check.ps1",
+    "scripts/tests/copilot-guards-gate.sh"
+  ],
+  "completionSummary": "Pinned the Copilot seat vocabulary in both parity validators and added the bounded combined gate. parity-check.sh/.ps1: MOE_COPILOT_ is a compared dynamic family; '\"copilot\"' cli type; new 'copilot vocabulary' group (MOE_COPILOT_MODEL/EFFORT/NOT_FOUND/CONFIG_FAILED/SIGNED_OUT, 'MOE_CLI_ARGV_REJECTED: the installed copilot (', 'GitHub Copilot CLI not found:', 'No authentication information found', COPILOT_GITHUB_TOKEN, --reasoning-effort, 'Copilot mode: headless', 'Copilot mode: interactive'; no MCP-config banner pin because neither wrapper prints one). New scripts/tests/copilot-guards-gate.sh: four parallel logged legs (bash; Windows PowerShell 5.1; pwsh 7; mutants), hard-fails on a missing engine, requires exactly 3 'PASS postflight-vm-route', 3 parity PASS, 2 ParseFile OK, 4 LEG_OK and 16 mutant checks, then prints 'PASS copilot-guards-gate'. Mutants run in a scratch dir on D: against copies of the wrappers: pristine passes; a pinned banner or argv-rejected string removed from ONE wrapper, an unpaired MOE_COPILOT_TEST_ONLY in one wrapper (both directions) and MOE_COPILOT_EFFORT removed from BOTH wrappers are each rejected by parity-check.sh and parity-check.ps1 on 5.1 (rc 1 plus a line naming literal and wrapper). Interrupt path forwards TERM only to recorded leg children (tested). Negative control (effort pin deleted from scratch validators) fails the gate. Fresh final gate: exit 0, 579 s. qualityGate (parity-check.sh + npm run lint) also run, rc 0. Three files, no wrapper/runtime/docs/IDE edits; the runtime guards and vm-route rows come from task-49d4a565 and ab323f85 unchanged.",
+  "commits": [
+    {
+      "sha": "4ded4ff17ef45a57a1edea3a403bf0cafa034d0f",
+      "ref": "refs/heads/moe/work-2026-10-24",
+      "kind": "completion",
+      "role": "worker",
+      "sessionId": "worker-db9d247b@2026-11-06T07:49:09Z",
+      "paths": [
+        "scripts/tests/copilot-guards-gate.sh",
+        "scripts/tests/parity-check.ps1",
+        "scripts/tests/parity-check.sh"
+      ],
+      "recordedBy": "worker-db9d247b",
+      "recordedAt": "2026-11-06T08:18:57.892Z",
+      "status": "REVIEW",
+      "pushed": true
+    }
+  ],
+  "unattributedPaths": [],
+  "lastCommitOutcome": {
+    "outcome": "committed",
+    "kind": "completion",
+    "sessionId": "worker-db9d247b@2026-11-06T07:49:09Z",
+    "at": "2026-11-06T08:18:57.892Z"
+  }
 }
