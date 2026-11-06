@@ -31,7 +31,7 @@ export type TaskPriority = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 // Mirrors the daemon schema; the daemon records every worker as 'CLAUDE' today
 // (it cannot see the CLI) — the other values are reserved.
-export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK';
+export type WorkerType = 'CLAUDE' | 'CODEX' | 'GEMINI' | 'GROK' | 'COPILOT';
 
 export type WorkerStatus =
   | 'IDLE'
