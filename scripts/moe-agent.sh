@@ -220,7 +220,9 @@ fi
 SECURE_TEMP_DIR=""
 create_secure_temp() {
     if [ -z "$SECURE_TEMP_DIR" ]; then
-        SECURE_TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'moe-agent')
+        # An explicit template: macOS `mktemp -d` ignores $TMPDIR.
+        local base="${TMPDIR:-/tmp}"
+        SECURE_TEMP_DIR=$(mktemp -d "${base%/}/moe-agent.XXXXXX" 2>/dev/null || mktemp -d 2>/dev/null || mktemp -d -t 'moe-agent')
         chmod 700 "$SECURE_TEMP_DIR"
     fi
     echo "$SECURE_TEMP_DIR"
@@ -9677,7 +9679,9 @@ account_wait_recheck() {
 agent_git_guard_node() { # $1 = the git the program runs
     "$NODE_CMD" - "$PROJECT" "$SECURE_TEMP_DIR" "$1" <<'MOE_GIT_GUARD_JS'
 const fs = require('fs'), path = require('path'), cp = require('child_process');
-const [project, temp, gitCmd] = process.argv.slice(-3), win = process.platform === 'win32';
+const [project, rawTemp, gitCmd] = process.argv.slice(-3), win = process.platform === 'win32';
+// Git reports the real path of core.hooksPath; macOS $TMPDIR (/var/...) is a symlink to /private/var/....
+let temp = rawTemp; try { temp = fs.realpathSync(rawTemp); } catch {}
 const native = p => win ? p.replaceAll('\\', '/') : p;
 const env = { ...process.env, LC_ALL: 'C' };
 // Under MOE_RUNTIME_PROTECTED=1 nothing runs by bare name: Node can look one up in the current directory or through a

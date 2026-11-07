@@ -139,7 +139,9 @@ else for (const [cli, interactive, hooks, status, opts = {}] of ['custom', 'clau
     assert.equal(fs.existsSync(observed.hooks), false, 'only the seat temp is cleaned');
     if (f.temp) {
       const normalize = p => win ? path.resolve(p).toLowerCase() : path.resolve(p);
-      assert.ok(normalize(observed.hooks).startsWith(normalize(f.temp) + path.sep), 'hooks belong under the seat temp');
+      // The guard places hooks under the real temp path: macOS os.tmpdir() (/var/...) is a symlink to /private/var/....
+      const seatTemp = win ? f.temp : fs.realpathSync(f.temp);
+      assert.ok(normalize(observed.hooks).startsWith(normalize(seatTemp) + path.sep), 'hooks belong under the seat temp');
       assert.deepEqual(fs.readdirSync(f.temp, { recursive: true, withFileTypes: true }).filter(e => e.name.startsWith('moe-git-guard-')), []);
       if (win && f.mode === 'non-ascii-temp') for (const suffix of ['.codepage', '.exit-codepage']) assert.equal(fs.readFileSync(f.result + suffix, 'ascii').trim(), '850');
     }
