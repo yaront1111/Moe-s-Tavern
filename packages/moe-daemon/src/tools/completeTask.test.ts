@@ -3,10 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
-import { completeTaskTool, resetBranchPolicyGovernorRateLimit } from './completeTask.js';
+import {
+  completeTaskTool, resetBranchPolicyGovernorRateLimit, resetLandingPreviewGovernorRateLimit, setLandingPreviewGitRunner,
+} from './completeTask.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { listAttempts, openAttempt } from '../state/attemptStore.js';
-import type { ExecutionAttempt, Task, Epic, Project, ProjectSettings } from '../types/schema.js';
+import type { ExecutionAttempt, Task, Epic, Project, ProjectSettings, Worker } from '../types/schema.js';
 
 describe('moe.complete_task ownership + ordering enforcement', () => {
   let testDir: string;
@@ -1105,5 +1107,218 @@ describe('moe.complete_task — legacy verification provenance', () => {
     expect(task.verification).toBeUndefined();
     expect(touchWorker).not.toHaveBeenCalled();
     expect(fs.readFileSync(taskFile(), 'utf8')).toBe(bytes);
+  });
+});
+
+describe('moe.complete_task — landing preview (contested holds)', () => {
+  // 2026-11-07: task-1c3ca59f's completion held docs/operations/adr-inventory.json
+  // (MOE_ATTR_CONTESTED_UNTOUCHED) and went to REVIEW with DoD 1 unmet; task-b6537327's
+  // e20282a landed an importer while its export line was held (MOE_ATTR_CONTESTED_EDITING).
+  // Both remedies need the session that completes, so complete_task tells it first.
+  const h = new ToolTestHarness();
+  const SHARED = 'src/shared.ts';
+  const OWN = 'src/own.ts';
+  const H = 'a'.repeat(40);
+  let gitCalls: Array<{ args: string[]; cwd: string; mutexHeld: boolean }>;
+  let dirty: string[];
+  let gitFails: boolean;
+  let governorsPost: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    h.init();
+    resetLandingPreviewGovernorRateLimit();
+    gitCalls = [];
+    dirty = [OWN, SHARED];
+    gitFails = false;
+    setLandingPreviewGitRunner(async (args, cwd) => {
+      gitCalls.push({ args, cwd, mutexHeld: h.state.mutex.isHeld() });
+      if (gitFails) throw Object.assign(new Error('fatal: not a git repository'), { code: 128 });
+      const asked = args.slice(args.indexOf('--') + 1);
+      return dirty.filter((p) => asked.includes(p)).map((p) => `1 .M N... 100644 100644 100644 ${H} ${H} ${p}\0`).join('');
+    });
+  });
+
+  afterEach(() => {
+    setLandingPreviewGitRunner(undefined);
+    vi.restoreAllMocks();
+    h.cleanup();
+  });
+
+  /** task-1 (worker-a) completes; it asserted OWN and SHARED. task-2 (worker-b) declares SHARED in step-2. */
+  async function boot(opts: {
+    peerStep?: 'PENDING' | 'IN_PROGRESS' | null;
+    peerWorker?: string | null;
+    attribution?: Record<string, unknown>;
+    workers?: Array<Partial<Worker>>;
+  } = {}): Promise<void> {
+    h.setupMoeFolder(opts.attribution ? {
+      settings: {
+        approvalMode: 'CONTROL', speedModeDelayMs: 2000, autoCreateBranch: true, branchPattern: 'moe/{epicId}/{taskId}',
+        commitPattern: 'feat({epicId}): {taskTitle}', agentCommand: 'claude', attribution: opts.attribution,
+      } as unknown as Project['settings'],
+    } : {});
+    h.createEpic();
+    h.createTask({
+      id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-a',
+      implementationPlan: [{ stepId: 'step-1', description: 'd', status: 'COMPLETED', affectedFiles: [OWN, SHARED] }],
+    });
+    if (opts.peerStep !== null) {
+      h.createTask({
+        id: 'task-2', status: 'WORKING', order: 2,
+        assignedWorkerId: opts.peerWorker === undefined ? 'worker-b' : opts.peerWorker,
+        implementationPlan: [
+          { stepId: 'step-1', description: 'd', status: 'COMPLETED', affectedFiles: ['src/other.ts'] },
+          { stepId: 'step-2', description: 'd', status: opts.peerStep ?? 'PENDING', affectedFiles: [SHARED] },
+        ],
+      });
+    }
+    for (const worker of opts.workers ?? []) h.createWorker(worker);
+    await h.state.load();
+    governorsPost = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+  }
+
+  function complete(): Promise<Record<string, unknown>> {
+    return completeTaskTool(h.state).handler({
+      taskId: 'task-1', workerId: 'worker-a', verification: { command: 'npm test', exitCode: 0 },
+    }, h.state) as Promise<Record<string, unknown>>;
+  }
+
+  type Preview = { held: Array<{ path: string; kind: string; peers: unknown[]; remedy: string }> };
+  const previewPosts = (): unknown[][] =>
+    governorsPost.mock.calls.filter((c: unknown[]) => String(c[1]).includes('MOE_LANDING_PREVIEW'));
+
+  it('is a blocking tool, so MCP dispatch does not hold the fleet-wide mutex across its git status', () => {
+    expect(completeTaskTool(h.state).blocking).toBe(true);
+  });
+
+  it('adds no preview and runs no git when no other open task declares a path of this task', async () => {
+    await boot({ peerStep: null });
+    const result = await complete();
+    expect(result.status).toBe('REVIEW');
+    expect(result.landingPreview).toBeUndefined();
+    expect((result.nextAction as { tool?: string }).tool).toBe('moe.wait_for_task');
+    expect(gitCalls).toEqual([]);
+    expect(previewPosts()).toEqual([]);
+  });
+
+  it('previews a dirty path an idle peer also declares as contested, with the Edit remedy, before the session exits', async () => {
+    await boot({ peerStep: 'PENDING', peerWorker: null });
+    const result = await complete();
+
+    expect(h.state.getTask('task-1')?.status).toBe('REVIEW');
+    const held = (result.landingPreview as Preview).held;
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ path: SHARED, kind: 'contested', peers: [{ taskId: 'task-2', workerId: null, steps: [] }] });
+    expect(held[0].remedy).toContain('also declared by open task(s) task-2');
+    expect(held[0].remedy).toContain('re-apply your hunk with the Edit tool');
+    expect(held[0].remedy).toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
+    // Only the contested path is asked about, and git runs after the handler's mutex released.
+    expect(gitCalls).toHaveLength(1);
+    expect(gitCalls[0].args.slice(gitCalls[0].args.indexOf('--') + 1)).toEqual([SHARED]);
+    expect(gitCalls[0].cwd).toBe(h.state.projectPath);
+    expect(gitCalls[0].mutexHeld).toBe(false);
+    // The instruction comes first and names no claim/wait tool; the old hint follows it.
+    const nextAction = result.nextAction as { tool?: string; reason: string };
+    expect(nextAction.tool).toBeUndefined();
+    expect(nextAction.reason).toMatch(/^LANDING PREVIEW: your landing will hold 1 of this task's path\(s\)/);
+    expect(nextAction.reason).toContain(held[0].remedy);
+    expect(nextAction.reason).toContain('(moe.wait_for_task)');
+    expect(previewPosts()).toHaveLength(1);
+    expect(String(previewPosts()[0][1])).toContain('MOE_LANDING_PREVIEW task=task-1: complete_task found 1 path(s)');
+    expect(String(previewPosts()[0][1])).toContain(`${SHARED} (contested: task-2)`);
+  });
+
+  it('names the mid-step peer, its worker and its step as peer-mid-step', async () => {
+    await boot({ peerStep: 'IN_PROGRESS' });
+    const result = await complete();
+
+    const held = (result.landingPreview as Preview).held;
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({
+      path: SHARED, kind: 'peer-mid-step', peers: [{ taskId: 'task-2', workerId: 'worker-b', steps: ['step-2'] }],
+    });
+    for (const piece of [
+      'task-2 (worker worker-b) is mid-step on src/shared.ts (step-2)', 'MOE_ATTR_CONTESTED_EDITING', 'failing to build',
+      'ask worker-b in #workers to complete_step step-2 of task-2', 'moe.chat_wait', 'Edit tool',
+    ]) {
+      expect(held[0].remedy).toContain(piece);
+    }
+    expect(String(previewPosts()[0][1])).toContain(`${SHARED} (peer-mid-step: task-2/worker-b)`);
+  });
+
+  it('adds no entry for a contested path that is clean', async () => {
+    dirty = [OWN];
+    await boot({ peerStep: 'IN_PROGRESS' });
+    const result = await complete();
+    expect(gitCalls).toHaveLength(1);
+    expect(result.landingPreview).toBeUndefined();
+    expect((result.nextAction as { tool?: string }).tool).toBe('moe.wait_for_task');
+    expect(previewPosts()).toEqual([]);
+  });
+
+  it('completes with no preview when git status fails', async () => {
+    gitFails = true;
+    await boot({ peerStep: 'IN_PROGRESS' });
+    const result = await complete();
+    expect(result.status).toBe('REVIEW');
+    expect(h.state.getTask('task-1')?.status).toBe('REVIEW');
+    expect(result.landingPreview).toBeUndefined();
+    expect((result.nextAction as { tool?: string }).tool).toBe('moe.wait_for_task');
+  });
+
+  it('under attribution.contested=skip says only the peer route releases the path', async () => {
+    await boot({ peerStep: 'IN_PROGRESS', attribution: { contested: 'skip' } });
+    const held = ((await complete()).landingPreview as Preview).held;
+    expect(held[0].kind).toBe('contested');
+    expect(held[0].remedy).toContain('attribution.contested=skip holds it at landing whatever your tools did (MOE_ATTR_CONTESTED)');
+    expect(held[0].remedy).toContain('only resolving, legitimately completing or archiving task-2 releases it');
+    expect(held[0].remedy).not.toContain('Edit tool');
+  });
+
+  it('under attribution.contested=commit previews nothing and runs no git', async () => {
+    await boot({ peerStep: 'IN_PROGRESS', attribution: { contested: 'commit' } });
+    const result = await complete();
+    expect(result.landingPreview).toBeUndefined();
+    expect(gitCalls).toEqual([]);
+  });
+
+  it('alerts #governors once per task per 24 h, while every result still carries the preview', async () => {
+    await boot({ peerStep: 'IN_PROGRESS' });
+    expect((await complete()).landingPreview).toBeDefined();
+    await h.state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-a' });
+    expect((await complete()).landingPreview).toBeDefined();
+    expect(previewPosts()).toHaveLength(1);
+    resetLandingPreviewGovernorRateLimit();
+    await h.state.updateTask('task-1', { status: 'WORKING', assignedWorkerId: 'worker-a' });
+    await complete();
+    expect(previewPosts()).toHaveLength(2);
+  });
+
+  it('previews nothing for a worktree attempt, whose landing holds no contested path', async () => {
+    await boot({ peerStep: 'IN_PROGRESS' });
+    await openAttempt(h.state, {
+      taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a',
+      workspace: path.join(h.testDir, '.worktrees', 'task-1'), workspaceMode: 'worktree',
+    });
+    const result = await complete();
+    expect(result.status).toBe('REVIEW');
+    expect(result.landingPreview).toBeUndefined();
+    expect(gitCalls).toEqual([]);
+  });
+
+  it('with a shared attempt, counts a peer as mid-step only while it is active since the attempt began', async () => {
+    await boot({ peerStep: 'IN_PROGRESS', workers: [{ id: 'worker-b', status: 'CODING', currentTaskId: 'task-2' }] });
+    await openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: h.testDir });
+    const held = ((await complete()).landingPreview as Preview).held;
+    expect(held[0]).toMatchObject({ kind: 'peer-mid-step', peers: [{ taskId: 'task-2', workerId: 'worker-b', steps: ['step-2'] }] });
+  });
+
+  it('with a shared attempt, previews an idle mid-step peer as contested, as the wrapper scopes it', async () => {
+    const longAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    await boot({ peerStep: 'IN_PROGRESS', workers: [{ id: 'worker-b', status: 'IDLE', startedAt: longAgo, lastActivityAt: longAgo }] });
+    await openAttempt(h.state, { taskId: 'task-1', workerId: 'worker-a', runnerId: 'worker-a', workspace: h.testDir });
+    const held = ((await complete()).landingPreview as Preview).held;
+    expect(held[0]).toMatchObject({ kind: 'contested', peers: [{ taskId: 'task-2', workerId: 'worker-b', steps: [] }] });
+    expect(held[0].remedy).toContain('MOE_ATTR_CONTESTED_UNTOUCHED');
   });
 });
