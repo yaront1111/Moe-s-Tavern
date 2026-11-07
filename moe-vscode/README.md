@@ -28,7 +28,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 1. Install the extension `yaront1111.moe-vscode` from the VS Code Marketplace or Open VSX.
 2. Open your project. If it contains `.moe/`, the extension connects automatically; otherwise run **Moe: Connect to Daemon** to create it.
-3. Open the **Moe** view in the activity bar: Task Board, Chat, Metrics, Managed VMs and Claude accounts. In Managed VMs, Reconcile needs a ready VM provider (Multipass at its installer's default location); Clean up owned also needs a launched VM row and asks for confirmation.
+3. Open the **Moe** view in the activity bar: Task Board, Chat, Metrics, Managed VMs and Claude accounts. The task board itself opens as an editor tab, in the same column as task details; showing the sidebar's Task Board entry opens it, and **Moe: Open Task Board** or the status bar item brings it back after you close it. In Managed VMs, Reconcile needs a ready VM provider (Multipass at its installer's default location); Clean up owned also needs a launched VM row and asks for confirmation.
 4. Create an epic and a task, drag the task to **Planning**, then run **Moe: Start Agent** (or **Moe: Start All Agents**).
 
 ## Extension settings
@@ -44,7 +44,7 @@ JetBrains is the primary IDE for Moe's Tavern; this extension is the secondary i
 
 ## Commands
 
-`Moe: Connect to Daemon`, `Moe: Disconnect from Daemon`, `Moe: Reconnect to Daemon`, `Moe: Refresh Board`, `Moe: Create Task`, `Moe: Create Epic`, `Moe: Open Task Detail`, `Moe: Open Epic Detail`, `Moe: Review Plan`, `Moe: Archive Done Tasks`, `Moe: Start Agent`, `Moe: Start All Agents`, `Moe: Open Settings`, `Moe: Show Daemon Status`, `Moe: Show Activity Log`, `Moe: Refresh Managed VMs`, `Moe: Reconcile Managed VMs`, `Moe: Clean Up Owned VMs`, `Moe: Refresh Claude Accounts`. The three Managed VMs commands are that view's title-bar buttons.
+`Moe: Open Task Board`, `Moe: Connect to Daemon`, `Moe: Disconnect from Daemon`, `Moe: Reconnect to Daemon`, `Moe: Refresh Board`, `Moe: Create Task`, `Moe: Create Epic`, `Moe: Open Task Detail`, `Moe: Open Epic Detail`, `Moe: Review Plan`, `Moe: Archive Done Tasks`, `Moe: Start Agent`, `Moe: Start All Agents`, `Moe: Open Settings`, `Moe: Show Daemon Status`, `Moe: Show Activity Log`, `Moe: Refresh Managed VMs`, `Moe: Reconcile Managed VMs`, `Moe: Clean Up Owned VMs`, `Moe: Refresh Claude Accounts`. The three Managed VMs commands are that view's title-bar buttons.
 
 The Claude accounts view adds `Moe Accounts: Add...`, `Moe Accounts: Set Switch Percent...` and `Moe: Refresh Claude Accounts` as title-bar buttons, and `Moe Accounts: Sign in`, `Rename...`, `Move up`, `Move down` and `Remove...` on each account's context menu. The `Moe Accounts` commands are hidden from the Command Palette, and each one is offered only while the daemon allows it.
 

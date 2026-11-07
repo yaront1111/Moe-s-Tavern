@@ -419,7 +419,7 @@ Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `R
 
 | Component | JetBrains | VSCode |
 |-----------|-----------|--------|
-| Board view | `MoeToolWindowPanel` (Swing) | `BoardViewProvider` (Webview) |
+| Board view | `MoeToolWindowPanel` (Swing) | `BoardViewProvider` (webview editor tab; the sidebar's Task Board entry opens it) |
 | Status indicator | `MoeStatusBarWidget` | `ConnectionStatusBar` |
 | Task detail | `TaskDetailDialog` (modal) | Quick pick + webview panel |
 | State events | `MoeStateListener` interface | `EventEmitter` pattern |
@@ -428,7 +428,7 @@ Outbound messages: `GET_STATE`, `UPDATE_TASK`, `APPROVE_TASK`, `REJECT_TASK`, `R
 
 | Trigger | JetBrains | VSCode |
 |---------|-----------|--------|
-| Condition | Project opened | `workspaceContains:.moe`, `onView:moe.board`, `onCommand:moe.connect` |
+| Condition | Project opened | `workspaceContains:.moe`, `onView:moe.board`, `onWebviewPanel:moe.boardPanel`, `onCommand:moe.connect` |
 | Auto-connect | On project open | On activation (configurable) |
 | Config location | `MoeSettingsDialog` (writes `.moe/project.json` `settings` through `UPDATE_SETTINGS`) | `vscode.workspace.getConfiguration('moe')` |
 

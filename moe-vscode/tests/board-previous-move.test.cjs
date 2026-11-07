@@ -84,7 +84,8 @@ function createHost() {
                 onDidReceiveMessage: fn => { panel.handler = fn; return { dispose() {} }; },
                 postMessage: message => { panel.posted.push(message); return Promise.resolve(true); }
             },
-            onDidDispose: () => ({ dispose() {} }), onDidChangeVisibility: () => ({ dispose() {} }), reveal() {}, dispose() {}
+            onDidDispose: () => ({ dispose() {} }), onDidChangeVisibility: () => ({ dispose() {} }),
+            onDidChangeViewState: () => ({ dispose() {} }), reveal() {}, dispose() {}
         };
         h.panels.push(panel);
         return panel;
@@ -127,8 +128,8 @@ function createHost() {
 function openBoardHost(h, tasks) {
     h.cache(tasks);
     const provider = new h.provider.BoardViewProvider({ path: '/ext' }, h.client);
-    const view = h.makePanel('moe.board');
-    provider.resolveWebviewView(view, {}, {});
+    const view = h.makePanel('moe.boardPanel');
+    provider.attachPanel(view);
     return message => view.handler(message);
 }
 
