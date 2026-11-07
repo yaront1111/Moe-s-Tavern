@@ -195,6 +195,53 @@ describe('moe.create_task guardrails + attribution', () => {
       expect((plain.warnings ?? []).every((w) => !w.includes('task-harden'))).toBe(true);
     });
 
+    // REGRESSION 2026-11-06: filing the closing "Integration and hardening" row of
+    // an epic whose product rows say "Evidence ..." and "... gate ..." named the
+    // highest-order of those bug rows as the consolidation target, telling the
+    // author to fold the epic-wide hardening pass into an unrelated bug fix.
+    it('never names a product row that merely contains a meta word as the target of a new hardening row', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-bug-evidence', title: 'Evidence actor_entity_id is never set', order: 32 });
+      h.createTask({ id: 'task-bug-gate', title: 'High-risk action gate ignores stale memory', order: 25 });
+      await h.state.load();
+
+      const final = await create({ title: 'Integration and hardening 1/3: the lifecycle end to end' });
+      expect(final.success).toBe(true);
+      expect((final.warnings ?? []).some((w) => w.startsWith('Meta/hardening row detected'))).toBe(false);
+
+      // A per-topic meta row filed afterwards folds into that closing row, not a bug row.
+      const perTopic = await create({ title: 'Security audit of the parser' });
+      const warning = perTopic.warnings!.find((w) => w.startsWith('Meta/hardening row detected'));
+      expect(warning).toContain(final.task.id);
+      expect(warning).not.toContain('task-bug-evidence');
+    });
+
+    it('with no closing row, a per-topic meta row still names the highest-order meta-titled sibling', async () => {
+      h.setupMoeFolder();
+      h.createEpic();
+      h.createTask({ id: 'task-audit-lexer', title: 'Security audit of the lexer', order: 10 });
+      await h.state.load();
+
+      const result = await create({ title: 'Security audit of the parser' });
+      expect(result.warnings!.find((w) => w.startsWith('Meta/hardening row detected'))).toContain('task-audit-lexer');
+    });
+
+    it('names the epic designated final task (finalTaskId) as the target, whatever its title or order', async () => {
+      h.setupMoeFolder();
+      h.createEpic({ finalTaskId: 'task-close' });
+      h.createTask({ id: 'task-close', title: 'Close out the epic', order: 5 });
+      h.createTask({ id: 'task-harden-old', title: 'Hardening pass on the parser', order: 50 });
+      h.createTask({ id: 'task-bug-audit', title: 'Audit log keeps no retention', order: 60 });
+      await h.state.load();
+
+      const result = await create({ title: 'Verification evidence for the parser' });
+      const warning = result.warnings!.find((w) => w.startsWith('Meta/hardening row detected'));
+      expect(warning).toContain('task-close');
+      expect(warning).not.toContain('task-harden-old');
+      expect(warning).not.toContain('task-bug-audit');
+    });
+
     it('warns past settings.taskSizing.maxTasksPerEpic (default 40) without blocking creation', async () => {
       h.setupMoeFolder({
         settings: {

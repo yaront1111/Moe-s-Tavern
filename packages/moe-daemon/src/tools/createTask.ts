@@ -15,6 +15,38 @@ import { resolveWorkerRole } from '../util/workerRole.js';
  */
 export const META_TITLE_RE = /security|evidence|verif|harden|audit|acceptance|quality|proof|gate/i;
 
+/**
+ * Titles shaped like an epic's closing integration-and-hardening row.
+ * META_TITLE_RE also matches ordinary product rows that merely name a domain
+ * noun ("Evidence actor_entity_id is never set", "the action gate ignores stale
+ * memory"), so it may flag a new row but must not pick the row to fold it into.
+ */
+export const HARDENING_TITLE_RE = /\bharden/i;
+
+/**
+ * The row a new meta-titled row should be consolidated into, or undefined.
+ * The epic's designated final task (moe.update_epic finalTaskId) wins whatever
+ * its title or order; else the highest-order row titled like a hardening row.
+ * A new hardening row with neither is the epic's first closing row, so nothing
+ * is named: falling back to any meta-titled sibling told the author to fold the
+ * epic-wide pass into an unrelated bug row. Only a per-topic meta row (security
+ * audit, verification evidence) still falls back to the highest-order
+ * meta-titled sibling. DONE rows are never a target.
+ */
+export function metaConsolidationTarget(
+  finalTaskId: string | undefined,
+  epicTasks: Task[],
+  newTitle: string
+): Task | undefined {
+  const open = epicTasks.filter((t) => t.status !== 'DONE');
+  const highest = (rows: Task[]) => rows.sort((a, b) => b.order - a.order)[0];
+  const designated = finalTaskId ? open.find((t) => t.id === finalTaskId) : undefined;
+  if (designated) return designated;
+  const hardening = highest(open.filter((t) => HARDENING_TITLE_RE.test(t.title)));
+  if (hardening || HARDENING_TITLE_RE.test(newTitle)) return hardening;
+  return highest(open.filter((t) => META_TITLE_RE.test(t.title)));
+}
+
 /** create_task's team-role → createdBy attribution mapping. */
 const ROLE_TO_CREATED_BY: Record<string, Task['createdBy']> = {
   architect: 'ARCHITECT',
@@ -247,11 +279,8 @@ export function createTaskTool(_state: StateManager): ToolDefinition {
       const epicTasks = Array.from(state.tasks.values())
         .filter((t) => t.epicId === params.epicId && t.id !== task.id && t.status !== 'ARCHIVED');
       if (META_TITLE_RE.test(params.title)) {
-        const metaSiblings = epicTasks
-          .filter((t) => META_TITLE_RE.test(t.title) && t.status !== 'DONE')
-          .sort((a, b) => b.order - a.order);
-        if (metaSiblings.length > 0) {
-          const target = metaSiblings[0];
+        const target = metaConsolidationTarget(state.getEpic(params.epicId)?.finalTaskId, epicTasks, params.title);
+        if (target) {
           warnings.push(
             `Meta/hardening row detected ("${params.title}") but this epic already has one: ${target.id} ("${target.title}", order ${target.order}). Consolidate the checks into that row (extend its DoD) instead of adding another — per-topic evidence rows are the measured board-inflation pattern.`
           );

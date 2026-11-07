@@ -168,6 +168,69 @@ function heldContestedLine(taskId: string, held: readonly HeldPath[]): string {
   return `MOE_CONTESTED_HELD task=${taskId}: ${shown.join(', ')}${more} — ${remedy}`;
 }
 
+const PARTIAL_PATHS_SHOWN = 10;
+/** Skip codes that can never land a reported path: tooling dirt, or a path gone from disk and HEAD. */
+const PARTIAL_IGNORED_CODES: ReadonlySet<string> = new Set(['MOE_ATTR_EXCLUDED', 'MOE_ATTR_MISSING']);
+
+/**
+ * Paths the task itself reported (a completed step's modifiedFiles, declare_files,
+ * complete_task's filesModified) that this completion left uncommitted, each with
+ * its skip code or 'unattributed'. Such a commit does not hold the whole delivery:
+ * the session's gate ran on a tree that had the file, a clean checkout of the sha
+ * does not (2026-11-07: a rehearsal completion left its own step-2 helper
+ * untracked, reported only as "unattributed=1", and every later clean-clone gate
+ * failed on it). Contested holds are left to MOE_CONTESTED_HELD, which names them
+ * with their own remedy.
+ */
+function partialLandingPaths(
+  task: Task,
+  committed: readonly string[],
+  unattributed: readonly string[],
+  skipped: readonly { path: string; code: string }[],
+  held: readonly HeldPath[]
+): { path: string; code: string }[] {
+  const keyOf = (raw: unknown): string | null => {
+    if (typeof raw !== 'string') return null;
+    const normalized = tolerantNormalizePath(raw);
+    return normalized === null ? null : pathKey(normalized);
+  };
+  const reported = new Set<string>();
+  const addAll = (list: unknown): void => {
+    if (!Array.isArray(list)) return;
+    for (const raw of list) {
+      const k = keyOf(raw);
+      if (k !== null) reported.add(k);
+    }
+  };
+  for (const step of task.implementationPlan ?? []) {
+    if (step?.status === 'COMPLETED') addAll(step.modifiedFiles);
+  }
+  addAll(task.declaredFiles);
+  addAll(task.filesModified);
+  const landedOrHeld = new Set<string>(held.map((h) => pathKey(h.path)));
+  for (const raw of committed) {
+    const k = keyOf(raw);
+    if (k !== null) landedOrHeld.add(k);
+  }
+  const out = new Map<string, { path: string; code: string }>();
+  const consider = (raw: string, code: string): void => {
+    const k = keyOf(raw);
+    if (k === null || !reported.has(k) || landedOrHeld.has(k) || out.has(k)) return;
+    out.set(k, { path: raw, code });
+  };
+  for (const s of skipped) {
+    if (!PARTIAL_IGNORED_CODES.has(s.code)) consider(s.path, s.code);
+  }
+  for (const raw of unattributed) consider(raw, 'unattributed');
+  return Array.from(out.values());
+}
+
+function partialLandingLine(taskId: string, shortSha: string, partial: readonly { path: string; code: string }[]): string {
+  const shown = partial.slice(0, PARTIAL_PATHS_SHOWN).map((p) => `${p.path} (${p.code})`);
+  const more = partial.length > shown.length ? ` … (+${partial.length - shown.length} more)` : '';
+  return `MOE_PARTIAL_LANDING task=${taskId}: this completion left ${partial.length} path(s) the task itself reported uncommitted: ${shown.join(', ')}${more}. ${shortSha} does not hold the whole delivery, so a clean checkout of it can fail where the session's gate passed. moe.declare_files the path(s) on this task so its next landing commits them (declared paths land whatever the baseline); QA: judge the delivery incomplete until they are on the branch.`;
+}
+
 /** Same commit when equal, or when one abbreviated sha is a prefix of the other. */
 function sameSha(a: string, b: string): boolean {
   const x = a.toLowerCase();
@@ -178,7 +241,7 @@ function sameSha(a: string, b: string): boolean {
 export function recordCommitTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.record_commit',
-    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome except an owner-guard refusal (MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE / MOE_COMMIT_REFUSED_OWNER_UNKNOWN: a non-assignee session landed nothing), which changes no task field. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, held contested paths (MOE_CONTESTED_HELD, from the skipped codes), rescue refs, or refused/failed outcomes other than an owner-guard refusal.',
+    description: 'Record the outcome of the agent wrapper\'s git landing for a task — a completion commit (feat|fix on the shared branch), a wip checkpoint, or a rescue ref (refs/moe/rescue/<taskId>/<ts>) — including refused/failed/nothing outcomes. On committed: appends task.commits (idempotent by sha and kind, capped, newest kept), unions the non-inferred paths into task.filesModified, and keeps task.inferredPaths / touchedFiles / unattributedPaths current; every outcome stamps task.lastCommitOutcome except an owner-guard refusal (MOE_COMMIT_REFUSED_ACTIVE_ASSIGNEE / MOE_COMMIT_REFUSED_OWNER_UNKNOWN: a non-assignee session landed nothing), which changes no task field. Guard-exempt (runs after complete_task when QA may already own the REVIEW task, and on unassigned BLOCKED tasks) and allowed in every status. Posts one line to the task channel and a rate-limited #governors alert on unattributed paths, held contested paths (MOE_CONTESTED_HELD, from the skipped codes), a completion that left a path the task itself reported uncommitted (MOE_PARTIAL_LANDING), rescue refs, or refused/failed outcomes other than an owner-guard refusal.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -425,10 +488,18 @@ export function recordCommitTool(_state: StateManager): ToolDefinition {
       }
       const held = heldContestedPaths(skipped, contested);
       if (held.length > 0) lines.push(heldContestedLine(task.id, held));
+      const partial = !ownerGuardRefusal && outcome === 'committed' && kind === 'completion'
+        ? partialLandingPaths(task, pathsRead.paths, unattributed, skipped, held)
+        : [];
+      if (partial.length > 0) {
+        lines.push(partialLandingLine(task.id, shortSha, partial));
+        warnings.push(`MOE_PARTIAL_LANDING: ${partial.length} reported path(s) did not land; declare them on ${task.id}`);
+      }
       try { await state.postSystemMessage(task.id, lines.join('\n')); } catch { /* never block tool */ }
 
       const alertGovernors = !ownerGuardRefusal
-        && (unattributed.length > 0 || rescueLanded || held.length > 0 || (outcome !== 'committed' && outcome !== 'nothing'));
+        && (unattributed.length > 0 || rescueLanded || held.length > 0 || partial.length > 0
+          || (outcome !== 'committed' && outcome !== 'nothing'));
       if (alertGovernors) {
         const nowMs = Date.now();
         const last = governorAlertAt.get(task.id);
