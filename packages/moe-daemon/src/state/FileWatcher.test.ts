@@ -14,7 +14,9 @@ describe('FileWatcher', () => {
   let receivedEvents: FileChangeEvent[];
 
   beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'moe-watcher-test-'));
+    // The watcher reports canonical paths (FileWatcher.paths.test.ts covers aliases);
+    // macOS's tmpdir is the /var -> /private/var alias.
+    testDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'moe-watcher-test-')));
     moePath = path.join(testDir, '.moe');
     fs.mkdirSync(moePath, { recursive: true });
     fs.mkdirSync(path.join(moePath, 'tasks'));
@@ -29,15 +31,36 @@ describe('FileWatcher', () => {
     fs.rmSync(testDir, { recursive: true, force: true });
   });
 
-  async function startReady(): Promise<void> {
+  async function startReady(): Promise<FSWatcher> {
     const watch = vi.spyOn(chokidar, 'watch');
     try {
       watcher.start();
       expect(watch).toHaveBeenCalledOnce();
       const nativeWatcher = watch.mock.results[0].value as FSWatcher;
       if (!nativeWatcher.readyEmitted) await once(nativeWatcher, 'ready');
+      return nativeWatcher;
     } finally {
       watch.mockRestore();
+    }
+  }
+
+  // chokidar opens a late directory's watch after emitting addDir, and FSEvents (macOS)
+  // can drop a new stream's first callbacks, so a write right after mkdir may never be
+  // seen. Rewrite an ignored probe until the directory's own watch reports it.
+  async function directoryLive(nativeWatcher: FSWatcher, dir: string): Promise<void> {
+    const probe = path.join(dir, 'probe.txt');
+    let live = false;
+    const onRaw = (_event: string, _path: string, details?: { watchedPath?: string }) => {
+      if (details?.watchedPath === dir) live = true;
+    };
+    nativeWatcher.on('raw', onRaw);
+    try {
+      await vi.waitFor(() => {
+        fs.writeFileSync(probe, String(Date.now()));
+        expect(live).toBe(true);
+      }, { timeout: 10000, interval: 50 });
+    } finally {
+      nativeWatcher.off('raw', onRaw);
     }
   }
 
@@ -127,13 +150,15 @@ describe('FileWatcher', () => {
 
   it.each(['workers', 'proposals', 'channels', 'pins', 'decisions'])('watches JSON in %s when created after start', async (directory) => {
     watcher = new FileWatcher(moePath, event => { receivedEvents.push(event); });
-    await startReady();
-    fs.mkdirSync(path.join(moePath, directory));
-    const file = path.join(moePath, directory, 'entity-late.json');
+    const nativeWatcher = await startReady();
+    const dir = path.join(moePath, directory);
+    fs.mkdirSync(dir);
+    await directoryLive(nativeWatcher, dir);
+    const file = path.join(dir, 'entity-late.json');
     fs.writeFileSync(file, '{}');
 
     await vi.waitFor(() => expect(receivedEvents).toEqual([{ type: 'add', path: file }]), { timeout: 3000 });
-  });
+  }, 20000);
 
   it('ignores non-JSON, nested and unrelated paths without hiding entity JSON', async () => {
     watcher = new FileWatcher(moePath, event => { receivedEvents.push(event); });

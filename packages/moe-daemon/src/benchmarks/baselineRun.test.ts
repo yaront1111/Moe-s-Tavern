@@ -272,8 +272,11 @@ describe.runIf(runnable)('real daemon and wrapper, fake agent only', () => {
     expect(report.rows[0].acceptance).toBe('accepted');
   }, 240_000);
   it('E2 caps once, kills trees and preserves partial task and usage observations', async () => {
-    const opts = await fakeOptions('hang'); opts.capMs = 25_000;
-    const stopIdleSeat = until(async () => existsSync(path.join(opts.parentDir, 'pids')), 20_000).then(async () => {
+    // The worker reaches its hang only after daemon start, the architect's plan and its own
+    // pre-flight: 22.9s on a macOS host whose endpoint security vets every exec. The cap must
+    // fall after that, so both budgets leave headroom.
+    const opts = await fakeOptions('hang'); opts.capMs = 45_000;
+    const stopIdleSeat = until(async () => existsSync(path.join(opts.parentDir, 'pids')), 40_000).then(async () => {
       const runDir = (await fs.readdir(opts.parentDir)).find(n => n.startsWith('moe-baseline-'))!;
       const pids = JSON.parse(await fs.readFile(path.join(opts.parentDir, runDir, 'processes.json'), 'utf8'));
       process.kill(-pids.seats[2], 'SIGTERM'); // intentional early seat exit; no replacement permitted

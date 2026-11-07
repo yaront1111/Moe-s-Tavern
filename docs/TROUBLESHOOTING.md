@@ -1345,6 +1345,17 @@ export LOG_RETENTION_COUNT=3
 
 ---
 
+### Daemon tests time out on a many-core machine
+
+**Symptom:** `npm test` in `packages/moe-daemon` fails dozens of tests with `Test timed out in 5000ms` or `Hook timed out`, and each failing file passes when run alone.
+
+**Solution:** Vitest starts one worker per core, and Git- and daemon-heavy tests then contend for process launches. Endpoint-security agents that vet every exec (common on managed laptops) make this much worse. Run fewer workers:
+```bash
+npx vitest run --maxWorkers=4
+```
+
+---
+
 ## Worktree Mode
 
 ### Worktree mode: flip on / roll back
