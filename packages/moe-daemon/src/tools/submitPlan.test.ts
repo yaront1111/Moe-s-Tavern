@@ -14,6 +14,7 @@ import path from 'path';
 import os from 'os';
 import { StateManager } from '../state/StateManager.js';
 import { submitPlanTool } from './submitPlan.js';
+import { getContextTool } from './getContext.js';
 import { activeChatWaiters } from './chatWait.js';
 import { activeWaiters } from './waitForTask.js';
 import type { Task, Epic, Project, Worker, WorkerStatus } from '../types/schema.js';
@@ -1798,5 +1799,30 @@ describe('rail refusal on the MCP wire', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(before);
     expect(h.state.getTask('task-1')?.status).toBe('PLANNING');
     expect(h.state.getTask('task-1')?.implementationPlan).toEqual([]);
+  });
+
+  it('get_context names the required patterns up front, so a first plan that follows it passes the rail', async () => {
+    const ctx = await getContextTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'architect-1' }, h.state
+    ) as { nextAction: { tool: string; reason: string } };
+    expect(ctx.nextAction.tool).toBe('moe.submit_plan');
+    expect(ctx.nextAction.reason).toBe(
+      'Plan this task and submit for approval. The step text must contain each global required pattern (case-insensitive substring): "error handling".'
+    );
+
+    const quoted = [...ctx.nextAction.reason.matchAll(/"([^"]+)"/g)].map(m => m[1]);
+    await submitPlanTool(h.state).handler(
+      { taskId: 'task-1', steps: [{ description: `Add the parser with ${quoted.join(' and ')}` }] }, h.state
+    );
+    expect(h.state.getTask('task-1')?.status).toBe('AWAITING_APPROVAL');
+  });
+
+  it('leaves the PLANNING hint unchanged when the project has no required patterns', async () => {
+    const rails = h.state.project!.globalRails;
+    rails.requiredPatterns = [];
+    const ctx = await getContextTool(h.state).handler(
+      { taskId: 'task-1', workerId: 'architect-1' }, h.state
+    ) as { nextAction: { reason: string } };
+    expect(ctx.nextAction.reason).toBe('Plan this task and submit for approval.');
   });
 });

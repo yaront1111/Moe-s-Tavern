@@ -1269,7 +1269,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=8a9dfeae8edb
+# moe-generated: sha=a810afb3a5d8
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1312,7 +1312,7 @@ If you can't tell where the task sits, read \`moe.get_context\` → \`task.isEpi
 ## The 8 phases
 
 ### Phase 1 — Plan before you touch anything
-Read \`task.description\`, \`task.definitionOfDone\`, the linked epic rails, and any \`KNOWN_ISSUES.md\`. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
+Read \`task.description\`, \`task.definitionOfDone\`, the linked epic rails, and any \`KNOWN_ISSUES.md\`. \`moe.submit_plan\` refuses a plan whose step text lacks any global \`requiredPatterns\` entry (case-insensitive substring); \`get_context\`'s \`nextAction.reason\` names them, so work each one into a step. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
 
 ### Phase 2 — Explore before you assume
 Don't reference a function, model, method, relationship, or constant you haven't grepped for. Hallucinated \`user.clientProfile.accounts\`-style chains are the #1 source of plan-time errors. If the skill \`explore-before-assume\` is available, invoke it now.
