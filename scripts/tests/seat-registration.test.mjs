@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -326,6 +326,30 @@ for (const engine of ENGINES) {
 function fileURLToPathSafe(rel) {
   return path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), rel);
 }
+
+// A rebuild behind `npm link` re-emits a global bin's target without the exec bit
+// npm set at install, and `command -v` still reports it. A wrapper that trusted it
+// failed every seat RPC on a swallowed "Permission denied", so no seat could claim.
+test('bash: a non-executable global npm bin is not taken as the proxy or daemon', { skip: windows && 'Git Bash has no POSIX exec bits' }, () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'moe-bin-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    mkdirSync(bin);
+    const target = path.join(dir, 'index.js');
+    writeFileSync(target, '#!/usr/bin/env node\n');
+    chmodSync(target, 0o644);
+    symlinkSync(target, path.join(bin, 'moe-proxy'));
+    const fn = `${between(sh, 'global_bin_runnable() {', '\n}\n')}\n}\n`;
+    const probe = () => spawnSync('/bin/bash', ['-c', `${fn}for b in moe-proxy moe-absent; do global_bin_runnable "$b" && echo yes || echo no; done`],
+      { encoding: 'utf8', env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` } }).stdout.trim().split('\n');
+    assert.deepEqual(probe(), ['no', 'no']);
+    chmodSync(target, 0o755);
+    assert.deepEqual(probe(), ['yes', 'no']);
+    assert.doesNotMatch(sh, /command -v moe-(proxy|daemon)\b/, 'a global bin lookup bypasses global_bin_runnable');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('CI runs this suite on Linux and Windows', () => {
   const file = 'scripts/tests/seat-registration.test.mjs';

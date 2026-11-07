@@ -62,6 +62,15 @@ ls -la .moe/
 chmod -R 755 .moe/
 ```
 
+#### `moe-proxy` or `moe-daemon`: permission denied after a rebuild
+
+**Symptom:** After rebuilding a package that `npm link` or the macOS/Linux installer linked globally, running `moe-proxy` or `moe-daemon` from PATH fails with `permission denied`, and seats log `Pre-flight claim RPC failed`.
+
+**Solution:** npm sets a bin's exec bit only at install time. Builds now restore it in `postbuild`, and `moe-agent.sh` runs `node <package>/dist/index.js` when the global bin is not executable. On an older build, restore the bit by hand:
+```bash
+chmod +x packages/moe-proxy/dist/index.js packages/moe-daemon/dist/index.js
+```
+
 #### Wrong Node.js version
 
 **Symptom:** Syntax errors or missing features.
