@@ -1,11 +1,12 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
+import { loopGuardPausedHint } from '../util/mentionRouter.js';
 
 export function chatSendTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.chat_send',
-    description: 'Send a chat message to a channel. Parses @mentions and returns routing info.',
+    description: 'Send a chat message to a channel. Parses @mentions and returns routing info. routingPaused: true (with a hint) means the channel\'s loop guard stored the message but woke nobody.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -68,7 +69,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
 
       // channel.id, never the caller's reference: a message stored under
       // "#general" would belong to no channel any reader can fetch.
-      const { message, routingTargets } = await state.sendMessage({
+      const { message, routingTargets, routingPaused, hopCount } = await state.sendMessage({
         channel: channel.id,
         sender,
         content: params.content,
@@ -83,7 +84,14 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         messageId: message.id,
         channel: message.channel,
         timestamp: message.timestamp,
-        routingTargets
+        routingTargets,
+        routingPaused,
+        ...(routingPaused
+          ? {
+            hint: `${loopGuardPausedHint(channel.name, hopCount, state.mentionRouter.getHopWindowMs())} ` +
+              'moe.add_comment on the recipient\'s task reaches them now.'
+          }
+          : {})
       };
     }
   };

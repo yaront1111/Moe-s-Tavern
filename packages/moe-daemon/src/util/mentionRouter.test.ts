@@ -212,6 +212,104 @@ describe('MentionRouter', () => {
     });
   });
 
+  describe('loop guard window: a burst guard, not a lifetime cap', () => {
+    // Observed 2026-11-07: only a human could reset the count, so an all-agent
+    // fleet's #architects and #workers paused for good after about ten
+    // coordination mentions spread over hours, and every later explicit
+    // mention there routed to nobody.
+    const WINDOW = 600_000;
+    const ping = makeMessage({ sender: 'worker-alice', content: '@worker-bob ping' });
+    const banner = makeMessage({ sender: 'system', content: '📦 checkpoint commit recorded for task-abc' });
+    let clock: number;
+    let guarded: MentionRouter;
+
+    beforeEach(() => {
+      clock = 1_000_000;
+      guarded = new MentionRouter(4, () => clock);
+    });
+
+    /** Five routable hops with no time passing: the fifth pauses (maxHops = 4). */
+    function burstToPause(): void {
+      for (let hop = 1; hop <= 4; hop++) {
+        expect(guarded.route(ping, workers)).toMatchObject({ paused: false, hopCount: hop });
+      }
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+    }
+
+    it('defaults to a 10-minute window', () => {
+      expect(guarded.getHopWindowMs()).toBe(WINDOW);
+    });
+
+    it('an agent hop after the window resets the count and unpauses', () => {
+      burstToPause();
+
+      clock += WINDOW; // exactly the window is not MORE than it
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+
+      clock += 1;
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 1 });
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 1, paused: false });
+    });
+
+    it('a burst inside the window still pauses at maxHops + 1', () => {
+      // Every gap is the full window, so no counted hop ever ages out: a slow
+      // steady loop trips the guard exactly like a rapid one.
+      for (let hop = 1; hop <= 4; hop++) {
+        expect(guarded.route(ping, workers)).toMatchObject({ paused: false, hopCount: hop });
+        clock += WINDOW;
+      }
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+    });
+
+    it('posts made while paused do not extend the pause', () => {
+      burstToPause();
+      for (let i = 0; i < 3; i++) {
+        clock += WINDOW / 3;
+        expect(guarded.route(ping, workers)).toMatchObject({ paused: true, hopCount: 5 });
+      }
+
+      clock += 1; // WINDOW + 1 after the hop that paused it
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 1 });
+    });
+
+    it('an agent post that routes nowhere neither counts nor restarts the window', () => {
+      expect(guarded.route(ping, workers).hopCount).toBe(1);
+      clock += WINDOW;
+      const aside = makeMessage({ sender: 'worker-alice', content: 'thinking out loud' });
+      expect(guarded.route(aside, workers)).toEqual({ targets: [], paused: false, hopCount: 1 });
+
+      clock += 1; // WINDOW + 1 after the only counted hop, 1 ms after the aside
+      expect(guarded.route(ping, workers)).toMatchObject({ paused: false, hopCount: 1 });
+    });
+
+    it('human and @continue still reset at once, inside the window', () => {
+      burstToPause();
+      guarded.route(makeMessage({ sender: 'human', content: 'carry on' }), workers);
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 0, paused: false });
+
+      burstToPause();
+      guarded.route(makeMessage({ sender: 'human', content: '@continue keep going' }), workers);
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 0, paused: false });
+
+      // Still armed after a reset.
+      burstToPause();
+    });
+
+    it('a system message neither counts, resets nor restarts the window', () => {
+      burstToPause();
+
+      clock += WINDOW;
+      expect(guarded.route(banner, workers)).toMatchObject({ paused: true, hopCount: 5 });
+      clock += 1;
+      // The window has passed, but a banner is not an agent hop: nothing resets.
+      expect(guarded.route(banner, workers)).toMatchObject({ paused: true, hopCount: 5 });
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 5, paused: true });
+
+      // Nor did the banners restart the window: the next agent hop starts over.
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 1 });
+    });
+  });
+
   describe('resetChannel', () => {
     it('clears hop count and paused state', () => {
       const msg = makeMessage({

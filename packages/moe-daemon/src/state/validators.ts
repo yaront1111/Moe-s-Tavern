@@ -383,6 +383,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     'columnLimits',
     'chatEnabled',
     'chatMaxAgentHops',
+    'chatAgentHopWindowMs',
     'autoCommit',
     'checkpointCommits',
     'checkpointPush',
@@ -441,6 +442,9 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
   }
   if (input.chatMaxAgentHops !== undefined) {
     next.chatMaxAgentHops = validateIntegerValue(input.chatMaxAgentHops, 'chatMaxAgentHops', 1, 20);
+  }
+  if (input.chatAgentHopWindowMs !== undefined) {
+    next.chatAgentHopWindowMs = validateIntegerValue(input.chatAgentHopWindowMs, 'chatAgentHopWindowMs', 60000, 86400000);
   }
   if (input.autoCommit !== undefined) {
     next.autoCommit = validateBooleanValue(input.autoCommit, 'autoCommit');

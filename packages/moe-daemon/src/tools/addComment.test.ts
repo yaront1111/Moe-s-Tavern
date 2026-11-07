@@ -279,7 +279,7 @@ import { chatWaitTool } from './chatWait.js';
 interface CommentResult {
   success: boolean;
   commentId: string;
-  routing?: { messageId: string; channel: string; routingTargets: string[] };
+  routing?: { messageId: string; channel: string; routingTargets: string[]; routingPaused: boolean; hint?: string };
   routingError?: string;
 }
 
@@ -321,7 +321,9 @@ describe('add_comment @mention relay', () => {
     const result = await comment(text, AUTHOR);
 
     expect(result.success).toBe(true);
-    expect(result.routing).toEqual({ messageId: expect.any(String), channel: general, routingTargets: [GOVERNOR] });
+    expect(result.routing).toEqual({
+      messageId: expect.any(String), channel: general, routingTargets: [GOVERNOR], routingPaused: false,
+    });
     expect(send).toHaveBeenCalledTimes(1);
     const woke = await waiting;
     expect(woke.hasMessage).toBe(true);
@@ -417,6 +419,20 @@ describe('add_comment @mention relay', () => {
     expect(Buffer.byteLength(sent, 'utf-8')).toBeLessThanOrEqual(MAX_CHAT_MESSAGE_BYTES);
     expect(sent.startsWith(`💬 ${AUTHOR} on task-1 (${result.commentId}):\n@${GOVERNOR} `)).toBe(true);
     expect(h.state.getTask('task-1')?.comments.at(-1)?.content).toBe(long);
+  });
+
+  it('reports routingPaused with a hint when the loop guard swallows the relay', async () => {
+    for (let i = 0; i < 5; i += 1) {
+      await h.state.sendMessage({ channel: general, sender: AUTHOR, content: `@${GOVERNOR} ping ${i}` });
+    }
+    expect(h.state.mentionRouter.getChannelState(general)).toEqual({ hopCount: 5, paused: true });
+
+    const result = await comment('@governor please decide', AUTHOR);
+
+    expect(result.success).toBe(true);
+    expect(result.routing).toMatchObject({ channel: general, routingTargets: [], routingPaused: true });
+    expect(result.routing?.hint).toContain('paused routing in #general after 5 agent hops');
+    expect(h.state.getTask('task-1')?.comments.at(-1)?.id).toBe(result.commentId);
   });
 });
 

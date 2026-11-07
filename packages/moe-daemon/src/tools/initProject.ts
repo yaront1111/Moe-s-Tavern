@@ -106,6 +106,7 @@ export function initProjectTool(_state: StateManager): ToolDefinition {
           enableAgentTeams: false,
           chatEnabled: true,
           chatMaxAgentHops: 4,
+          chatAgentHopWindowMs: 600000,
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()

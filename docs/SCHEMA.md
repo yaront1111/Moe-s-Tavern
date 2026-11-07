@@ -296,6 +296,8 @@ interface ProjectSettings {
   // Chat settings (all optional, defaults applied at runtime)
   chatEnabled?: boolean;              // default: true — enable/disable chat system
   chatMaxAgentHops?: number;          // default: 4 — loop guard threshold per channel
+  chatAgentHopWindowMs?: number;      // default: 600000 = 10 min — loop guard burst window
+                                      // (valid 60000-86400000): hops further apart stop counting
   chatAutoCreateChannels?: boolean;   // default: true — auto-create channels for epics/tasks
 }
 ```
@@ -1794,8 +1796,9 @@ interface ChatMessage {
 Messages with `@workerId` mentions are parsed and stored in the `mentions` array. The chat router uses per-channel hop counters to prevent runaway agent-to-agent conversations:
 
 - Each agent-to-agent routed message increments the hop counter for that channel
-- When `chatMaxAgentHops` (default 4) is exceeded, routing pauses until a human message resets the counter
-- Human messages always reset the hop counter to 0
+- When `chatMaxAgentHops` (default 4) is exceeded within one burst, routing pauses: agent messages are stored but route to nobody, and `moe.chat_send` returns `routingPaused: true` with a `hint`
+- A burst ends when `chatAgentHopWindowMs` (default 600000 = 10 min) passes with no counted hop on the channel: the next agent message resets the counter and lifts the pause. Posts made while paused are not hops
+- Human messages always reset the hop counter to 0 and lift the pause; daemon `system` messages neither count nor reset
 
 ### Storage Layout
 

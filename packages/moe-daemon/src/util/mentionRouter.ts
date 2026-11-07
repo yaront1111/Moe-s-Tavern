@@ -3,12 +3,27 @@
 // Ported from agentchattr's router.py
 // =============================================================================
 
-import type { ChatMessage, Worker, Team } from '../types/schema.js';
+import type { ChatMessage, Worker, Team, ProjectSettings } from '../types/schema.js';
 
 export interface RoutingResult {
   targets: string[];   // workerIds to notify
   paused: boolean;     // whether the channel is paused by loop guard
   hopCount: number;    // current hop count for the channel
+}
+
+/** settings.chatAgentHopWindowMs default (10 min): hops further apart than this stop counting. */
+const DEFAULT_AGENT_HOP_WINDOW_MS = 600_000;
+
+/**
+ * Why a send the loop guard swallowed woke nobody, and when the channel routes
+ * again. Without it a paused channel read exactly like a message that named
+ * nobody: chat_send answered `routingTargets: []` and nothing else.
+ */
+export function loopGuardPausedHint(channelName: string, hopCount: number, windowMs: number): string {
+  const minutes = +(windowMs / 60_000).toFixed(1);
+  return `The loop guard paused routing in #${channelName} after ${hopCount} agent hops, so this message is stored but woke nobody. ` +
+    `Routing resumes ${minutes} min after the hop that paused it (posts while paused do not extend that), ` +
+    `or as soon as a human posts in #${channelName}.`;
 }
 
 /** Group tokens address many seats at once, so they are position-sensitive. */
@@ -74,10 +89,16 @@ export function parseRawMentions(content: string): string[] {
 export class MentionRouter {
   private hopCounts = new Map<string, number>();
   private pausedChannels = new Set<string>();
+  /** Clock reading of each channel's last COUNTED agent hop; the burst window runs from it. */
+  private lastHopAt = new Map<string, number>();
   private maxHops: number;
+  private hopWindowMs = DEFAULT_AGENT_HOP_WINDOW_MS;
+  private readonly now: () => number;
 
-  constructor(maxHops = 4) {
+  /** `now` is the clock (epoch ms) the hop window is measured on; tests inject their own. */
+  constructor(maxHops = 4, now: () => number = () => Date.now()) {
     this.maxHops = maxHops;
+    this.now = now;
   }
 
   /**
@@ -89,6 +110,28 @@ export class MentionRouter {
    */
   setMaxHops(maxHops: number | undefined): void {
     this.maxHops = Number.isInteger(maxHops) && (maxHops as number) >= 1 ? (maxHops as number) : 4;
+  }
+
+  /**
+   * Re-apply the burst window, keeping hop counts and pauses. Anything but a
+   * positive finite number means the 10-minute default; the setting's bounds
+   * (1 min to 24 h) are enforced where project.json is read and updated.
+   */
+  setHopWindowMs(windowMs: number | undefined): void {
+    this.hopWindowMs = Number.isFinite(windowMs) && (windowMs as number) > 0
+      ? (windowMs as number)
+      : DEFAULT_AGENT_HOP_WINDOW_MS;
+  }
+
+  /** The burst window in force, for a caller explaining when a pause lifts. */
+  getHopWindowMs(): number {
+    return this.hopWindowMs;
+  }
+
+  /** Both loop-guard settings at once; StateManager.load() calls this on every reload. */
+  applySettings(settings: Pick<ProjectSettings, 'chatMaxAgentHops' | 'chatAgentHopWindowMs'> | undefined): void {
+    this.setMaxHops(settings?.chatMaxAgentHops);
+    this.setHopWindowMs(settings?.chatAgentHopWindowMs);
   }
 
   /**
@@ -233,6 +276,7 @@ export class MentionRouter {
     // Human messages always reset hop counter
     this.hopCounts.set(channel, 0);
     this.pausedChannels.delete(channel);
+    this.lastHopAt.delete(channel);
 
     // @continue also clears paused (already done above, but explicit for clarity)
     if (message.content.toLowerCase().includes('@continue')) {
@@ -260,8 +304,9 @@ export class MentionRouter {
    * any, otherwise every non-IDLE, non-DEAD worker — so a stale-worker alert
    * still reaches its seats even while the channel is paused. A pause exists to
    * stop agents answering each other, not to hide the daemon's own warnings.
-   * What it must NOT do is touch hopCounts or pausedChannels: only a human, or
-   * an explicit @continue, resumes a channel.
+   * What it must NOT do is touch hopCounts, pausedChannels or lastHopAt: only a
+   * human (an explicit @continue included), or an agent hop after a quiet
+   * window, resumes a channel.
    */
   private routeSystemMessage(
     message: ChatMessage,
@@ -291,6 +336,22 @@ export class MentionRouter {
     teams?: Team[]
   ): RoutingResult {
     const channel = message.channel;
+    const now = this.now();
+
+    // A burst guard, not a lifetime cap. Only a human post used to reset the
+    // count, so in an all-agent fleet #architects and #workers paused for good
+    // after a day's worth of coordination mentions, and seats parked in
+    // chat_wait were never woken by an @mention there again (observed
+    // 2026-11-07). A channel that has gone hopWindowMs since its last counted
+    // hop starts over, and its pause lifts. Posts made while paused are not
+    // hops, so they cannot keep a channel paused.
+    const lastHop = this.lastHopAt.get(channel);
+    if (lastHop !== undefined && now - lastHop > this.hopWindowMs) {
+      this.hopCounts.set(channel, 0);
+      this.pausedChannels.delete(channel);
+      this.lastHopAt.delete(channel);
+    }
+
     const hopCount = this.hopCounts.get(channel) ?? 0;
 
     // If channel is paused, store message but don't route
@@ -314,6 +375,7 @@ export class MentionRouter {
     // Increment hop counter
     const newHopCount = hopCount + 1;
     this.hopCounts.set(channel, newHopCount);
+    this.lastHopAt.set(channel, now);
 
     // Check loop guard
     if (newHopCount > this.maxHops) {
@@ -330,6 +392,7 @@ export class MentionRouter {
   resetChannel(channelId: string): void {
     this.hopCounts.delete(channelId);
     this.pausedChannels.delete(channelId);
+    this.lastHopAt.delete(channelId);
   }
 
   /**

@@ -209,6 +209,7 @@ export interface ProjectSettings {
   columnLimits?: Record<string, number>;
   chatEnabled?: boolean;              // default: true
   chatMaxAgentHops?: number;          // default: 4 (loop guard threshold)
+  chatAgentHopWindowMs?: number;      // default: 600000 = 10 min (hops further apart stop counting; 60000-86400000)
   /** Plan-size warn/reject thresholds for moe.submit_plan; see TaskSizingSettings. */
   taskSizing?: TaskSizingSettings;
   /** Per-tier model/effort for the wrapper's CLI launch; see RoutingSettings. */

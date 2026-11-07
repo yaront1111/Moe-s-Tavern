@@ -228,6 +228,8 @@ export function normalizeProject(projectPath: string, project: Partial<Project>)
       columnLimits: project.settings?.columnLimits as Record<string, number> | undefined,
       chatEnabled: sanitizeBoolean(project.settings?.chatEnabled, true),
       chatMaxAgentHops: sanitizeNumber(project.settings?.chatMaxAgentHops, 4, 1, 20),
+      // [1 min, 24h]: the loop guard's burst window (MentionRouter.setHopWindowMs).
+      chatAgentHopWindowMs: sanitizeNumber(project.settings?.chatAgentHopWindowMs, 600000, 60000, 86400000),
       staleWorkerTimeoutMs,
       reviewStaleTimeoutMs: sanitizeNumber(project.settings?.reviewStaleTimeoutMs, staleWorkerTimeoutMs, 60000, 86400000),
     },

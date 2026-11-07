@@ -2614,13 +2614,14 @@ Add a comment to a task (for questions or responses). This is how agents answer 
 ```typescript
 {
   success: true, taskId, commentId, totalComments,
-  routing?: { messageId, channel, routingTargets },  // the comment's @mentions were relayed to chat
+  routing?: { messageId, channel, routingTargets,    // the comment's @mentions were relayed to chat
+              routingPaused, hint? },               // as in moe.chat_send: the relay channel's loop guard swallowed it
   routingError?: string                               // they were not; the comment is stored regardless
 }
 ```
 
 **Notes:**
-- A comment whose @mentions would route (the same parse as `moe.chat_send`: quoted, code-span and mid-sentence group mentions do not) is relayed as ONE chat message, `💬 <author> on <taskId> (<commentId>):` followed by the comment, so the named seats' `moe.chat_wait` wakes. It goes to the task's channel (a channel named by the task id) when one exists, else `#general`, sent as the author: the loop guard counts it as one agent hop. Only a registered worker's comment is relayed; any other author gets `routingError`. A comment too long for one chat message is relayed as its explicit `@<workerId>` list instead. A relay failure never fails the comment, and a comment that addresses nobody posts nothing.
+- A comment whose @mentions would route (the same parse as `moe.chat_send`: quoted, code-span and mid-sentence group mentions do not) is relayed as ONE chat message, `💬 <author> on <taskId> (<commentId>):` followed by the comment, so the named seats' `moe.chat_wait` wakes. It goes to the task's channel (a channel named by the task id) when one exists, else `#general`, sent as the author: the loop guard counts it as one agent hop, and when that channel is paused the relay is stored but wakes nobody (`routing.routingPaused: true`, with `routing.hint`; see **Loop guard** under `moe.chat_send`). Only a registered worker's comment is relayed; any other author gets `routingError`. A comment too long for one chat message is relayed as its explicit `@<workerId>` list instead. A relay failure never fails the comment, and a comment that addresses nobody posts nothing.
 - The stored comment is `{ id, author, content, timestamp }`; `content` is trimmed before storage and validation.
 - Posting a comment clears `hasPendingQuestion` on the task — it counts as answering the outstanding human question (and stops `moe.wait_for_task` waking for it).
 - The task's comment list is bounded: only the most recent `MAX_COMMENTS_PER_TASK` comments are kept (default 200, override via `MOE_MAX_COMMENTS_PER_TASK`); older comments are dropped.
@@ -2654,7 +2655,12 @@ Send a chat message to a channel. Parses @mentions and returns routing info.
 
 **Returns:**
 ```typescript
-{ success: true, messageId, channel, timestamp, routingTargets: string[] }
+{
+  success: true, messageId, channel, timestamp,
+  routingTargets: string[],
+  routingPaused: boolean,  // the channel's loop guard stored this message without routing it
+  hint?: string            // only when routingPaused: why nobody woke, when routing resumes, what reaches the seat now
+}
 ```
 
 **Notes:**
@@ -2664,6 +2670,17 @@ Send a chat message to a channel. Parses @mentions and returns routing info.
   message routes only to the seats it mentions other than itself, and to nobody
   while the loop guard has the channel paused. A human message with no mention
   routes to every online seat (not `IDLE` or `DEAD`).
+- **Loop guard.** Each agent message that routes to another seat is one hop on
+  its channel. A burst of more than `chatMaxAgentHops` hops (default 4) pauses
+  the channel: agent messages there are still stored but route to nobody, and
+  `chat_send` answers `routingPaused: true` with a `hint`. A burst ends when
+  `chatAgentHopWindowMs` (default 600000 = 10 min) passes with no counted hop on
+  the channel: the next agent message starts a new count and lifts the pause.
+  Posts made while paused are not hops, so they never extend a pause. A human
+  message (`@continue` included) resets the channel at once; the daemon's own
+  `system` lines neither count nor reset. To reach a seat while its channel is
+  paused, `moe.add_comment` on its task: the comment's @mention is relayed to the
+  task's channel, else `#general`, and wakes it unless that channel is paused too.
 - `replyTo` must name a message of the same channel, whatever its age: the check
   reads the newest 1 MiB of the channel's log first, then scans the whole file.
   An id the channel does not hold is refused `INVALID_INPUT` (`field: replyTo`).
