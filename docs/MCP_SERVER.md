@@ -216,6 +216,8 @@ the contract declares `requiredChecks`.
 
 When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appended to the task's `contextFetchedBy` list so that `moe.start_step` can later verify the caller has seen the plan. See **Ownership & Ordering** below.
 
+**PLANNING `nextAction`.** On a PLANNING task the hint is `moe.submit_plan`. When `project.globalRails.requiredPatterns` is non-empty, its reason names each entry, JSON-quoted, that the step text must contain; `moe.submit_plan` refuses a plan that lacks one (see **Rail refusal**).
+
 **WORKING `nextAction`.** On a WORKING task the hint follows the plan:
 - no plan → `moe.request_replan` with its `reason` filled in (every step tool and `moe.complete_task` refuse a plan-less row);
 - the first unfinished step `IN_PROGRESS` → `moe.complete_step` for it (`moe.start_step` accepts only `PENDING`, and `moe.complete_step`'s own hint does the same);

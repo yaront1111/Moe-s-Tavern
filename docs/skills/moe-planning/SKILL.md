@@ -41,7 +41,7 @@ If you can't tell where the task sits, read `moe.get_context` → `task.isEpicFi
 ## The 8 phases
 
 ### Phase 1 — Plan before you touch anything
-Read `task.description`, `task.definitionOfDone`, the linked epic rails, and any `KNOWN_ISSUES.md`. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
+Read `task.description`, `task.definitionOfDone`, the linked epic rails, and any `KNOWN_ISSUES.md`. `moe.submit_plan` refuses a plan whose step text lacks any global `requiredPatterns` entry (case-insensitive substring); `get_context`'s `nextAction.reason` names them, so work each one into a step. Size the work: how many files? Cross-cutting? Architectural impact? Use the answer to decide which later phases apply.
 
 ### Phase 2 — Explore before you assume
 Don't reference a function, model, method, relationship, or constant you haven't grepped for. Hallucinated `user.clientProfile.accounts`-style chains are the #1 source of plan-time errors. If the skill `explore-before-assume` is available, invoke it now.

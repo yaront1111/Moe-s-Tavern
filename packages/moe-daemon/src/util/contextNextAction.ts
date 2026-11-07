@@ -20,10 +20,17 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
   if (!task) return undefined;
 
   if (task.status === 'PLANNING') {
+    // submit_plan refuses a plan missing any of these, so name them up front.
+    const rawRequired = state.project?.globalRails?.requiredPatterns;
+    const required = (Array.isArray(rawRequired) ? rawRequired : [])
+      .filter((p): p is string => typeof p === 'string' && p.length > 0);
+    const railNote = required.length
+      ? ` The step text must contain each global required pattern (case-insensitive substring): ${required.map(p => JSON.stringify(p)).join(', ')}.`
+      : '';
     return {
       tool: 'moe.submit_plan',
       args: { taskId: task.id, workerId: workerId || undefined },
-      reason: 'Plan this task and submit for approval.',
+      reason: `Plan this task and submit for approval.${railNote}`,
       recommendedSkill: recommendSkillFor('architect', 'planning_entry'),
     };
   }
