@@ -1177,7 +1177,7 @@ type WorkerType =
   | 'COPILOT';  // GitHub Copilot CLI
 // NOTE: worker.type is the CLI a seat reports; the daemon cannot check which CLI really runs.
 // The launchers (scripts/moe-agent.{sh,ps1}) export MOE_WORKER_TYPE from the CLI they start:
-// CLAUDE, CODEX, GEMINI or GROK (any other command is CLAUDE). moe-proxy adds it as workerType
+// CLAUDE, CODEX, GEMINI, GROK or COPILOT (any other command is CLAUDE). moe-proxy adds it as workerType
 // to claim_next_task and join_team unless the call sets its own. The daemon keeps an exact,
 // case-sensitive name and records any other value as 'CLAUDE'. An omitted workerType keeps an
 // existing record's type and makes a new record 'CLAUDE'. A governor record that

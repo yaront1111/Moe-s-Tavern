@@ -15,6 +15,7 @@ Common issues and solutions for Moe's Tavern.
    - [Protected profile in VS Code](#protected-profile-in-vs-code)
    - Wrapper refusal codes (`MOE_RUNTIME_PROTECTED_PATH_MISSING`, `MOE_PROTECTED_*`) are in the [Local Runner Issues](#local-runner-issues) table.
 3. [MCP/Proxy Issues](#mcpproxy-issues)
+   - [Copilot seat stops with a `MOE_COPILOT_*` or `MOE_CLI_ARGV_REJECTED` line](#copilot-seat-stops-with-a-moe_copilot_-or-moe_cli_argv_rejected-line)
 4. [Task Sync Issues](#task-sync-issues)
 5. [Claude Account Rotation Issues](#claude-account-rotation-issues)
 6. [Local Runner Issues](#local-runner-issues)
@@ -538,6 +539,51 @@ and `serena` servers in `<project>/.codex/config.toml`. Interim, with an older w
 To keep a real sandbox on Windows, install the MSI PowerShell 7 (`winget install --id Microsoft.PowerShell --source winget`)
 so codex finds `C:\Program Files\PowerShell\7\pwsh.exe`, then set `MOE_CODEX_SANDBOX=workspace-write`. Codex seats are interactive (TUI) by default again since 0.8.0; headless
 stays opt-in via `-CodexExec` / `--codex-exec`.
+
+### Copilot seat stops with a `MOE_COPILOT_*` or `MOE_CLI_ARGV_REJECTED` line
+
+**Symptom:** a copilot seat (`agentCommand` `copilot`, or `--command copilot`) prints one of the `[ERROR]` lines
+below and exits 1 instead of relaunch-looping. Every one except `MOE_COPILOT_NOT_FOUND` and
+`MOE_COPILOT_CONFIG_FAILED` also posts an `@governors` line in `#general`. Each one is permanent for that install
+or account, so a relaunch cannot fix it.
+
+Windows and WSL keep separate copilot installs and sign-ins, so fix the one the seat ran on. A JetBrains seat runs on
+Windows unless "Run Agents in WSL" is on. `node scripts/tests/copilot-smoke.mjs sh|ps1` checks a fix end to end:
+exit 0 is PASS, and exit 3 is BLOCKED with the same line. `ps1` and the WSL profile of
+`scripts/tests/copilot-final-gate.sh` need Windows or WSL; on macOS the gate skips them by name and prints
+`PASS copilot-final-gate-mac (skipped: …)`.
+
+- `MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: <cmd>. Install it (npm install -g @github/copilot), then sign in with copilot login.`
+  **Fix:** run `npm install -g @github/copilot` on that OS. A seat the IDE launches needs copilot on the IDE's
+  PATH, and a desktop-launched IDE often misses the shell PATH, so restart the IDE after the install.
+- `MOE_COPILOT_SIGNED_OUT: Copilot has no authentication information. Run copilot login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. Windows and WSL sign in separately; this seat exits instead of looping.`
+  This launch's copilot log says `No authentication information found`, and copilot exited nonzero. **Fix:** run
+  `copilot login` on that OS, or set one of those token variables for the seat. WSL has no OS keychain, so copilot
+  keeps the WSL token in plaintext `~/.copilot/config.json`. Never copy or paste that file.
+- `MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. …`
+  copilot printed `Error: Access denied by policy settings`, and its log holds the HTTP 403
+  `not authorized to use this Copilot feature`. Either the account's Copilot plan lacks Copilot CLI or its
+  organization turned Copilot CLI off. **Fix:** sign in (`copilot login`) with an account whose plan includes
+  Copilot CLI, or have the organization enable it (github.com/settings/copilot).
+- `MOE_COPILOT_MCP_BLOCKED: the Copilot policy of this account blocked the moe MCP server, so this seat can neither claim nor complete a task. …`
+  copilot printed `Third-party MCP servers are disabled by your organization's Copilot policy` or
+  `1 MCP server was blocked by policy: 'moe' …` on stderr. **Fix:** use an account or organization whose Copilot
+  policy allows MCP servers (github.com/settings/copilot). Moe's `moe` and `serena` servers are local stdio
+  servers, so no MCP registry allowlist may exclude them. A policy that blocks only `serena` is just a `[WARN]`:
+  that run goes on without Serena tools.
+- `MOE_COPILOT_CONFIG_FAILED: cannot write <file>; refusing to launch copilot without its prompt and moe server.`
+  The wrapper could not write the per-launch prompt or MCP file to its temp directory (bash: the wrapper's
+  private temp dir; PowerShell: `%TEMP%`). **Fix:** free space there or fix its permissions, then relaunch.
+- `MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <copilot's error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); …`
+  The once-per-process probe (the real headless argv plus `--help`) got
+  `error: unexpected argument '<flag>' found` or `error: invalid value '<v>' for '--reasoning-effort <level>'`.
+  Either the plugin's wrapper and the installed copilot have drifted apart, or `MOE_COPILOT_EFFORT` names a
+  level copilot does not take. **Fix:** do one of these:
+  - rebuild and reinstall the plugin (the commands are in the `--full-auto` section above);
+  - pin copilot to a version that takes the argv (`npm install -g @github/copilot@<version>`);
+  - correct `MOE_COPILOT_EFFORT`.
+
+  `MOE_DISABLE_ARGV_PROBE=1` skips this check, but then the launch itself fails.
 
 ---
 
