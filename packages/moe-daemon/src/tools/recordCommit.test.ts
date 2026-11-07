@@ -250,6 +250,58 @@ describe('moe.record_commit', () => {
     expect(h.state.getTask('task-1')!.commits).toHaveLength(1);
   });
 
+  // REGRESSION 2026-11-07: a completion landed 7 of its 8 reported files. The
+  // 8th, the task's own step-2 helper, stayed untracked, and the only signal was
+  // "unattributed=1". Every later clean-clone gate then failed on the missing file.
+  describe('partial landings (MOE_PARTIAL_LANDING)', () => {
+    const reportedPlan = [
+      { stepId: 'step-1', description: 'd', affectedFiles: [], status: 'COMPLETED', modifiedFiles: ['src/a.ts', 'scripts/seam.mjs'] },
+      { stepId: 'step-2', description: 'd', affectedFiles: [], status: 'PENDING', modifiedFiles: ['src/later.ts'] },
+    ];
+
+    it('flags a completion that leaves a completed step\'s reported path unattributed, in the task channel and #governors', async () => {
+      await seed({ implementationPlan: reportedPlan });
+      const sys = vi.spyOn(h.state, 'postSystemMessage').mockResolvedValue(undefined);
+      const gov = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+      const result = await record({ paths: ['src/a.ts'], unattributedPaths: ['scripts/seam.mjs', 'src/foreign.ts'] });
+      expect(result.warning).toContain('MOE_PARTIAL_LANDING');
+      const line = String(sys.mock.calls[0][1]);
+      expect(line).toContain('MOE_PARTIAL_LANDING task=task-1: this completion left 1 path(s)');
+      expect(line).toContain('scripts/seam.mjs (unattributed)');
+      // A foreign unattributed path is not the task's delivery.
+      expect(line.split('MOE_PARTIAL_LANDING')[1]).not.toContain('src/foreign.ts');
+      expect(gov).toHaveBeenCalledWith('governors', expect.stringContaining('MOE_PARTIAL_LANDING task=task-1'));
+    });
+
+    it('names the skip code of a declared path the landing skipped', async () => {
+      await seed({ declaredFiles: ['scripts/seam.mjs'] });
+      const sys = vi.spyOn(h.state, 'postSystemMessage').mockResolvedValue(undefined);
+      vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+      await record({ paths: ['src/a.ts'], skipped: [{ path: 'scripts/seam.mjs', code: 'MOE_ATTR_ASSERTED_FOREIGN' }] });
+      expect(String(sys.mock.calls[0][1])).toContain('scripts/seam.mjs (MOE_ATTR_ASSERTED_FOREIGN)');
+    });
+
+    it('stays quiet for a whole landing, a checkpoint, a contested hold, tooling dirt and a pending step\'s file', async () => {
+      await seed({ implementationPlan: reportedPlan, declaredFiles: ['src/held.ts', '.mcp.json'] });
+      const sys = vi.spyOn(h.state, 'postSystemMessage').mockResolvedValue(undefined);
+      vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+      await record({ paths: ['src/a.ts', 'scripts/seam.mjs'], unattributedPaths: ['src/later.ts'] });
+      await record({ sha: SHA_B, kind: 'checkpoint', paths: ['src/a.ts'], unattributedPaths: ['scripts/seam.mjs'] });
+      await record({
+        sha: 'c3d4e5f60718293a4b5c6d7e8f9012345678a1b2',
+        paths: ['src/a.ts', 'scripts/seam.mjs'],
+        skipped: [
+          { path: 'src/held.ts', code: 'MOE_ATTR_CONTESTED_UNTOUCHED(task-peer)' },
+          { path: '.mcp.json', code: 'MOE_ATTR_EXCLUDED' },
+        ],
+      });
+      for (const call of sys.mock.calls) expect(String(call[1])).not.toContain('MOE_PARTIAL_LANDING');
+    });
+  });
+
   it('rate-limits the #governors alert to once per task per window; the task channel gets every line', async () => {
     await seed();
     const sys = vi.spyOn(h.state, 'postSystemMessage').mockResolvedValue(undefined);
