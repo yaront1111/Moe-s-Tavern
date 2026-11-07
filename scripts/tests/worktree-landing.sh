@@ -475,6 +475,14 @@ async function diverged(){
   eq([rev(c.O,MAIN),rev(c.P,MAIN)],[P1,X],'origin main and P main');
   has(r,'MOE_LAND_TARGET_DIVERGED');eq(pushes(r).length,0,'wrapper pushes');notLanded(r);
 }
+// A local main strictly ahead of origin's (a pure fast-forward) is published, unforced, and the landing proceeds.
+async function localAhead(){
+  const c=fixture(true),X=peerCommit(c,MAIN,{'local.txt':'local only\n'});nm({X});
+  const r=await seat(c,'run',{edits:TASK9});
+  lacks(r,'MOE_LAND_TARGET_DIVERGED');
+  assert.ok(git(c.O,'rev-list','--count',X+'..'+MAIN)==='1','origin main does not hold X plus the landing commit');
+  noForce(r);
+}
 // 82178003 (a): an unanswered push with the tip still B re-pushes the SAME C.
 async function repush(){
   const c=fixture(true),r=await seat(c,'run',{edits:TASK9,fail:'push-once'}),C=published(c);
@@ -510,7 +518,7 @@ const CASES=[
   ['local','target-checked-out',checkedOut],['local','board-path',boardPath],
   ['remote','push-first-no-force',pushFirst],['remote','race-fetch-fails',race],['remote','push-transport-fails',pushTransport],
   ['remote','push-applied-client-fails',pushApplied],['remote','push-outcome-unknown',pushUnknown],
-  ['remote','push-rejected-retry',pushRejected],['remote','diverged',diverged],['remote','push-unanswered-repush',repush],
+  ['remote','push-rejected-retry',pushRejected],['remote','diverged',diverged],['remote','local-ahead-fast-forward',localAhead],['remote','push-unanswered-repush',repush],
   ['remote','push-remote-rejected',remoteRejected],['remote','push-unanswered-peer-lands',peerLands],
 ];
 async function main(){

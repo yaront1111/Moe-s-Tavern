@@ -7667,6 +7667,14 @@ sync_land_target() {
     land_fetch "$1" || { LAND_CODE=MOE_LAND_FETCH_FAILED; LAND_MESSAGE="git fetch origin $1 failed 3 times: $LAND_FETCH_ERR"; return 1; }
     LAND_B=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/remotes/origin/$1^{commit}" 2>/dev/null) || { LAND_MESSAGE="refs/remotes/origin/$1 does not resolve"; return 1; }
     [ -z "$l" ] || git -C "$MOE_TOP" merge-base --is-ancestor "$l" "$LAND_B" 2>/dev/null || rc=$?
+    # A local target that strictly extends origin's (no commit origin has is missing) is a pure
+    # fast-forward: publish it, never forced, then re-read B. A true divergence stays refused.
+    if [ "$rc" -eq 1 ] && git -C "$MOE_TOP" merge-base --is-ancestor "$LAND_B" "$l" 2>/dev/null \
+        && git -C "$MOE_TOP" push --porcelain origin "$l:refs/heads/$1" >/dev/null 2>&1 \
+        && land_fetch "$1"; then
+        LAND_B=$(git -C "$MOE_TOP" rev-parse -q --verify "refs/remotes/origin/$1^{commit}" 2>/dev/null) || { LAND_MESSAGE="refs/remotes/origin/$1 does not resolve"; return 1; }
+        rc=0; git -C "$MOE_TOP" merge-base --is-ancestor "$l" "$LAND_B" 2>/dev/null || rc=$?
+    fi
     [ "$rc" -ne 1 ] || { LAND_CODE=MOE_LAND_TARGET_DIVERGED; LAND_MESSAGE="refs/heads/$1 holds commits origin's $1 lacks"; return 1; }
     [ "$rc" -eq 0 ] || { LAND_MESSAGE="git merge-base --is-ancestor exited $rc"; return 1; }
     mirror_land_target "$1" "$LAND_B"

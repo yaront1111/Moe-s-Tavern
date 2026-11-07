@@ -15,22 +15,16 @@
   "implementationPlan": [
     {
       "stepId": "step-1",
-      "description": "Create scripts/tests/copilot-smoke.mjs with your own Write tool (a TOOL witness; never a shell write, per the global rail). It is the repeatable real-CLI smoke for DoD 1-2. Model it on scripts/tests/onboarding.mjs: free-port `daemon init --project <P> --port <n>`, the /health wait, a proxy-stdio MCP client with `ws` loaded via createRequire(proxyEntry), board WebSocket APPROVE_TASK with expectedPlanRevision, and `daemon stop --project` in finally. Copy those helpers; never import onboarding.mjs, which runs on import. Facts: mem:decision-copilot-cli-contract.\nUSAGE: `node scripts/tests/copilot-smoke.mjs <sh|ps1> [--command <cli>] [--keep]`. <cli> defaults to `copilot`; anything else exits 2 with a usage line. Run it from a snapshot whose packages/moe-daemon/dist and packages/moe-proxy/dist are built, and assert both, as onboarding does.\n- sh needs a non-win32 platform. It launches `bash <root>/scripts/moe-agent.sh --role worker --project <P> --worker-id smoke-copilot-sh --command <cli> --no-loop --no-interactive`, the JetBrains bash shape for a copilot worker.\n- ps1 needs win32. It launches `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& '<root>\\scripts\\moe-agent.ps1' -Role worker -Project '<P>' -WorkerId smoke-copilot-ps1 -Command '<cli>' -NoLoop -Interactive:$false; exit $LASTEXITCODE\"`. That is Windows PowerShell 5.1 and JetBrains' `&` call (TerminalAgentLauncher.kt about :778). -File cannot bind -Interactive:$false on 5.1.\nCHILD ENV: process.env minus every MOE_* key except MOE_SERENA_PATH, and minus CLAUDE* keys. The driver runs inside a live seat whose MOE_WORKER_ID, MOE_SESSION_ID and MOE_ATTEMPT_* must never reach the scratch seat or its proxy. Keep HOME/USERPROFILE: copilot's sign-in and Serena live there. Keep the inherited GIT_CONFIG_* keys, because the wrapper appends its own guard entry to GIT_CONFIG_COUNT (moe-agent.sh about :9632). Only the scratch daemon gets HOME/USERPROFILE = <scratch>/profile, so it never writes the human's ~/.moe.\nFIXTURE:\n- scratch = mkdtemp(os.tmpdir(), 'moe-copilot-smoke-'), and P = <scratch>/project.\n- In P: `git init -b main`, a local user.name/user.email, a .gitignore with .moe/ .mcp.json .serena/ .worktrees/, and a README.md seed commit.\n- canary = 'CANARY-' + 16 hex chars from crypto.randomBytes, written to P/.serena/memories/smoke-canary.md.\n- Through the daemon and proxy: create_epic; create_task with DoD 'proof.txt holds the smoke-canary memory'; set_task_status PLANNING; create_team architect plus join_team smoke-architect; claim by taskId; get_context.\n- submit_plan with ONE step, newFiles ['proof.txt'] and the description \"Read the memory named smoke-canary with the serena MCP server's read_memory tool (do not open files under .serena yourself), then create proof.txt in the project root whose whole content is exactly that memory's text.\"\n- Then APPROVE_TASK over /ws until get_context reports WORKING.\nRUN:\n- Spawn the wrapper and record its PID; on POSIX it is detached in its own process group.\n- Tee stdout and stderr to <scratch>/wrapper.log and to the console, bounded by SMOKE_TIMEOUT_SEC (default 900).\n- On timeout, kill only that recorded child: on POSIX process.kill(-pid,'SIGTERM'), then SIGKILL after 5 s; on Windows `taskkill /PID <pid> /T /F`. Never kill by name or pattern (global rail).\n- While it runs, call moe.list_workers every 2 s and record each `type` of the seat's record (its id; else the record whose currentTaskId is the smoke task).\n- Also record payload.type of every /ws WORKER_CREATED, WORKER_UPDATED and STATE_SNAPSHOT worker for that seat. That is the feed the board's WorkerPanel titles cards with (AccountPresentation.workerTitle).\nVERDICT, checked in this order:\n(1) BLOCKED, exit 3, when wrapper.log holds a line with MOE_COPILOT_NOT_FOUND, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED, MOE_COPILOT_MCP_BLOCKED or `MOE_CLI_ARGV_REJECTED: the installed copilot`. Print `BLOCKED copilot-smoke <engine>: <that line, ANSI stripped>`. This is a human prerequisite, never a pass.\n(2) PASS, exit 0, only when ALL of these hold:\n- the wrapper exited 0;\n- get_context shows REVIEW or DONE and every plan step COMPLETED;\n- `git -C P log --all` has a feat(task-<id>) or fix(task-<id>) completion commit whose proof.txt (`git show <sha>:proof.txt`, trimmed) equals the canary;\n- the seat's last daemon-record type before deregistration is COPILOT, and so is at least one /ws worker event;\n- a Serena log <os.homedir()>/.serena/logs/<local date of the start or the end>/mcp_*.txt, with mtime at or after the launch, holds `read_memory: memory_name='smoke-canary'` (Serena logs each tool call that way).\nThen print ONE line: `PASS copilot-smoke <engine>: copilot <first line of `<cli> --version`>; task <id> <status>; steps <n>/<n>; worker <id> type COPILOT (daemon <types seen>; board <types seen>); commit <sha7> <subject>; canary ok; serena read_memory ok (<log file name>); <s> s`.\n(3) Otherwise FAIL, exit 1: `FAIL copilot-smoke <engine>: <every failed check>`, plus the last 60 lines of wrapper.log.\nERROR HANDLING:\n- Every await and child has a bound. A daemon that never turns healthy, a refused tool call or a git failure is a FAIL with its reason, never a hang or a PASS.\n- finally always closes the board socket and the proxy, runs `daemon stop --project P`, and removes scratch, unless --keep, which prints the kept path. Use rmSync with maxRetries for Windows EBUSY, behind onboarding's guard: dirname is os.tmpdir() and the basename prefix matches.\n- Never read ~/.copilot or any credential file, and never print env values.\n- `<cli> --version` on win32 needs spawnSync(..., {shell: true}) for npm's .cmd shim.\nThis file is not a *.test.mjs, so ci-workflows.test.mjs's CI-wiring rule does not apply (precedent: onboarding.mjs, wave1-pilot.mjs). Its offline regression test is leg P of step 2's gate.",
+      "description": "Phase 0, replan 2026-11-07 (macOS arm64 fleet host, copilot 1.0.107 signed in, no JDK, no wslpath/cmd.exe/powershell.exe/pwsh). Already landed on the task branch and NOT redone: the driver scripts/tests/copilot-smoke.mjs (macOS sh smoke PASSED, comment-e45be6e0), the gate scripts/tests/copilot-final-gate.sh (WSL profile), and the earlier docs. Re-scope: this row now proves copilot end to end on the host the fleet has, i.e. a macOS bash profile. The Windows PowerShell 5.1 smoke and the WSL/Windows-only gate legs (J = gradlew.bat via cmd.exe, ps1 and pwsh 7 rows) are split to a follow-up row on a Windows/WSL host; this plan neither fakes nor weakens them. DoD and invariants are unchanged; the human-side BLOCKED contract (exit 3, never PASS) stays. This step is planning context only: start and complete it with no edit.",
       "status": "COMPLETED",
       "affectedFiles": [],
-      "newFiles": [
-        "scripts/tests/copilot-smoke.mjs"
-      ],
-      "modifiedFiles": [
-        "scripts/tests/copilot-smoke.mjs"
-      ],
-      "note": "scripts/tests/copilot-smoke.mjs written with the Write tool (onboarding.mjs helpers copied, not imported). Verified: node --check OK; usage errors exit 2 (no engine, ps1 on linux, non-copilot --command, unbuilt dist); offline row from a /tmp snapshot build `node copilot-smoke.mjs sh --command <S>/no-such-dir/copilot` exits 3 in 13 s with one `BLOCKED copilot-smoke sh: [ERROR] MOE_COPILOT_NOT_FOUND: ...` line after a real daemon, board approval, wrapper pre-flight and claim; scratch removed. Scope note: the bash pre-flight (ensure_mcp_config, pre-existing) rewrites the human's ~/.config/claude/mcp_servers.json for the scratch project; the driver now snapshots it before launch and puts the bytes back in cleanup only while the file still names the scratch project (verified sha-equal after a run). File is ~385 lines (over the 300 target): one self-contained driver per the approved scope; every function <=50 lines.",
-      "startedAt": "2026-11-06T09:38:25.427Z",
-      "completedAt": "2026-11-06T09:43:49.756Z"
+      "note": "Planning context only; no edit.",
+      "startedAt": "2026-11-07T14:22:54.192Z",
+      "completedAt": "2026-11-07T14:22:57.612Z"
     },
     {
       "stepId": "step-2",
-      "description": "Create scripts/tests/copilot-final-gate.sh with your Write tool. It is this epic-final row's regression gate, and checkRefs[0] runs it as `timeout 1200s bash ...` from the repo or task-worktree root on a /mnt/<drive> path.\nSETUP:\n- Resolve ROOT from BASH_SOURCE and cd there, then `unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}`.\n- Require node, npm, git, wslpath, cmd.exe, powershell.exe and pwsh.exe. A missing one exits 2 naming it; never a SKIP.\n- Reach Windows through `/init \"$(command -v cmd.exe)\"`, which works whether or not WSL's binfmt entry is registered (mem:gotcha-wsl-interop-binfmt-init).\n- Print first: `[gate] the JetBrains leg needs the caller to hold the jetbrains-gradle lease`.\nLEG D, docs: run it first and synchronously, but let the other legs run whatever it says. A small `node - <<'JS'` check prints `DOCS STALE: <file>: <needle>` for each miss. Needles per file:\n- scripts/CLAUDE.md: MOE_COPILOT_NOT_FOUND, MOE_COPILOT_CONFIG_FAILED, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED, MOE_COPILOT_MCP_BLOCKED, `copilot-smoke.mjs`, `All five CLIs`, `Grok, Copilot or interactive Claude`.\n- docs/TROUBLESHOOTING.md: the same five codes, plus `MOE_CLI_ARGV_REJECTED: the installed copilot`.\n- docs/CONFIGURATION.md: MOE_COPILOT_MODEL, MOE_COPILOT_EFFORT, '`GROK` or `COPILOT`', '`copilot` → `COPILOT`', and the line starting '| `agentCommand` |' must contain '`copilot`'.\n- docs/SCHEMA.md: `GROK or COPILOT`.\n- README.md and docs/PRD.md: `GitHub Copilot CLI` (task-1c580985's text); docs/PRD.md must not contain `Autocomplete only`.\nTHEN FOUR PARALLEL LEGS. Each runs in a subshell that writes $L/<leg>.log; record each PID and collect its exit code with `wait <pid>`.\n- W, wrappers: `bash scripts/tests/copilot-guards-gate.sh`, task-e266a150's gate: vm-route on bash, 5.1 and pwsh 7 with every copilot row of ab323f85, 49d4a565 and d0ea8735; bash -n and ParseFile; both parity checks; lint; its mutation rows. It must print `PASS copilot-guards-gate`. Use the landed file name. Then `node --test scripts/tests/protected-agent-command.test.mjs` (bash rows: CP1, CP2 and the five-name refusal).\n- J, JetBrains: `/init \"$(command -v cmd.exe)\" /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <wslpath -w ROOT>\\moe-jetbrains && gradlew.bat test --rerun\"`. WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl). Then require TEST-*.xml under moe-jetbrains/build/test-results/test newer than the leg's start, with tests > 0 and failures + errors = 0, so an UP-TO-DATE run cannot pass.\n- V, VS Code: S = `mktemp -d` outside the checkout, then `git archive HEAD | tar -x -C $S`. Use the whole repo, because its tests read JetBrains and daemon sources. Then in $S/moe-vscode run `npm ci --no-audit --no-fund && npm test && npm run compile`.\n- P, packages and the smoke driver, in the same $S:\n  - copy this task's scripts/tests/copilot-smoke.mjs over the snapshot's (it is uncommitted in the worktree);\n  - in $S/packages/moe-proxy: `npm ci && npm run build`;\n  - in $S/packages/moe-daemon: `npm ci && npm run build && npx vitest run src/tools/workerType.test.ts`;\n  - then `timeout 300 node $S/scripts/tests/copilot-smoke.mjs sh --command $S/no-such-dir/copilot` must exit 3 with one `BLOCKED copilot-smoke sh: ` line naming MOE_COPILOT_NOT_FOUND.\n  That last check is the driver's offline test: a real daemon, board, fixture, wrapper pre-flight and claim, with no model call.\nOUTPUT: print `tail -n 15` of each leg's log, a per-leg PASS/FAIL table and the elapsed seconds. Print `PASS copilot-final-gate` and exit 0 only when D and all four legs pass. Otherwise exit 1 and keep $L, printing its path.\nERROR HANDLING:\n- A trap on EXIT, INT and TERM kills only the recorded leg PIDs (never by name or pattern, per the global rail) and removes only its own $S.\n- npm runs only in $S, never in the shared checkout (global rail).\n- No full postflight.{sh,ps1} (gate-budget rail).\nTEST IT NOW: bash -n the file, take the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease), and run it once. Expect only leg D red (docs not written yet: the docs RED) and W, J, V and P green, inside 20 minutes. Record the wall time, then release the lease.",
+      "description": "Edit scripts/tests/copilot-final-gate.sh (present in the task worktree; listed as newFiles only because it is not yet on the work branch) to add a host profile. Detect WSL (the current requirements: /init, wslpath, cmd.exe, powershell.exe, pwsh.exe, /mnt/<x> root) vs Darwin (uname -s). WSL behavior and its final line `PASS copilot-final-gate` stay byte-identical. On Darwin: require only node npm git tar timeout (macOS has /usr/bin/timeout here; if absent fall back to gtimeout, else exit 2 with a clear message) and bash 3.2 compatibility (no mapfile, no bash 4 features, no GNU cp --parents/date +%3N: use node -e Date.now() for the timestamp). Error handling: every leg returns a non-zero code on failure and the gate collects every exit code. Run legs D (docs anchors, unchanged), W-mac, V (VS Code npm ci/test/compile in the snapshot) and P (proxy+daemon snapshot build, workerType.test.ts, offline NOT_FOUND smoke row exit 3) in parallel with the same logging/cleanup/kill-only-own-child machinery. W-mac = bash -n scripts/moe-agent.sh, scripts/tests/parity-check.sh, npm run lint (repo root role-doc linter), scripts/tests/postflight-vm-route.sh only if it runs on bash 3.2 (the worker measures it; if it cannot, name the reason in the leg output instead of dropping it silently), and node --test scripts/tests/protected-agent-command.test.mjs with the same unskipped bash CP1/CP2/R1 row check. Do NOT call copilot-guards-gate.sh on Darwin (it hard-requires WSL). J on Darwin: if no JDK (`/usr/libexec/java_home` fails) print `SKIP J: no JDK on this host (needs gradlew.bat on a Windows/WSL host)`; if a JDK exists run `./gradlew test --rerun` in moe-jetbrains with the same fresh-XML check. Final line on Darwin is ONLY `PASS copilot-final-gate-mac (skipped: <comma list of every skipped leg, e.g. J, W-ps1, W-pwsh7, smoke-ps1>)` and never the bare `PASS copilot-final-gate`; any failed leg prints FAIL and exits 1; an unsupported host exits 2. Keep invariants: never skip silently, never print env values, no npm install/build/test in the shared checkout (snapshot only), no pkill (record child PIDs).",
       "status": "COMPLETED",
       "affectedFiles": [],
       "newFiles": [
@@ -39,71 +33,57 @@
       "modifiedFiles": [
         "scripts/tests/copilot-final-gate.sh"
       ],
-      "note": "copilot-final-gate.sh created. bash -n passes. Ran it once under the jetbrains-gradle lease (held 09:47:38Z-10:00Z). Wall 636 s, exit 1.\n- D: FAIL, 20 stale anchors (expected: the docs RED).\n- W: PASS. copilot-guards-gate printed PASS; protected-agent-command bash CP1/CP2/R1 ok and unskipped.\n- V: PASS. 869 tests, 852 pass, 0 fail, 17 skipped; compile ok.\n- P: PASS. workerType.test.ts 67/67; the driver's offline row gave exit 3 with one BLOCKED MOE_COPILOT_NOT_FOUND line.\n- J: FAIL. NoSuchFileException on moe-jetbrains/build/test-results/test/binary/in-progress-results-generic.bin, with \"1 busy\" Gradle daemon. Cause: my first gate launch was stopped seconds in, and its Windows Gradle kept running. WSL interop does not forward the signal, so the two :test tasks clashed on the same build dir.\n- J rerun of the gate's exact cmd.exe gradlew.bat test --rerun command plus the same fresh-XML count: rc 0 in 32 s, 51 fresh TEST-*.xml, 745 tests, 0 failures+errors.\nGate edits from this: the header names that interop limit, and J's failure line gives the rerun hint. Expectation met apart from that environmental J clash: only D is red on code. The full gate reruns fresh in step 6.",
-      "startedAt": "2026-11-06T09:43:52.458Z",
-      "completedAt": "2026-11-06T10:00:10.010Z"
+      "note": "Darwin host profile added to copilot-final-gate.sh (bash 3.2: no assoc arrays, no date +%3N, no mapfile). WSL branch logic unchanged (leg_w/leg_j/leg_v/leg_p, PASS copilot-final-gate line). On mac: W leg = w_protected rows + parity-check + lint + bash -n; J skipped when no JDK; V = VS Code test+compile; P = offline NOT_FOUND row exits 3. Skips named: J, W-ps1, W-pwsh7, W-mutants, W-vmroute-sh (task-d95ce3aa, macOS portability bug), smoke-ps1 (task-ba574a26). Fresh run: PASS copilot-final-gate-mac (skipped: ...) in 93 s, exit 0.",
+      "startedAt": "2026-11-07T14:23:20.495Z",
+      "completedAt": "2026-11-07T14:39:23.419Z"
     },
     {
       "stepId": "step-3",
-      "description": "Docs, scripts/CLAUDE.md, with the Edit tool. A Bash or python doc edit leaves no TOOL witness (mem:gotcha-docs-edit-via-bash-python-no-tool-witness). First read the landed copilot blocks in scripts/moe-agent.sh and moe-agent.ps1 (tasks ab323f85, 49d4a565 and d0ea8735) and copy every flag, code, banner and env name from there, never from this plan.\n(a) Per-CLI launch: add one new paragraph after the existing one. Cover:\n- Selection: agentCommand `copilot`, or any path whose base name is copilot (.exe/.cmd stripped); npm `@github/copilot`.\n- Role polarity as claude and grok: an architect or governor TUI, worker and qa headless. --interactive/--no-interactive (ps1 -Interactive / -Interactive:$false) override it. No exec flag. Polling is off for a copilot TUI.\n- The exact landed headless argv. The prompt rides stdin, never argv, as UTF-8 on every PowerShell engine. Each launch gets a private --log-dir and MCP JSON. The TUI argv has no --allow-all or --no-ask-user and adds -i <pointer>.\n- The guards: the once-per-process argv probe (MOE_CLI_ARGV_REJECTED; MOE_DISABLE_ARGV_PROBE=1 skips it), MOE_COPILOT_NOT_FOUND, MOE_COPILOT_CONFIG_FAILED, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED and MOE_COPILOT_MCP_BLOCKED. Each prints one line, escalates once to #general and exits 1, never a relaunch loop.\n- Sign-in: COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; else `copilot login`, kept in the OS keychain (WSL has none, so plaintext ~/.copilot/config.json); else gh's. Windows and WSL sign in separately. The account's Copilot plan must include Copilot CLI, and its policy must allow third-party MCP servers.\n- Model and effort: --model only when explicit (-Model/--model, settings.models.{role}, else MOE_COPILOT_MODEL; never the claude fallback). --reasoning-effort comes from MOE_COPILOT_EFFORT, else the claimed task's launch effort, else nothing. Copilot takes none, minimal, low, medium, high, xhigh and max; which ones work depends on the model.\n- No TOOL witness: the text output carries no machine-readable tool events, so copilot lands like Gemini and Grok. No Claude account rotation. Under verified-local, a copilot worker or QA seat is refused (MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED).\n- `scripts/tests/copilot-smoke.mjs` runs the real-CLI smoke. Step 5 appends the closing `Verified ...` sentence.\n(b) In the Land-on-every-exit TOOL tier, `a Codex TUI, Gemini, Grok or interactive Claude session leaves none` becomes `a Codex TUI, Gemini, Grok, Copilot or interactive Claude session leaves none`.\n(c) In the MCP-servers bullet, add copilot's config: a per-launch JSON in the wrapper's private temp dir, passed as --additional-mcp-config @<file> with --disable-builtin-mcps.\n- Server moe is the proxy, with MOE_TOOL_NAME_STYLE=underscore, the seat and identity keys that are set (the attempt pair both or neither), tools [\"*\"] and timeout 780000.\n- Server serena runs with --context agent on the launch's Serena root (W in worktree mode).\nThen `**All four CLIs**` becomes `**All five CLIs**`, and the Serena --context list becomes `claude-code`/`codex`/`agent`/`agent`/`agent` for claude/codex/gemini/grok/copilot.\nKeep the file's terse style: every seat reads it.",
+      "description": "Docs: record the split and the measured contract. scripts/CLAUDE.md per-CLI copilot paragraph: add the macOS profile (gate prints `PASS copilot-final-gate-mac (skipped: ...)`, the macOS bash smoke line from comment-e45be6e0 with copilot 1.0.107, and that Serena 2.1.0 logs a read as the REPL line s.mem.read_memory(\"smoke-canary\")), plus the explicit statement that the Windows PowerShell 5.1 smoke and the gradlew.bat/ps1/pwsh7 legs are owned by a named follow-up row. docs/TROUBLESHOOTING.md copilot section: one line saying copilot-smoke.mjs ps1 and the WSL profile need Windows/WSL and that on macOS the gate skips them by name. Keep every anchor the docs leg D checks (codes MOE_COPILOT_*, copilot-smoke.mjs, 'All five CLIs', 'Grok, Copilot or interactive Claude', 'MOE_CLI_ARGV_REJECTED: the installed copilot') present; add no contract claims beyond what step 2 prints.",
       "status": "COMPLETED",
       "affectedFiles": [
-        "scripts/CLAUDE.md"
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
       ],
       "modifiedFiles": [
-        "scripts/CLAUDE.md"
+        "scripts/CLAUDE.md",
+        "docs/TROUBLESHOOTING.md"
       ],
-      "note": "scripts/CLAUDE.md, written with the Edit tool. Every flag and code was copied from the landed sh/ps1 copilot blocks.\n(a) New copilot paragraph after the grok/codex one. It covers:\n- selection;\n- polarity and overrides;\n- the exact headless and TUI argv, with the prompt on stdin as UTF-8;\n- sign-in and entitlement/policy needs;\n- model and effort resolution with the effort levels;\n- the guards.\nOn the guards, the landed code differs from the plan text: NOT_FOUND and CONFIG_FAILED print one line and exit 1 with no #general post. Only ARGV_REJECTED, SIGNED_OUT, NOT_ENTITLED and MCP_BLOCKED go through copilot_fatal/Stop-MoeCopilot (an @governors post). The docs say so.\nThe paragraph also covers: serena-blocked is only a WARN; no TOOL witness and no account rotation; the verified-local refusal MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED; the copilot-smoke.mjs PASS/BLOCKED contract.\n(b) TOOL tier now reads 'Grok, Copilot or interactive Claude'.\n(c) MCP bullet: copilot's per-launch JSON (sh private temp dir, ps1 %TEMP%) with moe (underscore, keys, tools *, timeout 780000) and serena --context agent. 'All five CLIs'; the context list now ends agent/agent/agent for gemini/grok/copilot.\nAlso, in the Execution identity bullet: 'Codex, grok and copilot reach the proxy only through their written config'.\nChecks: all 8 gate-D needles for scripts/CLAUDE.md present; npm run lint OK.",
-      "startedAt": "2026-11-06T10:00:17.450Z",
-      "completedAt": "2026-11-06T10:01:27.017Z"
+      "note": "scripts/CLAUDE.md copilot paragraph: macOS profile, the PASS copilot-final-gate-mac (skipped: ...) line, skipped-leg names, and task-ba574a26 as owner of the Windows 5.1 smoke and gradlew.bat/ps1/pwsh7 legs; task-d95ce3aa for vm-route. TROUBLESHOOTING.md copilot section: one added sentence (ps1 and WSL profile need Windows/WSL; macOS skips them by name). All docs-leg anchors kept; parity-check and lint pass.",
+      "startedAt": "2026-11-07T14:39:27.798Z",
+      "completedAt": "2026-11-07T14:39:51.691Z"
     },
     {
       "stepId": "step-4",
-      "description": "Docs, with the Edit tool, taking every string from the landed wrappers and IDE code (no placeholder text).\ndocs/CONFIGURATION.md:\n- the :43 MOE_WORKER_TYPE row: (`CLAUDE`, `CODEX`, `GEMINI`, `GROK` or `COPILOT`);\n- the :55 row: `copilot` → `COPILOT` before 'anything else → `CLAUDE`';\n- the :84 MOE_DISABLE_ARGV_PROBE row: the probe covers codex and copilot. Quote copilot's measured rejections, `error: unexpected argument '<flag>' found` and `error: invalid value '<v>' for '--reasoning-effort <level>'`;\n- new rows MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT beside MOE_GROK_MODEL/MOE_GROK_EFFORT, with the landed precedence. Model: --model/-Model > settings.models.{role} > MOE_COPILOT_MODEL > copilot's own default, never the claude fallback. Effort: MOE_COPILOT_EFFORT > the claimed task's launch effort > no flag;\n- the :201 agentCommand row: add `copilot` to the values. Say it is GitHub Copilot CLI: `npm install -g @github/copilot`, then `copilot login`, separately on Windows and in WSL; the account needs Copilot CLI and MCP servers allowed. Add it to the protected list too: `claude`, `codex`, `gemini`, `grok` or `copilot`, matching JetBrains' landed enum-derived allowlist and the wrappers' MOE_PROTECTED_AGENT_COMMAND_REFUSED line;\n- the :226 models.{role} row: copilot takes it as --model (absent: MOE_COPILOT_MODEL, else copilot's default).\ndocs/SCHEMA.md: in the NOTE under WorkerType (about :1179-1180; a8e13516's 2026-11-05 22:11Z comment), the CLI list becomes `CLAUDE, CODEX, GEMINI, GROK or COPILOT (any other command is CLAUDE)`.\ndocs/TROUBLESHOOTING.md: add a `### Copilot seat stops with a MOE_COPILOT_* or MOE_CLI_ARGV_REJECTED line` section after the two Codex sections, before `## Task Sync Issues`, plus its Table of Contents entry. Give one short entry per code, with the exact landed line and its fix:\n- MOE_COPILOT_NOT_FOUND: install it on that OS (`npm install -g @github/copilot`; Windows and WSL separately; an IDE-launched seat needs it on the IDE's PATH).\n- MOE_COPILOT_SIGNED_OUT: `copilot login` on that OS, or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. WSL keeps the token in plaintext ~/.copilot/config.json.\n- MOE_COPILOT_NOT_ENTITLED: `Access denied by policy settings`, logged as HTTP 403 `not authorized to use this Copilot feature`. The account's plan lacks Copilot CLI, or its organization disabled it (github.com/settings/copilot).\n- MOE_COPILOT_MCP_BLOCKED: `Third-party MCP servers are disabled by your organization's Copilot policy` or `MCP server was blocked by policy`. Moe's moe and serena servers are local stdio servers, so the policy must allow MCP servers, and no registry allowlist may exclude them.\n- MOE_COPILOT_CONFIG_FAILED: the wrapper could not write its private prompt or MCP file (the temp dir is full or not writable).\n- MOE_CLI_ARGV_REJECTED for copilot: version drift between the plugin and copilot. Reinstall the plugin or pin copilot; MOE_DISABLE_ARGV_PROBE=1 skips the check.",
+      "description": "Verify once (test run), on this macOS host, then record. Run checkRefs[0] (the gate, Darwin profile) and checkRefs[1] (macOS bash smoke from a git-archive snapshot; portable mkdir -p + cp instead of GNU cp --parents). Post both result lines as a task comment (`PASS copilot-final-gate-mac (skipped: ...)` and `PASS copilot-smoke sh`). Confirm the WSL branch is unchanged by `bash -n scripts/tests/copilot-final-gate.sh` plus diff review (it cannot run here). In the complete_task summary state plainly that DoD 1's Windows PowerShell 5.1 smoke and the WSL/Windows gate legs were NOT run on this host and are carried by the follow-up row; do not claim them. A signed-out CLI, entitlement, MCP-policy or argv rejection prints one BLOCKED line and exit 3, never PASS.",
       "status": "COMPLETED",
-      "affectedFiles": [
-        "docs/CONFIGURATION.md",
-        "docs/SCHEMA.md",
-        "docs/TROUBLESHOOTING.md"
-      ],
+      "affectedFiles": [],
       "modifiedFiles": [
-        "docs/CONFIGURATION.md",
-        "docs/SCHEMA.md",
+        "scripts/tests/copilot-final-gate.sh",
+        "scripts/CLAUDE.md",
         "docs/TROUBLESHOOTING.md"
       ],
-      "note": "Edit-tool docs, with strings copied from the landed wrappers and the decision-copilot-cli-contract measurements.\nCONFIGURATION.md:\n- :43 now lists `GROK` or `COPILOT`.\n- :55 adds `copilot` → `COPILOT`, plus \"copilot's per-launch MCP JSON carries the value\".\n- MOE_DISABLE_ARGV_PROBE now covers codex and copilot, quoting both measured copilot rejections.\n- New rows MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT after MOE_GROK_EFFORT, with the landed precedence and the effort levels.\n- agentCommand: the protected list is claude/codex/gemini/grok/copilot. The values gain `copilot` with install/login/entitlement/MCP-policy notes.\n- models.{role}: copilot takes it as --model (absent: MOE_COPILOT_MODEL, else copilot's default).\nSCHEMA.md: the NOTE lists `CLAUDE, CODEX, GEMINI, GROK or COPILOT (any other command is CLAUDE)`.\nTROUBLESHOOTING.md: a new section \"Copilot seat stops with a `MOE_COPILOT_*` or `MOE_CLI_ARGV_REJECTED` line\" after the two Codex sections, before `---`/Task Sync Issues. It has a ToC sub-entry under MCP/Proxy Issues and one entry per code, each with the exact landed line and its fix. It notes that only the four post-launch codes escalate to #general, and that a serena-only block is a WARN.\nChecks:\n- the gate's docs leg run standalone: \"DOCS OK: 6 files, every copilot anchor present\", rc 0;\n- npm run lint OK;\n- account-trust-docs.test.mjs 6/6.",
-      "startedAt": "2026-11-06T10:01:28.775Z",
-      "completedAt": "2026-11-06T10:03:17.581Z"
+      "note": "Fresh macOS runs: checkRefs[0] PASS copilot-final-gate-mac (skipped: J, W-ps1, W-pwsh7, W-mutants, W-vmroute-sh, smoke-ps1) exit 0 in 93 s; checkRefs[1] PASS copilot-smoke sh (COPILOT on daemon and board, serena read ok) exit 0 in 132 s; parity-check and lint PASS. Windows 5.1 smoke and WSL/Windows legs NOT run (task-ba574a26).",
+      "startedAt": "2026-11-07T14:39:56.051Z",
+      "completedAt": "2026-11-07T14:44:15.881Z"
     },
     {
       "stepId": "step-5",
-      "description": "Real-CLI smoke (DoD 1 and 2), once per engine, WSL first. It spends real Copilot premium requests: run each engine once, and again only after a fix.\nPRECONDITIONS are the human's, not yours: copilot installed and signed in on that OS, with an account whose Copilot plan includes Copilot CLI and whose policy allows MCP servers. On 2026-11-06 the WSL account failed both checks (HTTP 403, and third-party MCP disabled), and Windows had no copilot (mem:decision-copilot-cli-contract).\n- WSL: run checkRefs[1] exactly. It makes a git-archive snapshot outside the checkout with this task's driver copied in, runs npm ci and the build for moe-proxy and moe-daemon only there, then runs `node <snapshot>/scripts/tests/copilot-smoke.mjs sh`.\n- Windows: run checkRefs[2] exactly. It makes the same snapshot under D:\\moe-scratch, builds it with Windows npm through cmd.exe, and runs the driver with Windows node and engine ps1. The seat is therefore moe-agent.ps1 on Windows PowerShell 5.1.\nOUTCOMES:\n- PASS (exit 0): post ONE task comment with both PASS lines verbatim, both copilot versions and the UTC date. Then append to scripts/CLAUDE.md's copilot paragraph, with the Edit tool: `Verified <UTC date> with copilot <version> on WSL (bash) and Windows (PowerShell 5.1) by scripts/tests/copilot-smoke.mjs.`\n- BLOCKED (exit 3) is a human prerequisite. Post the BLOCKED line(s) as a task comment. Then call moe.report_blocked {taskId, reason: '<BLOCKED line>; human action: <the remedy that code's TROUBLESHOOTING entry names>', needsFrom: 'human', blockedOnTaskIds: []} and end the session. Steps 1-4 are already checkpointed, and the next session reruns this step.\n- FAIL (exit 1): rerun once with --keep, then read the scratch dir and wrapper.log.\n  - A defect in this task's own driver is fixed here, in scripts/tests/copilot-smoke.mjs.\n  - A defect in a landed slice is NOT patched here. Examples: the @file servers do not load in an untrusted folder, the tools are unreachable, or the prompt is not read. Create ONE bug task in epic-be924fb8 with the evidence: the copilot version, the failing check, log excerpts with no secrets, and the wrapper lines and vm-route rows involved. Then call moe.report_blocked {blockedOnTaskIds: [<that id>]} so this row resumes when it lands.\nError handling for an interrupted run: the driver stops its own daemon and child. If a session dies mid-run, remove only the scratch dir it printed. Never claim a PASS you did not see, never weaken a driver check to get one, and never paste tokens, ~/.copilot contents or env values anywhere.",
-      "status": "IN_PROGRESS",
-      "affectedFiles": [
-        "scripts/CLAUDE.md"
-      ],
-      "startedAt": "2026-11-06T10:03:24.456Z"
-    },
-    {
-      "stepId": "step-6",
-      "description": "Verification. Take the jetbrains-gradle lease with moe.acquire_resource {resourceId: 'jetbrains-gradle', taskId, workerId, note: 'copilot-final-gate'}. If a peer holds it, wait with moe.wait_for_resource (mem:convention-jetbrains-gradle-lease). Then run checkRefs[0] exactly, once and fresh, from the task worktree root (a /mnt/<drive> path), and release the lease in every case.\nSubmit to moe.complete_task: its exit status, its tail (the per-leg table and `PASS copilot-final-gate`) and the wall time as verification, plus both smoke PASS lines from step 5 in the summary. This gate re-proves DoD 2-6 at the integrated tip: docs anchors, every copilot row of both wrappers on bash, 5.1 and pwsh 7, both parity checks, lint, protected-agent-command, ./gradlew test, the VS Code tests and compile, the daemon worker-type test, and the driver's offline row.\nError handling for a red run:\n- Read the failing leg's log (the gate prints its path), then rerun that leg's command alone to diagnose.\n- Leg D is this task's docs: fix them.\n- A failure in leg W, J or V caused by a slice's landed code becomes a bug task, as in step 5. Never edit wrappers, harnesses or IDE code in this row.\n- Never substitute a smaller gate, never run the full postflight, and never run npm in the shared checkout.",
-      "status": "PENDING",
-      "affectedFiles": []
-    },
-    {
-      "stepId": "step-7",
-      "description": "Adversarial self-review: load adversarial-self-review. The scope is the whole Copilot feature: this task's diff plus the landed commits of bfadf533, ab323f85, 49d4a565, e266a150, d0ea8735, d609eae3, 7739d4af, 1c580985 and 3a531816. The Stability & Hardening epic's other rows already passed their own gates.\nCheck:\n(1) Twin parity of every copilot string in both wrappers. parity-check passes, but read the hunks anyway.\n(2) The driver:\n- the identity scrub: no MOE_WORKER_ID, MOE_SESSION_ID or MOE_ATTEMPT_* reaches the scratch seat;\n- every wait is bounded, only the owned PID is ever killed, and the scratch-removal guard holds;\n- no credential reads;\n- the verdict order: a NOT_FOUND line can never PASS, and a seat that completes without calling Serena FAILs.\n(3) The gate: every leg's exit code is collected; an UP-TO-DATE Gradle run or a SKIP cannot count green; the trap kills only its own PIDs; nothing builds in the shared checkout.\n(4) Docs: every code, flag, banner and env name matches the landed wrappers byte for byte (grep each one). Nothing promises more than the landed behavior, and the measured 1.0.106 facts are labeled as measured.\n(5) Verified-local: read the wrapper's verified-local gate and confirm it applies to the qa role too. vm-route row C3 covers worker; d0ea8735's plan adds a qa row; the IDE slices refuse both roles. If no row covers a copilot QA seat, file a bug task.\n(6) Concurrency: two smokes at once use separate scratch dirs and ports, and each gate run gets its own snapshot.\n(7) Cross-platform: Windows paths with spaces in the driver's quoted -Command, CRLF-safe docs, and moe-agent.ps1's BOM untouched.\nFix what you find in this task's files and rerun checkRefs[0]. Anything in a slice's files becomes a bug task. No added line may contain a project.json globalRails.forbiddenPatterns string.",
-      "status": "PENDING",
-      "affectedFiles": []
+      "description": "Single adversarial self-review of this task's diff: (a) the Darwin branch can never print the bare `PASS copilot-final-gate`; (b) a leg that cannot run is named in the skipped list, never omitted; (c) the WSL branch is byte-identical (git diff shows only additive Darwin code and shared helper tweaks that behave the same on WSL); (d) bash 3.2 compatibility and macOS BSD tool flags (cp, date, sed, mktemp templates); (e) concurrent runs use unique mktemp dirs and kill only recorded PIDs; (f) no env values, credentials or ~/.copilot reads in logs; (g) total wall time stays under the 20 min gate budget.",
+      "status": "COMPLETED",
+      "affectedFiles": [],
+      "note": "Self-review of scripts/tests/copilot-final-gate.sh (+docs) found no defect. (a) Darwin prints only `PASS copilot-final-gate-mac (skipped: ...)`; the bare line is WSL-only. (b) Every cannot-run leg goes through skip(): J (when no JDK), W-ps1, W-pwsh7, W-mutants, W-vmroute-sh, smoke-ps1. (c) WSL logic is unchanged: only the assoc-array->PID_/RC_ variables (bash 3.2) and the shared w_protected/j_xml_check extraction; leg_w/leg_j bodies and final line identical. (d) No mapfile/assoc arrays/date +%3N/GNU cp on mac; `timeout` falls back to gtimeout else exit 2. (e) Unique mktemp dirs; interrupt test: TERM to the gate's own recorded PID -> exit 130, snapshot removed, no leaked children, logs kept. (f) The driver never reads ~/.copilot, filters MOE_*/CLAUDE* from the seat env, and kills only its own child group; no env values printed. (g) Wall time ~93 s of the 20 min budget. Theoretical only: the V/P legs test `git archive HEAD` while D reads the working tree (pre-existing design; QA runs on landed bytes).",
+      "startedAt": "2026-11-07T14:44:49.990Z",
+      "completedAt": "2026-11-07T14:46:17.780Z"
     }
   ],
-  "planRevision": 1,
-  "status": "BLOCKED",
-  "assignedWorkerId": null,
+  "planRevision": 3,
+  "status": "WORKING",
+  "assignedWorkerId": "worker-36ca8fd6",
   "branch": null,
   "prLink": null,
   "reopenCount": 0,
-  "reopenReason": "Unblocked by the governor, 05:0xZ on 11-06. The external prerequisite is partly met: GitHub Copilot CLI 1.0.106 is installed in WSL (Ubuntu-24.04, nvm node 24, /home/sysadmin/.nvm/versions/node/v24.21.0/bin/copilot) and signed in as GitHub user bigboycoder1 through `copilot login`, with the token in plaintext ~/.copilot/config.json because WSL has no keychain. WSL interop is restored, so powershell.exe runs from WSL again. NOT done yet: the Windows install, because @github/copilot is not in %APPDATA%\\npm. Plan against the WSL CLI now. The human installs it on Windows (`npm install -g @github/copilot`, then `copilot login`) before the Windows real-CLI smoke.",
+  "reopenReason": "UNANSWERED BLOCK, carried forward. This row left BLOCKED with nothing that would have cleared it on its own: no resource lease was pending and no prerequisite was unmet. Treat what follows as an OPEN question, not as history, and do not plan past it on a guess — re-block if it is still unanswered. Landing unlanded (diverged) 1 time(s) in a row; refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z; reconcile, then move the task to WORKING",
   "createdBy": "GOVERNOR",
   "parentTaskId": null,
   "dependsOn": [
@@ -150,130 +130,155 @@
       "author": "worker-12053315",
       "content": "Step 5 real-CLI smoke, 2026-11-06 ~10:05Z. Both engines are BLOCKED (exit 3), which the plan treats as a human prerequisite.\n\nWSL, checkRefs[1], copilot 1.0.106:\nBLOCKED copilot-smoke sh: [ERROR] MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403): its Copilot plan or organization policy does not include Copilot CLI. Sign in with a GitHub account whose Copilot plan includes Copilot CLI (copilot login), or have the organization enable Copilot CLI (github.com/settings/copilot). Windows and WSL sign in separately; this seat exits instead of looping.\nOn the same run copilot also printed \"Third-party MCP servers are disabled by your organization's Copilot policy\" and \"2 MCP servers were blocked by policy: 'moe', 'serena'\". Fixing the entitlement alone is not enough: the account's policy must also allow MCP servers, or the next run stops with MOE_COPILOT_MCP_BLOCKED.\n\nWindows, checkRefs[2], PowerShell 5.1 seat:\nBLOCKED copilot-smoke ps1: [ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: copilot. Install it (npm install -g @github/copilot), then sign in with copilot login.\n\nHuman action:\n(1) On Windows: `npm install -g @github/copilot`, then `copilot login`.\n(2) On both Windows and WSL: sign in with a GitHub account whose Copilot plan includes Copilot CLI and whose Copilot policy allows third-party MCP servers (github.com/settings/copilot).\nThen unblock this row. The next session reruns step 5, then steps 6 and 7.\n\nSteps 1-4 are done:\n- the driver scripts/tests/copilot-smoke.mjs;\n- the gate scripts/tests/copilot-final-gate.sh. Its first run took 636 s: W, V and P green, D red before the docs, J green on rerun (the first J clashed with a Gradle orphaned by my own interrupted launch);\n- the docs in scripts/CLAUDE.md, CONFIGURATION.md, SCHEMA.md and TROUBLESHOOTING.md. The gate's docs leg now says DOCS OK.\nBoth scratch snapshots and smoke projects were removed; no process is left.",
       "timestamp": "2026-11-06T10:05:55.126Z"
+    },
+    {
+      "id": "comment-ac9f06f4711e4ad7ba9636dc906e1140",
+      "author": "governor-72986cf1",
+      "content": "@architects Unblocked to WORKING by governor-72986cf1 on the human's instruction (2026-11-07: \"we are on mac with copilot .. unblock tasks\"). The fleet host is now macOS 27.2 arm64 with copilot 1.0.107 (/opt/homebrew/bin/copilot), signed in, and the moe and serena MCP servers load and answer: this governor seat runs on that Copilot CLI. So the 2026-11-06 NOT_FOUND, 403 and MCP-policy blockers do not reproduce here.\nPlan mismatch: step 5's checkRefs are host-bound. checkRefs[1] says WSL and uses GNU `cp --parents`, which macOS cp lacks. checkRefs[2] needs /mnt/d, wslpath, cmd.exe and Windows PowerShell 5.1. checkRefs[0] reaches gradlew.bat via cmd.exe. There is no pwsh on this Mac. Run as written here, step 5 fails or re-blocks.\nRecommendation (needs the human's confirmation; asked, not yet answered): re-scope step 5 so a macOS bash smoke replaces the WSL leg, and split the Windows PowerShell 5.1 leg into a follow-up row. Architect, if you agree, flip this row to PLANNING and re-plan step 5 and checkRefs. Workers: do not run checkRefs[2] on this host.",
+      "timestamp": "2026-11-07T13:22:42.355Z"
+    },
+    {
+      "id": "comment-e45be6e0bed442078d49516bc3b278df",
+      "author": "worker-eeec7a9a",
+      "content": "macOS (arm64) bash-wrapper copilot smoke, run 2026-11-07 13:34-13:36Z against a `git archive HEAD` snapshot with proxy+daemon built by `npm ci && npm run build` outside the repo:\n\n`PASS copilot-smoke sh: copilot GitHub Copilot CLI 1.0.107.; task task-685a9ad0efea45d9bb80014862d7a8ad REVIEW; steps 1/1; worker smoke-copilot-sh type COPILOT (daemon COPILOT; board COPILOT); commit 6f9fc25 feat(task-685a9ad0…): Copy the smoke-canary memory into proof.txt; canary ok; serena read_memory ok (mcp_20261107-153439_49758.txt); 138 s` (exit 0)\n\nTwo driver defects found and fixed in scripts/tests/copilot-smoke.mjs (my own row's file): (1) Serena 2.1.0 logs a memory read as the REPL line `s.mem.read_memory(\"smoke-canary\")`, not `read_memory: memory_name='smoke-canary'`, so run 1 printed FAIL although the seat had read the canary and landed a correct commit; the driver now accepts both forms. (2) A parent copilot's loader/session vars (COPILOT_AGENT_SESSION_ID, COPILOT_DEBUG_NONCE, COPILOT_LOADER_PID, COPILOT_CLI*) are now scrubbed from the scratch seat's env.\n\nAlso run here: parity-check.sh PASS, `npm run lint` OK, the final-gate docs-anchor leg (DOCS OK: 6 files).\n\nNOT run, host-bound: checkRefs[2] (Windows PowerShell 5.1: needs cmd.exe, /mnt/d, wslpath) and checkRefs[0] copilot-final-gate.sh (hard-requires wslpath, cmd.exe, powershell.exe, pwsh.exe; JetBrains leg needs gradlew.bat and there is no JDK on this Mac). checkRefs[1] as written uses GNU `cp --parents` (absent on macOS); I ran its equivalent by hand. I will not fake those legs. Per the governor's 2026-11-07 note, the Windows 5.1 smoke and the Windows-bound final gate need a re-plan or a follow-up row on a Windows/WSL host.",
+      "timestamp": "2026-11-07T13:37:43.162Z"
+    },
+    {
+      "id": "comment-91cfb82012be4ee3a6179791e2389d39",
+      "author": "worker-eeec7a9a",
+      "content": "MOE_WORKTREE_STRAY_EDIT: this session wrote 9 path(s) into the control checkout instead of its worktree /Users/yarontorgeman/tools/Moe-s-Tavern/.worktrees/task-59e1d1502a7b488387d6a6d2a10ff43a. They were neither landed nor reverted; a human decides.\n- docs/TROUBLESHOOTING.md\n- packages/moe-daemon/package.json\n- packages/moe-daemon/src/context/mcpStdioClient.test.ts\n- packages/moe-daemon/src/index.bin.test.ts\n- packages/moe-daemon/src/state/FileWatcher.test.ts\n- packages/moe-proxy/package.json\n- packages/moe-proxy/src/index.test.ts\n- scripts/moe-agent.sh\n- scripts/tests/seat-registration.test.mjs",
+      "timestamp": "2026-11-07T13:38:24.818Z"
+    },
+    {
+      "id": "comment-6b4a764721aa4a7589230d213469e99e",
+      "author": "governor-b12a5c54",
+      "content": "Governor note on the 13:38Z MOE_WORKTREE_STRAY_EDIT: those 9 control-checkout paths were governor-b12a5c54's uncommitted edits (macOS bin exec-bit and test fixes), not this task's session. They now live on PR #245 (fix/macos-bin-exec-and-tests), and the control checkout has been restored to HEAD, so nothing needs deciding. The replan reason (step 6 and DoD 1 need Windows/WSL hosts) is unrelated and still stands for the architect.",
+      "timestamp": "2026-11-07T14:15:47.945Z"
+    },
+    {
+      "id": "comment-ac582230a7ea4627b1f158c56aae26a7",
+      "author": "worker-eeec7a9a",
+      "content": "Step 4 verification on macOS arm64 (fresh runs, this session):\n1) checkRefs[0] `timeout 1200s bash scripts/tests/copilot-final-gate.sh` -> exit 0, 93 s: `PASS copilot-final-gate-mac (skipped: J, W-ps1, W-pwsh7, W-mutants, W-vmroute-sh, smoke-ps1)`. Legs D, W, V, P all PASS; P's offline row printed exactly one BLOCKED line with MOE_COPILOT_NOT_FOUND (exit 3).\n2) checkRefs[1] snapshot smoke -> exit 0, 132 s: `PASS copilot-smoke sh: copilot GitHub Copilot CLI 1.0.107.; task REVIEW; steps 1/1; worker type COPILOT (daemon COPILOT; board COPILOT); commit 8744152; canary ok; serena read_memory ok`.\n3) qualityGate `parity-check.sh && npm run lint` -> PASS.\nNOT run on this host (named, owned by task-ba574a26): the Windows PowerShell 5.1 smoke and the gradlew.bat/ps1/pwsh7/mutant gate legs. J has no JDK, so the J mac path was never exercised (only its SKIP path). postflight-vm-route.sh is skipped on macOS: bug task-d95ce3aa. task-28ed3649 is a duplicate of task-ba574a26 and should be archived.",
+      "timestamp": "2026-11-07T14:44:15.871Z"
+    },
+    {
+      "id": "comment-db554965cb0e4c84abb3798ba21975a7",
+      "author": "moe-daemon",
+      "timestamp": "2026-11-07T14:50:58.611Z",
+      "content": "Landing unlanded (diverged) 1 time(s) in a row; attempt attempt-4658d2de585043268e0fded813a2485f (generation 4); paths: (none reported); rescue ref: refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z; target tip: 4c53f5eb70e4eecb401bc91eea92465eeb0bbc90; task BLOCKED."
     }
   ],
   "hasPendingQuestion": false,
   "createdAt": "2026-11-05T19:28:29.466Z",
-  "updatedAt": "2026-11-06T10:07:14.522Z",
+  "updatedAt": "2026-11-07T14:51:32.834Z",
   "metrics": {
     "firstClaimAt": "2026-11-05T19:29:03.136Z",
-    "plannedStepCount": 7,
-    "plannedDistinctFileCount": 6,
-    "executedStepCount": 4
+    "plannedStepCount": 5,
+    "plannedDistinctFileCount": 3,
+    "executedStepCount": 10
   },
   "contextFetchedBy": [
     "architect-fe831cde",
     "architect-a3d9076e",
     "architect-a8e13516",
-    "worker-12053315"
+    "worker-12053315",
+    "worker-eeec7a9a",
+    "architect-b0829e20",
+    "worker-019f7926",
+    "architect-0ac7f084",
+    "worker-36ca8fd6"
   ],
-  "blockedReason": "BLOCKED copilot-smoke sh: [ERROR] MOE_COPILOT_NOT_ENTITLED: Copilot refused this GitHub account (HTTP 403); the same WSL run also showed \"Third-party MCP servers are disabled by your organization's Copilot policy\" with moe and serena blocked. BLOCKED copilot-smoke ps1: [ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: copilot. Human action: (1) on Windows run `npm install -g @github/copilot`, then `copilot login`; (2) on both Windows and WSL, sign in with a GitHub account whose Copilot plan includes Copilot CLI and whose Copilot policy allows third-party MCP servers (github.com/settings/copilot). Then unblock this row. The next session reruns step-5 (checkRefs[1] and [2]), then steps 6-7. Steps 1-4 are done and checkpointed; see task comment comment-7f9ede45 and Serena task-task-59e1d1502a7b488387d6a6d2a10ff43a-handoff.",
+  "blockedReason": null,
   "blockedOnTaskIds": null,
   "blockedResourceId": null,
-  "blockedFromStatus": "WORKING",
-  "blockedAt": "2026-11-06T10:06:42.314Z",
-  "priorBlockedReason": "The task explicitly requires its plan to settle flags/MCP/auth/model/effort against the INSTALLED CLI and retain a real signed-in Windows+WSL claim/work/complete smoke. Governor comment confirms human installation/sign-in is outstanding. Current direct checks: command -v copilot returns no executable; the available Windows powershell.exe path cannot execute from this session (exit 126, Exec format error), so Windows availability cannot be established here either. This is a concrete external tool/runtime prerequisite, not REPL silence or a plan-approval wait. Earlier measured 1.0.105 parser facts and fake harnesses suffice for the submitted slice plans, not the missing native signed-in integration contract. Human setup and runnable native Windows/WSL access are needed before this row can be planned without inventing evidence. Preserve all original DoD and existing code dependencies; full handoff and missing closing-doc NOTE are in the latest task comment and Serena handoff.",
+  "blockedFromStatus": null,
+  "blockedAt": null,
+  "priorBlockedReason": "Landing unlanded (diverged) 1 time(s) in a row; refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z; reconcile, then move the task to WORKING",
   "tier": "heavy",
   "effort": "xhigh",
   "model": "claude-opus-5-5",
   "codexModel": "gpt-6-astra",
   "lowEffortEligible": true,
-  "planSizeWarnings": [
-    "Plan touches 6 distinct files (target <=5); plans over 10 are rejected. Small file-disjoint tasks review better and parallelize."
-  ],
   "stepsCompleted": [
     "step-1",
     "step-2",
     "step-3",
-    "step-4"
+    "step-4",
+    "step-5"
   ],
   "failedDodItems": [],
-  "planSubmittedAt": "2026-11-06T05:26:32.170Z",
+  "planSubmittedAt": "2026-11-07T14:22:25.177Z",
   "executionContract": {
-    "intendedBehavior": "GitHub Copilot CLI is a fifth agent provider end to end. The slice rows' wrappers, IDE pickers, daemon worker type and listings are integrated, and a repeatable real-CLI smoke proves them on WSL (the bash wrapper) and on Windows (moe-agent.ps1 on Windows PowerShell 5.1). In each smoke a copilot worker seat claims, works and completes a scratch task through the moe and Serena MCP servers, with worker.type COPILOT on the daemon record and on the board feed. The epic-final gate re-runs every affected suite within 20 minutes. scripts/CLAUDE.md, CONFIGURATION.md, SCHEMA.md and TROUBLESHOOTING.md document the landed behavior and the measured copilot 1.0.106 contract.",
+    "intendedBehavior": "GitHub Copilot CLI is a fifth agent provider, proven on the available macOS host: the bash wrapper smoke claims, works and completes a scratch task with worker.type COPILOT, and the final gate has a Darwin profile that runs every leg the host can run and names every skipped leg. The Windows PowerShell 5.1 smoke and WSL/Windows-only gate legs are split to a follow-up row and never faked.",
     "acceptanceCriteria": [
-      "checkRefs[1] (WSL, bash wrapper) and checkRefs[2] (Windows, moe-agent.ps1 on Windows PowerShell 5.1) each print `PASS copilot-smoke <engine>`. Each run shows: the task in REVIEW or DONE with every step COMPLETED; a completion commit whose proof.txt equals the canary; worker.type COPILOT on the daemon record and on the /ws board feed; and Serena's own log showing read_memory smoke-canary. Both lines are posted as a task comment and summarized in scripts/CLAUDE.md.",
-      "checkRefs[0] prints `PASS copilot-final-gate` within 20 minutes. It covers: the docs anchors; copilot-guards-gate.sh (vm-route on bash, 5.1 and pwsh 7 with every copilot row, parse checks, parity-check.sh and .ps1, lint); protected-agent-command (bash rows); ./gradlew test with fresh XML and zero failures; the VS Code npm test and compile; the daemon's workerType.test.ts; and the driver's offline NOT_FOUND row exiting 3.",
-      "A human-side prerequisite makes the driver print one BLOCKED line and exit 3, never PASS. These are: a missing CLI, a signed-out CLI, an account without Copilot CLI, MCP servers blocked by policy, or an argv rejection. The row is then reported blocked on the named human action.",
-      "The docs cover:\n- scripts/CLAUDE.md: the per-CLI copilot paragraph, and copilot in the TOOL-tier and MCP-servers bullets;\n- CONFIGURATION.md: agentCommand, models.{role}, both MOE_WORKER_TYPE rows, MOE_DISABLE_ARGV_PROBE, MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT;\n- SCHEMA.md: the launcher NOTE;\n- TROUBLESHOOTING.md: a copilot section;\n- README and PRD (task-1c580985): checked by the gate."
+      "checkRefs[1] prints `PASS copilot-smoke sh` on macOS: task REVIEW or DONE with all steps COMPLETED, completion commit whose proof.txt equals the canary, worker.type COPILOT on the daemon record and /ws board feed, Serena read_memory smoke-canary logged.",
+      "checkRefs[0] on macOS prints `PASS copilot-final-gate-mac (skipped: ...)` within 20 minutes, covering docs anchors, bash parity-check/lint/bash -n/protected-agent-command rows, VS Code npm test+compile, the daemon workerType.test.ts and the driver's offline NOT_FOUND row exiting 3; it never prints the bare `PASS copilot-final-gate`.",
+      "A human-side prerequisite still gives one BLOCKED line and exit 3, never PASS.",
+      "Docs state the macOS profile and name the follow-up row that owns the Windows 5.1 smoke and the gradlew.bat/ps1/pwsh7 legs."
     ],
     "invariants": [
-      "The driver never lets the live seat's identity reach the scratch seat: it drops every MOE_* key except MOE_SERENA_PATH, and every CLAUDE* key. It never reads ~/.copilot or a credential file, never prints env values, and kills only its own recorded child.",
-      "No npm install, build or test runs in the shared checkout; only snapshot builds (global rail).",
-      "This row edits no wrapper, harness, IDE or daemon source. A defect found there becomes a bug task that this row blocks on.",
-      "No full postflight runs, and checkRefs[0] stays within 20 minutes.",
-      "PASS requires every check. A BLOCKED or FAIL run never prints PASS."
+      "WSL profile output and its `PASS copilot-final-gate` line are unchanged.",
+      "The driver never forwards live-seat MOE_*/CLAUDE* identity, never reads ~/.copilot or credentials, never prints env values, kills only its own recorded child.",
+      "No npm install/build/test in the shared checkout; snapshots only.",
+      "No wrapper, harness, IDE or daemon source is edited; a defect found there becomes a bug task.",
+      "Skipped legs are always named; PASS requires every runnable leg green."
     ],
     "compatibility": [
       "No MCP tool API, daemon schema or .moe state-format change.",
-      "The existing providers' docs rows keep their content; copilot is only added.",
-      "onboarding.mjs and every slice harness are unchanged."
+      "Existing providers' docs rows keep their content."
     ],
     "approvedScope": [
-      "scripts/tests/copilot-smoke.mjs (new): the real-CLI smoke driver, with engines sh and ps1, --command and --keep. Verdicts PASS, BLOCKED and FAIL exit 0, 3 and 1; usage errors exit 2.",
-      "scripts/tests/copilot-final-gate.sh (new): the docs-anchor leg D plus parallel legs W (wrappers), J (JetBrains), V (VS Code) and P (packages plus the driver's offline row).",
-      "scripts/CLAUDE.md: the per-CLI copilot paragraph, the TOOL-tier sentence and the MCP-servers bullet.",
-      "docs/CONFIGURATION.md: the agentCommand, models.{role}, both MOE_WORKER_TYPE, MOE_DISABLE_ARGV_PROBE, MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT rows.",
-      "docs/SCHEMA.md: the WorkerType NOTE.",
-      "docs/TROUBLESHOOTING.md: a copilot section and its ToC entry."
+      "scripts/tests/copilot-final-gate.sh: Darwin host profile only; WSL profile untouched. The file exists only on this task's branch (moe/task/task-59e1d150), not yet on the work branch, hence newFiles in the plan.",
+      "scripts/CLAUDE.md: the copilot paragraph (macOS profile, follow-up ownership).",
+      "docs/TROUBLESHOOTING.md: one copilot-section line."
     ],
     "reuse": [
-      "scripts/tests/onboarding.mjs: daemon start, health and stop; the proxy-stdio MCP client; board APPROVE_TASK.",
-      "task-e266a150's scripts/tests/copilot-guards-gate.sh as the wrapper leg.",
-      "mem:gotcha-jetbrains-gradle-from-wsl: gradlew.bat through cmd.exe with GRADLE_OPTS and --rerun.",
-      "The JetBrains launch shapes for the smoke launch: `& <script> ... -Interactive:$false`, and bash --no-interactive."
+      "The existing leg_d/leg_v/leg_p/bounded/on_exit machinery in copilot-final-gate.sh.",
+      "scripts/tests/copilot-smoke.mjs sh engine (already macOS-proven).",
+      "scripts/tests/parity-check.sh, npm run lint, protected-agent-command.test.mjs."
     ],
     "sourceAssumptions": [
-      "Measured on copilot 1.0.106 in WSL (mem:decision-copilot-cli-contract):\n- the slice argv parses (--help exits 0);\n- rejections read `error: unexpected argument '<f>' found` and `error: invalid value '<v>' for '--reasoning-effort <level>'`;\n- with no prompt it prints `No prompt provided...`;\n- signed out, stderr says `Error: No authentication information found.` and the log holds `[ERROR] No authentication information found.`;\n- the human's account gets `Access denied by policy settings` (log: 403 `not authorized to use this Copilot feature`) and `Third-party MCP servers are disabled by your organization's Copilot policy`, the latter on stderr only.",
-      "scripts/tests/onboarding.mjs (246 lines) starts `daemon init --project --port`, waits for /health, drives tools through the proxy's stdio and approves through /ws APPROVE_TASK with expectedPlanRevision.",
-      "moe.list_workers returns each worker's type. /ws broadcasts WORKER_CREATED and WORKER_UPDATED with the full Worker (WebSocketServer.broadcast). The JetBrains WorkerPanel titles each card with worker.type (AccountPresentation.workerTitle).",
-      "Serena logs each tool call as `read_memory: memory_name='<name>'` in ~/.serena/logs/<date>/mcp_*.txt. Windows has %USERPROFILE%\\.local\\bin\\serena.exe and node.exe.",
-      "Worker claude seats run with --permission-mode bypassPermissions (moe-agent.sh PRINT_ARGS), so a worker may launch `copilot --allow-all`. The interactive architect TUI's classifier refused that run.",
-      "WSL has no JDK, so Gradle runs as gradlew.bat through cmd.exe. `gradlew test` needs no daemon or proxy dist, because requireBundledAssets runs only in prepareSandbox.",
-      "The wrapper appends its git-guard entry to an inherited GIT_CONFIG_COUNT (moe-agent.sh about :9632).",
-      "JetBrains runs the ps1 wrapper as `& <script> -Role ... -Command <cmd>` (TerminalAgentLauncher.kt about :778). task-d609eae3 adds `-Interactive:$false` for copilot."
+      "Host: Darwin arm64, bash 3.2.57, /usr/bin/timeout present, no JDK (`java -version` fails), no wslpath/cmd.exe/pwsh.",
+      "copilot 1.0.107 at /opt/homebrew/bin/copilot, signed in; moe and serena MCP servers load (comment-e45be6e0).",
+      "copilot-guards-gate.sh (task-e266a150) hard-requires WSL, so the Darwin W leg inlines its bash-only steps.",
+      "copilot-final-gate.sh (174 lines, in the task worktree .worktrees/task-59e1d150…): legs leg_w/leg_j/leg_v/leg_p, tool check at lines 23-27, J uses date +%3N (GNU only)."
     ],
     "checkRefs": [
       "cd \"$(git rev-parse --show-toplevel)\" && timeout 1200s bash scripts/tests/copilot-final-gate.sh",
-      "cd \"$(git rev-parse --show-toplevel)\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};S=$(mktemp -d)&&echo \"snapshot $S\"&&git archive HEAD|tar -x -C \"$S\"&&cp --parents scripts/tests/copilot-smoke.mjs \"$S\"&&(cd \"$S/packages/moe-proxy\"&&npm ci --no-audit --no-fund >/dev/null&&npm run build >/dev/null)&&(cd \"$S/packages/moe-daemon\"&&npm ci --no-audit --no-fund >/dev/null&&npm run build >/dev/null)&&{ timeout 1500 node \"$S/scripts/tests/copilot-smoke.mjs\" sh;r=$?;echo \"copilot-smoke sh exit $r\";rm -rf \"$S\";[ $r = 0 ];}",
-      "cd \"$(git rev-parse --show-toplevel)\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};mkdir -p /mnt/d/moe-scratch&&S=$(mktemp -d -p /mnt/d/moe-scratch cps.XXXXXX)&&echo \"snapshot $S\"&&git archive HEAD|tar -x -C \"$S\"&&cp --parents scripts/tests/copilot-smoke.mjs \"$S\"&&B=$(wslpath -w \"$S\")&&{ timeout 1800 /init \"$(command -v cmd.exe)\" /d /c \"cd /d $B\\packages\\moe-proxy && call npm ci --no-audit --no-fund >nul && call npm run build >nul && cd /d $B\\packages\\moe-daemon && call npm ci --no-audit --no-fund >nul && call npm run build >nul && cd /d $B && node scripts\\tests\\copilot-smoke.mjs ps1\";r=$?;echo \"copilot-smoke ps1 exit $r\";rm -rf \"$S\";[ $r = 0 ];}"
+      "cd \"$(git rev-parse --show-toplevel)\"&&unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*};S=$(mktemp -d)&&echo \"snapshot $S\"&&git archive HEAD|tar -x -C \"$S\"&&mkdir -p \"$S/scripts/tests\"&&cp scripts/tests/copilot-smoke.mjs \"$S/scripts/tests/\"&&(cd \"$S/packages/moe-proxy\"&&npm ci --no-audit --no-fund >/dev/null&&npm run build >/dev/null)&&(cd \"$S/packages/moe-daemon\"&&npm ci --no-audit --no-fund >/dev/null&&npm run build >/dev/null)&&{ timeout 1500 node \"$S/scripts/tests/copilot-smoke.mjs\" sh;r=$?;echo \"copilot-smoke sh exit $r\";rm -rf \"$S\";[ $r = 0 ];}"
     ]
   },
   "planningNotes": {
-    "approachesConsidered": "- A manual smoke procedure recorded only in a comment: rejected. QA could not re-run it, and it is not repeatable for the next copilot version. A driver modeled on onboarding.mjs makes the smoke a command (checkRefs[1]/[2]). The driver's NOT_FOUND path doubles as an offline regression row inside the gate.\n- An inline checkRefs[0] that chains wrappers, Gradle, VS Code and daemon legs: rejected. It cannot fit the 1000-char cap with the docs anchors. An owned gate script reuses e266a150's copilot-guards-gate.sh for the wrapper leg instead.\n- Patching any wrapper defect the smoke finds in this row: rejected. The wrappers' argv is pinned by vm-route rows from other rows, and this row would grow past 6 files. A defect becomes a bug task, and this row blocks on it.\n- A JSONL TOOL witness (`--output-format json`): deferred. The wrapper runs text mode, no tool-event shape was measurable without an entitled account, and in worktree mode attribution has no tiers. Copilot lands like Gemini and Grok.\n- A new guard row, task-d0ea8735, was filed from the measured 403 and MCP-policy failures, and this row depends on it.",
-    "codebaseInsights": "- The board's worker cards show worker.type raw (WorkerPanel via AccountPresentation.workerTitle), fed by /ws WORKER_CREATED/WORKER_UPDATED. So recording the /ws events proves the board leg of DoD 2, and moe.list_workers proves the daemon record.\n- Serena logs every tool application with its arguments, so a read_memory of a unique memory name proves the serena server was used.\n- The wrapper's git guard appends to an inherited GIT_CONFIG_COUNT, so the driver can keep the live seat's overlay.\n- Gradle must run through cmd.exe from WSL. A fresh worktree has no build dir, so a Kotlin compile adds about 1-2 min.\n- The verified-local CLI check is one catch-all for worker and QA seats (moe-agent.sh about :10243). The harness rows cover worker only; d0ea8735's plan adds a qa row.",
-    "risks": "- The human must sign in, in WSL and in Windows after installing copilot there, with an account that has Copilot CLI and allows MCP servers. On 2026-11-06 the WSL account failed both, so the smoke reports BLOCKED until then.\n- The smoke spends premium requests: run each engine once.\n- Copilot behavior was not measurable without an entitled run: @file MCP servers in an untrusted prompt-mode folder, env propagation to MCP servers, tool naming, and per-model effort support. The smoke settles them, and a failure routes to a bug task.\n- Gate wall time: the W leg (vm-route on three engines) dominates at about 10 min; the other legs run in parallel. Hold the jetbrains-gradle lease.\n- Windows snapshot builds on drvfs are slow, and rm -rf there takes minutes.\n- If e266a150 landed its gate under another name, the gate script uses the landed one (it is this task's own file).",
+    "approachesConsidered": "Faking/stubbing the Windows legs on macOS: rejected (task invariant). Keeping the plan as-is and waiting for a Windows host: rejected, the fleet is on macOS now. Silent skipping: rejected; a distinct PASS line that lists skipped legs keeps the WSL gate strict. Splitting the Windows 5.1 smoke and J/ps1/pwsh7 legs into a follow-up row.",
+    "codebaseInsights": "copilot-final-gate.sh and copilot-smoke.mjs already exist in the task worktree/branch with the docs; only the host profile remains. bash on macOS is 3.2; BSD cp lacks --parents; date lacks %3N.",
+    "risks": "postflight-vm-route.sh may not run under bash 3.2: measure and report by name rather than drop. A follow-up row for the Windows legs must be created so DoD 1 is not silently lost; the worker must not claim those legs passed.",
     "keyFiles": [
-      "scripts/tests/onboarding.mjs",
-      "scripts/tests/copilot-guards-gate.sh (task-e266a150)",
-      "scripts/moe-agent.sh (copilot launch, verified-local gate about :10243, git guard about :9632)",
-      "scripts/moe-agent.ps1",
+      "scripts/tests/copilot-final-gate.sh",
+      "scripts/tests/copilot-smoke.mjs",
+      "scripts/tests/copilot-guards-gate.sh",
       "scripts/CLAUDE.md",
-      "docs/CONFIGURATION.md (:43, :55, :84, :86-91, :201, :226)",
-      "docs/SCHEMA.md (:1172-1185)",
-      "docs/TROUBLESHOOTING.md (Codex sections :454-534)",
-      "moe-jetbrains/src/main/kotlin/com/moe/toolwindow/WorkerPanel.kt",
-      "packages/moe-daemon/src/server/WebSocketServer.ts (broadcast)"
+      "docs/TROUBLESHOOTING.md"
     ]
   },
   "executionPolicySnapshot": {
     "version": 2,
     "profile": "legacy",
-    "planRevision": 1,
+    "planRevision": 3,
     "deliveryPolicy": "legacy"
   },
   "planSourceBasis": {
     "version": 1,
-    "commit": "15c7fb34b75b7024732a1ebb92931ec69a51203e",
-    "planRevision": 1
+    "commit": "4c53f5eb70e4eecb401bc91eea92465eeb0bbc90",
+    "planRevision": 3
   },
-  "planApprovedAt": "2026-11-06T05:26:32.207Z",
-  "approvedPlanRevision": 1,
+  "planApprovedAt": "2026-11-07T14:22:25.209Z",
+  "approvedPlanRevision": 3,
   "lastCommitOutcome": {
-    "outcome": "committed",
-    "kind": "checkpoint",
-    "sessionId": "worker-12053315@2026-11-06T09:29:30Z",
-    "at": "2026-11-06T10:07:14.521Z"
+    "outcome": "failed",
+    "kind": "completion",
+    "code": "MOE_LAND_TARGET_DIVERGED",
+    "sessionId": "worker-019f7926@2026-11-07T14:44:31Z",
+    "at": "2026-11-07T14:50:58.284Z"
   },
   "workStartedAt": "2026-11-06T09:38:25.427Z",
   "commits": [
@@ -296,15 +301,190 @@
       "treeId": "0f612a930f859f58adba0952ebb5a78543411637",
       "status": "BLOCKED",
       "pushed": true
+    },
+    {
+      "sha": "21a81287b0c4558816f32df68cf72f79a09118ae",
+      "ref": "refs/heads/moe/task/task-59e1d1502a7b488387d6a6d2a10ff43a",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-eeec7a9a@2026-11-07T13:28:30Z",
+      "paths": [
+        "docs/CONFIGURATION.md",
+        "docs/SCHEMA.md",
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/tests/copilot-final-gate.sh",
+        "scripts/tests/copilot-smoke.mjs"
+      ],
+      "recordedBy": "worker-eeec7a9a",
+      "recordedAt": "2026-11-07T13:38:24.434Z",
+      "treeId": "37f0dfa48577a00dd9c3948ef56f5a61fbb68315",
+      "status": "PLANNING",
+      "pushed": false
+    },
+    {
+      "sha": "e12d6318af513d8903242d6cd8725c7242910114",
+      "ref": "refs/heads/moe/task/task-59e1d1502a7b488387d6a6d2a10ff43a",
+      "kind": "checkpoint",
+      "role": "worker",
+      "sessionId": "worker-019f7926@2026-11-07T14:44:31Z",
+      "paths": [
+        "docs/TROUBLESHOOTING.md",
+        "scripts/CLAUDE.md",
+        "scripts/tests/copilot-final-gate.sh"
+      ],
+      "recordedBy": "worker-019f7926",
+      "recordedAt": "2026-11-07T14:44:38.214Z",
+      "treeId": "0cf1922191c9da15473d2171c820d528f1caadca",
+      "status": "WORKING",
+      "pushed": false
+    },
+    {
+      "sha": "e12d6318af513d8903242d6cd8725c7242910114",
+      "ref": "refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z",
+      "kind": "rescue",
+      "role": "worker",
+      "sessionId": "worker-019f7926@2026-11-07T14:44:31Z",
+      "paths": [],
+      "recordedBy": "worker-019f7926",
+      "recordedAt": "2026-11-07T14:50:57.973Z",
+      "status": "REVIEW",
+      "pushed": false,
+      "message": "MOE_RESCUE_REF task=task-59e1d1502a7b488387d6a6d2a10ff43a ref=refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z sha=e12d6318af513d8903242d6cd8725c7242910114 reason=diverged"
     }
   ],
   "filesModified": [
-    "docs/CONFIGURATION.md",
-    "docs/SCHEMA.md",
-    "docs/TROUBLESHOOTING.md",
-    "scripts/CLAUDE.md",
     "scripts/tests/copilot-final-gate.sh",
-    "scripts/tests/copilot-smoke.mjs"
+    "scripts/CLAUDE.md",
+    "docs/TROUBLESHOOTING.md"
   ],
-  "unattributedPaths": []
+  "unattributedPaths": [],
+  "priorAttempt": {
+    "attemptedAt": "2026-11-07T13:38:03.839Z",
+    "reason": "Host mismatch: the fleet host is now macOS arm64 (copilot 1.0.107, signed in). Step 6's checkRefs[0] (copilot-final-gate.sh) hard-requires wslpath, cmd.exe, powershell.exe, pwsh.exe and gradlew.bat (no JDK here), and DoD 1's Windows PowerShell 5.1 smoke (checkRefs[2]) needs cmd.exe, /mnt/d and wslpath. None can run on this Mac, and I will not fake or weaken them. Step 5's macOS bash smoke PASSED (see comment-e45be6e0) after two driver fixes.",
+    "implementationPlan": [
+      {
+        "stepId": "step-1",
+        "description": "Create scripts/tests/copilot-smoke.mjs with your own Write tool (a TOOL witness; never a shell write, per the global rail). It is the repeatable real-CLI smoke for DoD 1-2. Model it on scripts/tests/onboarding.mjs: free-port `daemon init --project <P> --port <n>`, the /health wait, a proxy-stdio MCP client with `ws` loaded via createRequire(proxyEntry), board WebSocket APPROVE_TASK with expectedPlanRevision, and `daemon stop --project` in finally. Copy those helpers; never import onboarding.mjs, which runs on import. Facts: mem:decision-copilot-cli-contract.\nUSAGE: `node scripts/tests/copilot-smoke.mjs <sh|ps1> [--command <cli>] [--keep]`. <cli> defaults to `copilot`; anything else exits 2 with a usage line. Run it from a snapshot whose packages/moe-daemon/dist and packages/moe-proxy/dist are built, and assert both, as onboarding does.\n- sh needs a non-win32 platform. It launches `bash <root>/scripts/moe-agent.sh --role worker --project <P> --worker-id smoke-copilot-sh --command <cli> --no-loop --no-interactive`, the JetBrains bash shape for a copilot worker.\n- ps1 needs win32. It launches `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"& '<root>\\scripts\\moe-agent.ps1' -Role worker -Project '<P>' -WorkerId smoke-copilot-ps1 -Command '<cli>' -NoLoop -Interactive:$false; exit $LASTEXITCODE\"`. That is Windows PowerShell 5.1 and JetBrains' `&` call (TerminalAgentLauncher.kt about :778). -File cannot bind -Interactive:$false on 5.1.\nCHILD ENV: process.env minus every MOE_* key except MOE_SERENA_PATH, and minus CLAUDE* keys. The driver runs inside a live seat whose MOE_WORKER_ID, MOE_SESSION_ID and MOE_ATTEMPT_* must never reach the scratch seat or its proxy. Keep HOME/USERPROFILE: copilot's sign-in and Serena live there. Keep the inherited GIT_CONFIG_* keys, because the wrapper appends its own guard entry to GIT_CONFIG_COUNT (moe-agent.sh about :9632). Only the scratch daemon gets HOME/USERPROFILE = <scratch>/profile, so it never writes the human's ~/.moe.\nFIXTURE:\n- scratch = mkdtemp(os.tmpdir(), 'moe-copilot-smoke-'), and P = <scratch>/project.\n- In P: `git init -b main`, a local user.name/user.email, a .gitignore with .moe/ .mcp.json .serena/ .worktrees/, and a README.md seed commit.\n- canary = 'CANARY-' + 16 hex chars from crypto.randomBytes, written to P/.serena/memories/smoke-canary.md.\n- Through the daemon and proxy: create_epic; create_task with DoD 'proof.txt holds the smoke-canary memory'; set_task_status PLANNING; create_team architect plus join_team smoke-architect; claim by taskId; get_context.\n- submit_plan with ONE step, newFiles ['proof.txt'] and the description \"Read the memory named smoke-canary with the serena MCP server's read_memory tool (do not open files under .serena yourself), then create proof.txt in the project root whose whole content is exactly that memory's text.\"\n- Then APPROVE_TASK over /ws until get_context reports WORKING.\nRUN:\n- Spawn the wrapper and record its PID; on POSIX it is detached in its own process group.\n- Tee stdout and stderr to <scratch>/wrapper.log and to the console, bounded by SMOKE_TIMEOUT_SEC (default 900).\n- On timeout, kill only that recorded child: on POSIX process.kill(-pid,'SIGTERM'), then SIGKILL after 5 s; on Windows `taskkill /PID <pid> /T /F`. Never kill by name or pattern (global rail).\n- While it runs, call moe.list_workers every 2 s and record each `type` of the seat's record (its id; else the record whose currentTaskId is the smoke task).\n- Also record payload.type of every /ws WORKER_CREATED, WORKER_UPDATED and STATE_SNAPSHOT worker for that seat. That is the feed the board's WorkerPanel titles cards with (AccountPresentation.workerTitle).\nVERDICT, checked in this order:\n(1) BLOCKED, exit 3, when wrapper.log holds a line with MOE_COPILOT_NOT_FOUND, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED, MOE_COPILOT_MCP_BLOCKED or `MOE_CLI_ARGV_REJECTED: the installed copilot`. Print `BLOCKED copilot-smoke <engine>: <that line, ANSI stripped>`. This is a human prerequisite, never a pass.\n(2) PASS, exit 0, only when ALL of these hold:\n- the wrapper exited 0;\n- get_context shows REVIEW or DONE and every plan step COMPLETED;\n- `git -C P log --all` has a feat(task-<id>) or fix(task-<id>) completion commit whose proof.txt (`git show <sha>:proof.txt`, trimmed) equals the canary;\n- the seat's last daemon-record type before deregistration is COPILOT, and so is at least one /ws worker event;\n- a Serena log <os.homedir()>/.serena/logs/<local date of the start or the end>/mcp_*.txt, with mtime at or after the launch, holds `read_memory: memory_name='smoke-canary'` (Serena logs each tool call that way).\nThen print ONE line: `PASS copilot-smoke <engine>: copilot <first line of `<cli> --version`>; task <id> <status>; steps <n>/<n>; worker <id> type COPILOT (daemon <types seen>; board <types seen>); commit <sha7> <subject>; canary ok; serena read_memory ok (<log file name>); <s> s`.\n(3) Otherwise FAIL, exit 1: `FAIL copilot-smoke <engine>: <every failed check>`, plus the last 60 lines of wrapper.log.\nERROR HANDLING:\n- Every await and child has a bound. A daemon that never turns healthy, a refused tool call or a git failure is a FAIL with its reason, never a hang or a PASS.\n- finally always closes the board socket and the proxy, runs `daemon stop --project P`, and removes scratch, unless --keep, which prints the kept path. Use rmSync with maxRetries for Windows EBUSY, behind onboarding's guard: dirname is os.tmpdir() and the basename prefix matches.\n- Never read ~/.copilot or any credential file, and never print env values.\n- `<cli> --version` on win32 needs spawnSync(..., {shell: true}) for npm's .cmd shim.\nThis file is not a *.test.mjs, so ci-workflows.test.mjs's CI-wiring rule does not apply (precedent: onboarding.mjs, wave1-pilot.mjs). Its offline regression test is leg P of step 2's gate.",
+        "status": "COMPLETED",
+        "affectedFiles": [],
+        "newFiles": [
+          "scripts/tests/copilot-smoke.mjs"
+        ],
+        "modifiedFiles": [
+          "scripts/tests/copilot-smoke.mjs"
+        ],
+        "note": "scripts/tests/copilot-smoke.mjs written with the Write tool (onboarding.mjs helpers copied, not imported). Verified: node --check OK; usage errors exit 2 (no engine, ps1 on linux, non-copilot --command, unbuilt dist); offline row from a /tmp snapshot build `node copilot-smoke.mjs sh --command <S>/no-such-dir/copilot` exits 3 in 13 s with one `BLOCKED copilot-smoke sh: [ERROR] MOE_COPILOT_NOT_FOUND: ...` line after a real daemon, board approval, wrapper pre-flight and claim; scratch removed. Scope note: the bash pre-flight (ensure_mcp_config, pre-existing) rewrites the human's ~/.config/claude/mcp_servers.json for the scratch project; the driver now snapshots it before launch and puts the bytes back in cleanup only while the file still names the scratch project (verified sha-equal after a run). File is ~385 lines (over the 300 target): one self-contained driver per the approved scope; every function <=50 lines.",
+        "startedAt": "2026-11-06T09:38:25.427Z",
+        "completedAt": "2026-11-06T09:43:49.756Z"
+      },
+      {
+        "stepId": "step-2",
+        "description": "Create scripts/tests/copilot-final-gate.sh with your Write tool. It is this epic-final row's regression gate, and checkRefs[0] runs it as `timeout 1200s bash ...` from the repo or task-worktree root on a /mnt/<drive> path.\nSETUP:\n- Resolve ROOT from BASH_SOURCE and cd there, then `unset ${!MOE_*} ${!CLAUDE*} ${!FAKE_*}`.\n- Require node, npm, git, wslpath, cmd.exe, powershell.exe and pwsh.exe. A missing one exits 2 naming it; never a SKIP.\n- Reach Windows through `/init \"$(command -v cmd.exe)\"`, which works whether or not WSL's binfmt entry is registered (mem:gotcha-wsl-interop-binfmt-init).\n- Print first: `[gate] the JetBrains leg needs the caller to hold the jetbrains-gradle lease`.\nLEG D, docs: run it first and synchronously, but let the other legs run whatever it says. A small `node - <<'JS'` check prints `DOCS STALE: <file>: <needle>` for each miss. Needles per file:\n- scripts/CLAUDE.md: MOE_COPILOT_NOT_FOUND, MOE_COPILOT_CONFIG_FAILED, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED, MOE_COPILOT_MCP_BLOCKED, `copilot-smoke.mjs`, `All five CLIs`, `Grok, Copilot or interactive Claude`.\n- docs/TROUBLESHOOTING.md: the same five codes, plus `MOE_CLI_ARGV_REJECTED: the installed copilot`.\n- docs/CONFIGURATION.md: MOE_COPILOT_MODEL, MOE_COPILOT_EFFORT, '`GROK` or `COPILOT`', '`copilot` → `COPILOT`', and the line starting '| `agentCommand` |' must contain '`copilot`'.\n- docs/SCHEMA.md: `GROK or COPILOT`.\n- README.md and docs/PRD.md: `GitHub Copilot CLI` (task-1c580985's text); docs/PRD.md must not contain `Autocomplete only`.\nTHEN FOUR PARALLEL LEGS. Each runs in a subshell that writes $L/<leg>.log; record each PID and collect its exit code with `wait <pid>`.\n- W, wrappers: `bash scripts/tests/copilot-guards-gate.sh`, task-e266a150's gate: vm-route on bash, 5.1 and pwsh 7 with every copilot row of ab323f85, 49d4a565 and d0ea8735; bash -n and ParseFile; both parity checks; lint; its mutation rows. It must print `PASS copilot-guards-gate`. Use the landed file name. Then `node --test scripts/tests/protected-agent-command.test.mjs` (bash rows: CP1, CP2 and the five-name refusal).\n- J, JetBrains: `/init \"$(command -v cmd.exe)\" /d /c \"set GRADLE_OPTS=-Xmx512m&& cd /d <wslpath -w ROOT>\\moe-jetbrains && gradlew.bat test --rerun\"`. WSL has no JDK (mem:gotcha-jetbrains-gradle-from-wsl). Then require TEST-*.xml under moe-jetbrains/build/test-results/test newer than the leg's start, with tests > 0 and failures + errors = 0, so an UP-TO-DATE run cannot pass.\n- V, VS Code: S = `mktemp -d` outside the checkout, then `git archive HEAD | tar -x -C $S`. Use the whole repo, because its tests read JetBrains and daemon sources. Then in $S/moe-vscode run `npm ci --no-audit --no-fund && npm test && npm run compile`.\n- P, packages and the smoke driver, in the same $S:\n  - copy this task's scripts/tests/copilot-smoke.mjs over the snapshot's (it is uncommitted in the worktree);\n  - in $S/packages/moe-proxy: `npm ci && npm run build`;\n  - in $S/packages/moe-daemon: `npm ci && npm run build && npx vitest run src/tools/workerType.test.ts`;\n  - then `timeout 300 node $S/scripts/tests/copilot-smoke.mjs sh --command $S/no-such-dir/copilot` must exit 3 with one `BLOCKED copilot-smoke sh: ` line naming MOE_COPILOT_NOT_FOUND.\n  That last check is the driver's offline test: a real daemon, board, fixture, wrapper pre-flight and claim, with no model call.\nOUTPUT: print `tail -n 15` of each leg's log, a per-leg PASS/FAIL table and the elapsed seconds. Print `PASS copilot-final-gate` and exit 0 only when D and all four legs pass. Otherwise exit 1 and keep $L, printing its path.\nERROR HANDLING:\n- A trap on EXIT, INT and TERM kills only the recorded leg PIDs (never by name or pattern, per the global rail) and removes only its own $S.\n- npm runs only in $S, never in the shared checkout (global rail).\n- No full postflight.{sh,ps1} (gate-budget rail).\nTEST IT NOW: bash -n the file, take the jetbrains-gradle lease (mem:convention-jetbrains-gradle-lease), and run it once. Expect only leg D red (docs not written yet: the docs RED) and W, J, V and P green, inside 20 minutes. Record the wall time, then release the lease.",
+        "status": "COMPLETED",
+        "affectedFiles": [],
+        "newFiles": [
+          "scripts/tests/copilot-final-gate.sh"
+        ],
+        "modifiedFiles": [
+          "scripts/tests/copilot-final-gate.sh"
+        ],
+        "note": "copilot-final-gate.sh created. bash -n passes. Ran it once under the jetbrains-gradle lease (held 09:47:38Z-10:00Z). Wall 636 s, exit 1.\n- D: FAIL, 20 stale anchors (expected: the docs RED).\n- W: PASS. copilot-guards-gate printed PASS; protected-agent-command bash CP1/CP2/R1 ok and unskipped.\n- V: PASS. 869 tests, 852 pass, 0 fail, 17 skipped; compile ok.\n- P: PASS. workerType.test.ts 67/67; the driver's offline row gave exit 3 with one BLOCKED MOE_COPILOT_NOT_FOUND line.\n- J: FAIL. NoSuchFileException on moe-jetbrains/build/test-results/test/binary/in-progress-results-generic.bin, with \"1 busy\" Gradle daemon. Cause: my first gate launch was stopped seconds in, and its Windows Gradle kept running. WSL interop does not forward the signal, so the two :test tasks clashed on the same build dir.\n- J rerun of the gate's exact cmd.exe gradlew.bat test --rerun command plus the same fresh-XML count: rc 0 in 32 s, 51 fresh TEST-*.xml, 745 tests, 0 failures+errors.\nGate edits from this: the header names that interop limit, and J's failure line gives the rerun hint. Expectation met apart from that environmental J clash: only D is red on code. The full gate reruns fresh in step 6.",
+        "startedAt": "2026-11-06T09:43:52.458Z",
+        "completedAt": "2026-11-06T10:00:10.010Z"
+      },
+      {
+        "stepId": "step-3",
+        "description": "Docs, scripts/CLAUDE.md, with the Edit tool. A Bash or python doc edit leaves no TOOL witness (mem:gotcha-docs-edit-via-bash-python-no-tool-witness). First read the landed copilot blocks in scripts/moe-agent.sh and moe-agent.ps1 (tasks ab323f85, 49d4a565 and d0ea8735) and copy every flag, code, banner and env name from there, never from this plan.\n(a) Per-CLI launch: add one new paragraph after the existing one. Cover:\n- Selection: agentCommand `copilot`, or any path whose base name is copilot (.exe/.cmd stripped); npm `@github/copilot`.\n- Role polarity as claude and grok: an architect or governor TUI, worker and qa headless. --interactive/--no-interactive (ps1 -Interactive / -Interactive:$false) override it. No exec flag. Polling is off for a copilot TUI.\n- The exact landed headless argv. The prompt rides stdin, never argv, as UTF-8 on every PowerShell engine. Each launch gets a private --log-dir and MCP JSON. The TUI argv has no --allow-all or --no-ask-user and adds -i <pointer>.\n- The guards: the once-per-process argv probe (MOE_CLI_ARGV_REJECTED; MOE_DISABLE_ARGV_PROBE=1 skips it), MOE_COPILOT_NOT_FOUND, MOE_COPILOT_CONFIG_FAILED, MOE_COPILOT_SIGNED_OUT, MOE_COPILOT_NOT_ENTITLED and MOE_COPILOT_MCP_BLOCKED. Each prints one line, escalates once to #general and exits 1, never a relaunch loop.\n- Sign-in: COPILOT_GITHUB_TOKEN, GH_TOKEN or GITHUB_TOKEN; else `copilot login`, kept in the OS keychain (WSL has none, so plaintext ~/.copilot/config.json); else gh's. Windows and WSL sign in separately. The account's Copilot plan must include Copilot CLI, and its policy must allow third-party MCP servers.\n- Model and effort: --model only when explicit (-Model/--model, settings.models.{role}, else MOE_COPILOT_MODEL; never the claude fallback). --reasoning-effort comes from MOE_COPILOT_EFFORT, else the claimed task's launch effort, else nothing. Copilot takes none, minimal, low, medium, high, xhigh and max; which ones work depends on the model.\n- No TOOL witness: the text output carries no machine-readable tool events, so copilot lands like Gemini and Grok. No Claude account rotation. Under verified-local, a copilot worker or QA seat is refused (MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED).\n- `scripts/tests/copilot-smoke.mjs` runs the real-CLI smoke. Step 5 appends the closing `Verified ...` sentence.\n(b) In the Land-on-every-exit TOOL tier, `a Codex TUI, Gemini, Grok or interactive Claude session leaves none` becomes `a Codex TUI, Gemini, Grok, Copilot or interactive Claude session leaves none`.\n(c) In the MCP-servers bullet, add copilot's config: a per-launch JSON in the wrapper's private temp dir, passed as --additional-mcp-config @<file> with --disable-builtin-mcps.\n- Server moe is the proxy, with MOE_TOOL_NAME_STYLE=underscore, the seat and identity keys that are set (the attempt pair both or neither), tools [\"*\"] and timeout 780000.\n- Server serena runs with --context agent on the launch's Serena root (W in worktree mode).\nThen `**All four CLIs**` becomes `**All five CLIs**`, and the Serena --context list becomes `claude-code`/`codex`/`agent`/`agent`/`agent` for claude/codex/gemini/grok/copilot.\nKeep the file's terse style: every seat reads it.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "scripts/CLAUDE.md"
+        ],
+        "modifiedFiles": [
+          "scripts/CLAUDE.md"
+        ],
+        "note": "scripts/CLAUDE.md, written with the Edit tool. Every flag and code was copied from the landed sh/ps1 copilot blocks.\n(a) New copilot paragraph after the grok/codex one. It covers:\n- selection;\n- polarity and overrides;\n- the exact headless and TUI argv, with the prompt on stdin as UTF-8;\n- sign-in and entitlement/policy needs;\n- model and effort resolution with the effort levels;\n- the guards.\nOn the guards, the landed code differs from the plan text: NOT_FOUND and CONFIG_FAILED print one line and exit 1 with no #general post. Only ARGV_REJECTED, SIGNED_OUT, NOT_ENTITLED and MCP_BLOCKED go through copilot_fatal/Stop-MoeCopilot (an @governors post). The docs say so.\nThe paragraph also covers: serena-blocked is only a WARN; no TOOL witness and no account rotation; the verified-local refusal MOE_VERIFIED_LOCAL_CLI_UNSUPPORTED; the copilot-smoke.mjs PASS/BLOCKED contract.\n(b) TOOL tier now reads 'Grok, Copilot or interactive Claude'.\n(c) MCP bullet: copilot's per-launch JSON (sh private temp dir, ps1 %TEMP%) with moe (underscore, keys, tools *, timeout 780000) and serena --context agent. 'All five CLIs'; the context list now ends agent/agent/agent for gemini/grok/copilot.\nAlso, in the Execution identity bullet: 'Codex, grok and copilot reach the proxy only through their written config'.\nChecks: all 8 gate-D needles for scripts/CLAUDE.md present; npm run lint OK.",
+        "startedAt": "2026-11-06T10:00:17.450Z",
+        "completedAt": "2026-11-06T10:01:27.017Z"
+      },
+      {
+        "stepId": "step-4",
+        "description": "Docs, with the Edit tool, taking every string from the landed wrappers and IDE code (no placeholder text).\ndocs/CONFIGURATION.md:\n- the :43 MOE_WORKER_TYPE row: (`CLAUDE`, `CODEX`, `GEMINI`, `GROK` or `COPILOT`);\n- the :55 row: `copilot` → `COPILOT` before 'anything else → `CLAUDE`';\n- the :84 MOE_DISABLE_ARGV_PROBE row: the probe covers codex and copilot. Quote copilot's measured rejections, `error: unexpected argument '<flag>' found` and `error: invalid value '<v>' for '--reasoning-effort <level>'`;\n- new rows MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT beside MOE_GROK_MODEL/MOE_GROK_EFFORT, with the landed precedence. Model: --model/-Model > settings.models.{role} > MOE_COPILOT_MODEL > copilot's own default, never the claude fallback. Effort: MOE_COPILOT_EFFORT > the claimed task's launch effort > no flag;\n- the :201 agentCommand row: add `copilot` to the values. Say it is GitHub Copilot CLI: `npm install -g @github/copilot`, then `copilot login`, separately on Windows and in WSL; the account needs Copilot CLI and MCP servers allowed. Add it to the protected list too: `claude`, `codex`, `gemini`, `grok` or `copilot`, matching JetBrains' landed enum-derived allowlist and the wrappers' MOE_PROTECTED_AGENT_COMMAND_REFUSED line;\n- the :226 models.{role} row: copilot takes it as --model (absent: MOE_COPILOT_MODEL, else copilot's default).\ndocs/SCHEMA.md: in the NOTE under WorkerType (about :1179-1180; a8e13516's 2026-11-05 22:11Z comment), the CLI list becomes `CLAUDE, CODEX, GEMINI, GROK or COPILOT (any other command is CLAUDE)`.\ndocs/TROUBLESHOOTING.md: add a `### Copilot seat stops with a MOE_COPILOT_* or MOE_CLI_ARGV_REJECTED line` section after the two Codex sections, before `## Task Sync Issues`, plus its Table of Contents entry. Give one short entry per code, with the exact landed line and its fix:\n- MOE_COPILOT_NOT_FOUND: install it on that OS (`npm install -g @github/copilot`; Windows and WSL separately; an IDE-launched seat needs it on the IDE's PATH).\n- MOE_COPILOT_SIGNED_OUT: `copilot login` on that OS, or COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN. WSL keeps the token in plaintext ~/.copilot/config.json.\n- MOE_COPILOT_NOT_ENTITLED: `Access denied by policy settings`, logged as HTTP 403 `not authorized to use this Copilot feature`. The account's plan lacks Copilot CLI, or its organization disabled it (github.com/settings/copilot).\n- MOE_COPILOT_MCP_BLOCKED: `Third-party MCP servers are disabled by your organization's Copilot policy` or `MCP server was blocked by policy`. Moe's moe and serena servers are local stdio servers, so the policy must allow MCP servers, and no registry allowlist may exclude them.\n- MOE_COPILOT_CONFIG_FAILED: the wrapper could not write its private prompt or MCP file (the temp dir is full or not writable).\n- MOE_CLI_ARGV_REJECTED for copilot: version drift between the plugin and copilot. Reinstall the plugin or pin copilot; MOE_DISABLE_ARGV_PROBE=1 skips the check.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "docs/CONFIGURATION.md",
+          "docs/SCHEMA.md",
+          "docs/TROUBLESHOOTING.md"
+        ],
+        "modifiedFiles": [
+          "docs/CONFIGURATION.md",
+          "docs/SCHEMA.md",
+          "docs/TROUBLESHOOTING.md"
+        ],
+        "note": "Edit-tool docs, with strings copied from the landed wrappers and the decision-copilot-cli-contract measurements.\nCONFIGURATION.md:\n- :43 now lists `GROK` or `COPILOT`.\n- :55 adds `copilot` → `COPILOT`, plus \"copilot's per-launch MCP JSON carries the value\".\n- MOE_DISABLE_ARGV_PROBE now covers codex and copilot, quoting both measured copilot rejections.\n- New rows MOE_COPILOT_MODEL and MOE_COPILOT_EFFORT after MOE_GROK_EFFORT, with the landed precedence and the effort levels.\n- agentCommand: the protected list is claude/codex/gemini/grok/copilot. The values gain `copilot` with install/login/entitlement/MCP-policy notes.\n- models.{role}: copilot takes it as --model (absent: MOE_COPILOT_MODEL, else copilot's default).\nSCHEMA.md: the NOTE lists `CLAUDE, CODEX, GEMINI, GROK or COPILOT (any other command is CLAUDE)`.\nTROUBLESHOOTING.md: a new section \"Copilot seat stops with a `MOE_COPILOT_*` or `MOE_CLI_ARGV_REJECTED` line\" after the two Codex sections, before `---`/Task Sync Issues. It has a ToC sub-entry under MCP/Proxy Issues and one entry per code, each with the exact landed line and its fix. It notes that only the four post-launch codes escalate to #general, and that a serena-only block is a WARN.\nChecks:\n- the gate's docs leg run standalone: \"DOCS OK: 6 files, every copilot anchor present\", rc 0;\n- npm run lint OK;\n- account-trust-docs.test.mjs 6/6.",
+        "startedAt": "2026-11-06T10:01:28.775Z",
+        "completedAt": "2026-11-06T10:03:17.581Z"
+      },
+      {
+        "stepId": "step-5",
+        "description": "Real-CLI smoke (DoD 1 and 2), once per engine, WSL first. It spends real Copilot premium requests: run each engine once, and again only after a fix.\nPRECONDITIONS are the human's, not yours: copilot installed and signed in on that OS, with an account whose Copilot plan includes Copilot CLI and whose policy allows MCP servers. On 2026-11-06 the WSL account failed both checks (HTTP 403, and third-party MCP disabled), and Windows had no copilot (mem:decision-copilot-cli-contract).\n- WSL: run checkRefs[1] exactly. It makes a git-archive snapshot outside the checkout with this task's driver copied in, runs npm ci and the build for moe-proxy and moe-daemon only there, then runs `node <snapshot>/scripts/tests/copilot-smoke.mjs sh`.\n- Windows: run checkRefs[2] exactly. It makes the same snapshot under D:\\moe-scratch, builds it with Windows npm through cmd.exe, and runs the driver with Windows node and engine ps1. The seat is therefore moe-agent.ps1 on Windows PowerShell 5.1.\nOUTCOMES:\n- PASS (exit 0): post ONE task comment with both PASS lines verbatim, both copilot versions and the UTC date. Then append to scripts/CLAUDE.md's copilot paragraph, with the Edit tool: `Verified <UTC date> with copilot <version> on WSL (bash) and Windows (PowerShell 5.1) by scripts/tests/copilot-smoke.mjs.`\n- BLOCKED (exit 3) is a human prerequisite. Post the BLOCKED line(s) as a task comment. Then call moe.report_blocked {taskId, reason: '<BLOCKED line>; human action: <the remedy that code's TROUBLESHOOTING entry names>', needsFrom: 'human', blockedOnTaskIds: []} and end the session. Steps 1-4 are already checkpointed, and the next session reruns this step.\n- FAIL (exit 1): rerun once with --keep, then read the scratch dir and wrapper.log.\n  - A defect in this task's own driver is fixed here, in scripts/tests/copilot-smoke.mjs.\n  - A defect in a landed slice is NOT patched here. Examples: the @file servers do not load in an untrusted folder, the tools are unreachable, or the prompt is not read. Create ONE bug task in epic-be924fb8 with the evidence: the copilot version, the failing check, log excerpts with no secrets, and the wrapper lines and vm-route rows involved. Then call moe.report_blocked {blockedOnTaskIds: [<that id>]} so this row resumes when it lands.\nError handling for an interrupted run: the driver stops its own daemon and child. If a session dies mid-run, remove only the scratch dir it printed. Never claim a PASS you did not see, never weaken a driver check to get one, and never paste tokens, ~/.copilot contents or env values anywhere.",
+        "status": "COMPLETED",
+        "affectedFiles": [
+          "scripts/CLAUDE.md"
+        ],
+        "modifiedFiles": [
+          "scripts/tests/copilot-smoke.mjs",
+          "scripts/tests/copilot-final-gate.sh",
+          "scripts/CLAUDE.md",
+          "docs/CONFIGURATION.md",
+          "docs/SCHEMA.md",
+          "docs/TROUBLESHOOTING.md"
+        ],
+        "note": "Partial by host: macOS arm64 bash engine only. `PASS copilot-smoke sh` (copilot 1.0.107, task REVIEW, worker.type COPILOT on daemon + board, commit 6f9fc25 with canary, Serena read ok, 138 s) from a snapshot built outside the repo; full line in comment-e45be6e0. Fixed two driver defects (Serena 2.1 REPL log form; parent-copilot env scrub) and added the 'Verified' sentence to scripts/CLAUDE.md, worded for macOS/bash only. NOT done: the Windows PowerShell 5.1 smoke (checkRefs[2]) and the WSL form of checkRefs[1]; this Mac has no cmd.exe/pwsh/wslpath/JDK. Not faked; per governor note it needs re-plan or a Windows follow-up row.",
+        "startedAt": "2026-11-06T10:03:24.456Z",
+        "completedAt": "2026-11-07T13:37:58.394Z"
+      },
+      {
+        "stepId": "step-6",
+        "description": "Verification. Take the jetbrains-gradle lease with moe.acquire_resource {resourceId: 'jetbrains-gradle', taskId, workerId, note: 'copilot-final-gate'}. If a peer holds it, wait with moe.wait_for_resource (mem:convention-jetbrains-gradle-lease). Then run checkRefs[0] exactly, once and fresh, from the task worktree root (a /mnt/<drive> path), and release the lease in every case.\nSubmit to moe.complete_task: its exit status, its tail (the per-leg table and `PASS copilot-final-gate`) and the wall time as verification, plus both smoke PASS lines from step 5 in the summary. This gate re-proves DoD 2-6 at the integrated tip: docs anchors, every copilot row of both wrappers on bash, 5.1 and pwsh 7, both parity checks, lint, protected-agent-command, ./gradlew test, the VS Code tests and compile, the daemon worker-type test, and the driver's offline row.\nError handling for a red run:\n- Read the failing leg's log (the gate prints its path), then rerun that leg's command alone to diagnose.\n- Leg D is this task's docs: fix them.\n- A failure in leg W, J or V caused by a slice's landed code becomes a bug task, as in step 5. Never edit wrappers, harnesses or IDE code in this row.\n- Never substitute a smaller gate, never run the full postflight, and never run npm in the shared checkout.",
+        "status": "PENDING",
+        "affectedFiles": []
+      },
+      {
+        "stepId": "step-7",
+        "description": "Adversarial self-review: load adversarial-self-review. The scope is the whole Copilot feature: this task's diff plus the landed commits of bfadf533, ab323f85, 49d4a565, e266a150, d0ea8735, d609eae3, 7739d4af, 1c580985 and 3a531816. The Stability & Hardening epic's other rows already passed their own gates.\nCheck:\n(1) Twin parity of every copilot string in both wrappers. parity-check passes, but read the hunks anyway.\n(2) The driver:\n- the identity scrub: no MOE_WORKER_ID, MOE_SESSION_ID or MOE_ATTEMPT_* reaches the scratch seat;\n- every wait is bounded, only the owned PID is ever killed, and the scratch-removal guard holds;\n- no credential reads;\n- the verdict order: a NOT_FOUND line can never PASS, and a seat that completes without calling Serena FAILs.\n(3) The gate: every leg's exit code is collected; an UP-TO-DATE Gradle run or a SKIP cannot count green; the trap kills only its own PIDs; nothing builds in the shared checkout.\n(4) Docs: every code, flag, banner and env name matches the landed wrappers byte for byte (grep each one). Nothing promises more than the landed behavior, and the measured 1.0.106 facts are labeled as measured.\n(5) Verified-local: read the wrapper's verified-local gate and confirm it applies to the qa role too. vm-route row C3 covers worker; d0ea8735's plan adds a qa row; the IDE slices refuse both roles. If no row covers a copilot QA seat, file a bug task.\n(6) Concurrency: two smokes at once use separate scratch dirs and ports, and each gate run gets its own snapshot.\n(7) Cross-platform: Windows paths with spaces in the driver's quoted -Command, CRLF-safe docs, and moe-agent.ps1's BOM untouched.\nFix what you find in this task's files and rerun checkRefs[0]. Anything in a slice's files becomes a bug task. No added line may contain a project.json globalRails.forbiddenPatterns string.",
+        "status": "PENDING",
+        "affectedFiles": []
+      }
+    ],
+    "stepsCompleted": [
+      "step-1",
+      "step-2",
+      "step-3",
+      "step-4",
+      "step-5"
+    ]
+  },
+  "planningEntry": {
+    "from": "WORKING",
+    "at": "2026-11-07T13:38:03.840Z",
+    "seq": 1
+  },
+  "reviewStartedAt": "2026-11-07T14:50:49.531Z",
+  "verification": {
+    "command": "cd \"$(git rev-parse --show-toplevel)\" && timeout 1200s bash scripts/tests/copilot-final-gate.sh",
+    "exitCode": 0,
+    "outputTail": "BLOCKED copilot-smoke sh: [ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: .../no-such-dir/copilot. Install it (npm install -g @github/copilot), then sign in with copilot login.\nLEG_OK P\nleg  verdict  exit\nD    PASS     0\nW    PASS     0\nV    PASS     0\nP    PASS     0\nwall 91 s\nPASS copilot-final-gate-mac (skipped: J, W-ps1, W-pwsh7, W-mutants, W-vmroute-sh, smoke-ps1)\ngate exit 0\n(checkRefs[1] fresh: PASS copilot-smoke sh: copilot GitHub Copilot CLI 1.0.107.; task REVIEW; steps 1/1; worker type COPILOT (daemon COPILOT; board COPILOT); canary ok; serena read_memory ok; 132 s; exit 0)",
+    "reportedAt": "2026-11-07T14:50:49.531Z",
+    "source": "agent-reported"
+  },
+  "completionSummary": "Copilot CLI proven as a fifth provider on the macOS host (copilot 1.0.107, signed in). copilot-final-gate.sh gained a Darwin profile (bash 3.2: PID_/RC_ vars, node clock, gtimeout fallback; the WSL legs and bare `PASS copilot-final-gate` line are untouched). Fresh runs: checkRefs[0] `PASS copilot-final-gate-mac (skipped: J, W-ps1, W-pwsh7, W-mutants, W-vmroute-sh, smoke-ps1)` exit 0, 91 s (D, W, V, P PASS; offline NOT_FOUND row exit 3; workerType.test.ts 67/67; parity-check, lint, protected-agent-command bash rows). checkRefs[1] `PASS copilot-smoke sh`: task REVIEW, steps 1/1, worker type COPILOT on daemon and board, canary ok, serena read_memory ok, exit 0, 132 s. Interrupt test: TERM to the gate's own PID -> exit 130, snapshot removed, no leaked children. Docs: scripts/CLAUDE.md copilot paragraph (macOS profile) and a TROUBLESHOOTING line. NOT run on this host, named and owned by follow-up task-ba574a26: the Windows PowerShell 5.1 smoke, and the gradlew.bat/ps1/pwsh7/mutant legs of the gate (J has no JDK here); postflight-vm-route.sh is not macOS-portable (bug task-d95ce3aa). DoD 1's Windows smoke is therefore carried by the follow-up, not claimed here.",
+  "landingRetry": {
+    "reason": "diverged",
+    "rescueRef": "refs/moe/rescue/task-59e1d1502a7b488387d6a6d2a10ff43a/20261107T145057Z",
+    "targetTip": "4c53f5eb70e4eecb401bc91eea92465eeb0bbc90",
+    "paths": [],
+    "count": 1,
+    "at": "2026-11-07T14:50:58.611Z"
+  }
 }

@@ -1,0 +1,56 @@
+{
+  "id": "task-d95ce3aab1104c0bb47be05cd16eae37",
+  "epicId": "epic-be924fb8",
+  "title": "bug: scripts/tests/postflight-vm-route.sh cannot run on macOS: CP-H asserts an unresolved /var temp path (the wrapper resolves /private/var) and line 672 expands an empty array under set -u, which bash 3.2 rejects (extra[@]: unbound variable)",
+  "description": "Found by task-59e1d150 on macOS arm64 (bash 3.2.57, mktemp -d returns /var/folders/..., a symlink to /private/var). (1) The first copilot row CP-H fails: `AssertionError: actual /private/var/folders/.../project, expected /var/folders/.../project` (scripts/tests/postflight-vm-route.sh:149 node block compares cwd to $PROJECT). Run with a mktemp that prints the resolved path, the [copilot] and [copilot policy] rows pass. (2) After ~7 min the run dies at line 672 `\"${extra[@]}\"` with `extra[@]: unbound variable` (empty array under `set -u`, bash 3.2). Repro: `bash scripts/tests/postflight-vm-route.sh` on macOS. Fix the harness to resolve its temp dir with `pwd -P` and expand optional arrays as `${extra[@]+\"${extra[@]}\"}`; the copilot-final-gate.sh Darwin profile then runs it instead of naming it skipped.",
+  "definitionOfDone": [
+    "`bash scripts/tests/postflight-vm-route.sh` passes on macOS arm64 with bash 3.2.57 and prints `PASS postflight-vm-route`.",
+    "The Linux/WSL runs of the harness are unchanged and still pass.",
+    "scripts/tests/copilot-final-gate.sh Darwin profile runs postflight-vm-route.sh and drops it from its skipped list."
+  ],
+  "taskRails": [],
+  "implementationPlan": [],
+  "planRevision": 0,
+  "status": "BLOCKED",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "WORKER",
+  "parentTaskId": null,
+  "priority": "LOW",
+  "order": 549.7,
+  "comments": [
+    {
+      "id": "comment-436ecf555d5a47c9b3a526d51647d908",
+      "author": "architect-0ac7f084",
+      "content": "Planning investigation: confirmed /bin/bash 3.2.57 errors on an empty extra array under set -u; `${extra[@]+\"${extra[@]}\"}` passes zero-argument and multiargument/space-preservation assertions. macOS os.tmpdir() is /var/folders/... while fs.realpathSync returns /private/var/folders/... . In postflight-vm-route.sh, canonicalize TMP_DIR after mktemp and before deriving PROJECT/etc (keep cleanup safe if resolution fails); retain the strict cp_assert cwd/argv checks. Guard nullable extra expansion around line 673 and nullable kv around line 1023 (G1 and ATTEMPTS produce empty kv), not merely the first reported line. Review other optional expansions without rewriting fixed nonempty arrays. Existing safe-array prior art: scripts/moe-call.sh:146. Existing CP-H, seat-failure stop-failed/non-stop-failed and G1/G3 rows are regression coverage; do not weaken them.\nDoD 3's scripts/tests/copilot-final-gate.sh currently exists only in task-59e1d150's worktree/checkpoint, not this control checkout. Added the missing dependsOn edge to that task. Once landed, plan only the harness, Darwin leg_w_mac gate wiring and the stale W-vmroute-sh note in scripts/CLAUDE.md (3 files). Darwin must run the harness under its existing timeout/logging helper, require exit 0 AND exact PASS postflight-vm-route.sh (the harness can SKIP with exit 0), and remove only W-vmroute-sh from the skip list. Preserve the WSL branch. One bounded verification phase: macOS bash 3.2 full gate (which includes the harness), plus actual Linux/WSL harness evidence; do not claim a macOS run proves Linux. Final self-review should cover raw-vs-real temp cleanup, empty/nonempty argument fidelity, SKIP/nonzero fail-closed gate behavior and the 20-minute budget. No code edited; no full harness run claimed.",
+      "timestamp": "2026-11-07T14:49:07.835Z"
+    }
+  ],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-07T14:35:11.133Z",
+  "updatedAt": "2026-11-07T14:49:13.165Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-07T14:44:12.784Z",
+    "seq": 1
+  },
+  "metrics": {
+    "firstClaimAt": "2026-11-07T14:47:51.351Z"
+  },
+  "contextFetchedBy": [
+    "architect-0ac7f084"
+  ],
+  "dependsOn": [
+    "task-59e1d1502a7b488387d6a6d2a10ff43a"
+  ],
+  "blockedReason": "Planning DoD 3 requires editing scripts/tests/copilot-final-gate.sh, but it is absent from the control checkout and exists only in the prerequisite task's worktree/checkpoint. Do not recreate it or edit another worker's worktree. Wait for the prerequisite to finish and land its Darwin profile, then plan the three-file portability fix against those delivered bytes. Root-cause evidence and the proposed scope are preserved in comment-436ecf555d5a47c9b3a526d51647d908; the missing dependsOn edge is now recorded.",
+  "blockedOnTaskIds": [
+    "task-59e1d1502a7b488387d6a6d2a10ff43a"
+  ],
+  "blockedResourceId": null,
+  "blockedFromStatus": "PLANNING",
+  "blockedAt": "2026-11-07T14:49:13.164Z"
+}

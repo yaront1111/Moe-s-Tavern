@@ -7198,6 +7198,12 @@ function Sync-MoeLandTarget([string]$Top, [string]$T, [hashtable]$Res, [hashtabl
     $b = & $tip "refs/remotes/origin/$T"; $L.B = $b   # B (WT-11's targetTip) even when it diverged
     if (-not $b) { $L.Msg = "refs/remotes/origin/$T does not resolve"; return '' }
     $rc = if ($localTip) { (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $localTip, $b)).Rc } else { 0 }
+    # A local target that strictly extends origin's is a pure fast-forward: publish it, never forced, then re-read B. A true divergence stays refused.
+    if ($rc -eq 1 -and (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $b, $localTip)).Rc -eq 0 -and (Invoke-MoeGit -Top $Top -GitArgs @('push', '--porcelain', 'origin', "${localTip}:refs/heads/$T")).Rc -eq 0 -and (Invoke-MoeLandFetch $Top $T)) {
+        $b = & $tip "refs/remotes/origin/$T"; $L.B = $b
+        if (-not $b) { $L.Msg = "refs/remotes/origin/$T does not resolve"; return '' }
+        $rc = (Invoke-MoeGit -Top $Top -GitArgs @('merge-base', '--is-ancestor', $localTip, $b)).Rc
+    }
     if ($rc -eq 1) { $Res.Code = 'MOE_LAND_TARGET_DIVERGED'; $L.Msg = "refs/heads/$T holds commits origin's $T lacks"; return '' }
     if ($rc -ne 0) { $L.Msg = "git merge-base --is-ancestor exited $rc"; return '' }
     Update-MoeLandTargetMirror $Top $T $b

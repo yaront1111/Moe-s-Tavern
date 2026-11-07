@@ -1,0 +1,132 @@
+{
+  "id": "task-ba574a2646af44189339359d1362f8f4",
+  "epicId": "epic-be924fb8",
+  "title": "test: copilot Windows PowerShell 5.1 smoke and WSL/Windows gate legs (split from task-59e1d150)",
+  "description": "Split from task-59e1d1502a7b488387d6a6d2a10ff43a on 2026-11-07 (fleet host is macOS; those legs need Windows/WSL). Run on a Windows/WSL host: `node scripts/tests/copilot-smoke.mjs ps1` on Windows PowerShell 5.1 (original checkRefs[2]), and the WSL profile of scripts/tests/copilot-final-gate.sh (guards gate with 5.1 and pwsh 7 rows, gradlew.bat test via cmd.exe). Needs copilot installed and signed in on Windows, with an account allowing Copilot CLI and third-party MCP servers. Edits no wrapper/IDE/daemon source; a defect found becomes a bug task. Never fake a leg: a missing prerequisite prints one BLOCKED line and exits 3.",
+  "definitionOfDone": [
+    "`PASS copilot-smoke ps1` printed on Windows PowerShell 5.1: task REVIEW/DONE, every step COMPLETED, proof.txt equals canary, worker.type COPILOT on daemon record and board feed, Serena read_memory logged.",
+    "WSL profile `bash scripts/tests/copilot-final-gate.sh` prints `PASS copilot-final-gate` within 20 minutes.",
+    "Both result lines are posted as a task comment and summarized in scripts/CLAUDE.md."
+  ],
+  "taskRails": [],
+  "implementationPlan": [
+    {
+      "stepId": "step-1",
+      "description": "Preflight and prepare the Windows/WSL proof without changing source. Keep the existing dependency on task-59e1d1502a7b488387d6a6d2a10ff43a; require its landed copilot-smoke.mjs, copilot-final-gate.sh and Copilot docs, not another worker's unlanded files. Read both drivers. Use a Windows-drive checkout under /mnt/<x> with WSL interop, bash, node, npm, git, tar, python3, timeout, wslpath, cmd.exe, Windows PowerShell 5.1, pwsh 7 and a working Windows JDK. The real ps1 smoke requires Windows Node (process.platform win32), Copilot installed and signed in on Windows, Serena installed, entitlement and third-party MCP access; WSL authentication is not Windows authentication. Prepare a separate Windows-native git-archive/clone snapshot outside the live checkout; on missing dependencies install from its lockfiles and build moe-proxy and moe-daemon there only. Do not mix WSL and Windows node_modules. Capture source revision and tool versions, not credentials. Required error handling: unavailable host/tools/access means one BLOCKED reason, no PASS, and report_blocked with blockedOnTaskIds:[] for an external-host/access blocker. Source defects become separate bug tasks, not fixes here.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-2",
+      "description": "One verification/test evidence phase for DoD 1-2. From the built Windows snapshot, in Windows PowerShell 5.1, run exactly `node scripts/tests/copilot-smoke.mjs ps1`. Require exit 0 and PASS copilot-smoke ps1 with task REVIEW/DONE, every step COMPLETED, completion commit proof.txt equal to the canary, worker.type COPILOT in both daemon record and board feed, and a logged Serena memory read (legacy read_memory or REPL s.mem.read_memory). No fake CLI or macOS sh substitute. Separately, hold the jetbrains-gradle lease for the Windows-drive checkout and run exactly `timeout 1200s bash scripts/tests/copilot-final-gate.sh` under WSL: checkRefs[0] and the fresh complete_task verification command. Require exit 0, D/W/J/V/P passing, and bare PASS copilot-final-gate, not the macOS suffix. W covers bash/5.1/pwsh 7, parity/mutations and protected-command rows; J requires gradlew.bat test --rerun with fresh nonempty passing XML. The gate already runs npm in a snapshot and includes lint; do not run the full launcher postflight or duplicate the gate. Post both actual result lines with source revision, versions, elapsed time and return codes via moe.add_comment. Release the Gradle lease after its processes finish on all paths; interrupted WSL interop does not prove Windows Gradle stopped. Error handling: smoke BLOCKED exit 3, gate preflight exit 2, test failure and timeout are not success; retain safe logs, report the real blocker/defect, and do not weaken the drivers.",
+      "status": "PENDING",
+      "affectedFiles": []
+    },
+    {
+      "stepId": "step-3",
+      "description": "Update only scripts/CLAUDE.md's existing Copilot verification paragraph after the required evidence exists (DoD 3). Record the measured Windows PowerShell 5.1 verification date, CLI version, source revision and both PASS result summaries. Replace only this task's pending-Windows-proof statement; preserve macOS evidence, the distinction between full WSL PASS and macOS PASS-with-skips, all docs anchors, and the separate macOS vm-route portability follow-up. If either required run did not pass, do not claim Windows verification or remove its pending qualification. No wrapper, gate, smoke driver, IDE or daemon source changes belong here.",
+      "status": "PENDING",
+      "affectedFiles": [
+        "scripts/CLAUDE.md"
+      ]
+    },
+    {
+      "stepId": "step-4",
+      "description": "One final adversarial self-review and QA handoff of this task only. Confirm the diff contains only the intended scripts/CLAUDE.md evidence update; posted results and complete_task evidence identify the same source revision, actual Windows 5.1 engine and full WSL profile; no empty/stale/partial log or skipped leg was mistaken for PASS; credentials and environment values were not logged; unique scratch paths and recorded-PID cleanup cannot affect another seat; the gate met its 1200-second bound; and the Gradle lease is released after owned work ends. Review final documentation against captured results. Supply checkRefs[0]'s actual command/exitCode/outputTail to complete_task. QA repeats the exact required commands on a suitable Windows/WSL host, not a macOS substitute; defects require a separately scoped bug task.",
+      "status": "PENDING",
+      "affectedFiles": []
+    }
+  ],
+  "planRevision": 1,
+  "status": "WORKING",
+  "assignedWorkerId": null,
+  "branch": null,
+  "prLink": null,
+  "reopenCount": 0,
+  "reopenReason": null,
+  "createdBy": "ARCHITECT",
+  "parentTaskId": null,
+  "dependsOn": [
+    "task-59e1d1502a7b488387d6a6d2a10ff43a"
+  ],
+  "priority": "LOW",
+  "order": 547.7,
+  "comments": [],
+  "hasPendingQuestion": false,
+  "createdAt": "2026-11-07T14:22:34.484Z",
+  "updatedAt": "2026-11-07T14:47:34.909Z",
+  "planningEntry": {
+    "from": "BACKLOG",
+    "at": "2026-11-07T14:44:09.847Z",
+    "seq": 1
+  },
+  "contextFetchedBy": [
+    "governor-72986cf1",
+    "architect-0ac7f084"
+  ],
+  "metrics": {
+    "firstClaimAt": "2026-11-07T14:45:15.825Z",
+    "plannedStepCount": 4,
+    "plannedDistinctFileCount": 1
+  },
+  "tier": "standard",
+  "effort": "high",
+  "model": "claude-sonnet-5-5",
+  "codexModel": "gpt-6.1-sol",
+  "lowEffortEligible": true,
+  "stepsCompleted": [],
+  "failedDodItems": [],
+  "planSubmittedAt": "2026-11-07T14:47:34.878Z",
+  "executionContract": {
+    "intendedBehavior": "Close the remaining Windows PowerShell 5.1 real-Copilot smoke and full WSL/Windows regression evidence, then document only measured results.",
+    "acceptanceCriteria": [
+      "Native Windows Node run of node scripts/tests/copilot-smoke.mjs ps1 exits 0 and proves real Windows PowerShell 5.1 task completion, committed canary, COPILOT daemon/board type and Serena read.",
+      "The WSL gate exits 0 within 1200 seconds with D/W/J/V/P passing and bare PASS copilot-final-gate.",
+      "Both actual result lines, source revision and versions are posted on the task and summarized accurately in scripts/CLAUDE.md."
+    ],
+    "invariants": [
+      "Keep dependsOn task-59e1d1502a7b488387d6a6d2a10ff43a; consume landed driver artifacts.",
+      "No macOS result, mock CLI, skipped engine, stale XML, timeout or failed run counts as Windows proof.",
+      "No npm install/build/test against the live runtime checkout; no name-based process killing or credential logging.",
+      "Hold jetbrains-gradle while Windows Gradle runs; release after cleanup."
+    ],
+    "approvedScope": [
+      "Execution of existing proof drivers and a documentation-only verification update; source/harness defects are separate tasks."
+    ],
+    "reuse": [
+      "Unchanged copilot-smoke.mjs and copilot-final-gate.sh from the prerequisite; existing copilot-guards-gate.sh."
+    ],
+    "sourceAssumptions": [
+      "copilot-smoke.mjs parseArgs requires native Windows Node for ps1 and prebuilt daemon/proxy dist.",
+      "copilot-final-gate.sh WSL profile runs full Windows legs and separate npm snapshots; its macOS suffix is not the required verdict."
+    ],
+    "checkRefs": [
+      "timeout 1200s bash scripts/tests/copilot-final-gate.sh",
+      "node scripts/tests/copilot-smoke.mjs ps1"
+    ]
+  },
+  "planningNotes": {
+    "approachesConsidered": "Reuse the prerequisite's smoke and bounded full WSL gate unchanged. Rejected npm run lint as the completion gate: it cannot prove the Windows DoD. Rejected another macOS smoke or new harness: neither closes the missing Windows proof.",
+    "codebaseInsights": "Both drivers were read in task-59e1d150's existing task worktree; they are not yet in the control checkout. copilot-smoke.mjs parseArgs rejects ps1 unless process.platform is win32 and requires built daemon/proxy dist; its seat launches powershell.exe. copilot-final-gate.sh's WSL profile requires /mnt/<drive>, interop tools and an external jetbrains-gradle lease; npm builds use its private snapshot. Existing dependsOn prevents WORKING claims until the prerequisite is DONE/ARCHIVED.",
+    "risks": "The current macOS fleet host cannot supply Windows evidence. Submission approves future Windows-host execution, not a claim that runs passed here. Do not edit the prerequisite worktree, rebuild the live daemon/proxy, weaken assertions or convert an unavailable host into PASS. Preserve error handling and exit-code distinctions.",
+    "keyFiles": [
+      "scripts/CLAUDE.md",
+      "scripts/tests/copilot-smoke.mjs (read-only prerequisite artifact)",
+      "scripts/tests/copilot-final-gate.sh (read-only prerequisite artifact)",
+      "scripts/tests/copilot-guards-gate.sh (read-only)"
+    ]
+  },
+  "executionPolicySnapshot": {
+    "version": 2,
+    "profile": "legacy",
+    "planRevision": 1,
+    "deliveryPolicy": "legacy"
+  },
+  "planSourceBasis": {
+    "version": 1,
+    "commit": "e2fea0958baff5ff624ce67e43b24feea5637433",
+    "planRevision": 1
+  },
+  "planApprovedAt": "2026-11-07T14:47:34.909Z",
+  "approvedPlanRevision": 1
+}
