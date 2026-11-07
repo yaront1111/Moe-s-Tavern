@@ -6,7 +6,6 @@ import { MAX_CHAT_MESSAGE_BYTES } from '../util/chatPayload.js';
 import { generateId } from '../util/ids.js';
 import { invalidInput, missingRequired, notFound } from '../util/errors.js';
 import { logger } from '../util/logger.js';
-import { loopGuardPausedHint } from '../util/mentionRouter.js';
 
 export const MAX_TASK_COMMENT_LENGTH = 10_000;
 
@@ -63,12 +62,10 @@ async function relayMentions(state: StateManager, task: Task, comment: TaskComme
     return { routingError: 'relay would not address exactly the comment\'s @mentions; not sent' };
   }
 
-  const { message, routingTargets, routingPaused, hopCount } = await state.sendMessage({ channel: channel.id, sender: comment.author, content });
+  const { message, routingTargets, routingPaused } = await state.sendMessage({ channel: channel.id, sender: comment.author, content });
   // The relay is an agent hop like any other, so its channel's loop guard can
-  // swallow it; say so rather than report an empty routingTargets alone.
-  const hint = routingPaused
-    ? { hint: loopGuardPausedHint(channel.name, hopCount, state.mentionRouter.getHopWindowMs()) }
-    : {};
+  // refuse it; say so rather than report an empty routingTargets alone.
+  const hint = routingPaused ? { hint: state.mentionRouter.pausedHint(channel.id, channel.name) } : {};
   return { routing: { messageId: message.id, channel: message.channel, routingTargets, routingPaused, ...hint } };
 }
 

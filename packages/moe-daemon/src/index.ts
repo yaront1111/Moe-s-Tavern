@@ -1337,7 +1337,7 @@ function initProject(projectPath: string, projectName?: string): InitResult {
       enableAgentTeams: false,
       chatEnabled: true,
       chatMaxAgentHops: 4,
-      chatAgentHopWindowMs: 600000,
+      chatAgentHopWindowMs: 120000,
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()

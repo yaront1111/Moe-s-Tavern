@@ -862,7 +862,7 @@ export class StateManager {
   replyTo?: string;
   decisionId?: string;
   parseMentions?: boolean;
-}): Promise<{ message: ChatMessage; routingTargets: string[]; routingPaused: boolean; hopCount: number }> {
+}): Promise<{ message: ChatMessage; routingTargets: string[]; routingPaused: boolean }> {
     return sendMessage(this, opts);
   }
 

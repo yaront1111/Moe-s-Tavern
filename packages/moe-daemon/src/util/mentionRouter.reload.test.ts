@@ -100,32 +100,32 @@ describe('the loop guard survives state.load()', () => {
   });
 
   it('chatAgentHopWindowMs applies on reload, clamped to its bounds', async () => {
-    expect(h.state.mentionRouter.getHopWindowMs()).toBe(600_000);
-
-    await writeSettings({ chatAgentHopWindowMs: 120_000 });
     expect(h.state.mentionRouter.getHopWindowMs()).toBe(120_000);
 
+    await writeSettings({ chatAgentHopWindowMs: 30_000 });
+    expect(h.state.mentionRouter.getHopWindowMs()).toBe(30_000);
+
     await writeSettings({ chatAgentHopWindowMs: 5 });
-    expect(h.state.mentionRouter.getHopWindowMs()).toBe(60_000);
+    expect(h.state.mentionRouter.getHopWindowMs()).toBe(10_000);
   });
 });
 
 describe('settings.chatAgentHopWindowMs bounds', () => {
   it.each([
-    [undefined, 600_000], ['120000', 600_000], [Number.NaN, 600_000],
-    [1, 60_000], [59_999, 60_000], [60_000, 60_000], [120_000, 120_000],
+    [undefined, 120_000], ['30000', 120_000], [Number.NaN, 120_000],
+    [1, 10_000], [9_999, 10_000], [10_000, 10_000], [600_000, 600_000],
     [86_400_000, 86_400_000], [86_400_001, 86_400_000],
   ])('the project.json sanitizer reads %j as %d', (value, expected) => {
     const project = normalizeProject('/proj', { settings: { chatAgentHopWindowMs: value } as unknown as ProjectSettings });
     expect(project.settings.chatAgentHopWindowMs).toBe(expected);
   });
 
-  it.each([[60_000], [86_400_000]])('a settings update accepts %d', (value) => {
+  it.each([[10_000], [86_400_000]])('a settings update accepts %d', (value) => {
     const project = normalizeProject('/proj', {});
     expect(validateSettingsUpdate(project, { chatAgentHopWindowMs: value }).chatAgentHopWindowMs).toBe(value);
   });
 
-  it.each([[59_999], [86_400_001], [90_000.5], ['600000'], [null]])('a settings update refuses %j', (value) => {
+  it.each([[9_999], [86_400_001], [90_000.5], ['120000'], [null]])('a settings update refuses %j', (value) => {
     const project = normalizeProject('/proj', {});
     expect(() => validateSettingsUpdate(project, { chatAgentHopWindowMs: value } as unknown as Partial<ProjectSettings>))
       .toThrow(/chatAgentHopWindowMs/);
@@ -144,26 +144,26 @@ describe('MentionRouter.setHopWindowMs', () => {
     replyTo: null, mentions: [], timestamp: new Date().toISOString(),
   });
 
-  it('applies a shorter window to the hops already counted, keeping them until it passes', () => {
+  it('applies a shorter window to the hops already recorded', () => {
     let clock = 0;
     const router = new MentionRouter(4, () => clock);
-    for (let i = 1; i <= 3; i += 1) router.route(ping(), WORKERS);
+    for (let i = 1; i <= 4; i += 1) router.route(ping(), WORKERS); // the window is full
 
-    router.setHopWindowMs(60_000);
+    router.setHopWindowMs(10_000);
 
-    clock = 60_000;
-    expect(router.route(ping(), WORKERS)).toMatchObject({ paused: false, hopCount: 4 });
-    clock = 120_001;
+    clock = 10_000; // exactly one (new) window old: still counted
+    expect(router.route(ping(), WORKERS)).toMatchObject({ paused: true, hopCount: 5, targets: [] });
+    clock = 10_001; // the default 2-minute window would still count them
     expect(router.route(ping(), WORKERS)).toMatchObject({ paused: false, hopCount: 1 });
   });
 
   it.each([[0], [-1], [Number.NaN], [Number.POSITIVE_INFINITY], [undefined]])(
-    'falls back to the 10-minute default for %s',
+    'falls back to the 2-minute default for %s',
     (bad) => {
       const router = new MentionRouter(4);
-      router.setHopWindowMs(60_000);
+      router.setHopWindowMs(30_000);
       router.setHopWindowMs(bad as number | undefined);
-      expect(router.getHopWindowMs()).toBe(600_000);
+      expect(router.getHopWindowMs()).toBe(120_000);
     }
   );
 });

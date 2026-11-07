@@ -421,7 +421,7 @@ describe('add_comment @mention relay', () => {
     expect(h.state.getTask('task-1')?.comments.at(-1)?.content).toBe(long);
   });
 
-  it('reports routingPaused with a hint when the loop guard swallows the relay', async () => {
+  it('reports routingPaused with a hint when the loop guard refuses the relay', async () => {
     for (let i = 0; i < 5; i += 1) {
       await h.state.sendMessage({ channel: general, sender: AUTHOR, content: `@${GOVERNOR} ping ${i}` });
     }
@@ -431,7 +431,8 @@ describe('add_comment @mention relay', () => {
 
     expect(result.success).toBe(true);
     expect(result.routing).toMatchObject({ channel: general, routingTargets: [], routingPaused: true });
-    expect(result.routing?.hint).toContain('paused routing in #general after 5 agent hops');
+    expect(result.routing?.hint).toContain('paused routing in #general (more than 4 agent hops within 2 min)');
+    expect(result.routing?.hint).toContain('Routing resumes in');
     expect(h.state.getTask('task-1')?.comments.at(-1)?.id).toBe(result.commentId);
   });
 });

@@ -444,7 +444,7 @@ export function validateSettingsUpdate(project: Project, settings: Partial<Proje
     next.chatMaxAgentHops = validateIntegerValue(input.chatMaxAgentHops, 'chatMaxAgentHops', 1, 20);
   }
   if (input.chatAgentHopWindowMs !== undefined) {
-    next.chatAgentHopWindowMs = validateIntegerValue(input.chatAgentHopWindowMs, 'chatAgentHopWindowMs', 60000, 86400000);
+    next.chatAgentHopWindowMs = validateIntegerValue(input.chatAgentHopWindowMs, 'chatAgentHopWindowMs', 10000, 86400000);
   }
   if (input.autoCommit !== undefined) {
     next.autoCommit = validateBooleanValue(input.autoCommit, 'autoCommit');

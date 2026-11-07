@@ -2671,14 +2671,15 @@ Send a chat message to a channel. Parses @mentions and returns routing info.
   while the loop guard has the channel paused. A human message with no mention
   routes to every online seat (not `IDLE` or `DEAD`).
 - **Loop guard.** Each agent message that routes to another seat is one hop on
-  its channel. A burst of more than `chatMaxAgentHops` hops (default 4) pauses
-  the channel: agent messages there are still stored but route to nobody, and
-  `chat_send` answers `routingPaused: true` with a `hint`. A burst ends when
-  `chatAgentHopWindowMs` (default 600000 = 10 min) passes with no counted hop on
-  the channel: the next agent message starts a new count and lifts the pause.
-  Posts made while paused are not hops, so they never extend a pause. A human
-  message (`@continue` included) resets the channel at once; the daemon's own
-  `system` lines neither count nor reset. To reach a seat while its channel is
+  its channel, and only the hops of the last `chatAgentHopWindowMs` (default
+  120000 = 2 min) count, so steady coordination never trips it. A hop that would
+  make more than `chatMaxAgentHops` (default 4) inside that window is refused and
+  pauses the channel: agent messages there are still stored but route to nobody,
+  and `chat_send` answers `routingPaused: true` with a `hint` that says when
+  routing resumes. The pause lifts by itself once the oldest hop in the window
+  ages out of it. Refused posts are not hops, so retrying never extends a pause.
+  A human message (`@continue` included) resets the channel at once; the daemon's
+  own `system` lines neither count nor reset. To reach a seat while its channel is
   paused, `moe.add_comment` on its task: the comment's @mention is relayed to the
   task's channel, else `#general`, and wakes it unless that channel is paused too.
 - `replyTo` must name a message of the same channel, whatever its age: the check

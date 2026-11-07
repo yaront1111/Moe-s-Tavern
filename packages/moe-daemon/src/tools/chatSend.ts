@@ -1,7 +1,6 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, invalidInput, notFound, notAllowed } from '../util/errors.js';
-import { loopGuardPausedHint } from '../util/mentionRouter.js';
 
 export function chatSendTool(_state: StateManager): ToolDefinition {
   return {
@@ -36,7 +35,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
       // Validate sender identity. 'system' is reserved for daemon-internal
       // posts (which go straight through state.sendMessage); accepting it here
       // would let any /mcp agent impersonate the daemon and reset the
-      // mentionRouter loop-guard (hopCounts=0, unpause), defeating runaway
+      // mentionRouter loop-guard (hops cleared, unpaused), defeating runaway
       // protection.
       const sender = params.workerId || 'human';
       if (sender === 'system') {
@@ -69,12 +68,15 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
 
       // channel.id, never the caller's reference: a message stored under
       // "#general" would belong to no channel any reader can fetch.
-      const { message, routingTargets, routingPaused, hopCount } = await state.sendMessage({
+      const { message, routingTargets, routingPaused } = await state.sendMessage({
         channel: channel.id,
         sender,
         content: params.content,
         replyTo: params.replyTo
       });
+      const hint = routingPaused
+        ? `${state.mentionRouter.pausedHint(channel.id, channel.name)} moe.add_comment on the recipient's task reaches them now.`
+        : undefined;
       if (sender !== 'human') {
         await state.touchWorker(sender);
       }
@@ -86,12 +88,7 @@ export function chatSendTool(_state: StateManager): ToolDefinition {
         timestamp: message.timestamp,
         routingTargets,
         routingPaused,
-        ...(routingPaused
-          ? {
-            hint: `${loopGuardPausedHint(channel.name, hopCount, state.mentionRouter.getHopWindowMs())} ` +
-              'moe.add_comment on the recipient\'s task reaches them now.'
-          }
-          : {})
+        ...(hint ? { hint } : {})
       };
     }
   };

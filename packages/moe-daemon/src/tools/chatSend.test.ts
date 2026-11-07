@@ -59,25 +59,27 @@ describe('moe.chat_send reports a loop-guard pause', () => {
     expect(result).not.toHaveProperty('hint');
   });
 
-  it('reports routingPaused: true with a hint when the loop guard swallows an explicit mention', async () => {
+  it('reports routingPaused: true with a hint when the loop guard refuses an explicit mention', async () => {
     const paused = await pauseChannel();
 
     expect(paused).toMatchObject({ success: true, routingTargets: [], routingPaused: true });
-    expect(paused.hint).toContain('paused routing in #architects after 5 agent hops');
+    expect(paused.hint).toContain('paused routing in #architects (more than 4 agent hops within 2 min)');
     expect(paused.hint).toContain('stored but woke nobody');
-    expect(paused.hint).toContain('10 min after the hop that paused it');
-    expect(paused.hint).toContain('as soon as a human posts in #architects');
+    expect(paused.hint).toContain('Routing resumes in 2 min, when the oldest of those hops leaves the window');
+    expect(paused.hint).toContain('or as soon as a human posts in #architects');
     expect(paused.hint).toContain("moe.add_comment on the recipient's task reaches them now");
     expect((await h.state.getMessages(channel)).map((m) => m.id)).toContain(paused.messageId);
 
-    clock += 60_000;
-    expect(await ping('worker-b', 'worker-a'))
-      .toMatchObject({ routingTargets: [], routingPaused: true, hint: expect.any(String) });
+    // A later post names the time left, counted from the same oldest hop.
+    clock += 45_000;
+    const later = await ping('worker-b', 'worker-a');
+    expect(later).toMatchObject({ routingTargets: [], routingPaused: true });
+    expect(later.hint).toContain('Routing resumes in 75 s,');
   });
 
-  it('routes again, unpaused, once the window passes after the hop that paused it', async () => {
+  it('routes again, unpaused, once the oldest hop ages out of the window', async () => {
     await pauseChannel();
-    clock += 600_001;
+    clock += 120_001;
 
     const result = await ping('worker-b', 'worker-a');
 
