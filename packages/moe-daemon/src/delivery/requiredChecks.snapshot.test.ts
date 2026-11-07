@@ -23,9 +23,12 @@ const bytes = () => fs.readFileSync(path.join(h.moePath, 'tasks/task-1.json'), '
 const submit = (extra: Record<string, unknown> = {}) => submitPlanTool(h.state).handler({ taskId: 'task-1',
   steps: [{ description: 'implement and test', affectedFiles: ['file.ts'] }], executionContract: { requiredChecks: defs }, ...extra }, h.state);
 function git(...args: string[]): string {
+  return gitIn(undefined, ...args);
+}
+function gitIn(input: Buffer | undefined, ...args: string[]): string {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith('GIT_')));
   return execFileSync('git', ['-c', 'core.autocrlf=false', '-c', 'core.hooksPath=', ...args], {
-    cwd: h.testDir, encoding: 'utf8', env: { ...env, GIT_CONFIG_NOSYSTEM: '1',
+    cwd: h.testDir, encoding: 'utf8', input, env: { ...env, GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
       GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.test',
       GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.test' },
@@ -114,8 +117,10 @@ describe('daemon-measured required check snapshot', () => {
   });
   it.skipIf(process.platform === 'win32')('refuses lossy UTF-8 paths rather than approving a different filename', async () => {
     repo();
-    fs.writeFileSync(Buffer.concat([Buffer.from(`${h.testDir}/tests/acc/`), Buffer.from([0xff])]), 'invalid name');
-    git('add', 'tests/acc'); git('commit', '-qm', 'non-UTF8 path'); await refused();
+    // APFS refuses a non-UTF-8 filename (EILSEQ) and argv cannot carry the byte, so stage the name through stdin.
+    const blob = git('rev-parse', `HEAD:${files[0]}`);
+    gitIn(Buffer.concat([Buffer.from(`100644 ${blob}\ttests/acc/`), Buffer.from([0xff, 0])]), 'update-index', '-z', '--index-info');
+    git('commit', '-qm', 'non-UTF8 path'); await refused();
   });
   it.each(['HEAD', 'A'.repeat(40), 'a'.repeat(64), 'bad', null, 1])('refuses malformed revision %j before Git', async revision => {
     const run = vi.spyOn(checks.requiredCheckGit, 'run'); await refused({ requiredCheckRevision: revision }, 'requiredCheckRevision');

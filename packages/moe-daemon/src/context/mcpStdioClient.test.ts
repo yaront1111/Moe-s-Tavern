@@ -15,6 +15,8 @@ const ALLOWED = ['find_symbol', 'get_symbols_overview', 'missing_tool'];
 const ENV: Record<string, string> = { MOE_FAKE: '1', ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot ?? 'C:\\Windows' } : {}) };
 // libuv copies these into any Windows env block that lacks them (uv_spawn make_program_env), so exactness is POSIX-only.
 const LIBUV_WINDOWS_ENV = ['HOMEDRIVE', 'HOMEPATH', 'LOGONSERVER', 'PATH', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'USERDOMAIN', 'USERNAME', 'USERPROFILE', 'WINDIR'];
+// macOS adds this to every process environment, even one spawned with env {}.
+const DARWIN_OS_ENV = ['__CF_USER_TEXT_ENCODING'];
 const AB = { ok: true, text: 'AB', truncated: false };
 
 // Fake stdio MCP server, argv [startMode, logFile]: logs every received line and writes its pid (and a grandchild's) beside the log.
@@ -128,6 +130,7 @@ describe('openAnalyzerSession', () => {
     vi.stubEnv('MOE_PARENT_ONLY', 'x');
     const reply = await find((await open()).session, 'env');
     const env: Record<string, string> = JSON.parse(reply.ok ? reply.text : '{}');
+    if (process.platform === 'darwin') return expect(Object.fromEntries(Object.entries(env).filter(([key]) => !DARWIN_OS_ENV.includes(key)))).toEqual(ENV);
     if (process.platform !== 'win32') return expect(env).toEqual(ENV);
     expect(Object.fromEntries(Object.entries(env).filter(([key]) => key in ENV))).toEqual(ENV);
     expect(Object.keys(env).filter(key => !(key in ENV) && !LIBUV_WINDOWS_ENV.includes(key.toUpperCase()))).toEqual([]);

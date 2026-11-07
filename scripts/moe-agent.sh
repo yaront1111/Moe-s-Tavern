@@ -989,6 +989,16 @@ serena_ignore_override() { # $1 = Serena's project root
     return 0
 }
 
+# True when the global npm bin $1 resolves to an executable file. `command -v`
+# also reports a non-executable match, and a rebuild behind `npm link` re-emits
+# dist/index.js without the exec bit npm set at install time, so trusting it
+# would make every seat RPC fail with a swallowed "Permission denied".
+global_bin_runnable() {
+    local resolved
+    resolved=$(command -v "$1" 2>/dev/null) || return 1
+    [ -x "$resolved" ]
+}
+
 # Ensure MCP config for Claude Code
 ensure_mcp_config() {
     local config_dir="$HOME/.config/claude"
@@ -1002,7 +1012,7 @@ ensure_mcp_config() {
         PROXY_ARGS="$PROXY_PATH_OVERRIDE"
     elif [ "$RUNTIME_PROTECTED" = 1 ]; then
         refuse_unprotected_runtime MOE_PROXY_PATH
-    elif command -v moe-proxy &> /dev/null; then
+    elif global_bin_runnable moe-proxy; then
         PROXY_CMD="moe-proxy"
     else
         PROXY_SCRIPT="$ROOT_DIR/packages/moe-proxy/dist/index.js"
@@ -2040,7 +2050,7 @@ if [ "$NO_START_DAEMON" = false ]; then
             DAEMON_ARGS=("$DAEMON_PATH_OVERRIDE")
         elif [ "$RUNTIME_PROTECTED" = 1 ]; then
             refuse_unprotected_runtime MOE_DAEMON_PATH
-        elif command -v moe-daemon &> /dev/null; then
+        elif global_bin_runnable moe-daemon; then
             DAEMON_CMD="moe-daemon"
         else
             DAEMON_SCRIPT="$ROOT_DIR/packages/moe-daemon/dist/index.js"

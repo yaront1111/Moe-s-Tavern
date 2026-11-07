@@ -62,6 +62,15 @@ ls -la .moe/
 chmod -R 755 .moe/
 ```
 
+#### `moe-proxy` or `moe-daemon`: permission denied after a rebuild
+
+**Symptom:** After rebuilding a package that `npm link` or the macOS/Linux installer linked globally, running `moe-proxy` or `moe-daemon` from PATH fails with `permission denied`, and seats log `Pre-flight claim RPC failed`.
+
+**Solution:** npm sets a bin's exec bit only at install time. Builds now restore it in `postbuild`, and `moe-agent.sh` runs `node <package>/dist/index.js` when the global bin is not executable. On an older build, restore the bit by hand:
+```bash
+chmod +x packages/moe-proxy/dist/index.js packages/moe-daemon/dist/index.js
+```
+
 #### Wrong Node.js version
 
 **Symptom:** Syntax errors or missing features.
@@ -1333,6 +1342,17 @@ export LOG_RETENTION_COUNT=3
 1. Check network stability
 2. Increase reconnection delay in plugin settings
 3. Restart both daemon and plugin
+
+---
+
+### Daemon tests time out on a many-core machine
+
+**Symptom:** `npm test` in `packages/moe-daemon` fails dozens of tests with `Test timed out in 5000ms` or `Hook timed out`, and each failing file passes when run alone.
+
+**Solution:** Vitest starts one worker per core, and Git- and daemon-heavy tests then contend for process launches. Endpoint-security agents that vet every exec (common on managed laptops) make this much worse. Run fewer workers:
+```bash
+npx vitest run --maxWorkers=4
+```
 
 ---
 

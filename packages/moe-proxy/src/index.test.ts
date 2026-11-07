@@ -1052,3 +1052,10 @@ describe('moe-proxy graceful shutdown', () => {
     expect(p.lines).toHaveLength(1);
   }, 20000);
 });
+
+// npm sets a bin's mode only at install time, so a rebuild behind `npm link` must keep it runnable.
+describe.skipIf(process.platform === 'win32')('built bin', () => {
+  it('dist/index.js is executable', () => {
+    expect(() => fs.accessSync(path.join(__dirname, '../dist/index.js'), fs.constants.X_OK)).not.toThrow();
+  });
+});

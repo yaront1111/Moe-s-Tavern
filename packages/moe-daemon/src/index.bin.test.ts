@@ -102,3 +102,11 @@ describe('isEntryModule', () => {
     expect(isEntryModule(path.join(tmp, 'no-such-moe-entry.js'), moduleUrl())).toBe(false);
   });
 });
+
+// npm sets a bin's mode only at install time, so a rebuild behind `npm link` must keep it runnable.
+const builtEntry = fileURLToPath(new URL('../dist/index.js', import.meta.url));
+describe.skipIf(process.platform === 'win32' || !fs.existsSync(builtEntry))('built bin', () => {
+  it('B4: dist/index.js is executable', () => {
+    expect(() => fs.accessSync(builtEntry, fs.constants.X_OK)).not.toThrow();
+  });
+});
