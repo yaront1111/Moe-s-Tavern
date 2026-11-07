@@ -19,6 +19,7 @@ VS Code parity with JetBrains and shared client behaviour (epic-aabc654d; see `d
 - Shared test corpora: the VS Code delivery, blocker, settings-policy, accounts and seat-tracker logic replays the same `moe-jetbrains/src/test/resources/client-*.json` rows as JetBrains, and its labels are checked against `MoeBundle.properties`.
 
 ### Changed
+- The task board opens as an editor tab ("Moe Task Board") in the column task details open in, instead of filling the narrow sidebar. Showing the sidebar's Task Board entry opens it, **Moe: Open Task Board** and the status bar item bring it forward, and the tab comes back after a window reload.
 - Settings no longer edit `autoCreateBranch`, `branchPattern` or `commitPattern`, which no launcher reads. Values already saved in `.moe/project.json` are kept.
 - The bundled scripts and docs come from `scripts/bundle-manifest.json`, the same list the JetBrains build reads. The vsix now also ships the remaining `docs/roles` reference files.
 - The vsix ships only the esbuild bundle `dist/extension.js`, without the tsc output or `eslint.config.mjs`. CI packages the extension and smoke-tests its bundle on every pull request.

@@ -24,9 +24,13 @@ export function archiveDoneCount(tasks: ReadonlyArray<{ status?: unknown; epicId
     return tasks.filter(t => t?.status === 'DONE' && (!epicId || t.epicId === epicId)).length;
 }
 
-export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-    public static readonly viewType = 'moe.board';
-    private _view?: vscode.WebviewView;
+/**
+ * The task board. It lives in an editor tab, in the column the task views open in, so the
+ * columns get the editor's width; the sidebar's Task Board entry only opens it (extension.ts).
+ */
+export class BoardViewProvider implements vscode.WebviewPanelSerializer, vscode.Disposable {
+    public static readonly viewType = 'moe.boardPanel';
+    private _panel?: vscode.WebviewPanel;
     private _webviewReady = false;
     private disposed = false;
     private pushStateTimeout: NodeJS.Timeout | undefined;
@@ -68,8 +72,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.disposables.push(
             daemonClient.onActivityLog((events) => {
                 if (this.disposed) return;
-                if (this._view && this._webviewReady) {
-                    this._view.webview.postMessage({
+                if (this._panel && this._webviewReady) {
+                    this._panel.webview.postMessage({
                         type: 'activityLog',
                         events
                     });
@@ -188,15 +192,44 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         this.pendingApprovals.clear();
     }
 
-    resolveWebviewView(
-        webviewView: vscode.WebviewView
-    ): void {
-        dbg('resolveWebviewView called');
-        this._view = webviewView;
+    get isOpen(): boolean {
+        return this._panel !== undefined;
+    }
+
+    /** Open the board tab, or bring the open one forward wherever the user moved it. */
+    show(preserveFocus = false): void {
+        if (this.disposed) return;
+        if (this._panel) {
+            this._panel.reveal(undefined, preserveFocus);
+            return;
+        }
+        this.attachPanel(vscode.window.createWebviewPanel(
+            BoardViewProvider.viewType,
+            'Moe Task Board',
+            { viewColumn: vscode.ViewColumn.One, preserveFocus },
+            { enableScripts: true, localResourceRoots: [this.extensionUri], retainContextWhenHidden: true }
+        ));
+    }
+
+    /** A board tab VS Code restored after a reload. It wins over one opened meanwhile, so one tab stays. */
+    async deserializeWebviewPanel(panel: vscode.WebviewPanel): Promise<void> {
+        if (this.disposed) {
+            panel.dispose();
+            return;
+        }
+        const opened = this._panel;
+        this.attachPanel(panel);
+        opened?.dispose();
+    }
+
+    attachPanel(panel: vscode.WebviewPanel): void {
+        dbg('attachPanel called');
+        this._panel = panel;
         this._webviewReady = false;
 
-        webviewView.onDidDispose(() => {
-            this._view = undefined;
+        panel.onDidDispose(() => {
+            if (this._panel !== panel) return;
+            this._panel = undefined;
             this._webviewReady = false;
             if (this.pushStateTimeout) {
                 clearTimeout(this.pushStateTimeout);
@@ -204,8 +237,8 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             }
         });
 
-        webviewView.onDidChangeVisibility(() => {
-            if (webviewView.visible) {
+        panel.onDidChangeViewState(() => {
+            if (this._panel === panel && panel.visible) {
                 this.updateConnectionStatus(this.daemonClient.connectionState);
                 if (this.daemonClient.currentState) {
                     this.updateBoard(this.daemonClient.currentState);
@@ -213,14 +246,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
             }
         });
 
-        webviewView.webview.options = {
+        panel.webview.options = {
             enableScripts: true,
             localResourceRoots: [this.extensionUri]
         };
 
         // Register message handler BEFORE setting HTML to avoid race condition
         // where the webview sends 'ready' before the handler is in place.
-        webviewView.webview.onDidReceiveMessage((message) => {
+        panel.webview.onDidReceiveMessage((message) => {
             switch (message.type) {
                 case 'updateTaskStatus':
                     this.updateTaskStatus(message.taskId, message.status);
@@ -332,14 +365,14 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
         });
 
         // Set HTML after handler is registered
-        webviewView.webview.html = this.getHtmlContent(webviewView.webview);
+        panel.webview.html = this.getHtmlContent(panel.webview);
 
         // Push state once now and once more after a short delay as a safety net
         // for the case where the webview JS hasn't installed its message
         // listener yet. Once the webview sends 'ready' it will receive a fresh
         // snapshot, so we don't need additional retries.
         const pushState = () => {
-            if (this.disposed || !this._view) return;
+            if (this.disposed || !this._panel) return;
             dbg(`pushState: connState=${this.daemonClient.connectionState}, hasState=${!!this.daemonClient.currentState}`);
             this.updateConnectionStatus(this.daemonClient.connectionState);
             if (this.daemonClient.currentState) {
@@ -358,7 +391,7 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     refresh(): void {
-        if (this._view && this.daemonClient.currentState) {
+        if (this._panel && this.daemonClient.currentState) {
             this.updateBoard(this.daemonClient.currentState);
         }
     }
@@ -383,9 +416,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateBoard(state: StateSnapshot): void {
-        dbg(`updateBoard called, _view=${!!this._view}, tasks=${state?.tasks?.length ?? 'null'}`);
-        if (this._view) {
-            this._view.webview.postMessage({
+        dbg(`updateBoard called, _panel=${!!this._panel}, tasks=${state?.tasks?.length ?? 'null'}`);
+        if (this._panel) {
+            this._panel.webview.postMessage({
                 type: 'updateState',
                 state
             });
@@ -394,9 +427,9 @@ export class BoardViewProvider implements vscode.WebviewViewProvider, vscode.Dis
     }
 
     private updateConnectionStatus(status: string): void {
-        dbg(`updateConnectionStatus called, _view=${!!this._view}, status=${status}`);
-        if (this._view) {
-            this._view.webview.postMessage({
+        dbg(`updateConnectionStatus called, _panel=${!!this._panel}, status=${status}`);
+        if (this._panel) {
+            this._panel.webview.postMessage({
                 type: 'connectionStatus',
                 status
             });

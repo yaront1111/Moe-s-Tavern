@@ -37,6 +37,7 @@
     "workspaceContains:.moe",
     "onCommand:moe.connect",
     "onView:moe.board",
+    "onWebviewPanel:moe.boardPanel",
     "onView:moe.chat",
     "onView:moe.metrics"
   ],
@@ -54,7 +55,6 @@
     "views": {
       "moe": [
         {
-          "type": "webview",
           "id": "moe.board",
           "name": "Task Board"
         },
@@ -72,7 +72,18 @@
         { "id": "moe.accounts", "name": "Claude accounts" }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "moe.board",
+        "contents": "The task board opens as an editor tab, alongside the task views.\n[Open Task Board](command:moe.openBoard)"
+      }
+    ],
     "commands": [
+      {
+        "command": "moe.openBoard",
+        "title": "Moe: Open Task Board",
+        "icon": "$(link-external)"
+      },
       {
         "command": "moe.connect",
         "title": "Moe: Connect to Daemon"
@@ -147,6 +158,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "moe.openBoard",
+          "when": "view == moe.board",
+          "group": "navigation"
+        },
         {
           "command": "moe.createTask",
           "when": "view == moe.board",

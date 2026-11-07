@@ -48,6 +48,14 @@
 2. Click Create, Save, Delete and Add Comment (with a comment typed).
 3. Expected: a warning per action ("Not connected to Moe daemon — task was not created.", "... task was not saved.", "... comment was not added." and so on), every panel stays open with what was typed, and the comment goes back into the comment box if it is still empty. Reconnect and repeat: each action goes through and its form closes.
 
+## The board opens as an editor tab
+1. Click the Moe icon in the activity bar.
+2. Expected: the board opens as a "Moe Task Board" editor tab in the first editor column, with the columns across the editor's width, and the sidebar's Task Board entry shows an **Open Task Board** button. Focus stays where it was.
+3. Open a task from the board. Expected: the task detail opens as another tab in the same column, and the board tab stays open.
+4. Run `Moe: Open Task Board` again, and click the connected status bar item. Expected: each brings the existing board tab forward; no second board tab appears.
+5. Close the board tab, then switch the sidebar to Explorer and back to Moe. Expected: the board tab opens again.
+6. With the board tab open, run `Developer: Reload Window`. Expected: one board tab comes back, showing the board.
+
 ## Board cards update in place
 1. Keep the board open while a task's description, epic, human-review flag, blocker, reopen count or plan-critique verdict changes on the daemon side (an agent, JetBrains or `scripts/moe-call.sh`).
 2. Expected: the card shows the change at once, without a status change or a board refresh.

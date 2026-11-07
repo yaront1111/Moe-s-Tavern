@@ -115,10 +115,10 @@ function openHost(tasks) {
             postMessage: () => Promise.resolve(true)
         },
         onDidDispose: () => ({ dispose() {} }),
-        onDidChangeVisibility: () => ({ dispose() {} })
+        onDidChangeViewState: () => ({ dispose() {} })
     };
     const provider = new BoardViewProvider({ path: '/ext' }, client);
-    provider.resolveWebviewView(view, {}, {});
+    provider.attachPanel(view);
     h.frames.length = 0;
     h.send = async message => { handler(message); await new Promise(resolve => setImmediate(resolve)); };
     h.dispose = () => { provider.dispose(); client.dispose(); };

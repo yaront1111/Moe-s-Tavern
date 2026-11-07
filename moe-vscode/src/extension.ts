@@ -89,13 +89,23 @@ export function activate(context: vscode.ExtensionContext) {
         terminal.processId.then(pid => seatPids.record(workerId, pid), () => undefined);
     };
 
-    // Initialize board view provider
+    // The board is an editor tab; the sidebar's Task Board entry is an empty tree whose welcome
+    // content (package.json viewsWelcome) opens it, and which opens it itself whenever it is shown.
     const boardProvider = new BoardViewProvider(context.extensionUri, daemonClient);
+    const boardLauncher = vscode.window.createTreeView<never>('moe.board', {
+        treeDataProvider: { getChildren: () => [], getTreeItem: item => item }
+    });
+    const openBoardFromSidebar = (): void => {
+        if (boardLauncher.visible && !boardProvider.isOpen) { boardProvider.show(true); }
+    };
     context.subscriptions.push(
-        vscode.window.registerWebviewViewProvider('moe.board', boardProvider, {
-            webviewOptions: { retainContextWhenHidden: true }
-        })
+        boardProvider,
+        vscode.window.registerWebviewPanelSerializer(BoardViewProvider.viewType, boardProvider),
+        vscode.commands.registerCommand('moe.openBoard', () => boardProvider.show()),
+        boardLauncher,
+        boardLauncher.onDidChangeVisibility(openBoardFromSidebar)
     );
+    openBoardFromSidebar();
 
     // Initialize chat view provider
     const chatProvider = new ChatViewProvider(context.extensionUri, daemonClient);

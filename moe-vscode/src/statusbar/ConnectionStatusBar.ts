@@ -58,7 +58,7 @@ export class ConnectionStatusBar implements vscode.Disposable {
                 this.statusBarItem.text = `$(check) Moe: ${this.awaitingCount} awaiting | ${this.workingCount} working`;
                 this.statusBarItem.tooltip = `Moe: ${this.awaitingCount} tasks awaiting approval, ${this.workingCount} tasks in progress. Click to open board.`;
                 this.statusBarItem.backgroundColor = undefined;
-                this.statusBarItem.command = 'moe.board.focus';
+                this.statusBarItem.command = 'moe.openBoard';
                 break;
             case 'connecting':
                 this.statusBarItem.text = '$(sync~spin) Moe: connecting...';
