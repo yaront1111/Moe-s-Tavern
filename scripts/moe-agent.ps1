@@ -9424,7 +9424,9 @@ function Test-MoeAccountWaitAttempt {
 function Initialize-MoeAgentGitGuard {
     $program = @'
 const fs = require('fs'), path = require('path'), cp = require('child_process');
-const [project, temp, gitCmd] = process.argv.slice(-3), win = process.platform === 'win32';
+const [project, rawTemp, gitCmd] = process.argv.slice(-3), win = process.platform === 'win32';
+// Git reports the real path of core.hooksPath; macOS $TMPDIR (/var/...) is a symlink to /private/var/....
+let temp = rawTemp; try { temp = fs.realpathSync(rawTemp); } catch {}
 const native = p => win ? p.replaceAll('\\', '/') : p;
 const env = { ...process.env, LC_ALL: 'C' };
 // Under MOE_RUNTIME_PROTECTED=1 nothing runs by bare name: Node can look one up in the current directory or through a
