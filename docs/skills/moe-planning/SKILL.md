@@ -79,6 +79,7 @@ The worker's job ends at `moe.complete_task`. The QA agent reviews and may call 
 One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set `affectedFiles` tight per step.
+- Before `moe.submit_plan`, check your files against the plans of open tasks. For each shared file with no dependency path between the two rows, add the edge with `moe.set_task_dependencies`. In `TURBO` approval a plan is claimable the moment it is submitted, so an edge added afterwards can be too late, and two seats then edit one file at once.
 - When a Serena memory bears on a step, name it in that step's description as `mem:<name>` (for example `mem:gotcha-moe-doc-generated-artifacts`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
 - Cite only live names, and never another task's `task-<id>-handoff` or `task-<id>-qa-handoff`: QA retires those to `_archive/` at `moe.qa_approve`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a `gotcha-`/`pattern-`/`decision-` memory. Serena hides `_archive/` names, and read_memory refuses them.
 - Map every Definition-of-Done item to at least one step.
