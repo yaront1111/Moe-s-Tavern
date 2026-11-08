@@ -1863,7 +1863,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`regression-check\` follow-up.
 - Replaced the "Forbidden phrases" banned-phrase list with a one-line positive statement of how to respond (technical content only; verify before agreeing).`,
   'regression-check/SKILL.md': `---
-# moe-generated: sha=fb882949cdf7
+# moe-generated: sha=d9adaeaf0c83
 name: regression-check
 description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
@@ -1904,9 +1904,21 @@ If a project has a \`test:all\` or \`npm run check\` script, prefer that — it 
 ## How to read the output
 
 - **All green?** Submit this run as \`moe.complete_task { verification: { command, exitCode: 0, outputTail } }\` (required) and put the test/pass counts in your summary. Don't claim green without numbers.
-- **Failures in tests you didn't touch?** That's a regression. Investigate before \`complete_task\`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering.
+- **Failures in tests you didn't touch?** Treat it as your regression until the baseline says otherwise. Investigate before \`complete_task\`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering. If the same failure happens without your change, see "A red gate you did not cause" below.
 - **Failures in tests you did touch?** Either the test is wrong or the code is wrong. Fix one.
 - **Flake?** Run it again. If it's still red on the second run, it's not flake, it's a bug.
+
+## A red gate you did not cause
+
+Another seat can turn your gate red: an uncommitted edit in a shared checkout, a checkpoint that landed tests ahead of their code, a flaky test. That is not a reason to \`moe.report_blocked\`, and not a reason to add a \`dependsOn\` on whoever owns the failure. Both park your finished work behind theirs for nothing.
+
+1. Run the gate in a clean clone of the branch tip plus only your own files, so another seat's uncommitted edits cannot reach it.
+2. Still red outside your change? Run the same command at the same tip without your files. The same failures there mean they are not yours.
+3. If the failure stops the command before your tests run (a type error in someone else's file, say), gate on the last commit where it does not, plus your files, and name that commit in your evidence.
+4. File the failure as a \`bug:\` row if nobody has. Then call \`moe.complete_task\`. \`verification.exitCode\` must be 0, so submit a command whose exit reflects your change, such as one that passes when its failing set equals the baseline's.
+5. List every run and its failures in your summary. Never describe a red run as green.
+
+Baseline green and red with your files? It's yours: fix it. A project rail that sets a different bar wins over this section.
 
 ## What "broader" means — when you're in the full-scope case
 
