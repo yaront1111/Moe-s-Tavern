@@ -184,12 +184,14 @@ for cli_type in '"grok"' '"codex"' '"copilot"'; do
   require_both "cli type" "$cli_type"
 done
 # GitHub Copilot CLI seat vocabulary: the model and effort env names, the coded
-# stop lines (not found, config write failed, signed out, rejected argv), the
-# sign-in evidence and token names, the routed effort flag and the mode banners,
+# stop lines (not found, config write failed, signed out, rejected argv, an
+# unsupported model or effort), the sign-in evidence and token names, the two
+# allowed Copilot model ids, the effort and autopilot flags and the mode banners,
 # spelled identically. The mode banners are pinned as prefixes (the headless one
 # carries a '(stdin prompt)' suffix). Copilot's MCP config is private and
 # per-launch (no pre-flight 'config written to' line, no .copilot/ DENY prefix).
 for copilot_lit in MOE_COPILOT_MODEL MOE_COPILOT_EFFORT MOE_COPILOT_NOT_FOUND MOE_COPILOT_CONFIG_FAILED MOE_COPILOT_SIGNED_OUT \
+  MOE_COPILOT_MODEL_UNSUPPORTED MOE_COPILOT_EFFORT_UNSUPPORTED 'claude-opus-5.5' 'gpt-6-astra' '--autopilot' \
   'MOE_CLI_ARGV_REJECTED: the installed copilot (' 'GitHub Copilot CLI not found:' 'No authentication information found' \
   COPILOT_GITHUB_TOKEN '--reasoning-effort' 'Copilot mode: headless' 'Copilot mode: interactive'; do
   require_both "copilot vocabulary" "$copilot_lit"

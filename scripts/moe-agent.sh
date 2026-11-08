@@ -12048,11 +12048,15 @@ $PROMPT_BODY"
             printf '%b[ERROR]%b %s\n' "$RED" "$NC" "MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $COMMAND_BIN. Install it (npm install -g @github/copilot), then sign in with copilot login." >&2
             exit 1
         fi
-        COPILOT_MODEL="${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-}}"
-        COPILOT_EFFORT="${MOE_COPILOT_EFFORT:-${TASK_LAUNCH_EFFORT:-}}"
-        COPILOT_OPTIONS=()
-        [ -z "$COPILOT_MODEL" ] || COPILOT_OPTIONS+=(--model "$COPILOT_MODEL")
-        [ -z "$COPILOT_EFFORT" ] || COPILOT_OPTIONS+=(--reasoning-effort "$COPILOT_EFFORT")
+        # Copilot always runs an explicit model at its highest reasoning effort; a task's launch hint never lowers it.
+        COPILOT_MODEL="${EXPLICIT_MODEL:-${MOE_COPILOT_MODEL:-claude-opus-5.5}}"
+        case "$COPILOT_MODEL" in
+            claude-opus-5.5|gpt-6-astra) ;;
+            *) copilot_fatal "MOE_COPILOT_MODEL_UNSUPPORTED: Copilot seats run only claude-opus-5.5 or gpt-6-astra, but the pinned model is '$COPILOT_MODEL' (from --model, settings.models.$ROLE or MOE_COPILOT_MODEL). Pin one of those two Copilot ids, or clear the pin for the claude-opus-5.5 default; the Claude Code id claude-opus-5-5 is not a Copilot model. This seat exits instead of looping." ;;
+        esac
+        COPILOT_EFFORT="${MOE_COPILOT_EFFORT:-max}"
+        [ "$COPILOT_EFFORT" = max ] || copilot_fatal "MOE_COPILOT_EFFORT_UNSUPPORTED: MOE_COPILOT_EFFORT is '$COPILOT_EFFORT', but Copilot seats always run at --reasoning-effort max, the highest level claude-opus-5.5 and gpt-6-astra support, and never a lower one. Unset MOE_COPILOT_EFFORT or set it to max. This seat exits instead of looping."
+        COPILOT_OPTIONS=(--model "$COPILOT_MODEL" --reasoning-effort "$COPILOT_EFFORT")
         COPILOT_PROMPT_BODY="$PROMPT"
         if [ "$AUTO_CLAIM" != true ]; then
             case $ROLE in
@@ -12088,7 +12092,7 @@ $PROMPT_BODY"
                 printf '[ERROR] Cannot create private Copilot stderr copy %s; refusing to launch.\n' "$COPILOT_ERR_FILE" >&2
                 exit 1
             fi
-            COPILOT_ARGS=(-C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" --log-dir "$COPILOT_LOG_DIR")
+            COPILOT_ARGS=(-C "${CLI_ROOT:-$PROJECT}" --allow-all --no-ask-user --autopilot --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" --log-dir "$COPILOT_LOG_DIR")
             if [ "${COPILOT_ARGV_PROBED:-false}" != true ] && [ "${MOE_DISABLE_ARGV_PROBE:-}" != 1 ]; then
                 COPILOT_ARGV_PROBED=true
                 PROBE_EXIT=0
@@ -12123,9 +12127,9 @@ $PROMPT_BODY"
             [ -z "$COPILOT_FATAL" ] || copilot_fatal "$COPILOT_FATAL"
         else
             COPILOT_POINTER_PROMPT="Session context (routed mentions, pre-flight data) is in $COPILOT_PROMPT_FILE - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WORKER_ID. Then follow your role doc."
-            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" ${COPILOT_OPTIONS[*]} -i \"<prompt>\""
+            echo "Command: $COMMAND_BIN ${COMMAND_ARGV[*]} -C \"${CLI_ROOT:-$PROJECT}\" --autopilot --allow-all-tools --no-auto-update --disable-builtin-mcps --additional-mcp-config \"@$COPILOT_MCP_FILE\" ${COPILOT_OPTIONS[*]} -i \"<prompt>\""
             set +e
-            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" -i "$COPILOT_POINTER_PROMPT")
+            (cd "${CLI_ROOT:-$PROJECT}" && agent_git_exec "$COMMAND_BIN" "${COMMAND_ARGV[@]}" -C "${CLI_ROOT:-$PROJECT}" --autopilot --allow-all-tools --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$COPILOT_MCP_FILE" "${COPILOT_OPTIONS[@]}" -i "$COPILOT_POINTER_PROMPT")
             CLI_EXIT_CODE=$?
             set -e
         fi

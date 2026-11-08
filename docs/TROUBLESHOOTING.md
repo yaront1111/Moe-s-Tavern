@@ -574,14 +574,22 @@ exit 0 is PASS, and exit 3 is BLOCKED with the same line. `ps1` and the WSL prof
 - `MOE_COPILOT_CONFIG_FAILED: cannot write <file>; refusing to launch copilot without its prompt and moe server.`
   The wrapper could not write the per-launch prompt or MCP file to its temp directory (bash: the wrapper's
   private temp dir; PowerShell: `%TEMP%`). **Fix:** free space there or fix its permissions, then relaunch.
+- `MOE_COPILOT_MODEL_UNSUPPORTED: Copilot seats run only claude-opus-5.5 or gpt-6-astra, but the pinned model is '<m>' …`
+  Copilot seats always launch an explicit model at `--reasoning-effort max`, and only the Copilot ids
+  `claude-opus-5.5` (the default) and `gpt-6-astra` are accepted. The pin came from `--model`/`-Model`,
+  `settings.models.{role}` or `MOE_COPILOT_MODEL`, in that order. The Claude Code id `claude-opus-5-5` is not a
+  Copilot model, and the real CLI rejects it. **Fix:** pin one of the two ids, or clear the pin for the
+  `claude-opus-5.5` default. The wrapper never swaps in another model.
+- `MOE_COPILOT_EFFORT_UNSUPPORTED: MOE_COPILOT_EFFORT is '<level>', but Copilot seats always run at --reasoning-effort max …`
+  A copilot seat never runs below `max`, whatever the claimed task's `launch` effort says. **Fix:** unset
+  `MOE_COPILOT_EFFORT` or set it to `max`.
 - `MOE_CLI_ARGV_REJECTED: the installed copilot (<version>) rejects the wrapper's launch argv -- <copilot's error line>. Rebuild and reinstall the Moe plugin (or pin the copilot version); …`
   The once-per-process probe (the real headless argv plus `--help`) got
   `error: unexpected argument '<flag>' found` or `error: invalid value '<v>' for '--reasoning-effort <level>'`.
-  Either the plugin's wrapper and the installed copilot have drifted apart, or `MOE_COPILOT_EFFORT` names a
-  level copilot does not take. **Fix:** do one of these:
+  Either the plugin's wrapper and the installed copilot have drifted apart, or the installed copilot no longer
+  takes `--reasoning-effort max`. **Fix:** do one of these:
   - rebuild and reinstall the plugin (the commands are in the `--full-auto` section above);
-  - pin copilot to a version that takes the argv (`npm install -g @github/copilot@<version>`);
-  - correct `MOE_COPILOT_EFFORT`.
+  - pin copilot to a version that takes the argv (`npm install -g @github/copilot@<version>`).
 
   `MOE_DISABLE_ARGV_PROBE=1` skips this check, but then the launch itself fails.
 

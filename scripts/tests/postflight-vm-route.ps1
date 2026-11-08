@@ -130,7 +130,7 @@ function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project, [string]
     if ($R.Code -ne 0 -or -not $R.Ran) { Stop-Vmr $R 'copilot did not launch' }
     $rcli = [IO.File]::ReadAllText($rec) | ConvertFrom-Json; $tui = $Mode -eq 'tui'
     $cliRoot = $rcli.argv[[Array]::IndexOf($rcli.argv, '-C')+1]
-    $expected = @(if ($rcli.env.FAKE_CP_PREFIX) { '--prefix-test' }) + @('-C', $cliRoot) + @(if (-not $tui) { '--allow-all'; '--no-ask-user' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @(if ($Model) { '--model'; $Model }; if ($Effort) { '--reasoning-effort'; $Effort }) + @(if ($tui) { '-i'; $rcli.argv[-1] } else { '--log-dir'; $rcli.argv[-1] })
+    $expected = @(if ($rcli.env.FAKE_CP_PREFIX) { '--prefix-test' }) + @('-C', $cliRoot) + @(if ($tui) { '--autopilot'; '--allow-all-tools' } else { '--allow-all'; '--no-ask-user'; '--autopilot' }) + @('--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($rcli.mcpFile)") + @('--model', $(if ($Model) { $Model } else { 'claude-opus-5.5' }), '--reasoning-effort', $(if ($Effort) { $Effort } else { 'max' })) + @(if ($tui) { '-i'; $rcli.argv[-1] } else { '--log-dir'; $rcli.argv[-1] })
     if (($rcli.argv -join "`0") -cne ($expected -join "`0") -or $rcli.env.MOE_WORKER_TYPE -cne 'COPILOT') { Stop-Vmr $R 'argv/worker type' }
     foreach ($p in @($rcli.cwd, $cliRoot)) { if ([IO.Path]::GetFullPath($p) -ine [IO.Path]::GetFullPath($Root)) { Stop-Vmr $R 'CLI root' } }
     $text = if ($tui) { $rcli.pointerText } else { $rcli.stdin }
@@ -150,6 +150,51 @@ function Assert-CopilotRow($R, [string]$Mode, [string]$Root = $project, [string]
     $want = if ($tui -or $env:MOE_DISABLE_ARGV_PROBE -eq '1') { 0 } else { 1 }
     if ($probes.Count -ne $want) { Stop-Vmr $R 'probe count' }
     if ($want -and ($probes[0].stdin -cne '' -or ($probes[0].argv -join "`0") -cne (($rcli.argv + @('--help')) -join "`0"))) { Stop-Vmr $R 'probe stdin/argv' }
+}
+function Assert-CopilotUnsupported($R, [string]$Code, [string]$Bad) {
+    $lines = @($R.Text -split '\r?\n' | Where-Object { $_.Contains($Code) })
+    $msg = @(Get-Content $calls | ConvertFrom-Json | Where-Object { $_.tool -eq 'chat_send' -and $_.args.content.Contains($Code) -and $_.args.channel -eq 'chan-general' })
+    if ($R.Code -ne 1 -or $R.Ran -or (Test-Path -LiteralPath "$rec.copilot")) { Stop-Vmr $R 'unsupported choice launched or wrong exit' }
+    if ($lines.Count -ne 1 -or -not $R.Text.Contains("'$Bad'") -or $R.Text.Contains('[launch-failure]') -or $msg.Count -ne 1 -or $R.Tools -notcontains 'deregister_worker') { Stop-Vmr $R 'unsupported evidence' }
+}
+function Invoke-CopilotPolicyChoiceRows {
+    $mu = 'MOE_COPILOT_MODEL_UNSUPPORTED'; $eu = 'MOE_COPILOT_EFFORT_UNSUPPORTED'
+    $env:FAKE_CLAIM_MODE = 'resume'; $env:FAKE_TASK_STATUS = 'WORKING'
+    try {
+        $env:FAKE_CLAIM_LAUNCH = '{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
+        $r = Invoke-VmrRow CP-route worker copilot '' off; Assert-CopilotRow $r worker
+        $env:FAKE_CLAIM_LAUNCH = '{"tier":"light","effort":"low","model":"claude-haiku-4-5","codex":{"effort":"low"}}'
+        $r = Invoke-VmrRow CP-route-low worker copilot '' off; Assert-CopilotRow $r worker
+        $env:MOE_COPILOT_MODEL = 'gpt-6-astra'; $env:MOE_COPILOT_EFFORT = 'max'
+        $r = Invoke-VmrRow CP-env worker copilot '' off; Assert-CopilotRow $r worker $project gpt-6-astra max
+        Remove-Item Env:\MOE_COPILOT_EFFORT
+        foreach ($bad in @('env-model', 'claude-opus-5-5', 'auto')) {
+            $env:MOE_COPILOT_MODEL = $bad; $r = Invoke-VmrRow CP-env-bad worker copilot '' off; Assert-CopilotUnsupported $r $mu $bad
+        }
+        Remove-Item Env:\MOE_COPILOT_MODEL
+        foreach ($bad in @('none', 'minimal', 'xhigh')) {
+            $env:MOE_COPILOT_EFFORT = $bad; $r = Invoke-VmrRow CP-effort-bad worker copilot '' off; Assert-CopilotUnsupported $r $eu $bad
+        }
+        Remove-Item Env:\MOE_COPILOT_EFFORT
+        $env:MOE_COPILOT_MODEL = 'auto'; $script:VmrLoop = @('-PollInterval', '1')
+        $r = Invoke-VmrRow CP-bad-loop worker copilot '' off; Assert-CopilotUnsupported $r $mu auto
+        $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+        $script:VmrSetup = { $f = "$project\.moe\project.json"; $p = Get-Content -Raw $f | ConvertFrom-Json; $p.settings | Add-Member models @{worker=$script:CpPin;architect=$script:CpPin}; [IO.File]::WriteAllText($f, (ConvertTo-Json $p -Depth 6)) }
+        $script:CpPin = 'gpt-6-astra'; $env:MOE_COPILOT_MODEL = 'claude-opus-5.5'
+        $r = Invoke-VmrRow CP-settings worker copilot '' off; Assert-CopilotRow $r worker $project gpt-6-astra max
+        $script:CpPin = 'settings-model'; $env:MOE_COPILOT_MODEL = 'gpt-6-astra'
+        $r = Invoke-VmrRow CP-settings-bad worker copilot '' off; Assert-CopilotUnsupported $r $mu settings-model
+        $script:VmjExtraArgs = @('-Model', 'cli-model'); Remove-Item Env:\MOE_COPILOT_MODEL
+        $r = Invoke-VmrRow CP-cli-bad worker copilot '' off; Assert-CopilotUnsupported $r $mu cli-model
+        $script:VmjExtraArgs = @('-Model', 'gpt-6-astra'); $env:MOE_COPILOT_MODEL = 'env-model'
+        $script:VmrCommand = "$tempRoot\copilot.cmd --prefix-test"; $env:FAKE_CP_PREFIX = '1'
+        $r = Invoke-VmrRow CP-cli worker copilot '' off; Assert-CopilotRow $r worker $project gpt-6-astra max
+        $script:VmrCommand = ''; Remove-Item Env:\FAKE_CP_PREFIX
+        $r = Invoke-VmrRow CP-tui architect copilot '' off; Assert-CopilotRow $r tui $project gpt-6-astra max
+    } finally {
+        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_TASK_STATUS, Env:\FAKE_CLAIM_LAUNCH, Env:\MOE_COPILOT_MODEL, Env:\MOE_COPILOT_EFFORT, Env:\FAKE_CP_PREFIX -ErrorAction SilentlyContinue
+        $script:VmrSetup = $null; $script:CpPin = $null; $script:VmjExtraArgs = @(); $script:VmrCommand = ''; $script:VmrLoop = @('-NoLoop', '-PollInterval', '0')
+    }
 }
 function Invoke-CopilotProbeRows {
     $script:VmrStdin = "$tempRoot\cp-stdin"; [IO.File]::WriteAllText($script:VmrStdin, 'inherited stdin sentinel')
@@ -186,18 +231,7 @@ function Invoke-CopilotRows {
         foreach ($s in @('Copilot mode: interactive', 'Interactive mode: polling disabled', 'Loop: False')) { if (-not $r.Text.Contains($s)) { Stop-Vmr $r $s } }
         $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @('-Interactive:$false')
         $r = Invoke-VmrRow CP-AN architect copilot '' off; Assert-CopilotRow $r headless; $script:VmjExtraArgs = @()
-        $env:FAKE_CLAIM_MODE = 'resume'; $env:FAKE_TASK_STATUS = 'WORKING'; $env:FAKE_CLAIM_LAUNCH = '{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
-        $r = Invoke-VmrRow CP-route worker copilot '' off; Assert-CopilotRow $r worker $project '' xhigh
-        $env:MOE_COPILOT_MODEL = 'env-model'; $env:MOE_COPILOT_EFFORT = 'max'
-        $r = Invoke-VmrRow CP-env worker copilot '' off; Assert-CopilotRow $r worker $project env-model max
-        $script:VmrSetup = { $f = "$project\.moe\project.json"; $p = Get-Content -Raw $f | ConvertFrom-Json; $p.settings | Add-Member models @{worker='settings-model';architect='settings-model'}; [IO.File]::WriteAllText($f, (ConvertTo-Json $p -Depth 6)) }
-        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-settings worker copilot '' off; Assert-CopilotRow $r worker $project settings-model none
-        $script:VmjExtraArgs = @('-Model', 'cli-model'); $env:MOE_COPILOT_EFFORT = 'minimal'
-        $script:VmrCommand = "$tempRoot\copilot.cmd --prefix-test"; $env:FAKE_CP_PREFIX = '1'
-        $r = Invoke-VmrRow CP-cli worker copilot '' off; Assert-CopilotRow $r worker $project cli-model minimal
-        $script:VmrCommand = ''; Remove-Item Env:\FAKE_CP_PREFIX
-        $env:MOE_COPILOT_EFFORT = 'none'; $r = Invoke-VmrRow CP-tui architect copilot '' off; Assert-CopilotRow $r tui $project cli-model none
-        Remove-Item Env:\FAKE_CLAIM_MODE, Env:\FAKE_TASK_STATUS, Env:\FAKE_CLAIM_LAUNCH, Env:\MOE_COPILOT_MODEL, Env:\MOE_COPILOT_EFFORT; $script:VmrSetup = $null; $script:VmjExtraArgs = @()
+        Invoke-CopilotPolicyChoiceRows
         Invoke-CopilotProbeRows
         Invoke-CopilotAuthRows
         Invoke-CopilotPolicyRows
@@ -216,7 +250,7 @@ function Invoke-CopilotRows {
             $env:FAKE_CLAIM_WORKSPACE = '{"mode":"worktree","target":"main"}'; $env:FAKE_CTX_WORKSPACE = $env:FAKE_CLAIM_WORKSPACE
         }
         $r = Invoke-VmrRow CP-W worker copilot '' on; Assert-CopilotRow $r worker "$project\.worktrees\task-postflight"
-        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
+        Write-Host '[copilot] ok CP-H, CP-A, CP-AN, CP-NF, CP-W, routing, model-effort policy, argv-probe, auth, two-launch, logfail'
     } finally {
         $script:VmrLoop = @('-NoLoop', '-PollInterval', '0'); $script:VmjExtraArgs = @(); $script:VmrCommand = ''; $script:VmrSetup = $null
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
@@ -252,7 +286,7 @@ function Invoke-CopilotAuthRows {
             $dirs = @($runs | ForEach-Object { $_.argv[[Array]::IndexOf($_.argv,'--log-dir')+1] })
             if (@($dirs | Select-Object -Unique).Count -ne $count) { Stop-Vmr $r 'shared log directory' }
             foreach ($d in $dirs) { if (-not [IO.Path]::IsPathRooted($d) -or -not (Split-Path $d -Leaf).StartsWith('copilot-log.') -or (Test-Path -LiteralPath $d) -or (Test-Path -LiteralPath (Split-Path $d))) { Stop-Vmr $r 'log isolation/cleanup' } }
-            if ($count -eq 2 -and ($runs[0].argv[[Array]::IndexOf($runs[0].argv,'--reasoning-effort')+1] -cne 'xhigh' -or $runs[1].argv -contains '--reasoning-effort' -or @($runs | Where-Object { $_.argv -contains '--model' }).Count)) { Stop-Vmr $r 'stale routed hint' }
+            if ($count -eq 2) { foreach ($x in $runs) { if ($x.argv[[Array]::IndexOf($x.argv,'--reasoning-effort')+1] -cne 'max' -or $x.argv[[Array]::IndexOf($x.argv,'--model')+1] -cne 'claude-opus-5.5') { Stop-Vmr $r 'policy drifted across relaunch' } } }
             foreach ($x in $runs) { if (-not $x.copyExists -or (Test-Path -LiteralPath "$($x.logDir).stderr")) { Stop-Vmr $r 'stderr copy/cleanup' } }
             if (($count -eq 2 -and -not $runs[1].priorGone) -or @($r.Text -split '\r?\n' | Where-Object { $_.Contains('The Copilot policy of this account blocked the serena MCP server') }).Count -ne ($count - 1)) { Stop-Vmr $r 'per-launch copy/serena WARN' }
             foreach ($s in @('secret-copilot-token','secret-gh-token','secret-github-token')) { if (($r.Text + [IO.File]::ReadAllText($calls)).Contains($s)) { Stop-Vmr $r 'credential leaked' } }

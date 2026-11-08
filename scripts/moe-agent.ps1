@@ -11590,13 +11590,19 @@ $mentionsJson
             [Console]::Error.WriteLine("[ERROR] MOE_COPILOT_NOT_FOUND: GitHub Copilot CLI not found: $Command. Install it (npm install -g @github/copilot), then sign in with copilot login.")
             $script:MoeExitStatus = 1; exit 1
         }
+        # Copilot always runs an explicit model at its highest reasoning effort; a task's launch hint never lowers it.
         $copilotModel = $env:MOE_COPILOT_MODEL
         if ($Model) { $copilotModel = $Model }
         elseif ($projConfig -and $projConfig.settings -and $projConfig.settings.models -and $projConfig.settings.models.$Role) { $copilotModel = [string]$projConfig.settings.models.$Role }
-        $copilotEffort = if ($env:MOE_COPILOT_EFFORT) { $env:MOE_COPILOT_EFFORT } else { $taskLaunchEffort }
-        $copilotOptions = @()
-        if ($copilotModel) { $copilotOptions += @('--model', $copilotModel) }
-        if ($copilotEffort) { $copilotOptions += @('--reasoning-effort', $copilotEffort) }
+        if (-not $copilotModel) { $copilotModel = 'claude-opus-5.5' }
+        if ($copilotModel -cnotin @('claude-opus-5.5', 'gpt-6-astra')) {
+            Stop-MoeCopilot "MOE_COPILOT_MODEL_UNSUPPORTED: Copilot seats run only claude-opus-5.5 or gpt-6-astra, but the pinned model is '$copilotModel' (from --model, settings.models.$Role or MOE_COPILOT_MODEL). Pin one of those two Copilot ids, or clear the pin for the claude-opus-5.5 default; the Claude Code id claude-opus-5-5 is not a Copilot model. This seat exits instead of looping."
+        }
+        $copilotEffort = if ($env:MOE_COPILOT_EFFORT) { $env:MOE_COPILOT_EFFORT } else { 'max' }
+        if ($copilotEffort -cne 'max') {
+            Stop-MoeCopilot "MOE_COPILOT_EFFORT_UNSUPPORTED: MOE_COPILOT_EFFORT is '$copilotEffort', but Copilot seats always run at --reasoning-effort max, the highest level claude-opus-5.5 and gpt-6-astra support, and never a lower one. Unset MOE_COPILOT_EFFORT or set it to max. This seat exits instead of looping."
+        }
+        $copilotOptions = @('--model', $copilotModel, '--reasoning-effort', $copilotEffort)
         if ($claimPromptBody) { $copilotDirective = $claimPromptBody }
         elseif ($AutoClaim) { $copilotDirective = "If a routed_mentions block is present in the session context above, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc." }
         else {
@@ -11640,15 +11646,15 @@ $mentionsJson
             try {
                 if ($copilotInteractive) {
                     $copilotPointerPrompt = "Session context (routed mentions, pre-flight data) is in $($script:CopilotPromptFile) - read it. If a routed_mentions block is present, reply to each tagged message via moe.chat_send as workerId $WorkerId. Then follow your role doc."
-                    Write-Host "Command: $Command $($CommandArgs -join ' ') -C `"$script:cliRoot`" --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" $($copilotOptions -join ' ') -i `"<prompt>`""
-                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" @copilotOptions -i "$copilotPointerPrompt"
+                    Write-Host "Command: $Command $($CommandArgs -join ' ') -C `"$script:cliRoot`" --autopilot --allow-all-tools --no-auto-update --disable-builtin-mcps --additional-mcp-config `"@$($script:CopilotMcpFile)`" $($copilotOptions -join ' ') -i `"<prompt>`""
+                    Invoke-MoeGuardedCommand @CommandArgs -C "$script:cliRoot" --autopilot --allow-all-tools --no-auto-update --disable-builtin-mcps --additional-mcp-config "@$($script:CopilotMcpFile)" @copilotOptions -i "$copilotPointerPrompt"
                     $script:CliExitCode = $LASTEXITCODE
                 } else {
                     try { $copilotLogDir = New-MoeCopilotLog } catch {
                         [Console]::Error.WriteLine('[ERROR] Cannot create private Copilot log directory; refusing to launch.')
                         $script:MoeExitStatus = 1; exit 1
                     }
-                    $copilotArgs = @('-C', "$script:cliRoot", '--allow-all', '--no-ask-user', '--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($script:CopilotMcpFile)") + $copilotOptions + @('--log-dir', $copilotLogDir)
+                    $copilotArgs = @('-C', "$script:cliRoot", '--allow-all', '--no-ask-user', '--autopilot', '--no-auto-update', '--disable-builtin-mcps', '--additional-mcp-config', "@$($script:CopilotMcpFile)") + $copilotOptions + @('--log-dir', $copilotLogDir)
                     Test-MoeCopilotArgv $copilotArgs
                     Write-Host "Command: $Command $($CommandArgs -join ' ') $($copilotArgs -join ' ')"
                     # This launch's private stderr copy, beside (never inside) its log dir.

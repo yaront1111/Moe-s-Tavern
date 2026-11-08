@@ -149,7 +149,7 @@ cp_assert() {
   "$NODE" - "$REC" "$PROJECT" "$1" "${2:-$PROJECT}" "$FAKE_PROXY" "$TMP_DIR/serena-bin/serena" "${3:-}" "${4:-}" <<'JS' || vmr_fail "$VMR_ROW" 'copilot contract'
 const [file,project,mode,root,proxy,serena,model,effort]=process.argv.slice(2),fs=require('fs'),a=require('assert/strict'),r=JSON.parse(fs.readFileSync(file)),tui=mode==='tui';
 a.equal(r.env.MOE_WORKER_TYPE,'COPILOT'); a.equal(r.cwd,root);
-a.deepEqual(r.argv,[...(r.env.FAKE_CP_PREFIX?['--prefix-test']:[]),'-C',root,...(tui?[]:['--allow-all','--no-ask-user']),'--no-auto-update','--disable-builtin-mcps','--additional-mcp-config','@'+r.mcpFile,...(model?['--model',model]:[]),...(effort?['--reasoning-effort',effort]:[]),...(tui?['-i',r.argv.at(-1)]:['--log-dir',r.argv.at(-1)])]);
+a.deepEqual(r.argv,[...(r.env.FAKE_CP_PREFIX?['--prefix-test']:[]),'-C',root,...(tui?['--autopilot','--allow-all-tools']:['--allow-all','--no-ask-user','--autopilot']),'--no-auto-update','--disable-builtin-mcps','--additional-mcp-config','@'+r.mcpFile,'--model',model||'claude-opus-5.5','--reasoning-effort',effort||'max',...(tui?['-i',r.argv.at(-1)]:['--log-dir',r.argv.at(-1)])]);
 if(!tui)a.ok(!fs.existsSync(r.argv.at(-1)),'log cleanup');
 const text=tui?r.pointerText:r.stdin;
 for(const s of [r.env.FAKE_CLAIM_MODE==='resume'?'task-resume':'task-postflight','# Session Context (per-iteration)',tui?'INTERACTIVE session:':'One-shot session:']) a.ok(text.includes(s),s);
@@ -176,6 +176,14 @@ a.equal(text.split('\n').filter(l=>l.includes('MOE_CLI_ARGV_REJECTED')).length,1
 a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes('MOE_CLI_ARGV_REJECTED')&&x.args.channel==='chan-general').length,1);a.ok(rpc.some(x=>x.tool==='deregister_worker'));a.ok(!text.includes('[launch-failure]'));
 JS
 }
+cp_unsupported() { # $1 = the coded stop, $2 = the rejected value it must name
+  [ "$VMR_CODE" = 1 ] && [ ! -e "$REC" ] && [ ! -e "$REC.copilot" ] || vmr_fail "$VMR_ROW" 'unsupported choice launched or wrong exit'
+  "$NODE" - "$OUT" "$CALLS" "$1" "$2" <<'JS' || vmr_fail "$VMR_ROW" 'unsupported evidence'
+const fs=require('fs'),a=require('assert/strict'),[o,c,code,bad]=process.argv.slice(2),text=fs.readFileSync(o,'utf8'),rpc=fs.readFileSync(c,'utf8').trim().split('\n').map(JSON.parse);
+a.equal(text.split('\n').filter(l=>l.includes(code)).length,1);a.ok(text.includes("'"+bad+"'"));a.ok(!text.includes('[launch-failure]'));
+a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes(code)&&x.args.channel==='chan-general').length,1);a.ok(rpc.some(x=>x.tool==='deregister_worker'));
+JS
+}
 cp_auth_assert() {
   "$NODE" - "$REC.copilot" "$OUT" "$CALLS" "$VMR_CODE" "$1" "$2" <<'JS' || vmr_fail "$VMR_ROW" 'auth lifecycle'
 const fs=require('fs'),a=require('assert/strict'),p=require('path'),[f,o,c,code,fatal,count]=process.argv.slice(2),rows=p=>fs.readFileSync(p,'utf8').trim().split('\n').map(JSON.parse),all=rows(f),r=all.filter(x=>x.kind==='run'),text=fs.readFileSync(o,'utf8'),rpc=rows(c),msg='MOE_COPILOT_SIGNED_OUT';
@@ -183,7 +191,7 @@ a.equal(Number(code),fatal==='1'?1:0);a.equal(r.length,Number(count));a.equal(al
 a.equal(text.split('\n').filter(l=>l.includes(msg)).length,Number(fatal));a.equal(rpc.filter(x=>x.tool==='chat_send'&&x.args.content.includes(msg)&&x.args.channel==='chan-general').length,Number(fatal));a.ok(rpc.some(x=>x.tool==='deregister_worker'));
 if(fatal==='1'){a.ok(!text.includes('[launch-failure]'));for(const s of ['copilot login','COPILOT_GITHUB_TOKEN / GH_TOKEN / GITHUB_TOKEN','Windows and WSL sign in separately'])a.ok(text.includes(s));}
 const dirs=r.map(x=>x.argv[x.argv.indexOf('--log-dir')+1]);a.equal(new Set(dirs).size,r.length);for(const d of dirs){a.ok(p.isAbsolute(d));a.ok(p.basename(d).startsWith('copilot-log.'));a.ok(!fs.existsSync(d));a.ok(!fs.existsSync(p.dirname(d)));}
-if(r.length===2){a.equal(r[0].argv[r[0].argv.indexOf('--reasoning-effort')+1],'xhigh');a.ok(!r[1].argv.includes('--reasoning-effort'));a.ok(!r.some(x=>x.argv.includes('--model')));a.ok(r[1].priorGone,'earlier log dir and copy removed');}
+if(r.length===2){for(const x of r){a.equal(x.argv[x.argv.indexOf('--reasoning-effort')+1],'max');a.equal(x.argv[x.argv.indexOf('--model')+1],'claude-opus-5.5');}a.ok(r[1].priorGone,'earlier log dir and copy removed');}
 for(const x of r){a.ok(x.copyExists,'stderr copy');a.ok(!fs.existsSync(x.logDir+'.stderr'));}
 a.equal(text.split('\n').filter(l=>l.includes('The Copilot policy of this account blocked the serena MCP server')).length,r.length===2?1:0,'serena WARN');
 for(const s of ['secret-copilot-token','secret-gh-token','secret-github-token'])a.ok(!(text+fs.readFileSync(c,'utf8')).includes(s));
@@ -207,15 +215,27 @@ cp_fixture() {
   VMR_ARGS=(--no-loop --poll-interval 0 --no-interactive); vmr_run CP-AN architect copilot - off -; cp_assert headless
   VMR_ARGS=(--no-loop --poll-interval 0)
   export FAKE_CLAIM_MODE=resume FAKE_TASK_STATUS=WORKING FAKE_CLAIM_LAUNCH='{"tier":"standard","effort":"xhigh","model":"claude-opus-5-5","codex":{"effort":"low"}}'
-  vmr_run CP-route worker copilot - off -; cp_assert worker '' '' xhigh
-  vmr_run CP-env worker copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=max; cp_assert worker '' env-model max
-  cp_models() { "$NODE" -e 'const f=process.argv[1],fs=require("fs"),p=JSON.parse(fs.readFileSync(f));p.settings.models={worker:"settings-model",architect:"settings-model"};fs.writeFileSync(f,JSON.stringify(p))' "$PROJECT/.moe/project.json"; }
+  vmr_run CP-route worker copilot - off -; cp_assert worker
+  export FAKE_CLAIM_LAUNCH='{"tier":"light","effort":"low","model":"claude-haiku-4-5","codex":{"effort":"low"}}'
+  vmr_run CP-route-low worker copilot - off -; cp_assert worker
+  vmr_run CP-env worker copilot - off - MOE_COPILOT_MODEL=gpt-6-astra MOE_COPILOT_EFFORT=max; cp_assert worker '' gpt-6-astra max
+  for bad in env-model claude-opus-5-5 auto; do
+    vmr_run CP-env-bad worker copilot - off - MOE_COPILOT_MODEL="$bad"; cp_unsupported MOE_COPILOT_MODEL_UNSUPPORTED "$bad"
+  done
+  for bad in none minimal xhigh; do
+    vmr_run CP-effort-bad worker copilot - off - MOE_COPILOT_EFFORT="$bad"; cp_unsupported MOE_COPILOT_EFFORT_UNSUPPORTED "$bad"
+  done
+  VMR_ARGS=(--poll-interval 1); vmr_run CP-bad-loop worker copilot - off - MOE_COPILOT_MODEL=auto; cp_unsupported MOE_COPILOT_MODEL_UNSUPPORTED auto
+  VMR_ARGS=(--no-loop --poll-interval 0)
+  cp_models() { "$NODE" -e 'const f=process.argv[1],fs=require("fs"),p=JSON.parse(fs.readFileSync(f));p.settings.models={worker:process.argv[2],architect:process.argv[2]};fs.writeFileSync(f,JSON.stringify(p))' "$PROJECT/.moe/project.json" "$CP_PIN"; }
   VMR_SETUP=cp_models
-  vmr_run CP-settings worker copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=none; cp_assert worker '' settings-model none
-  VMR_ARGS+=(--model cli-model)
+  CP_PIN=gpt-6-astra; vmr_run CP-settings worker copilot - off - MOE_COPILOT_MODEL=claude-opus-5.5; cp_assert worker '' gpt-6-astra max
+  CP_PIN=settings-model; vmr_run CP-settings-bad worker copilot - off - MOE_COPILOT_MODEL=gpt-6-astra; cp_unsupported MOE_COPILOT_MODEL_UNSUPPORTED settings-model
+  VMR_ARGS+=(--model cli-model); vmr_run CP-cli-bad worker copilot - off -; cp_unsupported MOE_COPILOT_MODEL_UNSUPPORTED cli-model
+  VMR_ARGS=(--no-loop --poll-interval 0 --model gpt-6-astra)
   VMR_CMD="$BIN/copilot --prefix-test"
-  vmr_run CP-cli worker copilot - off - FAKE_CP_PREFIX=1 MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=minimal; cp_assert worker '' cli-model minimal
-  vmr_run CP-tui architect copilot - off - MOE_COPILOT_MODEL=env-model MOE_COPILOT_EFFORT=none; cp_assert tui '' cli-model none
+  vmr_run CP-cli worker copilot - off - FAKE_CP_PREFIX=1 MOE_COPILOT_MODEL=env-model; cp_assert worker '' gpt-6-astra max
+  vmr_run CP-tui architect copilot - off - MOE_COPILOT_MODEL=env-model; cp_assert tui '' gpt-6-astra max
   unset FAKE_CLAIM_MODE FAKE_TASK_STATUS FAKE_CLAIM_LAUNCH VMR_SETUP; VMR_ARGS=(--no-loop --poll-interval 0)
   printf 'inherited stdin sentinel' > "$TMP_DIR/cp-stdin"; VMR_STDIN="$TMP_DIR/cp-stdin"
   for phrase in 'Unexpected Argument' 'invalid value' 'unrecognized'; do
@@ -251,7 +271,7 @@ cp_fixture() {
   printf '[user]\n name = Test\n email = test@example.com\n' > "$GIT_CONFIG_GLOBAL"
   VMR_SETUP=cp_fixture; vmr_run CP-W worker copilot - on -; cp_assert worker "$PROJECT/.worktrees/task-postflight"
 )
-echo '[copilot] ok CP-H, CP-X, CP-A, CP-AN, CP-NF, CP-W, routing, argv-probe, auth, two-launch, logfail'
+echo '[copilot] ok CP-H, CP-X, CP-A, CP-AN, CP-NF, CP-W, routing, model-effort policy, argv-probe, auth, two-launch, logfail'
 
 # --- [copilot policy]: a 403 in this launch's own log (nonzero exit only) or a moe server
 # blocked on this launch's stderr (any exit) stops the seat once; a blocked serena only warns.
