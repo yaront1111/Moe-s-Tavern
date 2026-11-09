@@ -3756,7 +3756,7 @@ prepare_worktree_launch() {
     fi
     DYNAMIC_CONTEXT="$DYNAMIC_CONTEXT
 
-Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/."
+Before testing a package in this worktree, install its dependencies with the command for its lockfile (package-lock.json: npm ci --prefer-offline; pnpm-lock.yaml: pnpm install --frozen-lockfile), plus its build step where its tests require built output."
     # The writers take Serena's root as an argument; an empty SERENA_CMD drops the server (stale entries too).
     SERENA_CMD="${serena:+$SERENA_CMD}" write_project_mcp_json "$CLI_ROOT" "$serena" \
         || worktree_stop MOE_WORKTREE_CREATE_FAILED "cannot write the MCP config ($CLI_ROOT/.mcp.json)"

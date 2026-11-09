@@ -3686,7 +3686,7 @@ try {
         $serenaPath = $null
         $Context.Value = $Context.Value -replace '(?m)^memory_total=.*\r?\nmemory_this_task=.*\r?\nmemory_recent=.*', 'memory_total=0 (Serena is off for this launch: MOE_WORKTREE_LINK_FAILED .serena/memories)'
     }
-    $Context.Value += "`n`nBefore testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/."
+    $Context.Value += "`n`nBefore testing a package in this worktree, install its dependencies with the command for its lockfile (package-lock.json: npm ci --prefer-offline; pnpm-lock.yaml: pnpm install --frozen-lockfile), plus its build step where its tests require built output."
     $what = "cannot write the $cliType config"; $at = Join-Path $script:cliRoot ".$cliType"
     try {
         switch ($cliType) {

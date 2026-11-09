@@ -554,7 +554,7 @@ function serenaOf(text,toml=false){
   const a=toml?m&&JSON.parse(m[1]):(JSON.parse(text).mcpServers.serena||{}).args;
   return a?a[a.indexOf('--project')+1]:null;
 }
-const DEPS_LINE='Before testing a package in this worktree, run npm ci --prefer-offline in that package, plus npm run build where its tests require dist/.';
+const DEPS_LINE='Before testing a package in this worktree, install its dependencies with the command for its lockfile (package-lock.json: npm ci --prefer-offline; pnpm-lock.yaml: pnpm install --frozen-lockfile), plus its build step where its tests require built output.';
 const SERENA_OFF='memory_total=0 (Serena is off for this launch: MOE_WORKTREE_LINK_FAILED .serena/memories)';
 const LINKS=['.serena/memories','.claude/skills'];
 // [banner, config path under its root]; the sh Gemini writer prints its banner twice.
