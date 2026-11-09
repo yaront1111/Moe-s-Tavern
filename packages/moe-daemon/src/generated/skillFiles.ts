@@ -1269,7 +1269,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=a810afb3a5d8
+# moe-generated: sha=a1988604b52d
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Provides the canonical 8-phase template (plan, explore, tests, minimum impl, verify, document, adversarial review, QA loop), rules for when to skip phases on trivial tasks, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1350,6 +1350,7 @@ The worker's job ends at \`moe.complete_task\`. The QA agent reviews and may cal
 One step per phase is a fine starting point for non-trivial work. For larger tasks, Phase 4 (minimum implementation) usually expands into multiple steps — one per logical concern. **Only Phase 4 expands.** Phases 5 and 7 are one step each, at the end, no matter how many implementation steps precede them. Always:
 
 - Set \`affectedFiles\` tight per step.
+- Before \`moe.submit_plan\`, check your files against the plans of open tasks. For each shared file with no dependency path between the two rows, add the edge with \`moe.set_task_dependencies\`. In \`TURBO\` approval a plan is claimable the moment it is submitted, so an edge added afterwards can be too late, and two seats then edit one file at once.
 - When a Serena memory bears on a step, name it in that step's description as \`mem:<name>\` (for example \`mem:gotcha-moe-doc-generated-artifacts\`), so the worker calls read_memory on exactly that memory instead of scanning list_memories.
 - Cite only live names, and never another task's \`task-<id>-handoff\` or \`task-<id>-qa-handoff\`: QA retires those to \`_archive/\` at \`moe.qa_approve\`, and a dependsOn edge holds this task's claim until then, so the worker's read_memory finds nothing (task-62ec51f1's seat, 2026-11-04). Quote the fact the step needs, or cite a \`gotcha-\`/\`pattern-\`/\`decision-\` memory. Serena hides \`_archive/\` names, and read_memory refuses them.
 - Map every Definition-of-Done item to at least one step.
@@ -1863,7 +1864,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`regression-check\` follow-up.
 - Replaced the "Forbidden phrases" banned-phrase list with a one-line positive statement of how to respond (technical content only; verify before agreeing).`,
   'regression-check/SKILL.md': `---
-# moe-generated: sha=fb882949cdf7
+# moe-generated: sha=d9adaeaf0c83
 name: regression-check
 description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
 when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
@@ -1904,9 +1905,21 @@ If a project has a \`test:all\` or \`npm run check\` script, prefer that — it 
 ## How to read the output
 
 - **All green?** Submit this run as \`moe.complete_task { verification: { command, exitCode: 0, outputTail } }\` (required) and put the test/pass counts in your summary. Don't claim green without numbers.
-- **Failures in tests you didn't touch?** That's a regression. Investigate before \`complete_task\`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering.
+- **Failures in tests you didn't touch?** Treat it as your regression until the baseline says otherwise. Investigate before \`complete_task\`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering. If the same failure happens without your change, see "A red gate you did not cause" below.
 - **Failures in tests you did touch?** Either the test is wrong or the code is wrong. Fix one.
 - **Flake?** Run it again. If it's still red on the second run, it's not flake, it's a bug.
+
+## A red gate you did not cause
+
+Another seat can turn your gate red: an uncommitted edit in a shared checkout, a checkpoint that landed tests ahead of their code, a flaky test. That is not a reason to \`moe.report_blocked\`, and not a reason to add a \`dependsOn\` on whoever owns the failure. Both park your finished work behind theirs for nothing.
+
+1. Run the gate in a clean clone of the branch tip plus only your own files, so another seat's uncommitted edits cannot reach it.
+2. Still red outside your change? Run the same command at the same tip without your files. The same failures there mean they are not yours.
+3. If the failure stops the command before your tests run (a type error in someone else's file, say), gate on the last commit where it does not, plus your files, and name that commit in your evidence.
+4. File the failure as a \`bug:\` row if nobody has. Then call \`moe.complete_task\`. \`verification.exitCode\` must be 0, so submit a command whose exit reflects your change, such as one that passes when its failing set equals the baseline's.
+5. List every run and its failures in your summary. Never describe a red run as green.
+
+Baseline green and red with your files? It's yours: fix it. A project rail that sets a different bar wins over this section.
 
 ## What "broader" means — when you're in the full-scope case
 
