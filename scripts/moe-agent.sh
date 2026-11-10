@@ -8725,6 +8725,21 @@ worktree_dirt_scan() {
 # wt_remove_refused W DETAIL -- the removal engine's refusal line.
 wt_remove_refused() { echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_REMOVE_REFUSED: $1: $2"; }
 
+# finish_leftover_worktree W -- finish a W that `git worktree remove` exited 0 on
+# but left on disk: git has already deregistered it, and remove_task_worktree's
+# callers proved every byte landed or rescued. `rm -rf --` never follows a link:
+# it unlinks a symlink, and under msys a junction, without entering it. A W that
+# is itself a link, or that still stands afterwards (a file held open), is only
+# warned about, and the next sweep pass names it MOE_WORKTREE_UNREGISTERED.
+# Twin: Remove-MoeLeftoverWorktree.
+finish_leftover_worktree() {
+    if [ -L "$1" ]; then echo -e "${YELLOW}[WARN]${NC} $1 is a link; it is left on disk."; return 0; fi
+    rm -rf -- "$1" 2>/dev/null || true
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        echo -e "${YELLOW}[WARN]${NC} git worktree remove left $1 on disk and it could not be deleted; the next sweep names it."
+    fi
+}
+
 # remove_task_worktree TOP TID [TIP] -- the one removal engine. W is
 # TOP/.worktrees/TID: neither W nor TOP/.worktrees a link, registered on
 # refs/heads/moe/task/TID (wt_registration), no W/.moe, and every line of its
@@ -8736,9 +8751,10 @@ wt_remove_refused() { echo -e "${YELLOW}[WARN]${NC} MOE_WORKTREE_REMOVE_REFUSED:
 # TID.control-dirt, and `branch -D` while the branch is still at TIP (default:
 # its tip here). A failed guard prints MOE_WORKTREE_REMOVE_REFUSED and returns
 # 1 with W registered and the branch kept. Git deregisters W even when its
-# remove fails part-way (refused here, branch kept), and Git for Windows exits
-# 0 with W left on disk when W holds a junction no manifest lists: the next
-# sweep pass names either leftover MOE_WORKTREE_UNREGISTERED. Callers hold the
+# remove fails part-way (refused here, branch kept): the next sweep pass names
+# that leftover MOE_WORKTREE_UNREGISTERED. Git for Windows also exits 0 with W
+# left on disk when W holds a junction no manifest lists (pnpm's node_modules is
+# full of them); finish_leftover_worktree finishes that W. Callers hold the
 # sweep lock and have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
 remove_task_worktree() {
     local top="$1" tid="$2" tip="${3:-}" w="$1/.worktrees/$2" d rel p cur out rc=0
@@ -8765,6 +8781,7 @@ remove_task_worktree() {
     if ! out=$(git -C "$top" worktree remove --force --force "$w" 2>&1); then
         wt_remove_refused "$w" "git worktree remove failed: ${out%%$'\n'*}"; return 1
     fi
+    if [ -e "$w" ] || [ -L "$w" ]; then finish_leftover_worktree "$w"; fi
     for p in "$d/$tid.links" "$d/$tid.control-dirt"; do
         rm -f -- "$p" 2>/dev/null || true
         if [ -e "$p" ] || [ -L "$p" ]; then echo -e "${YELLOW}[WARN]${NC} could not delete $p; $w is already removed."; fi

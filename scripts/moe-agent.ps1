@@ -8315,6 +8315,28 @@ function Write-MoeWorktreeRemoveRefused([string]$W, [string]$Detail) {
     Write-Host "[WARN] MOE_WORKTREE_REMOVE_REFUSED: ${W}: $Detail" -ForegroundColor Yellow
 }
 
+# Remove-MoeLeftoverWorktree W -- finish a W that `git worktree remove` exited 0
+# on but left on disk: git has already deregistered it, and Remove-MoeTaskWorktree's
+# callers proved every byte landed or rescued. Never follows a link: on Windows
+# cmd's `rd /s /q` unlinks a junction or symlink without entering it; elsewhere
+# Remove-Item -Recurse, which in PowerShell 7 does not follow links either. A W
+# that is itself a link, or that still stands afterwards (a file held open), is
+# only warned about, and the next sweep pass names it MOE_WORKTREE_UNREGISTERED.
+# Twin: finish_leftover_worktree.
+function Remove-MoeLeftoverWorktree([string]$W) {
+    # rd's stderr (a file held open) must not throw under the script's 'Stop'.
+    $ErrorActionPreference = 'Continue'
+    if (Test-MoeLinkItem $W) { Write-Host "[WARN] $W is a link; it is left on disk." -ForegroundColor Yellow; return }
+    if ($env:OS -eq 'Windows_NT') {
+        $null = & cmd.exe /d /c rd /s /q ($W.Replace('/', '\')) 2>&1
+    } else {
+        try { Remove-Item -LiteralPath $W -Recurse -Force -ErrorAction Stop } catch {}
+    }
+    if ($null -ne (Get-Item -LiteralPath $W -Force -ErrorAction SilentlyContinue)) {
+        Write-Host "[WARN] git worktree remove left $W on disk and it could not be deleted; the next sweep names it." -ForegroundColor Yellow
+    }
+}
+
 # The one removal engine. W is $Top/.worktrees/$TaskId: neither W nor
 # $Top/.worktrees a link, registered on refs/heads/moe/task/$TaskId
 # (Get-MoeWorktreeRegistration), no W/.moe, and every line of its manifest
@@ -8327,10 +8349,11 @@ function Write-MoeWorktreeRemoveRefused([string]$W, [string]$Detail) {
 # still at $Tip (default: its tip here). A failed guard, or any throw before W
 # is removed, prints MOE_WORKTREE_REMOVE_REFUSED and returns $false with W
 # registered and the branch kept. Git deregisters W even when its remove fails
-# part-way (refused here, branch kept), and Git for Windows exits 0 with W left
-# on disk when W holds a junction no manifest lists: the next sweep pass names
-# either leftover MOE_WORKTREE_UNREGISTERED. Callers hold the sweep lock and have
-# proved every byte landed or rescued. Twin: remove_task_worktree.
+# part-way (refused here, branch kept): the next sweep pass names that leftover
+# MOE_WORKTREE_UNREGISTERED. Git for Windows also exits 0 with W left on disk
+# when W holds a junction no manifest lists (pnpm's node_modules is full of
+# them); Remove-MoeLeftoverWorktree finishes that W. Callers hold the sweep lock
+# and have proved every byte landed or rescued. Twin: remove_task_worktree.
 function Remove-MoeTaskWorktree([string]$Top, [string]$TaskId, [string]$Tip = '') {
     $w = "$Top/.worktrees/$TaskId"
     try {
@@ -8356,6 +8379,7 @@ function Remove-MoeTaskWorktree([string]$Top, [string]$TaskId, [string]$Tip = ''
         }
         $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $w) -MergeStderr
         if ($r.Rc -ne 0) { Write-MoeWorktreeRemoveRefused $w "git worktree remove failed: $(@($r.Out) | Select-Object -First 1)"; return $false }
+        if ($null -ne (Get-Item -LiteralPath $w -Force -ErrorAction SilentlyContinue)) { Remove-MoeLeftoverWorktree $w }
     } catch {
         Write-MoeWorktreeRemoveRefused $w "the removal failed in PowerShell: $_"; return $false
     }

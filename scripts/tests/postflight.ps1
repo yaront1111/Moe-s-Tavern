@@ -5884,6 +5884,31 @@ exit 0
     $wt14Run++
     Write-Host '[scenario WT14A] ok'
 
+    # Git for Windows exits 0 and leaves W on disk when W holds a junction no manifest
+    # lists. pnpm's layout: real node_modules directories holding junctions, one to a
+    # package inside W and one out to a store beside it.
+    Write-Host '[scenario WT14N] a W holding junctions no manifest lists is removed from disk; the store a junction points at keeps its bytes'
+    New-Wt14Fixture 'n' 'moe/control' @('task-postflight')
+    New-Item -ItemType Directory -Force -Path (Join-Path $wt14.P '.git\info') | Out-Null
+    [IO.File]::AppendAllText((Join-Path $wt14.P '.git\info\exclude'), "node_modules/`n")
+    $wt14Dep = Join-Path (Get-Wt14W) 'node_modules\.pnpm\dep@1\node_modules\dep'
+    New-Item -ItemType Directory -Force -Path $wt14Dep, (Join-Path (Get-Wt14W) 'src\node_modules') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wt14Dep 'index.js'), "dep`n")
+    $wt14Store = Join-Path $tempRoot 'wt14-n-store'
+    New-Item -ItemType Directory -Force -Path $wt14Store | Out-Null
+    [IO.File]::WriteAllText((Join-Path $wt14Store 'keep.js'), "store`n")
+    foreach ($wt14J in @(@((Join-Path (Get-Wt14W) 'src\node_modules\dep'), $wt14Dep), @((Join-Path (Get-Wt14W) 'node_modules\store'), $wt14Store))) {
+        $null = New-Item -ItemType Junction -Path $wt14J[0] -Target $wt14J[1]
+        $wt14Links.Add($wt14J[0])
+    }
+    Invoke-Wt14Qa 'WT14N'
+    if ($wt14.Text -cnotmatch '(?m)^\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight\r?$') { Stop-Wt14 'WT14N' 'no [worktree] removed line' }
+    Assert-Wt14Gone 'WT14N' 'task-postflight'
+    Assert-Wt14Bytes 'WT14N' (Join-Path $wt14Store 'keep.js') "store`n" 'the store behind a junction lost its bytes'
+    Assert-Wt14Sentinels 'WT14N'
+    $wt14Run++
+    Write-Host '[scenario WT14N] ok'
+
     Write-Host '[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x'
     New-Wt14Fixture 'b' 'moe/control' @('task-postflight')
     New-Item -ItemType Directory -Force -Path (Join-Path (Get-Wt14W) '.moe') | Out-Null
@@ -6075,7 +6100,7 @@ exit 0
     Write-Host '[scenario WT14I] ok'
 
     foreach ($l in $wt14Links) { if (Test-Wt14Link $l) { [IO.Directory]::Delete($l) } }
-    if ($wt14Run -ne 11) { throw "Expected 11 WT-14 scenarios (WT14A, WT14B, WT14C, WT14U, WT14D, WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $wt14Run" }
+    if ($wt14Run -ne 12) { throw "Expected 12 WT-14 scenarios (WT14A, WT14N, WT14B, WT14C, WT14U, WT14D, WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $wt14Run" }
     Write-Host "[WT-14] ok: $wt14Run scenarios"
 
     # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the
