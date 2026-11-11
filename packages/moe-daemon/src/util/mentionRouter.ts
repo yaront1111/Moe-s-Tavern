@@ -3,12 +3,20 @@
 // Ported from agentchattr's router.py
 // =============================================================================
 
-import type { ChatMessage, Worker, Team } from '../types/schema.js';
+import type { ChatMessage, Worker, Team, ProjectSettings } from '../types/schema.js';
 
 export interface RoutingResult {
   targets: string[];   // workerIds to notify
   paused: boolean;     // whether the channel is paused by loop guard
-  hopCount: number;    // current hop count for the channel
+  hopCount: number;    // agent hops in the channel's window (when paused, the refused one too)
+}
+
+/** settings.chatAgentHopWindowMs default (2 min): only agent hops this recent count. */
+const DEFAULT_AGENT_HOP_WINDOW_MS = 120_000;
+
+/** A duration for a hint: minutes from 2 min up (to 0.1), else whole seconds (never "0 s"). */
+function roughly(ms: number): string {
+  return ms >= 120_000 ? `${+(ms / 60_000).toFixed(1)} min` : `${Math.max(1, Math.round(ms / 1000))} s`;
 }
 
 /** Group tokens address many seats at once, so they are position-sensitive. */
@@ -72,12 +80,22 @@ export function parseRawMentions(content: string): string[] {
 }
 
 export class MentionRouter {
-  private hopCounts = new Map<string, number>();
+  /**
+   * Clock readings of each channel's ROUTED agent hops, oldest first. Only the
+   * ones inside the last hopWindowMs count, and there are never more than
+   * maxHops of them: the hop that would exceed the limit is refused, not stored.
+   */
+  private hopTimes = new Map<string, number[]>();
+  /** Channels where a hop was refused; the pause holds while the window is still full. */
   private pausedChannels = new Set<string>();
   private maxHops: number;
+  private hopWindowMs = DEFAULT_AGENT_HOP_WINDOW_MS;
+  private readonly now: () => number;
 
-  constructor(maxHops = 4) {
+  /** `now` is the clock (epoch ms) the hop window is measured on; tests inject their own. */
+  constructor(maxHops = 4, now: () => number = () => Date.now()) {
     this.maxHops = maxHops;
+    this.now = now;
   }
 
   /**
@@ -89,6 +107,28 @@ export class MentionRouter {
    */
   setMaxHops(maxHops: number | undefined): void {
     this.maxHops = Number.isInteger(maxHops) && (maxHops as number) >= 1 ? (maxHops as number) : 4;
+  }
+
+  /**
+   * Re-apply the sliding window, keeping recorded hops and pauses. Anything but
+   * a positive finite number means the 2-minute default; the setting's bounds
+   * (10 s to 24 h) are enforced where project.json is read and updated.
+   */
+  setHopWindowMs(windowMs: number | undefined): void {
+    this.hopWindowMs = Number.isFinite(windowMs) && (windowMs as number) > 0
+      ? (windowMs as number)
+      : DEFAULT_AGENT_HOP_WINDOW_MS;
+  }
+
+  /** The sliding window in force. */
+  getHopWindowMs(): number {
+    return this.hopWindowMs;
+  }
+
+  /** Both loop-guard settings at once; StateManager.load() calls this on every reload. */
+  applySettings(settings: Pick<ProjectSettings, 'chatMaxAgentHops' | 'chatAgentHopWindowMs'> | undefined): void {
+    this.setMaxHops(settings?.chatMaxAgentHops);
+    this.setHopWindowMs(settings?.chatAgentHopWindowMs);
   }
 
   /**
@@ -204,7 +244,7 @@ export class MentionRouter {
 
     // The daemon's own bookkeeping is NEITHER a human resuming the channel nor
     // an agent taking a hop, so it routes neutrally. It used to take the human
-    // path, which resets hopCounts to 0 and clears the pause — and on a working
+    // path, which clears the hop count and the pause — and on a working
     // channel a checkpoint banner, a "Step N completed", a claim notice or a
     // resource grant lands every minute or so, so the loop guard was being
     // reset faster than agents could reach maxHops and could effectively never
@@ -231,7 +271,7 @@ export class MentionRouter {
     const channel = message.channel;
 
     // Human messages always reset hop counter
-    this.hopCounts.set(channel, 0);
+    this.hopTimes.delete(channel);
     this.pausedChannels.delete(channel);
 
     // @continue also clears paused (already done above, but explicit for clarity)
@@ -260,8 +300,9 @@ export class MentionRouter {
    * any, otherwise every non-IDLE, non-DEAD worker — so a stale-worker alert
    * still reaches its seats even while the channel is paused. A pause exists to
    * stop agents answering each other, not to hide the daemon's own warnings.
-   * What it must NOT do is touch hopCounts or pausedChannels: only a human, or
-   * an explicit @continue, resumes a channel.
+   * What it must NOT do is record a hop, drop one or lift a pause: only a human
+   * (an explicit @continue included) resumes a channel at once; otherwise its
+   * hops age out of the window on their own schedule.
    */
   private routeSystemMessage(
     message: ChatMessage,
@@ -269,7 +310,6 @@ export class MentionRouter {
     knownWorkerIds: string[],
     teams?: Team[]
   ): RoutingResult {
-    const channel = message.channel;
     const mentions = this.parseMentions(message.content, knownWorkerIds, allWorkers, teams);
     const targets = mentions.length > 0
       ? mentions
@@ -277,11 +317,7 @@ export class MentionRouter {
           .filter((w) => w.status !== 'IDLE' && w.status !== 'DEAD')
           .map((w) => w.id);
 
-    return {
-      targets,
-      paused: this.pausedChannels.has(channel),
-      hopCount: this.hopCounts.get(channel) ?? 0,
-    };
+    return { targets, ...this.getChannelState(message.channel) };
   }
 
   private routeAgentMessage(
@@ -291,11 +327,22 @@ export class MentionRouter {
     teams?: Team[]
   ): RoutingResult {
     const channel = message.channel;
-    const hopCount = this.hopCounts.get(channel) ?? 0;
+    const now = this.now();
 
-    // If channel is paused, store message but don't route
-    if (this.pausedChannels.has(channel)) {
-      return { targets: [], paused: true, hopCount };
+    // A sliding window, not a lifetime cap. Only a human post used to reset the
+    // count, so in an all-agent fleet #architects and #workers paused for good
+    // after about ten coordination mentions spread over hours, and seats parked
+    // in chat_wait were never woken by an @mention there again (observed
+    // 2026-11-07). Now only the routed hops of the last hopWindowMs count:
+    // steady coordination never fills the window, fast ping-pong does, and a
+    // pause lifts by itself once the oldest hop in the window ages out.
+    const { hops, paused } = this.stateAt(channel, now);
+    if (!paused) this.pausedChannels.delete(channel);
+
+    // If channel is paused, store message but don't route. Not a hop either,
+    // so a seat that keeps retrying cannot extend the pause.
+    if (paused) {
+      return { targets: [], paused: true, hopCount: hops.length + 1 };
     }
 
     const mentions = this.parseMentions(message.content, knownWorkerIds, allWorkers, teams);
@@ -308,37 +355,60 @@ export class MentionRouter {
     // Agents must explicitly @mention someone other than themselves to route —
     // no routable targets means no routing and no hop advance.
     if (targets.length === 0) {
-      return { targets: [], paused: false, hopCount };
+      return { targets: [], paused: false, hopCount: hops.length };
     }
 
-    // Increment hop counter
-    const newHopCount = hopCount + 1;
-    this.hopCounts.set(channel, newHopCount);
-
-    // Check loop guard
-    if (newHopCount > this.maxHops) {
+    // Check loop guard: the window already holds maxHops routed hops, so this
+    // one exceeds it. Refuse it and pause, but do not record it: recorded, it
+    // would still fill the window after the oldest hop aged out, so the next
+    // post would be refused too and the pause would outlast its hint.
+    if (hops.length >= this.maxHops) {
       this.pausedChannels.add(channel);
-      return { targets: [], paused: true, hopCount: newHopCount };
+      return { targets: [], paused: true, hopCount: hops.length + 1 };
     }
 
-    return { targets, paused: false, hopCount: newHopCount };
+    hops.push(now);
+    this.hopTimes.set(channel, hops);
+    return { targets, paused: false, hopCount: hops.length };
   }
 
   /**
    * Reset channel state (for testing or manual reset via @continue).
    */
   resetChannel(channelId: string): void {
-    this.hopCounts.delete(channelId);
+    this.hopTimes.delete(channelId);
     this.pausedChannels.delete(channelId);
   }
 
   /**
-   * Get channel state for debugging/testing.
+   * Get channel state for debugging/testing. A pure read: it records nothing.
    */
   getChannelState(channelId: string): { hopCount: number; paused: boolean } {
-    return {
-      hopCount: this.hopCounts.get(channelId) ?? 0,
-      paused: this.pausedChannels.has(channelId)
-    };
+    const { hops, paused } = this.stateAt(channelId, this.now());
+    return { hopCount: hops.length + (paused ? 1 : 0), paused };
+  }
+
+  /**
+   * The hint for a send the loop guard refused: why nobody woke, and when the
+   * channel routes again. Without it a paused channel read exactly like a
+   * message that named nobody: chat_send answered `routingTargets: []` alone.
+   */
+  pausedHint(channelId: string, channelName: string): string {
+    const now = this.now();
+    const { hops } = this.stateAt(channelId, now);
+    // There is room for one more hop once only maxHops - 1 of these are left.
+    const freeing = hops.length - this.maxHops;
+    const resumesIn = freeing >= 0 ? hops[freeing] + this.hopWindowMs - now : 0;
+    return `The loop guard paused routing in #${channelName} (more than ${this.maxHops} agent hops within ` +
+      `${roughly(this.hopWindowMs)}): this message is stored but woke nobody. Routing resumes in ${roughly(resumesIn)}, ` +
+      `when the oldest of those hops leaves the window, or as soon as a human posts in #${channelName}; ` +
+      'posting again here does not delay it.';
+  }
+
+  /** The channel at `now`: its routed hops inside the window, and whether a refusal still holds. */
+  private stateAt(channel: string, now: number): { hops: number[]; paused: boolean } {
+    const cutoff = now - this.hopWindowMs;
+    const hops = (this.hopTimes.get(channel) ?? []).filter((t) => t >= cutoff).slice(-(this.maxHops + 1));
+    return { hops, paused: this.pausedChannels.has(channel) && hops.length >= this.maxHops };
   }
 }

@@ -10,7 +10,7 @@ import { logger } from '../util/logger.js';
 export const MAX_TASK_COMMENT_LENGTH = 10_000;
 
 type MentionRelay =
-  | { routing: { messageId: string; channel: string; routingTargets: string[] } }
+  | { routing: { messageId: string; channel: string; routingTargets: string[]; routingPaused: boolean; hint?: string } }
   | { routingError: string };
 
 /** Who `content` would wake if `sender` posted it: the router's own parse, minus the sender. */
@@ -62,8 +62,11 @@ async function relayMentions(state: StateManager, task: Task, comment: TaskComme
     return { routingError: 'relay would not address exactly the comment\'s @mentions; not sent' };
   }
 
-  const { message, routingTargets } = await state.sendMessage({ channel: channel.id, sender: comment.author, content });
-  return { routing: { messageId: message.id, channel: message.channel, routingTargets } };
+  const { message, routingTargets, routingPaused } = await state.sendMessage({ channel: channel.id, sender: comment.author, content });
+  // The relay is an agent hop like any other, so its channel's loop guard can
+  // refuse it; say so rather than report an empty routingTargets alone.
+  const hint = routingPaused ? { hint: state.mentionRouter.pausedHint(channel.id, channel.name) } : {};
+  return { routing: { messageId: message.id, channel: message.channel, routingTargets, routingPaused, ...hint } };
 }
 
 export function addCommentTool(_state: StateManager): ToolDefinition {

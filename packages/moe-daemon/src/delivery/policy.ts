@@ -61,7 +61,8 @@
 
 import type { StateManager } from '../state/StateManager.js';
 import type {
-  Candidate, DeliveryPolicy, ExecutionPolicySnapshotV2, ProtectedCheckDefinition, Task, TaskCommit, TaskDeliveryEvidence,
+  Candidate, DeliveryPolicy, ExecutionPolicySnapshotV2, ProtectedCheckDefinition, Task, TaskCommit, TaskCommitKind,
+  TaskDeliveryEvidence,
 } from '../types/schema.js';
 import { MoeError, MoeErrorCode, invalidInput } from '../util/errors.js';
 import { logger } from '../util/logger.js';
@@ -207,6 +208,18 @@ export function captureExecutionPolicySnapshot(
 export function completionCommitsForReview(
   task: Pick<Task, 'commits' | 'reviewStartedAt' | 'workStartedAt' | 'rejectionHistory' | 'reopenedAt'>,
 ): TaskCommit[] {
+  return roundCommits(task, 'completion');
+}
+
+/**
+ * Ledger entries of one kind recorded in the task's CURRENT work round, under
+ * the round anchor completionCommitsForReview documents (that function is this
+ * one with kind 'completion'). Oldest first, as task.commits keeps them.
+ */
+export function roundCommits(
+  task: Pick<Task, 'commits' | 'reviewStartedAt' | 'workStartedAt' | 'rejectionHistory' | 'reopenedAt'>,
+  kind: TaskCommitKind,
+): TaskCommit[] {
   const commits: unknown[] = Array.isArray(task.commits) ? task.commits : [];
   // Anchor on the start of the CURRENT work round, not reviewStartedAt. A worker
   // that commits by hand calls record_commit BEFORE complete_task stamps
@@ -224,7 +237,7 @@ export function completionCommitsForReview(
   return commits.filter((entry): entry is TaskCommit => {
     if (entry === null || typeof entry !== 'object') return false;
     const commit = entry as Partial<TaskCommit>;
-    return commit.kind === 'completion' && (!since || (typeof commit.recordedAt === 'string' && commit.recordedAt >= since));
+    return commit.kind === kind && (!since || (typeof commit.recordedAt === 'string' && commit.recordedAt >= since));
   });
 }
 

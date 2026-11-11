@@ -2932,6 +2932,47 @@ finally{if(!process.env.MOE_KEEP_FROZEN_FIXTURE)for(const d of [root,wrapperTmp]
                 if ((Get-HeadSubject $scopeMDir) -ne 'wip(task-resume): Resume smoke [status=BLOCKED role=worker cli-exit=0] recovered') {
                     throw "SCENARIO M FAILED: unexpected idle-path subject [$(Get-HeadSubject $scopeMDir)]"
                 }
+                # M-c: a FINISHED task's unlanded baseline is recovered, then
+                # dropped. A task can reach DONE or ARCHIVED while its last landing
+                # never reached a branch, and nothing pre-flights it again:
+                # dropping that baseline unrecovered would strand the bytes for good.
+                foreach ($scopeMcStatus in @('DONE', 'ARCHIVED')) {
+                    $scopeMcDir = Join-Path $tempRoot "scope-mc-$scopeMcStatus"
+                    New-ScopeProject $scopeMcDir @('owned-a.txt')
+                    Write-TaskRecord $scopeMcDir @('resume-owned.txt') $scopeMcStatus $null 'task-resume' 'Resume smoke'
+                    Set-Content -Path (Join-Path $scopeMcDir 'resume-owned.txt') -Value 'left-behind'
+                    $scopeMcBaselineDir = Join-Path $scopeMcDir '.git\moe\baseline'
+                    New-Item -ItemType Directory -Force -Path $scopeMcBaselineDir | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $scopeMcBaselineDir 'task-resume.tsv'), "#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head= landed=0`n", (New-Object System.Text.UTF8Encoding($false)))
+                    $scopeMcOut = Join-Path $tempRoot "scope-mc-$scopeMcStatus.out"
+                    $env:FAKE_CLAIM_MODE = 'blocked'
+                    try {
+                        Assert-ScopeRun 'M' (Invoke-GateWrapper $scopeMcDir $scopeMcOut -Status 'BLOCKED') $scopeMcOut
+                    } finally { Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue }
+                    $scopeMcText = Get-Content -Raw -Path $scopeMcOut
+                    if ($scopeMcText -notlike '*MOE_CHECKPOINT_RECOVERED task=task-resume sha=*') { Write-Host $scopeMcText; throw "SCENARIO M FAILED: a $scopeMcStatus task's unlanded baseline must be recovered, not dropped" }
+                    if ((Get-HeadSubject $scopeMcDir) -ne "wip(task-resume): Resume smoke [status=$scopeMcStatus role=worker cli-exit=0] recovered") {
+                        Write-Host $scopeMcText; throw "SCENARIO M FAILED: unexpected recovered $scopeMcStatus subject [$(Get-HeadSubject $scopeMcDir)]"
+                    }
+                    if (@((Get-CommittedPaths $scopeMcDir) -split ' ') -notcontains 'resume-owned.txt') { throw "SCENARIO M FAILED: the recovered $scopeMcStatus checkpoint must carry resume-owned.txt; got [$(Get-CommittedPaths $scopeMcDir)]" }
+                    if (Test-Path (Join-Path $scopeMcBaselineDir 'task-resume.tsv')) { throw "SCENARIO M FAILED: a $scopeMcStatus task's baseline must go once its recovery landed" }
+                }
+                # M-d: a finished task whose baseline already reads landed is only dropped.
+                $scopeMdDir = Join-Path $tempRoot 'scope-md'
+                New-ScopeProject $scopeMdDir @('owned-a.txt')
+                Write-TaskRecord $scopeMdDir @('resume-owned.txt') 'DONE' $null 'task-resume' 'Resume smoke'
+                Set-Content -Path (Join-Path $scopeMdDir 'resume-owned.txt') -Value 'left-behind'
+                $scopeMdBaselineDir = Join-Path $scopeMdDir '.git\moe\baseline'
+                New-Item -ItemType Directory -Force -Path $scopeMdBaselineDir | Out-Null
+                [System.IO.File]::WriteAllText((Join-Path $scopeMdBaselineDir 'task-resume.tsv'), "#moe-baseline v1 task=task-resume at=2026-01-01T00:00:00Z head= landed=1`n", (New-Object System.Text.UTF8Encoding($false)))
+                $scopeMdOut = Join-Path $tempRoot 'scope-md.out'
+                $env:FAKE_CLAIM_MODE = 'blocked'
+                try {
+                    Assert-ScopeRun 'M' (Invoke-GateWrapper $scopeMdDir $scopeMdOut -Status 'BLOCKED') $scopeMdOut
+                } finally { Remove-Item Env:FAKE_CLAIM_MODE -ErrorAction SilentlyContinue }
+                $scopeMdText = Get-Content -Raw -Path $scopeMdOut
+                if ($scopeMdText -like '*MOE_CHECKPOINT_RECOVERED*' -or (Get-HeadSubject $scopeMdDir) -like 'wip(task-resume)*') { Write-Host $scopeMdText; throw 'SCENARIO M FAILED: a finished task whose baseline reads landed must land nothing' }
+                if (Test-Path (Join-Path $scopeMdBaselineDir 'task-resume.tsv')) { throw "SCENARIO M FAILED: a finished task's landed baseline must be dropped" }
                 $scopeScenariosRun++
                 Write-Host '[scenario M] ok'
 

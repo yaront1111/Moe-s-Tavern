@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import os from 'node:os';
-import { computeDiskStateSignature, defaultGitRunner, type GitRunner } from './diskState.js';
+import { computeDiskStateSignature, defaultGitRunner, DIRTY_PATHS_MAX, listDirtyPaths, type GitRunner } from './diskState.js';
 
 const OID = '9f2c0a1b3d4e5f60718293a4b5c6d7e8f9012345';
 
@@ -133,5 +133,54 @@ describe('computeDiskStateSignature', () => {
     } else {
       expect(sig).toBeUndefined();
     }
+  });
+});
+
+describe('listDirtyPaths', () => {
+  const H = '1111111111111111111111111111111111111111';
+  /** One porcelain v2 -z record per entry; a rename passes [record, originalPath]. */
+  const z = (...records: string[]): string => records.map((r) => `${r}\0`).join('');
+
+  it('asks one literal-pathspec porcelain v2 -z status over exactly the named paths', async () => {
+    const run = runnerFor('');
+    await listDirtyPaths('D:/projexts/moes', ['src/a.ts', 'docs/b c.md'], run);
+    expect(run.calls).toEqual([{
+      args: ['--literal-pathspecs', '--no-optional-locks', 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--', 'src/a.ts', 'docs/b c.md'],
+      cwd: 'D:/projexts/moes',
+    }]);
+  });
+
+  it('returns the named paths git reports changed, staged, renamed, unmerged or untracked, in their own spelling', async () => {
+    const run = runnerFor(z(
+      `1 .M N... 100644 100644 100644 ${H} ${H} src/modified.ts`,
+      `1 A. N... 000000 100644 100644 ${'0'.repeat(40)} ${H} src/with space.ts`,
+      `2 R. N... 100644 100644 100644 ${H} ${H} R100 src/renamed-to.ts`, 'src/renamed-from.ts',
+      `u UU N... 100644 100644 100644 100644 ${H} ${H} ${H} src/conflict.ts`,
+      '? src/new file.ts',
+      '! src/ignored.ts',
+    ));
+    const asked = ['src/modified.ts', 'src/with space.ts', 'src/renamed-to.ts', 'src/renamed-from.ts',
+      'src/conflict.ts', 'src/new file.ts', 'src/ignored.ts', 'src/clean.ts'];
+    expect(await listDirtyPaths('/repo', asked, run)).toEqual(asked.slice(0, 6));
+  });
+
+  it('returns [] for a clean tree and never runs git for no paths', async () => {
+    expect(await listDirtyPaths('/repo', ['src/clean.ts'], runnerFor(''))).toEqual([]);
+    const run = runnerFor('');
+    expect(await listDirtyPaths('/repo', [], run)).toEqual([]);
+    expect(run.calls).toEqual([]);
+  });
+
+  it('asks about at most DIRTY_PATHS_MAX paths', async () => {
+    const run = runnerFor('');
+    const many = Array.from({ length: DIRTY_PATHS_MAX + 5 }, (_, i) => `src/f${i}.ts`);
+    await listDirtyPaths('/repo', many, run);
+    const args = run.calls[0].args;
+    expect(args.slice(args.indexOf('--') + 1)).toHaveLength(DIRTY_PATHS_MAX);
+  });
+
+  it('returns undefined (unknown, never clean) when git fails', async () => {
+    const run: GitRunner = async () => { throw Object.assign(new Error('fatal: not a git repository'), { code: 128 }); };
+    expect(await listDirtyPaths('/repo', ['src/a.ts'], run)).toBeUndefined();
   });
 });

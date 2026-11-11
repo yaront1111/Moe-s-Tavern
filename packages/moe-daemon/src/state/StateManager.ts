@@ -862,7 +862,7 @@ export class StateManager {
   replyTo?: string;
   decisionId?: string;
   parseMentions?: boolean;
-}): Promise<{ message: ChatMessage; routingTargets: string[] }> {
+}): Promise<{ message: ChatMessage; routingTargets: string[]; routingPaused: boolean }> {
     return sendMessage(this, opts);
   }
 
@@ -1143,7 +1143,7 @@ export class StateManager {
       this.logRotator = new LogRotator(activityLogPath);
 
       // Keep the one router: a new one here cleared every pause and hop count.
-      this.mentionRouter.setMaxHops(this.project?.settings?.chatMaxAgentHops);
+      this.mentionRouter.applySettings(this.project?.settings);
       this.stateVersion++;
       this.boardVersion++;
 

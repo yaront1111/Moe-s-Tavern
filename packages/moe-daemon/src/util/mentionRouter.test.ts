@@ -212,6 +212,136 @@ describe('MentionRouter', () => {
     });
   });
 
+  describe('loop guard: a sliding window, not a lifetime cap', () => {
+    // Observed 2026-11-07: only a human could reset the count, so an all-agent
+    // fleet's #architects and #workers paused for good after about ten
+    // coordination mentions spread over hours, and every later explicit
+    // mention there routed to nobody. Now only the hops of the last window count.
+    const WINDOW = 120_000;
+    const ping = makeMessage({ sender: 'worker-alice', content: '@worker-bob ping' });
+    const banner = makeMessage({ sender: 'system', content: '📦 checkpoint commit recorded for task-abc' });
+    let clock: number;
+    let guarded: MentionRouter;
+
+    beforeEach(() => {
+      clock = 1_000_000;
+      guarded = new MentionRouter(4, () => clock);
+    });
+
+    /** maxHops (4) routed hops `gap` ms apart, then a fifth that the guard refuses. */
+    function burstToPause(gap = 0): void {
+      for (let hop = 1; hop <= 4; hop++) {
+        expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: hop });
+        clock += gap;
+      }
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+    }
+
+    it('defaults to a 2-minute window', () => {
+      expect(guarded.getHopWindowMs()).toBe(WINDOW);
+    });
+
+    it('a steady trickle never pauses, however long it runs', () => {
+      // maxHops + 5 hops, each half a window after the last: never more than
+      // three of them inside any one window.
+      for (let hop = 1; hop <= 9; hop++) {
+        const result = guarded.route(ping, workers);
+        expect(result).toMatchObject({ targets: ['worker-bob'], paused: false });
+        expect(result.hopCount).toBeLessThanOrEqual(3);
+        clock += WINDOW / 2;
+      }
+    });
+
+    it('a burst of maxHops + 1 hops within the window pauses', () => {
+      // The fifth lands exactly one window after the first, which still counts.
+      burstToPause(WINDOW / 4);
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 5, paused: true });
+    });
+
+    it('the pause lifts once the oldest hop ages out of the window, one hop at a time', () => {
+      const start = clock;
+      burstToPause(10_000); // routed at +0, +10s, +20s, +30s; refused at +40s
+
+      clock = start + WINDOW; // the first hop is exactly one window old: it still counts
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+
+      clock = start + WINDOW + 1; // it has aged out: room for one more hop
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 4 });
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+
+      clock = start + 10_000 + WINDOW + 1; // the +10s hop has aged out too
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 4 });
+    });
+
+    it('posts made while paused are not counted, so retrying never extends the pause', () => {
+      const start = clock;
+      burstToPause();
+      for (let retry = 1; retry <= 3; retry++) {
+        clock = start + (WINDOW / 3) * retry; // the last retry lands exactly one window after the burst
+        expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+      }
+
+      clock = start + WINDOW + 1;
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 1 });
+    });
+
+    it('a post that routes to no other seat is not a hop', () => {
+      for (let hop = 1; hop <= 3; hop++) guarded.route(ping, workers);
+      const aside = makeMessage({ sender: 'worker-alice', content: '@worker-alice thinking out loud' });
+      for (let i = 0; i < 5; i++) {
+        expect(guarded.route(aside, workers)).toEqual({ targets: [], paused: false, hopCount: 3 });
+      }
+
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 4 });
+      expect(guarded.route(ping, workers)).toEqual({ targets: [], paused: true, hopCount: 5 });
+    });
+
+    it('human and @continue still reset at once, inside the window', () => {
+      burstToPause();
+      guarded.route(makeMessage({ sender: 'human', content: 'carry on' }), workers);
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 0, paused: false });
+
+      burstToPause();
+      guarded.route(makeMessage({ sender: 'human', content: '@continue keep going' }), workers);
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 0, paused: false });
+
+      // Still armed after a reset.
+      burstToPause();
+    });
+
+    it('a system message neither counts, resets nor delays the lift', () => {
+      const start = clock;
+      burstToPause();
+
+      expect(guarded.route(banner, workers)).toMatchObject({ paused: true, hopCount: 5 });
+      clock = start + WINDOW;
+      expect(guarded.route(banner, workers)).toMatchObject({ paused: true, hopCount: 5 });
+      expect(guarded.getChannelState('chan-general')).toEqual({ hopCount: 5, paused: true });
+
+      // The banners recorded nothing: the burst ages out on schedule.
+      clock = start + WINDOW + 1;
+      expect(guarded.route(ping, workers)).toEqual({ targets: ['worker-bob'], paused: false, hopCount: 1 });
+    });
+
+    it('the hint says when routing resumes, from the oldest hop in the window', () => {
+      const start = clock;
+      burstToPause(15_000); // routed at +0, +15s, +30s, +45s; refused at +60s
+
+      expect(guarded.pausedHint('chan-general', 'general')).toBe(
+        'The loop guard paused routing in #general (more than 4 agent hops within 2 min): this message is stored ' +
+        'but woke nobody. Routing resumes in 60 s, when the oldest of those hops leaves the window, or as soon as ' +
+        'a human posts in #general; posting again here does not delay it.'
+      );
+      clock = start + 100_000;
+      expect(guarded.pausedHint('chan-general', 'general')).toContain('Routing resumes in 20 s,');
+
+      guarded.setHopWindowMs(600_000); // a longer window, reported in minutes
+      expect(guarded.pausedHint('chan-general', 'general'))
+        .toContain('(more than 4 agent hops within 10 min)');
+      expect(guarded.pausedHint('chan-general', 'general')).toContain('Routing resumes in 8.3 min,');
+    });
+  });
+
   describe('resetChannel', () => {
     it('clears hop count and paused state', () => {
       const msg = makeMessage({

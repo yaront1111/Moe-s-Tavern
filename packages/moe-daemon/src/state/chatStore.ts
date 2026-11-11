@@ -180,7 +180,7 @@ export async function sendMessage(state: StateManager, opts: {
    * to no seat; the router is not consulted. Default true.
    */
   parseMentions?: boolean;
-}): Promise<{ message: ChatMessage; routingTargets: string[] }> {
+}): Promise<{ message: ChatMessage; routingTargets: string[]; routingPaused: boolean }> {
   const channel = state.channels.get(opts.channel);
   if (!channel) throw new Error(`Channel not found: ${opts.channel}`);
 
@@ -199,7 +199,10 @@ export async function sendMessage(state: StateManager, opts: {
 
   // Compute routing targets via MentionRouter (expands @all, applies loop guards)
   // The router re-parses the content itself, so an echo skips it altogether.
+  // Its pause verdict goes back to the caller too: an empty routingTargets
+  // alone cannot tell a paused channel from a message that named nobody.
   let routingTargets: string[] = [];
+  let routingPaused = false;
   if (addressesSeats) {
     try {
       const allWorkers = Array.from(state.workers.values());
@@ -210,6 +213,7 @@ export async function sendMessage(state: StateManager, opts: {
       };
       const routingResult = state.mentionRouter.route(tempMessage, allWorkers, allTeams);
       routingTargets = routingResult.targets;
+      routingPaused = routingResult.paused;
     } catch {
       // Fall back to raw mentions on MentionRouter errors
       routingTargets = rawMentions;
@@ -256,7 +260,7 @@ export async function sendMessage(state: StateManager, opts: {
     sender: opts.sender
   });
 
-  return { message, routingTargets };
+  return { message, routingTargets, routingPaused };
 }
 
 /**

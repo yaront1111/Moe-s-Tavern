@@ -25,6 +25,7 @@ import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import { gitExecutable } from './gitExecutable.js';
+import { pathKey } from './affectedFiles.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -108,6 +109,84 @@ export async function computeDiskStateSignature(
   } catch {
     // git missing (ENOENT), not a repository (exit 128), timeout/kill, buffer
     // overflow — all indistinguishable to the caller and all mean "unknown".
+    return undefined;
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Dirty paths — which of a few named paths the working tree has changed
+// -----------------------------------------------------------------------------
+
+/**
+ * At most this many paths go to one `git status` call. The list is a pathspec
+ * on the command line, and 200 project-relative paths stay far below Windows'
+ * 32767-character limit. Paths past the cap are not checked (a caller sees
+ * them as not dirty).
+ */
+export const DIRTY_PATHS_MAX = 200;
+
+/** The text after the `fields`-th space of a porcelain v2 record: its path. */
+function porcelainPathAfter(record: string, fields: number): string | null {
+  let at = -1;
+  for (let i = 0; i < fields; i += 1) {
+    at = record.indexOf(' ', at + 1);
+    if (at < 0) return null;
+  }
+  const rest = record.slice(at + 1);
+  return rest.length > 0 ? rest : null;
+}
+
+/**
+ * The entries of `paths` (project-relative, as stored) that git reports
+ * changed in the working tree at `projectPath`: modified, staged, deleted,
+ * renamed (old and new name), unmerged or untracked. Ignored files never count.
+ *
+ * One `git status --porcelain=v2 -z` limited to `paths` as literal pathspecs,
+ * so it never walks the rest of the tree, and `-z` leaves names unquoted.
+ * Porcelain paths are relative to the repository root, so `projectPath` must
+ * be that root; from a subdirectory nothing matches (the safe direction).
+ *
+ * Invariant 1 above applies: `undefined` means unknown (git missing, not a
+ * repository, timeout, output not understood), never "clean". Invariant 2
+ * too: call it OUTSIDE the state mutex. Never throws.
+ */
+export async function listDirtyPaths(
+  projectPath: string,
+  paths: readonly string[],
+  run: GitRunner = defaultGitRunner
+): Promise<string[] | undefined> {
+  try {
+    const asked = paths.filter((p) => typeof p === 'string' && p.length > 0).slice(0, DIRTY_PATHS_MAX);
+    if (asked.length === 0) return [];
+    const stdout = await run(
+      ['--literal-pathspecs', '--no-optional-locks', 'status', '--porcelain=v2', '-z', '--untracked-files=all', '--', ...asked],
+      projectPath
+    );
+    if (typeof stdout !== 'string') return undefined;
+    const dirty = new Set<string>();
+    const records = stdout.split('\0');
+    for (let i = 0; i < records.length; i += 1) {
+      const record = records[i];
+      if (!record || record.startsWith('#')) continue;
+      let changed: string | null = null;
+      switch (record[0]) {
+        case '1': changed = porcelainPathAfter(record, 8); break;
+        case '2': {
+          // A rename or copy: the original name is the next NUL-separated field.
+          changed = porcelainPathAfter(record, 9);
+          const original = records[i + 1];
+          i += 1;
+          if (original) dirty.add(pathKey(original));
+          break;
+        }
+        case 'u': changed = porcelainPathAfter(record, 10); break;
+        case '?': changed = record.length > 2 ? record.slice(2) : null; break;
+        default: break; // '!' (ignored) and anything newer: not a change we land
+      }
+      if (changed) dirty.add(pathKey(changed));
+    }
+    return asked.filter((p) => dirty.has(pathKey(p)));
+  } catch {
     return undefined;
   }
 }

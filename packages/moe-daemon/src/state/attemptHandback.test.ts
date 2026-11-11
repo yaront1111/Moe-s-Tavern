@@ -350,6 +350,19 @@ describe('attempt close on hand-back', () => {
       });
     }
 
+    /**
+     * The ledger row worker-1's landing left before its runner died without a
+     * finalize: the bytes are on a branch, so a close hands the row to QA. A
+     * close with NO completion recorded routes the row back for a landing retry
+     * instead (finalizingCloseRetry.test.ts).
+     */
+    async function recordLandedCompletion(): Promise<void> {
+      await h.state.updateTask('task-W', { commits: [{
+        sha: LANDED, ref: 'refs/heads/moe/work-2026-11-05', kind: 'completion', status: 'REVIEW', role: 'worker',
+        sessionId: 'worker-1@2026-11-05T00:00:00Z', paths: [], recordedBy: 'worker-1', recordedAt: new Date().toISOString(),
+      }] });
+    }
+
     function waitForReview(timeoutMs: number): Promise<Record<string, unknown>> {
       return call(waitForTaskTool(h.state), { statuses: ['REVIEW'], workerId: 'qa-1', timeoutMs });
     }
@@ -520,6 +533,7 @@ describe('attempt close on hand-back', () => {
 
     it('deregister_worker closes its own finalizing attempt so an exiting runner cannot wedge the row', async () => {
       await completeClaimedRow();
+      await recordLandedCompletion();
 
       const result = await call(deregisterWorkerTool(h.state), { workerId: 'worker-1', reason: 'terminal_closed' });
 
@@ -544,6 +558,7 @@ describe('attempt close on hand-back', () => {
 
     it('closes a DEAD worker finalizing attempt on a retried deregister without chat, activity or worker events', async () => {
       await completeClaimedRow();
+      await recordLandedCompletion();
       await h.state.updateWorker('worker-1', { status: 'DEAD' });
       const posted = vi.spyOn(h.state, 'postToRoleChannel');
       const activity = vi.spyOn(h.state, 'appendActivity');
@@ -878,6 +893,7 @@ describe('attempt close on hand-back', () => {
 
       it('removing a DEAD worker record closes its finalizing attempt and hands the row to QA', async () => {
         await deadWithLandingHold();
+        await recordLandedCompletion();
         const published: string[] = [];
         h.state.subscribe((event) => {
           if (event.type === 'TASK_UPDATED') published.push(event.payload.id);
