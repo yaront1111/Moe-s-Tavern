@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 import { getContextTool } from './getContext.js';
 import { reattachAttemptTool } from './reattachAttempt.js';
+import { amendPlanStepTool } from './amendPlanStep.js';
 import { ToolTestHarness } from './toolTestHarness.js';
 import { StateManager } from '../state/StateManager.js';
 import { getAttempt, openAttempt, reconcileRunningAttempts, setAttemptPhase } from '../state/attemptStore.js';
@@ -99,6 +100,24 @@ describe('moe.get_context acknowledged deltas', () => {
     const base = await acknowledge();
     const again = await read({ basePacketId: base, contextEpoch: 0 });
     expect(again.delta).toStrictEqual({ basePacketId: base, packetId: base, changed: [], removed: [] });
+  });
+
+  it('D1: an amended step reaches a session holding the old base as its effective description', async () => {
+    const original = 'Rename the cache module';
+    const amended = 'Keep the cache module; add a TTL option';
+    await h.state.updateTask('task-1', {
+      implementationPlan: [{ stepId: 'step-1', description: original, status: 'PENDING', affectedFiles: ['src/cache.ts'] }],
+    });
+    const base = await acknowledge();
+    await amendPlanStepTool(h.state).handler({
+      taskId: 'task-1', stepId: 'step-1', workerId: 'architect-1', description: amended, reason: 'the importer still uses it',
+    }, h.state);
+
+    const next = await read({ basePacketId: base, contextEpoch: 0 });
+    expect(next.servedContext.contextDelta).toStrictEqual({ served: 'delta' });
+    // Arrays are replaced whole, so the plan arrives as one change at its pointer.
+    const plan = next.delta!.changed.find((c) => c.pointer === '/task/implementationPlan')?.value as Array<Record<string, unknown>>;
+    expect(plan[0]).toMatchObject({ description: amended, originalDescription: original, activeAmendmentId: 'amend-1' });
   });
 
   it('D2: a wrong or older base gets the full packet (base-mismatch)', async () => {

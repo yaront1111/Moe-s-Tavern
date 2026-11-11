@@ -42,3 +42,22 @@ export function activeAmendment(step: AmendableStep): StepAmendment | null {
 export function effectiveStepDescription(step: AmendableStep): string {
   return activeAmendment(step)?.description ?? step?.description ?? '';
 }
+
+/**
+ * A plan as seats must read it. A step with an active amendment is served with
+ * the amended text as `description` and the text it replaced as
+ * `originalDescription`. `amendments` stays as the audit trail. Every response
+ * that hands plan steps to a seat goes through this (moe.get_context,
+ * moe.search_tasks detail:'full'), so a reader of `description` never follows
+ * superseded instructions. An amended step is served as a new object, and
+ * nothing is ever written back to the stored plan.
+ */
+export function servedPlan(plan: ImplementationStep[]): ImplementationStep[] {
+  // .moe/tasks/*.json is hand-editable, so a non-array here is possible.
+  if (!Array.isArray(plan)) return plan;
+  // Only a step with an amendment in force changes shape, so an unamended
+  // task's served payload, and its packetId, stay byte-identical.
+  return plan.map((step) => activeAmendment(step)
+    ? { ...step, description: effectiveStepDescription(step), originalDescription: step.description }
+    : step);
+}
