@@ -379,9 +379,6 @@ function seedAlertedStaleBlocks(state: StateManager): Set<string> {
   return memo;
 }
 
-/** Prerequisite statuses that make no progress on their own — a human must move them. */
-const NON_PROGRESSING_STATUSES = new Set<TaskStatus>(['BLOCKED', 'BACKLOG']);
-
 /**
  * Multiplier on state.blockedTimeoutMs for the general age bound on a
  * dependency-waiting block whose prerequisites are still moving: patience for
@@ -409,16 +406,57 @@ export function describeUnmetDependency(state: StateManager, taskId: string, con
 }
 
 /**
+ * Why the unmet prerequisite `id` of `consumer` will not clear without a human,
+ * as the path from `id` down to the row that needs one, or null while that
+ * chain still moves. The leaf is a BACKLOG row (it needs a promote), a DONE row
+ * the delivery evidence rule withholds, a human-block (BLOCKED with no
+ * blockedOnTaskIds and no resource), or a row already on the walked path: a
+ * cycle, the alerted row included. A resource-parked row clears on its grant
+ * (the lease reaper bounds it). A dependency-blocked row is stuck only through
+ * one of its own unmet prerequisites, read with the auto-unblock's own
+ * unmetBlockedOnTaskIds, so a slice parked on a moving predecessor stays quiet.
+ * `walk` holds the rows on the path ('walking', seeded with the alerted row)
+ * and the dependency-blocked rows already found moving ('clear'): each row is
+ * walked once, and a row reached twice through a diamond is no cycle.
+ */
+function stuckChain(
+  state: StateManager,
+  id: string,
+  consumer: Task,
+  walk = new Map<string, 'walking' | 'clear'>([[consumer.id, 'walking']])
+): { path: string[]; cycle: boolean } | null {
+  const seen = walk.get(id);
+  if (seen) return seen === 'walking' ? { path: [id], cycle: true } : null;
+  const dep = state.getTask(id);
+  if (dep?.status === 'BACKLOG' || dep?.status === 'DONE') {
+    return { path: [describeUnmetDependency(state, id, consumer)], cycle: false };
+  }
+  if (dep?.status !== 'BLOCKED' || dep.blockedResourceId) return null;
+  if (!Array.isArray(dep.blockedOnTaskIds) || dep.blockedOnTaskIds.length === 0) {
+    return { path: [`${id} [BLOCKED, human-block]`], cycle: false };
+  }
+  walk.set(id, 'walking');
+  for (const next of unmetBlockedOnTaskIds(state, dep)) {
+    const chain = stuckChain(state, next, dep, walk);
+    if (chain) return { path: [id, ...chain.path], cycle: chain.cycle };
+  }
+  walk.set(id, 'clear');
+  return null;
+}
+
+/**
  * Visibility pass for stale blocks (resource-parked rows excluded — the lease
  * reaper bounds those). Four classes draw one line in #governors per block
  * instance (a restart included); alert ONLY — never auto-park, the un-park decision is human triage
  * (set_task_status / unblock paths / promote the prerequisite):
  *   - dep-less rows past blockedTimeoutMs: no machine is on their side, nothing
  *     will ever auto-unblock them;
- *   - dep-waiting rows past blockedTimeoutMs whose unmet prerequisite is itself
- *     BLOCKED or BACKLOG: the auto-unblock cannot fire until a human moves the
- *     prerequisite — this is what makes a block cycle (A waits on B, B waits on
- *     A) or a BACKLOG-parked prerequisite visible instead of silently eternal;
+ *   - dep-waiting rows past blockedTimeoutMs whose unmet prerequisite will not
+ *     clear without a human (stuckChain): a BACKLOG row, or a BLOCKED one whose
+ *     own chain ends in a human-block, a BACKLOG row, a cycle (A waits on B, B
+ *     waits on A) or withheld delivery evidence. The line names that chain, so a
+ *     cycle or a parked leaf is visible instead of silently eternal; a
+ *     prerequisite only dependency-blocked on moving rows is left to the age bound;
  *   - dep-waiting rows past blockedTimeoutMs whose unmet prerequisite is DONE
  *     but withheld by the delivery evidence rule: no claim moves a DONE task,
  *     so nothing clears it until that evidence is recorded or a human restores
@@ -461,11 +499,15 @@ export async function alertStaleBlocks(state: StateManager, nowMs: number = Date
       const unmet = unmetBlockedOnTaskIds(state, task);
       if (unmet.length === 0) continue;
       const described = unmet.map((id) => describeUnmetDependency(state, id, task));
-      const stuck = unmet.filter((id) => {
-        const dep = state.getTask(id);
-        return !!dep && NON_PROGRESSING_STATUSES.has(dep.status);
-      });
       const withheld = unmet.filter((id) => state.getTask(id)?.status === 'DONE');
+      // A direct DONE prerequisite is the withheld class; any other is stuck only
+      // when its chain ends at a row that needs a human.
+      const stuck = unmet.flatMap((id) => {
+        const chain = withheld.includes(id) ? null : stuckChain(state, id, task);
+        if (!chain) return [];
+        if (chain.path.length === 1) return [id]; // the prerequisite itself is the leaf
+        return [`${id} (${chain.cycle ? 'cycle via' : 'waits on'} ${chain.path.slice(1).join(' → ')})`];
+      });
       if (stuck.length > 0) {
         alert =
           `⚠️ ${task.id} (${task.title}) has been BLOCKED ${ageMin}m waiting on ${described.join(', ')} — ` +

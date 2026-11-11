@@ -514,6 +514,112 @@ describe('dependencyUnblock', () => {
       expect(roleMsgs[0][1]).toContain('the blocked timeout');
     });
 
+    // Slices parked BLOCKED on their predecessor slice are normal: a BLOCKED
+    // prerequisite pages before the 2× bound only when its own chain needs a human.
+    describe('a BLOCKED prerequisite is followed down its own chain', () => {
+      const PAST_TIMEOUT = 1.5 * HOUR; // past the 1h timeout, under the 2× bound
+      const FRESH = 10 * 60 * 1000; // under the timeout: the row draws no page of its own
+      const pageFor = (posts: Array<[string, string]>, id: string) => posts.find(([, m]) => m.startsWith(`⚠️ ${id} `))?.[1];
+
+      it('a prerequisite dependency-blocked on a moving row draws no alert under the 2× bound', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-B', ['task-C'], PAST_TIMEOUT);
+        h.createTask({ id: 'task-C', status: 'WORKING' });
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(0);
+        expect(roleMsgs).toEqual([]);
+      });
+
+      it('a row reached twice through a diamond is no cycle', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-B', ['task-C', 'task-D'], FRESH);
+        staleDepRow('task-C', ['task-E'], FRESH);
+        staleDepRow('task-D', ['task-E'], FRESH);
+        staleDepRow('task-E', ['task-F'], FRESH);
+        h.createTask({ id: 'task-F', status: 'WORKING' });
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(0);
+        expect(roleMsgs).toEqual([]);
+      });
+
+      it('names the chain when the prerequisite waits on a BACKLOG row', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-B', ['task-C'], FRESH);
+        h.createTask({ id: 'task-C', status: 'BACKLOG' });
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(1);
+        expect(pageFor(roleMsgs, 'task-A')).toMatch(/^⚠️ task-A \(Test Task\) has been BLOCKED \d+m waiting on task-B \[BLOCKED\] — /u);
+        expect(pageFor(roleMsgs, 'task-A')).toContain(
+          'prerequisite(s) task-B (waits on task-C [BACKLOG]) are BLOCKED/BACKLOG and will not progress on their own'
+        );
+      });
+
+      it('pages a cycle through blockedOnTaskIds before the 2× bound, from both sides', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-B', ['task-A'], PAST_TIMEOUT);
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(2);
+        expect(pageFor(roleMsgs, 'task-A')).toContain('prerequisite(s) task-B (cycle via task-A) are BLOCKED/BACKLOG');
+        expect(pageFor(roleMsgs, 'task-A')).toContain('dependency cycle');
+        expect(pageFor(roleMsgs, 'task-B')).toContain('prerequisite(s) task-A (cycle via task-B) are BLOCKED/BACKLOG');
+      });
+
+      it('a human-blocked prerequisite pages with the existing wording, and a nested one is named as the leaf', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDeplessRow('task-B', FRESH);
+        staleDepRow('task-A2', ['task-B2'], PAST_TIMEOUT);
+        staleDepRow('task-B2', ['task-C2'], FRESH);
+        staleDeplessRow('task-C2', FRESH);
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(2);
+        expect(pageFor(roleMsgs, 'task-A')).toContain('waiting on task-B [BLOCKED] — prerequisite(s) task-B are BLOCKED/BACKLOG');
+        expect(pageFor(roleMsgs, 'task-A2')).toContain('prerequisite(s) task-B2 (waits on task-C2 [BLOCKED, human-block]) are BLOCKED/BACKLOG');
+      });
+
+      it('a resource-blocked prerequisite is never stuck: it clears on its grant, so only the 2× bound pages', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-old', ['task-B'], (DEPENDENCY_WAIT_ALERT_MULTIPLIER + 1) * HOUR);
+        h.createTask({
+          id: 'task-B', status: 'BLOCKED', blockedResourceId: 'benchmark-box', blockedFromStatus: 'WORKING',
+          blockedReason: 'waiting on benchmark-box', blockedAt: new Date(Date.now() - 3 * HOUR).toISOString(),
+        } as never);
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(1);
+        expect(pageFor(roleMsgs, 'task-A')).toBeUndefined();
+        expect(pageFor(roleMsgs, 'task-old')).toContain(`still unmet past ${DEPENDENCY_WAIT_ALERT_MULTIPLIER}× the blocked timeout`);
+        expect(pageFor(roleMsgs, 'task-old')).not.toContain('will not progress on their own');
+      });
+
+      it('follows a chain three levels down to its BACKLOG leaf, and a cycle below the prerequisite ends the walk', async () => {
+        staleDepRow('task-A', ['task-B'], PAST_TIMEOUT);
+        staleDepRow('task-B', ['task-C'], FRESH);
+        staleDepRow('task-C', ['task-D'], FRESH);
+        h.createTask({ id: 'task-D', status: 'BACKLOG' });
+        // task-Y and task-Z wait on each other, a loop task-X is not part of.
+        staleDepRow('task-X', ['task-Y'], PAST_TIMEOUT);
+        staleDepRow('task-Y', ['task-Z'], FRESH);
+        staleDepRow('task-Z', ['task-Y'], FRESH);
+        await h.state.load();
+        const roleMsgs = captureRolePosts();
+
+        expect(await alertStaleBlocks(h.state)).toBe(2);
+        expect(pageFor(roleMsgs, 'task-A')).toContain('prerequisite(s) task-B (waits on task-C → task-D [BACKLOG]) are BLOCKED/BACKLOG');
+        expect(pageFor(roleMsgs, 'task-X')).toContain('prerequisite(s) task-Y (cycle via task-Z → task-Y) are BLOCKED/BACKLOG');
+      });
+    });
+
     it('pages a block instance once while the row stays BLOCKED, however often it stops and starts qualifying', async () => {
       const now = Date.now();
       staleDepRow('task-c0n5um', ['task-p4e4eq'], 1.5 * HOUR); // past the timeout, under the 2× bound
@@ -1066,6 +1172,16 @@ describe('dependencyUnblock — delivery evidence on a DONE prerequisite', () =>
 
       expect(await alertStaleBlocks(h.state)).toBe(2);
       expect(postFor(posts, 'task-S')).toContain('task-P [DONE, delivery evidence could not be judged: check settings.deliveryPolicy]');
+    });
+
+    it('pages a row whose BLOCKED prerequisite waits on a withheld DONE row, and names that chain', async () => {
+      await seed({ checks: FAILED_RUN_AND_DECOYS, tasks: [{ ...HELD_PAST_TIMEOUT, blockedOnTaskIds: ['task-E'], blockedReason: 'Waiting on task-E.' }] });
+      const posts = captureGovernorPosts();
+
+      expect(await alertStaleBlocks(h.state)).toBe(2); // task-E itself, and task-S through it
+      expect(postFor(posts, 'task-S')).toContain(
+        'prerequisite(s) task-E (waits on task-P [DONE, missing required-check:node gate.cjs]) are BLOCKED/BACKLOG'
+      );
     });
 
     it('under the default policy a row waiting on a DONE prerequisite draws no alert, because the dependency scan owns it', async () => {
