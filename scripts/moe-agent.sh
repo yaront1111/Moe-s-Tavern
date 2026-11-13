@@ -8754,8 +8754,13 @@ finish_leftover_worktree() {
 # remove fails part-way (refused here, branch kept): the next sweep pass names
 # that leftover MOE_WORKTREE_UNREGISTERED. Git for Windows also exits 0 with W
 # left on disk when W holds a junction no manifest lists (pnpm's node_modules is
-# full of them); finish_leftover_worktree finishes that W. Callers hold the
-# sweep lock and have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
+# full of them); finish_leftover_worktree finishes that W. The remove runs with
+# core.longpaths=true: pnpm's node_modules also holds paths past MAX_PATH, and
+# without it Git for Windows deregisters W, then fails "Filename too long" with
+# W half deleted (other gits ignore the key). A core.longpaths=false in the
+# repository's own config still beats the -c once sparse checkout has set
+# extensions.worktreeConfig. Callers hold the sweep lock and have proved every
+# byte landed or rescued. Twin: Remove-MoeTaskWorktree.
 remove_task_worktree() {
     local top="$1" tid="$2" tip="${3:-}" w="$1/.worktrees/$2" d rel p cur out rc=0
     if ! [[ "$tid" =~ ^task-[A-Za-z0-9_-]{1,128}$ ]]; then wt_remove_refused "$w" "'$tid' is not a task id"; return 1; fi
@@ -8778,7 +8783,7 @@ remove_task_worktree() {
         rm -f -- "$p" 2>/dev/null || true
         if [ -e "$p" ] || [ -L "$p" ]; then wt_remove_refused "$w" "the link $rel could not be unlinked"; return 1; fi
     done
-    if ! out=$(git -C "$top" worktree remove --force --force "$w" 2>&1); then
+    if ! out=$(git -C "$top" -c core.longpaths=true worktree remove --force --force "$w" 2>&1); then
         wt_remove_refused "$w" "git worktree remove failed: ${out%%$'\n'*}"; return 1
     fi
     if [ -e "$w" ] || [ -L "$w" ]; then finish_leftover_worktree "$w"; fi
