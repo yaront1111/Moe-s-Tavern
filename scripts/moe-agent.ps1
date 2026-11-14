@@ -11326,6 +11326,11 @@ $mentionsJson
                     Write-Host "[WARN] MOE_CODEX_SANDBOX='$($env:MOE_CODEX_SANDBOX)' is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access." -ForegroundColor Yellow
                     $codexSandboxArgs = @('--sandbox', 'danger-full-access')
                 }
+                # codex exec refuses a non-git project ("Not inside a trusted directory and
+                # --skip-git-repo-check was not specified", exit 1 before any work). Moe supports
+                # non-git projects, so always pass it; it rides the sandbox array so the banner and
+                # the launch both carry it.
+                $codexSandboxArgs += '--skip-git-repo-check'
                 $codexSandboxBanner = if ($codexSandboxArgs.Count -gt 0) { ' ' + ($codexSandboxArgs -join ' ') } else { '' }
                 # --full-auto also kept approval_policy = never when the operator's config resolves
                 # approvals_reviewer = "auto_review" (codex 0.130-0.146 set
