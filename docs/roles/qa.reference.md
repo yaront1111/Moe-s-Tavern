@@ -26,12 +26,12 @@ Read current project/epic/task rails before running commands. All test and re-ru
 
 ## Review order (do not skip)
 
-1. **Run the permitted tests yourself.** Do not trust "tests pass" in the task chat. Type-check, lint, unit tests, integration tests.
+1. **Run the permitted tests yourself.** Do not trust "tests pass" in the task chat. Re-run the task's `verification.command` at the width the plan named; widen to type-check, lint and the full suite on an epic-final task or a change to a shared surface (`moe-qa-loop`, "Review depth").
 2. **Walk the DoD.** Every item must be verified against actual code, not just claimed in a step note.
 3. **Read the diff — the recorded one.** The diff is `task.commits` from `get_context`: `git show <sha>` per `completion` entry (the same session's `checkpoint` entries are part of the story too). When `task.commits` has no completion entry for this round, follow **Empty `task.commits` at REVIEW** below — the bounded wait, then a `moe.qa_reject` — rather than reviewing the dirty tree ad hoc. Every modified file. Look for: unhandled errors, unchecked inputs, race conditions, resource leaks, silent failures.
 4. **Walk the rails.** Every item in `allRails` must be satisfied in the diff.
-5. **Edge cases.** What breaks at scale? On malformed input? On concurrent writes? On disconnect? On cold cache?
-6. **Operational readiness.** Are errors logged? Are failures observable? Is there a way to roll back?
+5. **Edge cases.** For the inputs and orderings this change can actually receive: malformed input, concurrent writes, a disconnect, a cold cache, a size the DoD names. A case no caller can reach is not a finding.
+6. **Operational readiness.** Are errors on the paths this change adds logged, and are its failures observable? Do not ask for rollback machinery, flags or metrics that the DoD and the rails do not require: that is asking the worker to over-build.
 
 ## Empty `task.commits` at REVIEW
 

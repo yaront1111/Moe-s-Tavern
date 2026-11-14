@@ -9,7 +9,7 @@
     },
     {
       "name": "moe-planning",
-      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
+      "description": "How to plan one task for moe.submit_plan: the simplest change that meets the DoD, short steps that say only what the worker cannot read in the code, the planning checklist, the plan shape per task type, and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
       "role": "architect",
       "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
     },
@@ -27,13 +27,13 @@
     },
     {
       "name": "writing-plans",
-      "description": "Vendored from superpowers. Multi-step plan structure with checkpoints; output format aligns with moe.submit_plan step lists.",
+      "description": "Vendored from superpowers, rewritten for Moe. What one plan step contains (files, the change, the decision made, test cases by name) and what it leaves to the code; maps to moe.submit_plan steps.",
       "role": "architect",
       "triggeredBy": ["before moe.submit_plan"]
     },
     {
       "name": "test-driven-development",
-      "description": "Vendored from superpowers. RED-GREEN-REFACTOR with mutation-resistant assertions (assertEquals, not assert).",
+      "description": "Vendored from superpowers. RED-GREEN-REFACTOR with mutation-resistant assertions (assertEquals, not assert); one test per behaviour or boundary, not per function.",
       "role": "worker",
       "triggeredBy": ["start_step on test-touching steps"]
     },
@@ -51,7 +51,7 @@
     },
     {
       "name": "adversarial-self-review",
-      "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist before final complete_step or complete_task.",
+      "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist, plus a pass for code nothing needs, before final complete_step or complete_task.",
       "role": "worker",
       "triggeredBy": ["final step before complete_step", "before complete_task"]
     },

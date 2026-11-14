@@ -30,6 +30,8 @@ export const DEFAULT_MAX_TASKS_PER_EPIC = 40;
  * read "step 2 stored at exactly 5000 chars", the approved harness text gone.
  */
 export const MAX_STEP_DESCRIPTION_CHARS = 10000;
+/** A step past this restates what the worker reads in the code. Advisory: nothing is refused. */
+export const WARN_STEP_DESCRIPTION_CHARS = 1500;
 /** Longest complete_step note accepted; the sanitizer bounds at the same value. */
 export const MAX_STEP_NOTE_CHARS = 10000;
 /**
@@ -91,6 +93,25 @@ export function countDistinctAffectedFiles(steps: { affectedFiles: string[] }[])
     for (const file of step.affectedFiles) distinct.add(file);
   }
   return distinct.size;
+}
+
+/**
+ * Advisory step-text check for moe.submit_plan. Kept out of assessPlanSize on
+ * purpose: those warnings mean "split the task" (they are persisted, shown on
+ * the board and fed to the size critic), and a wordy plan needs fewer words,
+ * not fewer steps. Returns zero or one message naming every long step.
+ * ponytail: fixed threshold; make it a taskSizing setting when a project needs its own.
+ */
+export function planTextWarnings(steps: { description: string }[]): string[] {
+  const long = steps
+    .map((step, i) => ({ id: `step-${i + 1}`, chars: step.description.length }))
+    .filter(step => step.chars > WARN_STEP_DESCRIPTION_CHARS);
+  if (long.length === 0) return [];
+  return [
+    `Step text is long: ${long.map(step => `${step.id} (${step.chars} chars)`).join(', ')}; target <=${WARN_STEP_DESCRIPTION_CHARS} a step. ` +
+    'State what changes, where, and what the worker cannot see in the code: it reads the code, the rails and its skills itself. ' +
+    'This plan stands: do not resubmit it or split a step for this, write the next plan shorter.',
+  ];
 }
 
 export function assessPlanSize(

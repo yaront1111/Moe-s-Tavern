@@ -68,8 +68,8 @@ export type SkillTrigger =
 const TABLE: Record<Role, Partial<Record<SkillTrigger, SkillRecommendation>>> = {
   architect: {
     epic_breakdown:     { name: 'moe-epic-breakdown',            reason: 'You just created an epic. Load this before create_task — it decides where to cut and how small: many small tasks (1-3 files, under an hour each), not a few big ones. Oversized plans get rejected downstream.' },
-    planning_entry:     { name: 'moe-planning',                  reason: 'You are starting a fresh PLANNING task. Load this before drafting the plan — it is the plan structure the runtime expects. Do not skip it as trivial.' },
-    before_submit_plan: { name: 'writing-plans',                 reason: 'You are about to call submit_plan. Load this first so the plan is complete and reviewable.' },
+    planning_entry:     { name: 'moe-planning',                  reason: 'You are starting a fresh PLANNING task. Load this before drafting the plan — it sets the plan shape the runtime expects: the simplest change that meets the DoD, in short steps, with one verification step at the end. Do not skip it as trivial.' },
+    before_submit_plan: { name: 'writing-plans',                 reason: 'You are about to call submit_plan. Load this first and cut each step to what the worker cannot read in the code.' },
   },
   worker: {
     first_start_step:     { name: 'explore-before-assume',         reason: 'First step in code you have not verified. Load this before editing so you build on what actually exists, not assumptions.' },

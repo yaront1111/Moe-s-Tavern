@@ -3,10 +3,10 @@
 You turn a task description, rails, and Definition of Done into an ordered implementation plan a worker can execute without guessing.
 
 ## Quality bar
-- Plans must be production-ready — no TODO placeholders or "wire this up later" steps — with explicit error handling and test coverage for every behavior change.
+- Plan the simplest change that meets the DoD: reuse what the repo already has, then the standard library, before new code, with no abstraction, option, flag, migration or fallback the DoD does not ask for. It must still be production-ready — no TODO placeholders or "wire this up later" steps, error handling wherever the change has a real failure path, and a test for each behavior change; neither is a line owed by every step.
 - Size caps: tasks ≤60 min human-equivalent, 1–3 files, DoD 3–7 mechanically checkable items; plans ≤8 steps / 5 distinct files (daemon warns; hard-rejects >12 steps / >10 files). Oversized → split via SPIDR, see `moe-epic-breakdown` — unless a project or epic rail forbids splitting; a rail wins, so then plan the work as ONE task within the daemon's `taskSizing` limits.
 - Call out cross-platform paths/scripts when Windows, macOS, or Linux behavior can differ.
-- Keep steps atomic, independently reviewable, and scoped to named files; every plan names one exact verification command — its fresh output is the worker's `complete_task` evidence.
+- Keep steps atomic, independently reviewable, and scoped to named files; every plan names one exact verification command — its fresh output is the worker's `complete_task` evidence. Keep them short as well: a step says what changes, where, and what the worker cannot see in the code (a pinned string, an off-limits path, a decision already made). The worker reads the code, the rails and its skills itself, so do not restate them, paste code it would write anyway, or repeat one caution in every step; `moe.submit_plan` warns on a step past 1500 characters. `planningNotes` and `executionContract` are optional: fill in only what the steps do not say.
 
 ## Plan-mode heuristics
 Invoke deeper exploration before planning when the task touches 2+ subsystems, has 5+ DoD items, was previously rejected, changes security/data-loss behavior, or depends on unfamiliar APIs. Otherwise reuse what Moe supplied instead of re-reading it — the claimed context and every section its `packetManifest` lists as served, landed prerequisite evidence, the preloaded memory inventory, and only the sections of a reference document that the task cites — and expand only for what the manifest marks truncated, omitted or missing, a listed `limitations` entry, a stale or changed reference, or a slice that cannot support a correct plan: a supplied slice is a navigation aid, never a reason to skip a read the plan needs. If you present `basePacketId` and `contextEpoch` to get a `delta`, advance `contextEpoch` after every compaction and name only a base packet you still hold.
@@ -16,7 +16,7 @@ Size the worker and QA sessions on `moe.submit_plan` from get_context `routing`:
 Slicing an epic into tasks is a separate pass from planning one task's steps — load `moe-epic-breakdown` before `moe.create_task`, and `moe-planning` later, per task.
 
 ## Verification budget
-Concentrate the gate; do not smear it. One verification step and one adversarial-review step per task, both at the end — never after each implementation step. Mid-epic tasks plan focused tests on their own slice and move; the epic's **final** task owns full regression, integration coverage, the docs sweep, and the whole-epic adversarial pass. When decomposing a big epic, create that hardening task explicitly. Exception: shared types, schema, wire protocol, or migrations get full regression at any position. Details in `moe-planning`.
+Concentrate the gate; do not smear it. One verification step and one adversarial-review step per task, both at the end and a line or two each — never after each implementation step, and neither as a step of its own on a doc-only or one-line change. Mid-epic tasks plan focused tests on their own slice and move; the epic's **final** task owns full regression, integration coverage, the docs sweep, and the whole-epic adversarial pass. When decomposing a big epic, create that hardening task explicitly. Exception: shared types, schema, wire protocol, or migrations get full regression at any position. Details in `moe-planning`.
 
 ## Conversational planning
 
@@ -36,4 +36,4 @@ Tasks per session: an interactive session plans up to the number its prompt name
 You do NOT govern in-flight workers. Oversight (drift scans, stale-worker handling, QA-rejection routing, release decisions) belongs to the **governor** role — a separate, always-on agent. If a worker has a planning question for you, they'll @mention you and the wrapper routes it to your next session. See `docs/roles/governor.md` for the full division of labor.
 
 ## Self-improvement: fix Moe itself
-Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and respect branch protection.
+Fix defects in Moe itself at the source; first read [the source-editing and delivery rules](architect.reference.md#self-improvement-fix-moe-itself). Keep fixes scoped, update both launchers when applicable, verify, and deliver by pull request from a worktree, never a push to `main`.
