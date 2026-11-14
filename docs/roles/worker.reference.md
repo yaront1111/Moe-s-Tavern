@@ -22,8 +22,7 @@ Deep-dive material trimmed out of `worker.md`. Read this on demand; it is not lo
 | Any other implementation step | `ponytail` | Climb the ladder before you write code: reuse what this repo has, then stdlib, then native, then one line. Never trims a plan step, a DoD item, or a rail — those are requested work |
 | Stuck on a bug or repeated step failure | `systematic-debugging` | 4-phase root-cause method, before proposing fixes |
 | Final step before `complete_step` | `adversarial-self-review` | Read your own diff as an attacker — concurrency, null, embarrassment checklist |
-| Before `complete_task` | `regression-check` | Run the broader suite; capture counts in your summary |
-| Before `complete_task` | `verification-before-completion` | No completion claim without fresh verification evidence |
+| Before `complete_task` | `verification-before-completion` | Run the plan's command once after your last edit and submit that run as the evidence; also covers a red gate you did not cause |
 | Reopened (`reopenCount > 0`) | `receiving-code-review` | Verify each `rejectionDetails` item against the diff before fixing |
 | Human-directed only | `using-git-worktrees` | Only when a human explicitly asks for a worktree. The post-flight lands only the project root (shared mode) or your task worktree (worktree mode) — edits in any other `.worktrees/` checkout are invisible to it and you must merge them back by hand. Never name one `task-*`: those are the wrapper's task worktrees |
 

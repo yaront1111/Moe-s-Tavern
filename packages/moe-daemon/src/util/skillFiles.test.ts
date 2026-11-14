@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { SKILL_FILES, SKILL_MANIFEST, writeSkillFiles } from '../generated/skillFiles.js';
+import { RETIRED_SKILLS, SKILL_FILES, SKILL_MANIFEST, writeSkillFiles } from '../generated/skillFiles.js';
 
 /**
  * Skill files are vendored into the daemon by generate-skill-files.ts and
@@ -140,5 +140,42 @@ describe('writeSkillFiles', () => {
     writeSkillFiles(moePath);
 
     expect(fs.readFileSync(assetPath, 'utf-8')).toBe('USER VERSION');
+  });
+
+  // No upgrade touches a file the pack has stopped shipping, so a skill deleted
+  // from docs/skills would stay in every project that already has it.
+  describe('a retired skill', () => {
+    const retired = 'regression-check';
+    const retiredMd = () => path.join(moePath, 'skills', retired, 'SKILL.md');
+    const writeRetired = (content: string) => {
+      fs.mkdirSync(path.dirname(retiredMd()), { recursive: true });
+      fs.writeFileSync(retiredMd(), content);
+    };
+
+    it('is named in RETIRED_SKILLS and no longer shipped', () => {
+      expect(RETIRED_SKILLS).toContain(retired);
+      const manifestNames = JSON.parse(SKILL_MANIFEST).skills.map((s: { name: string }) => s.name);
+      for (const name of RETIRED_SKILLS) {
+        expect(Object.keys(SKILL_FILES).filter((rel) => rel.startsWith(`${name}/`))).toEqual([]);
+        expect(manifestNames).not.toContain(name);
+      }
+    });
+
+    it('is removed when the copy on disk is one an earlier pack wrote', () => {
+      writeRetired(`---\n# moe-generated: sha=000000000000\nname: ${retired}\n---\n\nOLD BODY`);
+
+      writeSkillFiles(moePath);
+
+      expect(fs.existsSync(path.dirname(retiredMd()))).toBe(false);
+    });
+
+    it('is kept when the user has made it their own (no marker)', () => {
+      const custom = `---\nname: ${retired}\n---\n\nMY OWN RULES`;
+      writeRetired(custom);
+
+      writeSkillFiles(moePath);
+
+      expect(fs.readFileSync(retiredMd(), 'utf-8')).toBe(custom);
+    });
   });
 });

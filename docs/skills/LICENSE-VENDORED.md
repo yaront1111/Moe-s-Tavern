@@ -85,5 +85,4 @@ The following skills were authored fresh for Moe and are licensed under the proj
 - `moe-planning/`
 - `explore-before-assume/`
 - `adversarial-self-review/`
-- `regression-check/`
 - `moe-qa-loop/`

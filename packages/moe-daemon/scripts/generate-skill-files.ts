@@ -19,6 +19,11 @@ const manifestPath = path.join(skillsDir, 'manifest.json');
 const licensePath = path.join(skillsDir, 'LICENSE-VENDORED.md');
 const outPath = path.join(__dirname, '..', 'src', 'generated', 'skillFiles.ts');
 
+// Skills an earlier pack shipped and this one does not. Name a skill here in
+// the commit that deletes its docs/skills directory: nothing else removes the
+// copy a project already has, and its seats would go on being offered it.
+const RETIRED_SKILLS = ['regression-check'];
+
 if (!fs.existsSync(skillsDir)) {
   console.log('docs/skills not found — skipping skillFiles.ts regeneration (using committed version)');
   process.exit(0);
@@ -157,6 +162,13 @@ export const SKILL_LICENSE = \`${escapeTemplateLiteral(
   licenseContent ? stampSkillFile('LICENSE-VENDORED.md', licenseContent) : ''
 )}\`;
 
+/**
+ * Skills an earlier pack shipped and this one does not. writeSkillFiles removes
+ * a project's generated copy of each, and linkClaudeSkills the entry made for
+ * it under .claude/skills.
+ */
+export const RETIRED_SKILLS: string[] = ${JSON.stringify(RETIRED_SKILLS)};
+
 const GENERATED_MARKER_RE = /^<!--\\s*moe-generated:\\s*sha=([a-f0-9]{6,64})\\s*-->/;
 // YAML-comment form used for frontmatter docs (SKILL.md), where an HTML comment
 // above the \`---\` delimiter would break the skill loader.
@@ -198,6 +210,8 @@ function shouldUpgradeSkillFile(onDisk: string, bundled: string): boolean {
  * - Files without a marker are left alone (user customizations; deleting the
  *   marker line opts a file out of future auto-upgrades).
  * - Non-markdown assets (vendored templates etc.) stay create-only.
+ * - A retired skill (RETIRED_SKILLS) is removed when its SKILL.md still carries
+ *   the marker; without one it is the user's own skill and stays.
  */
 export function writeSkillFiles(moePath: string): void {
   const skillsDir = path.join(moePath, 'skills');
@@ -238,6 +252,15 @@ export function writeSkillFiles(moePath: string): void {
       atomicWriteText(licensePath, SKILL_LICENSE);
     } else if (shouldUpgradeSkillFile(fs.readFileSync(licensePath, 'utf-8'), SKILL_LICENSE)) {
       atomicWriteText(licensePath, SKILL_LICENSE);
+    }
+  }
+
+  // Last, so a directory that will not delete cannot stop the writes above.
+  for (const name of RETIRED_SKILLS) {
+    const dir = path.join(skillsDir, name);
+    const skillMd = path.join(dir, 'SKILL.md');
+    if (fs.existsSync(skillMd) && markerSha(fs.readFileSync(skillMd, 'utf-8'))) {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   }
 }

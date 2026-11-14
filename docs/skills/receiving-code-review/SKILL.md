@@ -75,6 +75,6 @@ When you receive a QA rejection:
 2. **Verify each item against the diff.** If QA points at a file/line, open it and read for yourself.
 3. **If an item seems wrong**, push back via `moe.add_comment` on the task channel with technical reasoning. Don't silently ignore; don't silently implement.
 4. **Implement in priority order** (security/correctness > simple fixes > refactoring). One item at a time within the plan's current steps — don't batch unrelated fixes into one change.
-5. **After fixes, run regression-check** and put actual results in your `moe.complete_task` summary.
+5. **After fixes, run the gate again** (`verification-before-completion`) and put the actual results in your `moe.complete_task` summary.
 
 Never include performative gratitude in `moe.add_comment`. State what you changed.

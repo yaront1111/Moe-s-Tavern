@@ -145,8 +145,8 @@ rails are the "explicitly requested" tier — never YAGNI them away.
   Never mark a step complete without doing it because it "wasn't needed".
 - **Moe's verification floor outranks ponytail's test rule.**
   `moe.complete_task` requires `verification: { command, exitCode: 0 }`, and
-  `regression-check` / `test-driven-development` still apply on the steps that
-  recommend them. "Trivial one-liners need no test" never means "no
+  `verification-before-completion` / `test-driven-development` still apply
+  where the daemon recommends them. "Trivial one-liners need no test" never means "no
   verification command" — QA re-runs that command.
 - **`ponytail:` comments are the audit trail.** A deliberate corner with a
   known ceiling gets the comment naming the ceiling and upgrade path; QA reads

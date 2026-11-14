@@ -1275,7 +1275,7 @@ If the epic touched shared types, schema, wire protocol, or migrations, say so i
 
 Create the tasks, then stop. Each one gets planned separately — when it reaches \`PLANNING\` and you claim it, that's when \`moe-planning\` runs, with the task's epic position already decided here.`,
   'moe-planning/SKILL.md': `---
-# moe-generated: sha=e4144c5ed5b4
+# moe-generated: sha=772799d5a194
 name: moe-planning
 description: Use when an architect is turning a Moe task into an implementation plan via moe.submit_plan. Covers planning the simplest change that meets the Definition of Done, writing short steps that say only what the worker cannot read in the code, the planning checklist (read, explore, tests, implementation, verification, docs, self-review), the plan shape per task type, and where the verification gate belongs — once at the end of a task, and at full scope only on the epic's final task.
 when_to_use: After moe.get_context returns a PLANNING task, before drafting implementationPlan.steps for moe.submit_plan.
@@ -1348,7 +1348,7 @@ Work through these in order. They are your checklist, not a list of steps: most 
 2. **Explore before you assume.** Don't reference a function, model, method, relationship or constant you haven't grepped for: hallucinated \`user.clientProfile.accounts\`-style chains are the #1 source of plan-time errors. Load \`explore-before-assume\`. What reaches the plan is correct paths and names, not an account of the search.
 3. **Tests.** For every behavior the change adds or alters, name the case that proves it: one per behavior or boundary, not a matrix, with an assertion that fails when the code does nothing (\`assertEquals('completed', r.status)\`, not \`assert(r)\`). Scope them to *this* task; end-to-end tests belong to the epic's final task, where the whole flow exists to be tested. If the breakdown created a sibling **test-authoring task** for this behavior, plan against those held-out tests: name the test files, make the verification step "the tests from task-<id> pass unchanged", and never plan a step that edits them — QA rejects a diff that weakens held-out tests.
 4. **Implementation.** One step per logical concern, each with the tests for what it changes. Most tasks need one to three, and only this part of the plan grows with the task.
-5. **Verification: one step, after the implementation steps.** Name **one exact command**, sized by the table above: \`npx vitest run src/server/McpAdapter.test.ts\`, not "run the tests". It IS the worker's completion evidence: \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` and rejects without it, and QA re-runs the same command to audit. Add what a pass looks like when that is more than exit code 0, and anything the worker could not guess (a slow suite, a required flag, a test already red that is not this task's). The procedure is in the worker's \`regression-check\` and \`verification-before-completion\` skills; do not restate it.
+5. **Verification: one step, after the implementation steps.** Name **one exact command**, sized by the table above: \`npx vitest run src/server/McpAdapter.test.ts\`, not "run the tests". It IS the worker's completion evidence: \`moe.complete_task\` requires \`verification: { command, exitCode, outputTail }\` and rejects without it, and QA re-runs the same command to audit. Add what a pass looks like when that is more than exit code 0, and anything the worker could not guess (a slow suite, a required flag, a test already red that is not this task's). The procedure is in the worker's \`verification-before-completion\` skill; do not restate it.
 6. **Docs.** Comments only where the *why* is non-obvious; a changelog entry if the change is user-visible; \`docs/\` when a contract changes, in the step that changes it. On a big epic the docs sweep waits for the final task, unless this task alone changes a contract someone else is about to build against.
 7. **Self-review: one step, last.** Give the scope (this task's diff, or the whole epic diff on the epic's final task) and the two or three things that could really go wrong with *this* change: a second concurrent run, an empty or huge input, an assumption you could not verify. The general checklist is in \`adversarial-self-review\`, which the worker loads on its final step; do not copy it in.
 
@@ -1499,7 +1499,7 @@ If the diff is large or touches an unfamiliar subsystem, before deciding:
 
 If after that you still can't tell — \`moe.add_comment\` on the task asking the worker a specific clarifying question. Don't reject for ambiguity; reject for defect.`,
   'ponytail/SKILL.md': `---
-# moe-generated: sha=22cebfcbaa64
+# moe-generated: sha=5b91983e3fd6
 name: ponytail
 description: >
   Forces the laziest solution that actually works, simplest, shortest, most
@@ -1646,8 +1646,8 @@ rails are the "explicitly requested" tier — never YAGNI them away.
   Never mark a step complete without doing it because it "wasn't needed".
 - **Moe's verification floor outranks ponytail's test rule.**
   \`moe.complete_task\` requires \`verification: { command, exitCode: 0 }\`, and
-  \`regression-check\` / \`test-driven-development\` still apply on the steps that
-  recommend them. "Trivial one-liners need no test" never means "no
+  \`verification-before-completion\` / \`test-driven-development\` still apply
+  where the daemon recommends them. "Trivial one-liners need no test" never means "no
   verification command" — QA re-runs that command.
 - **\`ponytail:\` comments are the audit trail.** A deliberate corner with a
   known ceiling gets the comment naming the ceiling and upgrade path; QA reads
@@ -1777,7 +1777,7 @@ Vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/po
 - The footer limits the QA pass to diffs past about 100 changed lines outside tests (measured on Moe's own board: 12 of the 18 reviews where the pass found anything, and 147 of the 187 lines).
 - Body otherwise byte-identical to upstream (tags, examples, scoring, boundaries unchanged).`,
   'receiving-code-review/SKILL.md': `---
-# moe-generated: sha=b87db22bbedb
+# moe-generated: sha=a5bada1cd455
 name: receiving-code-review
 description: Use when receiving code review feedback, before implementing suggestions, especially if feedback seems unclear or technically questionable - requires technical rigor and verification, not performative agreement or blind implementation
 ---
@@ -1854,10 +1854,10 @@ When you receive a QA rejection:
 2. **Verify each item against the diff.** If QA points at a file/line, open it and read for yourself.
 3. **If an item seems wrong**, push back via \`moe.add_comment\` on the task channel with technical reasoning. Don't silently ignore; don't silently implement.
 4. **Implement in priority order** (security/correctness > simple fixes > refactoring). One item at a time within the plan's current steps — don't batch unrelated fixes into one change.
-5. **After fixes, run regression-check** and put actual results in your \`moe.complete_task\` summary.
+5. **After fixes, run the gate again** (\`verification-before-completion\`) and put the actual results in your \`moe.complete_task\` summary.
 
 Never include performative gratitude in \`moe.add_comment\`. State what you changed.`,
-  'receiving-code-review/SOURCE.md': `<!-- moe-generated: sha=13b25bb240cf -->
+  'receiving-code-review/SOURCE.md': `<!-- moe-generated: sha=e26b28fdd33b -->
 
 # Source
 
@@ -1872,84 +1872,8 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed personalised "your human partner" / CLAUDE.md framing — generalised to "trusted human reviewer".
 - Removed "Strange things are afoot at the Circle K" signal phrase (private convention).
 - Removed the GitHub Thread Replies section (Moe's review channel is \`moe.add_comment\`, not GitHub PR threads — captured in the integration footer).
-- Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`regression-check\` follow-up.
+- Appended \`## Moe integration\` footer wiring the skill to \`moe.qa_reject\` recovery, \`rejectionDetails\`, and the \`verification-before-completion\` follow-up.
 - Replaced the "Forbidden phrases" banned-phrase list with a one-line positive statement of how to respond (technical content only; verify before agreeing).`,
-  'regression-check/SKILL.md': `---
-# moe-generated: sha=d9adaeaf0c83
-name: regression-check
-description: Use before moe.complete_task. Runs the suite the plan named — narrow for a mid-epic task, full for the epic's final task — to confirm nothing unrelated broke. The goal is zero regressions. Better to find out now than in a QA reject comment.
-when_to_use: Worker, after the final implementation step is done, before moe.complete_task.
-allowed-tools: Bash, Read
----
-
-# Regression Check
-
-Before \`moe.complete_task\` — **once, not after every step** — run the suite the plan named. The goal is zero regressions. Finding out now is cheap; finding out from a \`qa_reject\` is expensive.
-
-## How wide, though?
-
-The plan sizes this deliberately; don't silently upgrade it.
-
-- **Mid-epic task** (\`moe.get_context\` \`task.isEpicFinal\` is false): run the narrow suite the plan named — your package, or the test files covering what you changed. You are proving *your slice*. The epic's final task owns the full-system pass.
-- **Epic-final task, or a task with no epic siblings**: run the full thing. Every affected package, plus whatever integration/smoke the plan named.
-- **Any task that touched shared types, schema, wire protocol, or a migration**: full suite regardless of position. These break code outside your blast radius, and the epic's final task is too late to find out.
-
-Unsure of your position? Read \`moe.get_context\` → \`task.isEpicFinal\`: true means epic-final (the full run), false means mid-epic. A task with no epic reads true.
-
-## What to run
-
-The plan should name the suite. If it doesn't, work out from your changes:
-
-| Touched | Run at minimum |
-|---------|----------------|
-| \`packages/moe-daemon/src/...\` | \`cd packages/moe-daemon && npm test\` |
-| \`packages/moe-proxy/src/...\` | \`cd packages/moe-proxy && npm test\` |
-| \`packages/moe-claude-plugin/src/...\` | \`cd packages/moe-claude-plugin && npm test\` |
-| \`moe-jetbrains/src/...\` | \`cd moe-jetbrains && ./gradlew test\` |
-| \`moe-vscode/src/...\` | \`cd moe-vscode && npm test && npm run compile\` |
-| Multi-package or shared types | All of the above |
-| Scripts / wrappers | \`bash scripts/tests/postflight.sh\` + \`bash scripts/tests/parity-check.sh\` |
-| Docs only | \`npm run lint\` at the repo root (role-doc line caps) |
-
-If a project has a \`test:all\` or \`npm run check\` script, prefer that — it usually wires lint + type-check + tests in the right order.
-
-## How to read the output
-
-- **All green?** Submit this run as \`moe.complete_task { verification: { command, exitCode: 0, outputTail } }\` (required) and put the test/pass counts in your summary. Don't claim green without numbers.
-- **Failures in tests you didn't touch?** Treat it as your regression until the baseline says otherwise. Investigate before \`complete_task\`. Usual suspects: shared util change, type-signature change, fixture / seed dependency, test ordering. If the same failure happens without your change, see "A red gate you did not cause" below.
-- **Failures in tests you did touch?** Either the test is wrong or the code is wrong. Fix one.
-- **Flake?** Run it again. If it's still red on the second run, it's not flake, it's a bug.
-
-## A red gate you did not cause
-
-Another seat can turn your gate red: an uncommitted edit in a shared checkout, a checkpoint that landed tests ahead of their code, a flaky test. That is not a reason to \`moe.report_blocked\`, and not a reason to add a \`dependsOn\` on whoever owns the failure. Both park your finished work behind theirs for nothing.
-
-1. Run the gate in a clean clone of the branch tip plus only your own files, so another seat's uncommitted edits cannot reach it.
-2. Still red outside your change? Run the same command at the same tip without your files. The same failures there mean they are not yours.
-3. If the failure stops the command before your tests run (a type error in someone else's file, say), gate on the last commit where it does not, plus your files, and name that commit in your evidence.
-4. File the failure as a \`bug:\` row if nobody has. Then call \`moe.complete_task\`. \`verification.exitCode\` must be 0, so submit a command whose exit reflects your change, such as one that passes when its failing set equals the baseline's.
-5. List every run and its failures in your summary. Never describe a red run as green.
-
-Baseline green and red with your files? It's yours: fix it. A project rail that sets a different bar wins over this section.
-
-## What "broader" means — when you're in the full-scope case
-
-Once you're in the full-scope case above, it's tempting to still run only the tests in the package you edited. Don't. Cross-package dependencies are exactly where regressions hide. Specifically:
-
-- Type changes in \`schema.ts\` ripple through every tool and the plugin.
-- Migrations affect \`load()\` for every existing \`.moe/\`.
-- Wire-protocol changes (new fields in WebSocket / MCP messages) need both ends tested.
-
-## When to skip
-
-- Doc-only changes (formatter / spell-check is enough).
-- Pure addition of a new file that nothing imports yet.
-
-For everything else, run *something* — narrow or full per the sizing above. Skipping entirely is what turns 90 saved seconds into a 4-hour \`qa_reject\` round trip.
-
-## What to put in the complete_step / complete_task summary
-
-Be specific. Not "tests pass" — "342 / 342 tests pass; ran \`npm test\` in moe-daemon and moe-proxy; type-check clean." Numbers + commands let QA verify quickly without re-running everything.`,
   'ros2-skill/AGENTS.md': `<!-- moe-generated: sha=cf72bf834ed6 -->
 
 # ros2-skill Agent Instructions
@@ -30449,89 +30373,66 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 - Removed Jesse-specific quote attributions ("Per Jesse's rule…").
 - Appended \`## Moe integration\` footer covering branch naming, the \`.moe/\` folder relationship, and post-flight cleanup.`,
   'verification-before-completion/SKILL.md': `---
-# moe-generated: sha=926cb394474a
+# moe-generated: sha=807eead18719
 name: verification-before-completion
-description: Use when about to claim work is complete, fixed, or passing, before committing or creating PRs - requires running verification commands and confirming output before making any success claims; evidence before assertions always
+description: Use before moe.complete_task, and before any claim that work passes, is fixed or is done. Run the command the plan named (narrow for a mid-epic task, full for the epic's final task) fresh, read its output, and submit that run as the completion evidence. Covers reading a red run, including a red gate you did not cause.
+when_to_use: Worker, after the last step and before moe.complete_task; any role about to report that something passes.
 ---
 
 # Verification Before Completion
 
-## Overview
+A completion claim is only as good as the fresh command output behind it. Before \`moe.complete_task\`, run the command the plan named, read the result, and submit that run as the evidence. Do it **once, after your last edit**, not after every step.
 
-A completion claim is only as good as the fresh command output behind it. Before you say something passes, is fixed, or is done, run the command that proves it and read its result.
+## The gate
 
-## The Gate Function
+1. **Identify** the command that proves the claim. The plan's verification step names it.
+2. **Run** it in full, now. A run from before your last edit says nothing about the code as it stands.
+3. **Read** the output: the exit code, the failure count, the names of what failed.
+4. **Report what it says.** Green: call \`moe.complete_task { verification: { command, exitCode: 0, outputTail } }\` (the call is rejected without it) and put the counts in your summary. Not green: say so with the output, then fix it or follow "A red gate you did not cause".
 
-\`\`\`
-BEFORE claiming any status or expressing satisfaction:
+"Should pass now", a clean linter, an earlier run and a subagent's report are not evidence. QA re-runs the same command.
 
-1. IDENTIFY: What command proves this claim?
-2. RUN: Execute the FULL command (fresh, complete)
-3. READ: Full output, check exit code, count failures
-4. VERIFY: Does output confirm the claim?
-   - If NO: State actual status with evidence
-   - If YES: State claim WITH evidence
-5. ONLY THEN: Make the claim
+| Claim | What proves it |
+|-------|----------------|
+| Tests pass | This run's output: 0 failures |
+| Bug fixed | The original symptom, tested again |
+| A regression test works | It fails with the fix reverted and passes with it restored |
+| A subagent finished the job | The diff it left, read by you |
+| Every DoD item is met | Each item checked against the diff, not "tests pass" |
 
-A claim without steps 2–4 is a guess, and QA will re-run it.
-\`\`\`
+## How wide
 
-## Common Failures
+The plan sizes the gate deliberately. Do not silently widen or narrow it.
 
-| Claim | Requires | Not Sufficient |
-|-------|----------|----------------|
-| Tests pass | Test command output: 0 failures | Previous run, "should pass" |
-| Linter clean | Linter output: 0 errors | Partial check, extrapolation |
-| Build succeeds | Build command: exit 0 | Linter passing, logs look good |
-| Bug fixed | Test original symptom: passes | Code changed, assumed fixed |
-| Regression test works | Red-green cycle verified | Test passes once |
-| Agent completed | VCS diff shows changes | Agent reports "success" |
-| Requirements met | Line-by-line checklist | Tests passing |
+- **Mid-epic task** (\`moe.get_context\` → \`task.isEpicFinal\` is false): the narrow suite the plan named, which is your package or the test files covering what you changed. You are proving *your slice*; the epic's final task owns the full-system pass.
+- **Epic-final task, or a task with no epic** (\`task.isEpicFinal\` is true): the full run. Every affected package, plus whatever integration or smoke run the plan named.
+- **Shared types, schema, wire protocol or a migration**, at any position: the full run. These break code outside the package you edited (both ends of a protocol, every reader of a stored shape), and the epic's final task is too late to find out.
+- **Doc-only or config-only change**: the plan's proving command (a linter, a build, a grep) is the whole gate.
 
-## Key Patterns
+If the plan names no command, use the project's own test entry point for the packages you touched, and name the command you chose in your summary.
 
-**Tests:**
-\`\`\`
-✅ [Run test command] [See: 34/34 pass] "All tests pass"
-❌ "Should pass now" / "Looks correct"
-\`\`\`
+## Reading a red run
 
-**Regression tests (TDD Red-Green):**
-\`\`\`
-✅ Write → Run (pass) → Revert fix → Run (MUST FAIL) → Restore → Run (pass)
-❌ "I've written a regression test" (without red-green verification)
-\`\`\`
+- **Tests you touched fail.** Either the test is wrong or the code is. Fix one.
+- **Tests you did not touch fail.** Treat it as your regression until a baseline says otherwise. Usual suspects: a shared helper, a changed signature, a fixture or seed, test ordering. If the same failure happens without your change, see the next section.
+- **Flake?** Run it again. Red twice is a bug, not a flake.
 
-**Build:**
-\`\`\`
-✅ [Run build] [See: exit 0] "Build passes"
-❌ "Linter passed" (linter doesn't check compilation)
-\`\`\`
+## A red gate you did not cause
 
-**Requirements:**
-\`\`\`
-✅ Re-read plan → Create checklist → Verify each → Report gaps or completion
-❌ "Tests pass, phase complete"
-\`\`\`
+Another seat can turn your gate red: an uncommitted edit in a shared checkout, a checkpoint that landed tests ahead of their code, a flaky test. That is not a reason to \`moe.report_blocked\`, and not a reason to add a \`dependsOn\` on whoever owns the failure. Both park your finished work behind theirs for nothing.
 
-**Agent delegation:**
-\`\`\`
-✅ Agent reports success → Check VCS diff → Verify changes → Report actual state
-❌ Trust agent report
-\`\`\`
+1. Run the gate in a clean clone of the branch tip plus only your own files, so another seat's uncommitted edits cannot reach it.
+2. Still red outside your change? Run the same command at the same tip without your files. The same failures there mean they are not yours.
+3. If the failure stops the command before your tests run (a type error in someone else's file, say), gate on the last commit where it does not, plus your files, and name that commit in your evidence.
+4. File the failure as a \`bug:\` row if nobody has. Then call \`moe.complete_task\`. \`verification.exitCode\` must be 0, so submit a command whose exit reflects your change, such as one that passes when its failing set equals the baseline's.
+5. List every run and its failures in your summary. Never describe a red run as green.
 
----
+Baseline green and red with your files? It's yours: fix it. A project rail that sets a different bar wins over this section.
 
-## Moe integration
+## The summary
 
-This skill is the gate before \`moe.complete_step\` (final step) and \`moe.complete_task\`. Before either:
-
-1. Identify the verification command for the step's \`affectedFiles\` (\`npm test\` for daemon/proxy, \`./gradlew test\` for the JetBrains plugin, etc. — see the \`regression-check\` skill).
-2. Run it fresh in this turn.
-3. Submit the run as \`moe.complete_task { verification: { command, exitCode: 0, outputTail } }\` — the call is rejected without it — and put the counts (tests run / passed) in the \`complete_step\` note or \`complete_task\` summary.
-
-QA reviews the summary. A summary that says "all tests pass" with no numbers is a \`qa_reject\` waiting to happen — for good reason. Pair this skill with \`regression-check\` for what to run, and \`adversarial-self-review\` for what else to look at before claiming done.`,
-  'verification-before-completion/SOURCE.md': `<!-- moe-generated: sha=7fad5f7094e1 -->
+Be specific: "342 / 342 tests pass; ran \`npm test\` in moe-daemon and moe-proxy; type-check clean", not "tests pass". Commands and counts let QA audit the claim, and a summary with no numbers invites a reject.`,
+  'verification-before-completion/SOURCE.md': `<!-- moe-generated: sha=57de2c3937cd -->
 
 # Source
 
@@ -30544,8 +30445,8 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
 ## Local modifications
 
 - Removed two upstream phrases that referenced specific personal-history quotes ("I don't believe you", "you'll be replaced") — the principle stands without the specifics.
-- Appended \`## Moe integration\` footer wiring the skill to \`moe.complete_step\` / \`moe.complete_task\` and pointing at sibling skills (\`regression-check\`, \`adversarial-self-review\`).
-- Replaced the Overview / Iron Law pressure language with a plain statement of the gate, softened "Skip any step = lying", and removed the Red Flags, Rationalization Prevention, Why This Matters, When To Apply and Bottom Line sections (the gate function and the claim/requires tables carry the rule).`,
+- Replaced the Overview / Iron Law pressure language with a plain statement of the gate, softened "Skip any step = lying", and removed the Red Flags, Rationalization Prevention, Why This Matters, When To Apply and Bottom Line sections (the gate function and the claim/requires tables carry the rule).
+- Merged with Moe's own \`regression-check\` skill (2026-11-14), which is retired. Both were loaded at the same moment, before \`moe.complete_task\`, and both said to run the command, read the output and report the counts. From upstream this skill keeps the gate and the claim table, cut to the rows a Moe worker meets. From \`regression-check\` it takes how wide to run, how to read a red run, "A red gate you did not cause" and the summary rule. The \`## Moe integration\` footer is folded into the body, which names the \`verification\` argument of \`moe.complete_task\` directly.`,
   'writing-plans/SKILL.md': `---
 # moe-generated: sha=e90e1b919961
 name: writing-plans
@@ -30635,7 +30536,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
  * lean "Available Skills" section into the system prompt.
  */
 export const SKILL_MANIFEST = `{
-  "moeGeneratedSha": "c9046b47a20d",
+  "moeGeneratedSha": "a8a09ef7e12a",
   "version": 1,
   "skills": [
     {
@@ -30676,7 +30577,7 @@ export const SKILL_MANIFEST = `{
     },
     {
       "name": "verification-before-completion",
-      "description": "Vendored from superpowers. Forces running verification commands and confirming output before any complete claim. Evidence before assertions.",
+      "description": "Vendored from superpowers, merged with Moe's former regression-check. Run the command the plan named once after the last edit (narrow for a mid-epic task, full for the epic's final task), read the output and submit that run as the completion evidence. Covers a red gate you did not cause.",
       "role": "worker",
       "triggeredBy": ["before moe.complete_task"]
     },
@@ -30691,12 +30592,6 @@ export const SKILL_MANIFEST = `{
       "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist, plus a pass for code nothing needs, before final complete_step or complete_task.",
       "role": "worker",
       "triggeredBy": ["final step before complete_step", "before complete_task"]
-    },
-    {
-      "name": "regression-check",
-      "description": "Run the test suite the plan named before complete_task — narrow for a mid-epic task, full for the epic's final task. Goal: zero regressions, evidence-based summary.",
-      "role": "worker",
-      "triggeredBy": ["before complete_task"]
     },
     {
       "name": "receiving-code-review",
@@ -30747,7 +30642,7 @@ export const SKILL_MANIFEST = `{
  * Content for .moe/skills/LICENSE-VENDORED.md, auto-generated from
  * docs/skills/LICENSE-VENDORED.md. Records attribution for vendored skills.
  */
-export const SKILL_LICENSE = `<!-- moe-generated: sha=b1d782fec1e2 -->
+export const SKILL_LICENSE = `<!-- moe-generated: sha=14f8be37bcfb -->
 
 # Vendored Skill Attribution
 
@@ -30836,8 +30731,14 @@ The following skills were authored fresh for Moe and are licensed under the proj
 - \`moe-planning/\`
 - \`explore-before-assume/\`
 - \`adversarial-self-review/\`
-- \`regression-check/\`
 - \`moe-qa-loop/\``;
+
+/**
+ * Skills an earlier pack shipped and this one does not. writeSkillFiles removes
+ * a project's generated copy of each, and linkClaudeSkills the entry made for
+ * it under .claude/skills.
+ */
+export const RETIRED_SKILLS: string[] = ["regression-check"];
 
 const GENERATED_MARKER_RE = /^<!--\s*moe-generated:\s*sha=([a-f0-9]{6,64})\s*-->/;
 // YAML-comment form used for frontmatter docs (SKILL.md), where an HTML comment
@@ -30880,6 +30781,8 @@ function shouldUpgradeSkillFile(onDisk: string, bundled: string): boolean {
  * - Files without a marker are left alone (user customizations; deleting the
  *   marker line opts a file out of future auto-upgrades).
  * - Non-markdown assets (vendored templates etc.) stay create-only.
+ * - A retired skill (RETIRED_SKILLS) is removed when its SKILL.md still carries
+ *   the marker; without one it is the user's own skill and stays.
  */
 export function writeSkillFiles(moePath: string): void {
   const skillsDir = path.join(moePath, 'skills');
@@ -30920,6 +30823,15 @@ export function writeSkillFiles(moePath: string): void {
       atomicWriteText(licensePath, SKILL_LICENSE);
     } else if (shouldUpgradeSkillFile(fs.readFileSync(licensePath, 'utf-8'), SKILL_LICENSE)) {
       atomicWriteText(licensePath, SKILL_LICENSE);
+    }
+  }
+
+  // Last, so a directory that will not delete cannot stop the writes above.
+  for (const name of RETIRED_SKILLS) {
+    const dir = path.join(skillsDir, name);
+    const skillMd = path.join(dir, 'SKILL.md');
+    if (fs.existsSync(skillMd) && markerSha(fs.readFileSync(skillMd, 'utf-8'))) {
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   }
 }

@@ -157,4 +157,47 @@ describe('linkClaudeSkills', () => {
     expect(result.noSkillPack).toBe(true);
     expect(fs.existsSync(path.join(root, '.claude', 'skills'))).toBe(false);
   });
+
+  // regression-check is in RETIRED_SKILLS. writeSkillFiles removes it from
+  // .moe/skills; the host must stop offering it as well.
+  describe('a retired skill', () => {
+    const retired = 'regression-check';
+    const entry = (root: string) => path.join(root, '.claude', 'skills', retired);
+    // readdir, not exists: a dangling link is still an entry.
+    const hasEntry = (root: string) => fs.readdirSync(path.dirname(entry(root))).includes(retired);
+    const writeEntry = (root: string, body: string) => {
+      fs.mkdirSync(entry(root), { recursive: true });
+      fs.writeFileSync(path.join(entry(root), 'SKILL.md'), body);
+    };
+
+    it('loses the entry made for it once .moe/skills no longer has it', () => {
+      const root = makeProject({ [retired]: BODY });
+      linkClaudeSkills(root);
+      expect(hasEntry(root)).toBe(true);
+      fs.rmSync(path.join(root, '.moe', 'skills', retired), { recursive: true });
+
+      linkClaudeSkills(root);
+
+      expect(hasEntry(root)).toBe(false);
+    });
+
+    it('loses a copied entry too (the fallback where links are unavailable)', () => {
+      const root = makeProject();
+      writeEntry(root, BODY);
+
+      linkClaudeSkills(root);
+
+      expect(hasEntry(root)).toBe(false);
+    });
+
+    it('keeps a skill of that name the user wrote', () => {
+      const root = makeProject();
+      const userBody = `---\nname: ${retired}\ndescription: mine\n---\nUser owns this.\n`;
+      writeEntry(root, userBody);
+
+      linkClaudeSkills(root);
+
+      expect(readExposed(root, retired)).toBe(userBody);
+    });
+  });
 });
