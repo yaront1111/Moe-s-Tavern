@@ -11830,6 +11830,11 @@ $PROMPT_BODY"
                     echo -e "${YELLOW}[WARN]${NC} MOE_CODEX_SANDBOX='${MOE_CODEX_SANDBOX:-}' is not one of read-only | workspace-write | danger-full-access | inherit; using danger-full-access."
                     CODEX_SANDBOX_ARGS=(--sandbox danger-full-access) ;;
             esac
+            # codex exec refuses a non-git project ("Not inside a trusted directory and
+            # --skip-git-repo-check was not specified", exit 1 before any work). Moe supports
+            # non-git projects, so always pass it; it rides the sandbox array so the banner and
+            # the launch both carry it.
+            CODEX_SANDBOX_ARGS+=(--skip-git-repo-check)
             CODEX_SANDBOX_BANNER=""
             if [ "${#CODEX_SANDBOX_ARGS[@]}" -gt 0 ]; then CODEX_SANDBOX_BANNER=" ${CODEX_SANDBOX_ARGS[*]}"; fi
             # --full-auto also kept approval_policy = never when the operator's config resolves

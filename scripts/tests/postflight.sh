@@ -4644,7 +4644,7 @@ EOF
     cat "$CODEX_ARGS_FILE" >&2 || true
     scope_fail Z "expected the workerId inside a complete mcp_servers.moe={command=...} override on the codex argv" "$TMP_DIR/scope-z.out"
   fi
-  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '-c' 'approvals_reviewer=user'; do
+  for flag in 'exec' '-C' '--sandbox' 'danger-full-access' '--skip-git-repo-check' '-c' 'approvals_reviewer=user'; do
     if ! grep -Fqx -- "$flag" "$CODEX_ARGS_FILE"; then
       cat "$CODEX_ARGS_FILE" >&2 || true
       scope_fail Z "expected [$flag] on the headless codex argv" "$TMP_DIR/scope-z.out"

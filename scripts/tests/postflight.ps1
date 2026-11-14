@@ -3978,7 +3978,7 @@ else {
                     # partial dotted `mcp_servers.moe.env.MOE_WORKER_ID=` override at bootstrap.
                     $scopeZMoe = @($scopeZArgs | Where-Object { $_ -clike "mcp_servers.moe={command=*MOE_WORKER_ID='worker-scope-z'}}" })
                     if ($scopeZMoe.Count -lt 1 -or @($scopeZArgs | Where-Object { $_ -like 'mcp_servers.moe.env.MOE_WORKER_ID=*' }).Count -gt 0) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: headless codex argv must carry the workerId inside a complete mcp_servers.moe={command=...} override' }
-                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '-c', 'approvals_reviewer=user')) {
+                    foreach ($flag in @('exec', '--json', '-C', '--sandbox', 'danger-full-access', '--skip-git-repo-check', '-c', 'approvals_reviewer=user')) {
                         if ($scopeZArgs -cnotcontains $flag) { Write-Host ($scopeZArgs -join ' '); throw "SCENARIO Z FAILED: headless codex argv must carry [$flag]" }
                     }
                     if ([array]::IndexOf($scopeZArgs, '--sandbox') -le [array]::IndexOf($scopeZArgs, 'exec')) { Write-Host ($scopeZArgs -join ' '); throw 'SCENARIO Z FAILED: --sandbox must follow the exec subcommand' }
