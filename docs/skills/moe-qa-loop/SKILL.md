@@ -25,8 +25,8 @@ For each task in `REVIEW`:
 
 3. **Read the diff — the recorded one.** `git show <sha>` for each `task.commits[]` entry of kind `completion` (plus the same session's `checkpoint` entries when the completion is a follow-up), or `git diff <base>..HEAD -- <filesModified>`; `git branch --contains <sha>` confirms it is on the branch the entry's `ref` names: in shared mode the shared branch; in worktree mode the target (a literal `consolidationBranch`, else `main`, recorded as `refs/heads/<target>`), where the wrapper squash-lands the task branch `moe/task/<taskId>`. Do not review the dirty shared working tree — other sessions' edits live there too. A `task.commits` with no `completion` entry for this round at REVIEW is a bounded wait, not a blocker. Step 2 already re-ran `task.verification` and the tests, and that re-run normally outlasts the wrapper's landing window on its own — so re-poll `moe.get_context` straight after it rather than idling, up to ~2 minutes total. Never sleep-loop, and re-poll and decide before you act. If a completion commit arrives, review that. No self-landing, in either mode (worktree mode: `git rev-parse --symbolic-full-name HEAD` prints exactly `refs/heads/moe/control`; otherwise shared mode): never commit in the control checkout — the agent Git-write guard refuses it with `MOE_AGENT_GIT_REFUSED`, and the wrapper lands the work. With no completion and no isolated delivery after the bounded wait, the landing did not happen: call `moe.qa_reject` citing `task.lastCommitOutcome`, with one `other` issue that starts `Landing gap:` (see "Reject when" and `.moe/roles/qa.reference.md`). A landing-gap reject counts toward the reopen cap like any other, and a re-plan cannot fix a landing gap. Read it adversarially — see the `adversarial-self-review` skill for the checklist. Count the size: **>400 net changed LOC is itself grounds to reject** (see "Oversized diffs" below, including its rail exception).
 4. **Verify each Definition-of-Done item.** Map every item to evidence in the diff. Missing evidence is a reject.
-5. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (`assertEquals('expected', actual)`, not `assert(actual)`)? Are edge cases covered or only the happy path? Any **deleted or weakened test** in the diff (loosened assertion, skipped case, removed file) that the plan didn't call for is a reject on sight.
-6. **Run the regression suite if you can.** If the worker's `complete_step` summaries don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
+5. **Spot-check the tests.** Did the worker add tests for the new behavior? Are they mutation-resistant (`assertEquals('expected', actual)`, not `assert(actual)`)? Are edge cases covered or only the happy path? Judge coverage by behavior, not by count: each behavior and boundary the change adds needs one case that fails without it, and a behavior that is already pinned needs no further cases. Any **deleted or weakened test** in the diff (loosened assertion, skipped case, removed file) that the plan didn't call for is a reject on sight.
+6. **Run the regression suite if you can.** If the worker's `complete_step` notes don't include test counts, run the suite yourself — the one the plan named, at the width the plan named (see below).
 
 ## Review depth follows the task's position in its epic
 
@@ -84,12 +84,14 @@ Bad rejects produce ping-pong. Good rejects produce one round-trip.
 ## What never to do
 
 - **Never move a rejected task to `BACKLOG`.** That deprioritizes work the worker is mid-flow on. Use `moe.qa_reject` — it routes the task back to `WORKING` for the worker to fix.
-- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity") go in the `qa_approve` summary instead.
+- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity", which runs on larger diffs only) go in the `qa_approve` summary instead.
 - **Never re-write the worker's code in your reject message.** Describe the gap, don't fix it for them — they need the practice.
 
 ## Second pass: complexity
 
-Once the verdict is settled on correctness, run `ponytail-review` over the same diff — a complexity-only pass
+Run it only on a diff that changes more than about 100 lines outside test files (`git show --stat <sha>`). On Moe's own board (718 reviews, October–November 2026) the pass found lines to cut in 18 reviews, 187 lines in all. Diffs past that size were about a quarter of the reviews and held 12 of those 18 and 147 of the 187 lines. On a smaller diff skip it and write nothing about it.
+
+Past that size, once the verdict is settled on correctness, run `ponytail-review` over the same diff — a complexity-only pass
 (`delete:` / `stdlib:` / `native:` / `yagni:` / `shrink:`, one line per finding). Route the findings, don't just list them:
 
 - Breaches a rail or a DoD item → a real `rejectionDetails` entry.

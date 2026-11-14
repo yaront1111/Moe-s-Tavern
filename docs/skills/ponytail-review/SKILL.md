@@ -8,7 +8,7 @@ description: >
   delete", "is this over-engineered", "simplify review", or invokes
   /ponytail-review. Complements correctness-focused review, this one only
   hunts complexity.
-when_to_use: QA, as a second pass after moe-qa-loop's correctness review; architect or governor auditing a diff for bloat.
+when_to_use: QA, as a second pass after moe-qa-loop's correctness review, on a diff past about 100 changed lines outside tests; architect or governor auditing a diff for bloat.
 license: MIT
 ---
 
@@ -64,7 +64,9 @@ Does not apply the fixes, only lists them.
 
 Second pass, never the first. `moe-qa-loop` decides the verdict: DoD coverage,
 rails, the re-run of `task.verification.command`, the completion commit in
-`task.commits`. Run this pass after that one, on the same diff.
+`task.commits`. Run this pass after that one, on the same diff, and only when
+the diff changes more than about 100 lines outside test files: on Moe's own
+board smaller diffs gave it almost nothing to find (numbers in `moe-qa-loop`).
 
 Routing the findings matters more than finding them:
 
@@ -77,8 +79,8 @@ Routing the findings matters more than finding them:
   follow-up card with `moe.create_task` (`dependsOn: []`, it lands in BACKLOG
   human-gated). Never reject a task for taste; that is a reopen the reopen
   counter will punish, and 3 reopens auto-flip the task back to PLANNING.
-- `net: -<N> lines possible.` goes in the summary either way — it is the
-  metric a governor can read across tasks.
+- `net: -<N> lines possible.` goes in the summary whenever you ran the pass —
+  it is the metric a governor can read across tasks.
 - A worker's `ponytail:` comment naming a ceiling and an upgrade path is
   declared intent, not a finding. Flag it only if the ceiling is wrong or the
   corner breaks a DoD item.

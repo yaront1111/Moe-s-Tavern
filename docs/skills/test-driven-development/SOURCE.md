@@ -12,3 +12,5 @@ Vendored from [`obra/superpowers`](https://github.com/obra/superpowers).
 - Removed the `## Testing Anti-Patterns` reference (linked to a sibling file not vendored).
 - Appended `## Moe integration` footer pointing to `moe.start_step` / `moe.complete_step` flow and the `verification-before-completion` skill.
 - Replaced "delete it and start over" (Iron Law and checklist) with: keep an existing implementation (e.g. a resumed session's), write the test, and prove it fails without the change before trusting it.
+- Added `## How Many Tests` and reworded two checklist items (2026-11-13): coverage is counted by behaviour and boundary, not by function ("Every new function/method has a test" became one test per behaviour the change adds or alters; "Edge cases and errors covered" became the edge cases and error paths this change adds, each once). Across 800 completion commits on Moe's own board (from 2026-10-01) the medians were 25 changed source lines and 93 changed test lines, with a median test-to-source ratio of 2.1.
+- The Moe footer names the `complete_step` field that exists (`note`; there is no `summary`).

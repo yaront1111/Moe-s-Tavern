@@ -35,6 +35,10 @@ Test passes, other tests still pass, output pristine. If a test fails: fix the c
 ### REFACTOR — clean up while green
 Remove duplication, improve names, extract helpers. No new behaviour. Tests stay green.
 
+## How Many Tests
+
+A test earns its place by failing for a reason no other test fails for. Write one case per behaviour or boundary the change adds, and put cases that share a shape in one table-driven test. Do not test the language, the framework, or a private helper that a test of the public behaviour already exercises. More cases for a behaviour that is already pinned add reading and run time, not safety.
+
 ## When To Use
 
 Always: new features, bug fixes, refactors, behaviour changes. Exceptions (ask first): throwaway prototypes, generated code, config files. "Just this once" is rationalization.
@@ -45,12 +49,12 @@ Bug found → write a failing test that reproduces it → run → see it fail �
 
 ## Verification Checklist
 
-- [ ] Every new function/method has a test.
+- [ ] Every behaviour the change adds or alters has a test: one per behaviour or boundary, not one per function.
 - [ ] Watched each test fail before implementing.
 - [ ] Each test failed for the expected reason.
 - [ ] Wrote minimal code to pass.
 - [ ] All tests pass and output is pristine.
-- [ ] Edge cases and errors covered.
+- [ ] The edge cases and error paths this change adds are covered, each once.
 
 Any unticked box is a gap to close before `complete_step`.
 
@@ -69,4 +73,4 @@ Any unticked box is a gap to close before `complete_step`.
 
 - Apply this discipline within each `moe.start_step` → implement → `moe.complete_step` cycle on test-touching steps.
 - The architect plans each step as the implementation plus the tests for what it changed (see `moe-planning` "Where the gate goes"); RED → GREEN happens inside that step.
-- Before `moe.complete_task`, pair with `verification-before-completion` — capture the actual test-run output (count + pass/fail) in your `complete_step` summary so QA has evidence rather than a claim.
+- Before `moe.complete_task`, pair with `verification-before-completion` — capture the actual test-run output (count + pass/fail) in your `complete_step` `note` so QA has evidence rather than a claim.

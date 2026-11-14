@@ -21,11 +21,13 @@ export function contextNextAction(state: StateManager, task: Task | null, worker
 
   if (task.status === 'PLANNING') {
     // submit_plan refuses a plan missing any of these, so name them up front.
+    // "Once in the whole plan" is said outright: read as a per-step duty, a
+    // pattern turns into a boilerplate line repeated down the plan.
     const rawRequired = state.project?.globalRails?.requiredPatterns;
     const required = (Array.isArray(rawRequired) ? rawRequired : [])
       .filter((p): p is string => typeof p === 'string' && p.length > 0);
     const railNote = required.length
-      ? ` The step text must contain each global required pattern (case-insensitive substring): ${required.map(p => JSON.stringify(p)).join(', ')}.`
+      ? ` Each global required pattern must appear in the step text (case-insensitive substring), once in the whole plan, not once per step: ${required.map(p => JSON.stringify(p)).join(', ')}.`
       : '';
     return {
       tool: 'moe.submit_plan',

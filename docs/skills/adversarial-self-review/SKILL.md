@@ -1,6 +1,6 @@
 ---
 name: adversarial-self-review
-description: Use once per task, before moe.complete_step on the final step (or moe.complete_task). Forces you to read your own diff as an attacker, not an author. Catches concurrency bugs, null-deref, embarrassing assumptions before QA does.
+description: Use once per task, before moe.complete_step on the final step (or moe.complete_task). Forces you to read your own diff as an attacker, not an author. Catches concurrency bugs, null-deref, embarrassing assumptions and code nothing needs before QA does.
 when_to_use: Worker, on the final step of a task, before complete_step or complete_task.
 allowed-tools: Read, Grep, Bash(git diff:*), Bash(git log:*)
 ---
@@ -43,16 +43,22 @@ Before `moe.complete_step` on the final step or `moe.complete_task`, walk every 
 - Are partial writes / partial state changes possible if we throw mid-way?
 - If we retry, do we double-charge / double-send / double-write?
 
+### What should not be there
+- Is every function, option, parameter and branch you added reached by a caller that exists today? If nothing reaches it, delete it.
+- Does the repo, the standard library or an installed dependency already do what a new helper does? Use that and delete the helper.
+- Do two tests fail for the same reason? Keep one.
+- Is there a change here that no plan step or DoD item asked for? Take it out, and file it with `moe.create_task` if it matters.
+
 ### Embarrassment test
 - If this broke in prod tomorrow and ended up in a postmortem, would I be embarrassed by what I shipped?
 - If a senior engineer reviewed this PR cold, what would they ding me for?
 
 ## What to do with what you find
 
-For each item that triggers concern:
+The checklist is for finding problems, not for adding a guard per question. For each item that triggers concern:
 
-1. **Real risk?** Fix it now, before `complete_step`. A bad fix is better than no fix; an explicit "we'll handle this in follow-up" is better than silence.
-2. **Theoretical only?** Note it in the step `summary` field on `complete_step` so QA knows you considered it.
+1. **Real risk** (an input, state or ordering this code can actually receive)? Fix it now, before `complete_step`, with the smallest change that closes it, and add the test that fails without the fix.
+2. **Theoretical only** (no caller, input or schedule reaches it)? Add no code for it. Say so in the `complete_step` `note` so QA knows you considered it.
 3. **Genuine unknown?** Pause and ask via `moe.add_comment` on the task, or `moe.report_blocked` if it changes the design.
 
 ## What this catches that tests don't

@@ -41,6 +41,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { RETIRED_SKILLS } from '../generated/skillFiles.js';
 import { logger } from './logger.js';
 
 export interface ClaudeSkillsLinkResult {
@@ -141,7 +142,28 @@ export function linkClaudeSkills(projectRoot: string): ClaudeSkillsLinkResult {
     }
   }
 
+  // writeSkillFiles removed a retired skill from .moe/skills, so the loop above
+  // never reaches the entry made for it here.
+  for (const name of RETIRED_SKILLS) removeOwnEntry(path.join(targetDir, name));
+
   return result;
+}
+
+/**
+ * Remove what we put at `target` for a skill that no longer has a source: a
+ * link left dangling, or a copy carrying the generated marker. Anything else
+ * stays: a link that still resolves, and a skill the user wrote.
+ */
+function removeOwnEntry(target: string): void {
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      if (!fs.existsSync(target)) fs.unlinkSync(target);
+    } else if (fs.readFileSync(path.join(target, 'SKILL.md'), 'utf-8').includes(GENERATED_MARKER)) {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  } catch {
+    // Nothing there, or not ours to read: leave it.
+  }
 }
 
 type Ownership = 'absent' | 'ours-symlink' | 'ours-copy' | 'user-owned';
