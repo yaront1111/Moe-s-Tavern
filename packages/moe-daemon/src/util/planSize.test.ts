@@ -3,6 +3,8 @@ import {
   assessPlanSize,
   resolveTaskSizing,
   countDistinctAffectedFiles,
+  planTextWarnings,
+  WARN_STEP_DESCRIPTION_CHARS,
   WARN_STEPS_DEFAULT,
   MAX_STEPS_DEFAULT,
   WARN_DISTINCT_FILES_DEFAULT,
@@ -96,5 +98,23 @@ describe('assessPlanSize', () => {
   it('respects settings.taskSizing overrides', () => {
     const result = assessPlanSize(steps(5), { taskSizing: { warnSteps: 3, maxSteps: 4 } });
     expect(result.violation).toContain('5 steps (max 4)');
+  });
+});
+
+describe('planTextWarnings', () => {
+  const step = (chars: number) => ({ description: 'x'.repeat(chars) });
+
+  it('is quiet up to the threshold', () => {
+    expect(planTextWarnings([step(WARN_STEP_DESCRIPTION_CHARS), step(1)])).toEqual([]);
+  });
+
+  it('names every step past the threshold in one message that keeps the plan', () => {
+    const warnings = planTextWarnings([
+      step(WARN_STEP_DESCRIPTION_CHARS + 1), step(10), step(2 * WARN_STEP_DESCRIPTION_CHARS),
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`step-1 (${WARN_STEP_DESCRIPTION_CHARS + 1} chars), step-3 (${2 * WARN_STEP_DESCRIPTION_CHARS} chars)`);
+    expect(warnings[0]).not.toContain('step-2');
+    expect(warnings[0]).toContain('do not resubmit');
   });
 });

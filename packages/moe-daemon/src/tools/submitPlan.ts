@@ -12,7 +12,7 @@ import { notFound, invalidState, invalidInput, MoeError, MoeErrorCode } from '..
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { normalizeAffectedFiles, findMissingPaths, pathKey } from '../util/affectedFiles.js';
 import { cachedPlanRef, findCachedPlanPaths, type CachedPlanPaths } from '../util/cachedPlanPaths.js';
-import { assessPlanSize, MAX_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
+import { assessPlanSize, MAX_STEP_DESCRIPTION_CHARS, planTextWarnings, WARN_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
 import {
   allowedEfforts, clampEffort, EFFORTS, effortFloor, isEffort, isLowEffortPlan, isTier, maxEffort, maxTier, modelsForTier,
   planSizeFloor, resolveLaunch,
@@ -206,7 +206,8 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
     // Git fallback runs outside the fleet mutex; each validation/write attempt
     // below takes the mutex and revalidates current ownership/status/rails.
     blocking: true,
-    description: 'Architect: submit the implementation plan for a PLANNING task and free your seat. CONTROL mode moves the task to AWAITING_APPROVAL for a human, SPEED auto-approves after a short delay, TURBO moves it straight to WORKING (moe.check_approval reports the state). Each step is one ordered unit the worker runs with start_step/complete_step. affectedFiles must already exist under the project root (or the cached origin ref), relative to the project root; put files the step creates in newFiles. Global rails are enforced on the step text (descriptions plus file paths, case-insensitive substring): it must contain every project.globalRails.requiredPatterns entry and none of the forbiddenPatterns, or the plan is refused. Size limits (settings.taskSizing): warns past 8 steps or 5 distinct files, rejects past 12 steps or 10 files — split the task instead.',
+    description: 'Architect: submit the implementation plan for a PLANNING task and free your seat. CONTROL mode moves the task to AWAITING_APPROVAL for a human, SPEED auto-approves after a short delay, TURBO moves it straight to WORKING (moe.check_approval reports the state). Each step is one ordered unit the worker runs with start_step/complete_step. affectedFiles must already exist under the project root (or the cached origin ref), relative to the project root; put files the step creates in newFiles. Global rails are enforced on the plan text as a whole (step descriptions plus file paths, case-insensitive substring): it must contain every project.globalRails.requiredPatterns entry at least once, in any one step, and none of the forbiddenPatterns, or the plan is refused. Size limits (settings.taskSizing): warns past 8 steps or 5 distinct files, rejects past 12 steps or 10 files — split the task instead. '
+      + `Keep step text short: a warning, never a refusal, names each step past ${WARN_STEP_DESCRIPTION_CHARS} characters.`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -218,7 +219,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         steps: {
           type: 'array',
           maxItems: MAX_PLAN_STEPS,
-          description: 'Ordered implementation steps; each has a description and the files it edits (affectedFiles) or creates (newFiles)',
+          description: 'Ordered implementation steps; each has a description (what changes, where, and what the worker cannot see in the code: it reads the code, the rails and its skills itself) and the files it edits (affectedFiles) or creates (newFiles)',
           items: {
             type: 'object',
             properties: {
@@ -236,7 +237,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         },
         executionContract: {
           type: 'object', additionalProperties: false,
-          description: 'Optional execution intent: behavior <=2000 chars; lists <=50 items of <=1000 chars. File scope stays in steps. Resubmission replaces it (omitted = none, clears stored contract); changes advance planRevision.',
+          description: 'Optional execution intent; omit any field that would only restate the steps or the definitionOfDone. Limits: behavior <=2000 chars; lists <=50 items of <=1000 chars. File scope stays in steps. Resubmission replaces it (omitted = none, clears stored contract); changes advance planRevision.',
           properties: {
             intendedBehavior: { type: 'string', maxLength: MAX_CONTRACT_BEHAVIOR_CHARS, description: 'Observable behavior or outcome.' },
             acceptanceCriteria: { type: 'array', maxItems: MAX_CONTRACT_LIST_ITEMS, items: { type: 'string', maxLength: MAX_CONTRACT_ITEM_CHARS }, description: 'Behavior-level criteria; definitionOfDone stays human-owned.' },
@@ -283,7 +284,7 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
         },
         planningNotes: {
           type: 'object',
-          description: 'Architect reasoning notes for the worker (approaches considered, codebase insights, risks, key files)',
+          description: 'Optional notes for the worker; include only what the steps do not already say (approaches considered, codebase insights, risks, key files)',
           properties: {
             approachesConsidered: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'What alternatives were evaluated and why rejected' },
             codebaseInsights: { type: 'string', maxLength: MAX_PLANNING_NOTE_CHARS, description: 'Patterns, conventions, architecture discovered' },
@@ -772,7 +773,17 @@ export function submitPlanTool(_state: StateManager): ToolDefinition {
             return launch ? { launch } : {};
           })(),
           ...(pathValidation ? { pathValidation } : {}),
-          ...(planSize.warnings.length > 0 ? { warnings: planSize.warnings } : {}),
+          // Step-text advice rides the reply only: persisting it beside
+          // planSize.warnings would hand a wordy plan to the size critic,
+          // whose one answer is "split the task". It also says "this plan
+          // stands", so a plan that critic just sent back does not get it.
+          ...(() => {
+            const warnings = [
+              ...planSize.warnings,
+              ...(finalStatus === 'PLANNING' ? [] : planTextWarnings(normalizedSteps)),
+            ];
+            return warnings.length > 0 ? { warnings } : {};
+          })(),
           ...(accountChange
             ? {
                 accountSwitch: accountSwitchReply(

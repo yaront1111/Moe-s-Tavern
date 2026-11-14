@@ -7,6 +7,7 @@ import {
 } from './submitPlan.js';
 import { MoeError, MoeErrorCode } from '../util/errors.js';
 import { findMissingPaths } from '../util/affectedFiles.js';
+import { WARN_STEP_DESCRIPTION_CHARS } from '../util/planSize.js';
 import * as cachedPlanPaths from '../util/cachedPlanPaths.js';
 import fs from 'fs';
 import { execFileSync } from 'node:child_process';
@@ -710,6 +711,38 @@ describe('plan-size gate', () => {
     expect(task.planCritiqueResult?.verdict).toBe('block');
     expect(task.planCritiqueResult?.reviewedBy).toBe('moe-daemon-size-critic');
     expect(task.planSizeWarnings?.length).toBe(1);
+  });
+
+  it('warns on a long step in the reply only: not persisted, and never a reason to auto-block', async () => {
+    setupMoeFolder({ approvalMode: 'CONTROL', taskSizing: { autoCritique: true } });
+    writeEpic();
+    writeTask();
+    await state.load();
+    const steps = makeSteps(2);
+    steps[1].description = 'x'.repeat(WARN_STEP_DESCRIPTION_CHARS + 1);
+    const result = await submitPlanTool(state).handler({ taskId: 'task-size', steps }, state) as {
+      status: string; warnings?: string[];
+    };
+    expect(result.status).toBe('AWAITING_APPROVAL');
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings![0]).toContain(`step-2 (${WARN_STEP_DESCRIPTION_CHARS + 1} chars)`);
+    expect(state.getTask('task-size')?.planSizeWarnings).toBeFalsy();
+    expect(state.getTask('task-size')?.critiqueBlockCount).toBeUndefined();
+  });
+
+  it('leaves the step-text advice off a plan the size critic sent back', async () => {
+    setupMoeFolder({ approvalMode: 'CONTROL', taskSizing: { autoCritique: true } });
+    writeEpic();
+    writeTask();
+    await state.load();
+    const steps = makeSteps(9);
+    steps[0].description = 'x'.repeat(WARN_STEP_DESCRIPTION_CHARS + 1);
+    const result = await submitPlanTool(state).handler({ taskId: 'task-size', steps }, state) as {
+      status: string; warnings?: string[];
+    };
+    expect(result.status).toBe('PLANNING');
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings![0]).toContain('9 steps');
   });
 
   it('does not auto-block when autoCritique is off (default)', async () => {
@@ -1807,7 +1840,7 @@ describe('rail refusal on the MCP wire', () => {
     ) as { nextAction: { tool: string; reason: string } };
     expect(ctx.nextAction.tool).toBe('moe.submit_plan');
     expect(ctx.nextAction.reason).toBe(
-      'Plan this task and submit for approval. The step text must contain each global required pattern (case-insensitive substring): "error handling".'
+      'Plan this task and submit for approval. Each global required pattern must appear in the step text (case-insensitive substring), once in the whole plan, not once per step: "error handling".'
     );
 
     const quoted = [...ctx.nextAction.reason.matchAll(/"([^"]+)"/g)].map(m => m[1]);

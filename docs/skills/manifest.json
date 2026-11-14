@@ -9,7 +9,7 @@
     },
     {
       "name": "moe-planning",
-      "description": "8-phase plan template for moe.submit_plan (plan → explore → tests → minimum impl → verify → document → adversarial review → QA loop), with skip rules for trivial work and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
+      "description": "How to plan one task for moe.submit_plan: the simplest change that meets the DoD, short steps that say only what the worker cannot read in the code, the planning checklist, the plan shape per task type, and the verification budget: gate once at the end of a task, at full scope only on the epic's final task.",
       "role": "architect",
       "triggeredBy": ["moe.get_context (PLANNING)", "before moe.submit_plan"]
     },
@@ -27,19 +27,19 @@
     },
     {
       "name": "writing-plans",
-      "description": "Vendored from superpowers. Multi-step plan structure with checkpoints; output format aligns with moe.submit_plan step lists.",
+      "description": "Vendored from superpowers, rewritten for Moe. What one plan step contains (files, the change, the decision made, test cases by name) and what it leaves to the code; maps to moe.submit_plan steps.",
       "role": "architect",
       "triggeredBy": ["before moe.submit_plan"]
     },
     {
       "name": "test-driven-development",
-      "description": "Vendored from superpowers. RED-GREEN-REFACTOR with mutation-resistant assertions (assertEquals, not assert).",
+      "description": "Vendored from superpowers. RED-GREEN-REFACTOR with mutation-resistant assertions (assertEquals, not assert); one test per behaviour or boundary, not per function.",
       "role": "worker",
       "triggeredBy": ["start_step on test-touching steps"]
     },
     {
       "name": "verification-before-completion",
-      "description": "Vendored from superpowers. Forces running verification commands and confirming output before any complete claim. Evidence before assertions.",
+      "description": "Vendored from superpowers, merged with Moe's former regression-check. Run the command the plan named once after the last edit (narrow for a mid-epic task, full for the epic's final task), read the output and submit that run as the completion evidence. Covers a red gate you did not cause.",
       "role": "worker",
       "triggeredBy": ["before moe.complete_task"]
     },
@@ -51,15 +51,9 @@
     },
     {
       "name": "adversarial-self-review",
-      "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist before final complete_step or complete_task.",
+      "description": "Read your own diff as an attacker, not an author. Concurrency / null / embarrassment checklist, plus a pass for code nothing needs, before final complete_step or complete_task.",
       "role": "worker",
       "triggeredBy": ["final step before complete_step", "before complete_task"]
-    },
-    {
-      "name": "regression-check",
-      "description": "Run the test suite the plan named before complete_task — narrow for a mid-epic task, full for the epic's final task. Goal: zero regressions, evidence-based summary.",
-      "role": "worker",
-      "triggeredBy": ["before complete_task"]
     },
     {
       "name": "receiving-code-review",
@@ -75,9 +69,9 @@
     },
     {
       "name": "ponytail-review",
-      "description": "Vendored from DietrichGebert/ponytail. Complexity-only diff review (delete / stdlib / native / yagni / shrink, one line per finding). Second pass after moe-qa-loop; taste-only findings go in the qa_approve summary or a follow-up card, never a reject.",
+      "description": "Vendored from DietrichGebert/ponytail. Complexity-only diff review (delete / stdlib / native / yagni / shrink, one line per finding). Second pass after moe-qa-loop, on diffs past about 100 changed lines outside tests; taste-only findings go in the qa_approve summary or a follow-up card, never a reject.",
       "role": "qa|architect",
-      "triggeredBy": ["after moe-qa-loop's correctness pass on a REVIEW task", "auditing a diff for bloat"]
+      "triggeredBy": ["after moe-qa-loop's correctness pass, on a diff past about 100 changed lines outside tests", "auditing a diff for bloat"]
     },
     {
       "name": "using-git-worktrees",

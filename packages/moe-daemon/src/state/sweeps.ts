@@ -547,9 +547,9 @@ export async function runBlockedTimeoutSweep(state: StateManager): Promise<void>
 
   // Visibility (alert only, never auto-park): page #governors once per block
   // instance for resource-less BLOCKED rows past their age line — dep-less
-  // rows (no machine on their side), dep-waiting rows whose prerequisite is
-  // itself BLOCKED/BACKLOG (a cycle or a parked prerequisite: the auto-unblock
-  // cannot fire without a human), and dep-waiting rows past the general bound.
+  // rows (no machine on their side), dep-waiting rows whose prerequisite chain
+  // ends at a row that needs a human (stuckChain: a BACKLOG row, a human-block,
+  // a cycle or withheld evidence), and dep-waiting rows past the general bound.
   try {
     await alertStaleBlocks(state, now);
   } catch (error) {

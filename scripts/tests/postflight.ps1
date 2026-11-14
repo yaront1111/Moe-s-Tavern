@@ -5867,11 +5867,11 @@ exit 0
         $wt14.Text = [string](Get-Content -Raw -LiteralPath $wt14.Out -ErrorAction SilentlyContinue)
         if ($wt14.Code -ne 0) { Stop-Wt14 $Name "exit $($wt14.Code), expected 0" }
     }
-    # Invoke-Wt14Qa NAME -- one QA seat: task-postflight is DONE, its completion recorded at main's tip.
-    function Invoke-Wt14Qa([string]$Name) {
+    # Invoke-Wt14Qa NAME [KNOBS] -- one QA seat: task-postflight is DONE, its completion recorded at main's tip.
+    function Invoke-Wt14Qa([string]$Name, [hashtable]$Knobs = @{}) {
         $land = "$(Invoke-Wt14Git $wt14.P @('rev-parse', 'main'))"
-        Invoke-Wt14Seat $Name 'qa' @{ FAKE_TASK_STATUS = 'DONE'
-            FAKE_CTX_LANDING = '{"lastCompletion":{"sha":"' + $land + '","ref":"refs/heads/main","pushed":false,"recordedAt":"2026-11-02T00:00:00.000Z"}}' }
+        Invoke-Wt14Seat $Name 'qa' (@{ FAKE_TASK_STATUS = 'DONE'
+            FAKE_CTX_LANDING = '{"lastCompletion":{"sha":"' + $land + '","ref":"refs/heads/main","pushed":false,"recordedAt":"2026-11-02T00:00:00.000Z"}}' } + $Knobs)
     }
     function Test-Wt14Listed([string]$Tid) {
         @(Invoke-Wt14Git $wt14.P @('worktree', 'list', '--porcelain') | Where-Object { $_ -cmatch ('^worktree .*/\.worktrees/' + [regex]::Escape($Tid) + '\z') }).Count -gt 0
@@ -5949,6 +5949,28 @@ exit 0
     Assert-Wt14Sentinels 'WT14N'
     $wt14Run++
     Write-Host '[scenario WT14N] ok'
+
+    # pnpm's node_modules also holds paths past MAX_PATH. Without core.longpaths Git for
+    # Windows deregisters W, then fails "Filename too long" (exit 255) with W half deleted.
+    # The seat reads no system or global git config, so a machine-wide core.longpaths cannot
+    # hide that. The repository's own config stays unset: once sparse checkout has set
+    # extensions.worktreeConfig, a core.longpaths=false there beats the fix's -c.
+    Write-Host '[scenario WT14L] a W holding a path past MAX_PATH is removed from disk'
+    New-Wt14Fixture 'l' 'moe/control' @('task-postflight')
+    New-Item -ItemType Directory -Force -Path (Join-Path $wt14.P '.git\info') | Out-Null
+    [IO.File]::AppendAllText((Join-Path $wt14.P '.git\info\exclude'), "node_modules/`n")
+    $wt14Gc = Join-Path $tempRoot 'wt14-l.gitconfig'
+    [IO.File]::WriteAllText($wt14Gc, '')
+    # The \\?\ prefix lets Windows PowerShell 5.1 create it too.
+    $wt14Deep = '\\?\' + (Join-Path (Get-Wt14W) ('node_modules\.pnpm\' + ('d' * 120) + '\node_modules\' + ('e' * 120)))
+    $null = [IO.Directory]::CreateDirectory($wt14Deep)
+    [IO.File]::WriteAllText("$wt14Deep\index.js", "deep`n")
+    Invoke-Wt14Qa 'WT14L' @{ GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_GLOBAL = $wt14Gc }
+    if ($wt14.Text -cnotmatch '(?m)^\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight\r?$') { Stop-Wt14 'WT14L' 'no [worktree] removed line' }
+    Assert-Wt14Gone 'WT14L' 'task-postflight'
+    Assert-Wt14Sentinels 'WT14L'
+    $wt14Run++
+    Write-Host '[scenario WT14L] ok'
 
     Write-Host '[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x'
     New-Wt14Fixture 'b' 'moe/control' @('task-postflight')
@@ -6141,7 +6163,7 @@ exit 0
     Write-Host '[scenario WT14I] ok'
 
     foreach ($l in $wt14Links) { if (Test-Wt14Link $l) { [IO.Directory]::Delete($l) } }
-    if ($wt14Run -ne 12) { throw "Expected 12 WT-14 scenarios (WT14A, WT14N, WT14B, WT14C, WT14U, WT14D, WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $wt14Run" }
+    if ($wt14Run -ne 13) { throw "Expected 13 WT-14 scenarios (WT14A, WT14N, WT14L, WT14B, WT14C, WT14U, WT14D, WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $wt14Run" }
     Write-Host "[WT-14] ok: $wt14Run scenarios"
 
     # --- A protected launch (MOE_RUNTIME_PROTECTED exactly '1', which the

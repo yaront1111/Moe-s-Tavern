@@ -8754,8 +8754,13 @@ finish_leftover_worktree() {
 # remove fails part-way (refused here, branch kept): the next sweep pass names
 # that leftover MOE_WORKTREE_UNREGISTERED. Git for Windows also exits 0 with W
 # left on disk when W holds a junction no manifest lists (pnpm's node_modules is
-# full of them); finish_leftover_worktree finishes that W. Callers hold the
-# sweep lock and have proved every byte landed or rescued. Twin: Remove-MoeTaskWorktree.
+# full of them); finish_leftover_worktree finishes that W. The remove runs with
+# core.longpaths=true: pnpm's node_modules also holds paths past MAX_PATH, and
+# without it Git for Windows deregisters W, then fails "Filename too long" with
+# W half deleted (other gits ignore the key). A core.longpaths=false in the
+# repository's own config still beats the -c once sparse checkout has set
+# extensions.worktreeConfig. Callers hold the sweep lock and have proved every
+# byte landed or rescued. Twin: Remove-MoeTaskWorktree.
 remove_task_worktree() {
     local top="$1" tid="$2" tip="${3:-}" w="$1/.worktrees/$2" d rel p cur out rc=0
     if ! [[ "$tid" =~ ^task-[A-Za-z0-9_-]{1,128}$ ]]; then wt_remove_refused "$w" "'$tid' is not a task id"; return 1; fi
@@ -8778,7 +8783,7 @@ remove_task_worktree() {
         rm -f -- "$p" 2>/dev/null || true
         if [ -e "$p" ] || [ -L "$p" ]; then wt_remove_refused "$w" "the link $rel could not be unlinked"; return 1; fi
     done
-    if ! out=$(git -C "$top" worktree remove --force --force "$w" 2>&1); then
+    if ! out=$(git -C "$top" -c core.longpaths=true worktree remove --force --force "$w" 2>&1); then
         wt_remove_refused "$w" "git worktree remove failed: ${out%%$'\n'*}"; return 1
     fi
     if [ -e "$w" ] || [ -L "$w" ]; then finish_leftover_worktree "$w"; fi
@@ -11496,7 +11501,7 @@ $DYNAMIC_CONTEXT"
 <system-reminder>
 # Incoming @mentions targeting you ($WORKER_ID)
 
-You have $PREFLIGHT_ROUTED_MENTIONS_COUNT unread message(s) that named you directly, via @all, or via your role group. Before ANY other planned tool call (moe.start_step, moe.submit_plan, moe.qa_approve, moe.claim_next_task, etc.), you MUST reply to each via moe.chat_send in the same channel. Replies are substantive -- answer the question, confirm the handoff, or say why you can't. The Loop Guard (max 4 agent-to-agent hops per channel) is the system's throttle; you don't need your own.
+You have $PREFLIGHT_ROUTED_MENTIONS_COUNT unread message(s) that named you directly, via @all, or via your role group. Before ANY other planned tool call (moe.start_step, moe.submit_plan, moe.qa_approve, moe.claim_next_task, etc.), you MUST reply to each via moe.chat_send in the same channel. Replies are substantive -- answer the question, confirm the handoff, or say why you can't. Acknowledge once: if the other side only acks back, the thread is over. The Loop Guard caps agent-to-agent hops per channel, but it cannot tell agreement from progress.
 
 <routed_mentions>
 $PREFLIGHT_ROUTED_MENTIONS_JSON
@@ -11522,9 +11527,9 @@ $PREFLIGHT_ROUTED_MENTIONS_JSON
                     case "$ARCHITECT_SESSION_TASKS" in ''|*[!0-9]*) ARCHITECT_SESSION_TASKS=10 ;; esac
                     if [ "$ARCHITECT_SESSION_TASKS" -lt 1 ]; then ARCHITECT_SESSION_TASKS=10; fi
                     if { [ "$CLAUDE_INTERACTIVE" = true ] || [ "$CODEX_INTERACTIVE" = true ] || [ "$GEMINI_INTERACTIVE" = true ] || [ "$GROK_INTERACTIVE" = true ] || [ "$COPILOT_INTERACTIVE" = true ]; } && [ "$ARCHITECT_SESSION_TASKS" -gt 1 ]; then
-                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $ARCHITECT_SESSION_TASKS tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WORKER_ID'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $ARCHITECT_SESSION_TASKS tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with the simplest plan that meets the definitionOfDone, in short steps. After each moe.submit_plan, use Serena write_memory to record a 'task-<taskId>-handoff' note (and any reusable 'decision-<area>' learnings). This interactive session may plan up to $ARCHITECT_SESSION_TASKS tasks, this one included: after each plan and its handoff note, call moe.claim_next_task with statuses ['PLANNING'] and workerId '$WORKER_ID'; on hasNext:true call moe.get_context for the claimed task and plan it the same way. Stop claiming once you have planned $ARCHITECT_SESSION_TASKS tasks or a claim returns hasNext:false. Then output a one-line text summary naming every task you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     else
-                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with a complete plan. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
+                        PROMPT_BODY="Task $PREFLIGHT_TASK_ID is claimed and its daemon-scoped context is above (<claimed_task_context>). If a <routed_mentions> block is present, reply to each tagged message via moe.chat_send FIRST. Read the recent task comments before acting; if absent or truncated, call moe.get_context with commentsMaxChars: 0 for them. Read prior knowledge via Serena read_memory on the memory names preloaded in <inbox> (call list_memories only if they don't cover your area). Then study the implementationPlan, rails, and definitionOfDone, and call moe.submit_plan with the simplest plan that meets the definitionOfDone, in short steps. Before you STOP, use Serena write_memory to record a 'task-$PREFLIGHT_TASK_ID-handoff' note (and any reusable 'decision-<area>' learnings). Then output a one-line text summary of what you planned and STOP. Do NOT poll moe.check_approval — approval is a human gate. Do NOT call moe.wait_for_task — the wrapper will pick up the next task in a fresh session."
                     fi
                     ;;
                 worker)
