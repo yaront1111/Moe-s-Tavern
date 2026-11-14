@@ -3410,7 +3410,7 @@ Moe can spread claude seats across several Claude subscription accounts on one m
   - `ACCOUNTS_EXHAUSTED`, every signed-in account spent, posted with ⏸️ once per episode;
   - `ACCOUNT_SIGNED_OUT`, posted with 🔑.
 - **CLI.** Run `node <daemon>/dist/index.js accounts <command>`, or `dist/accounts/cli.js` directly.
-  - Commands: `list`, `add [--label <text>]`, `login <id>`, `logout <id>`, `check [<id>]`, `remove <id> [--sign-out]`, `vm-token <id> [--remove]` (optional: mints, or with `--remove` deletes, the account's long-lived token for Moe VM jobs; without a token, a claude VM seat uses the account's sign-in). `--accounts-file <path>` picks the list.
+  - Commands: `list`, `add [--label <text>]`, `login <id>`, `logout <id>`, `check [<id>]`, `refresh [<id>]` (re-measures usage with one minimal claude run per account and replaces the stored numbers, so a limit reset, which can keep its reset time, is seen), `remove <id> [--sign-out]`, `vm-token <id> [--remove]` (optional: mints, or with `--remove` deletes, the account's long-lived token for Moe VM jobs; without a token, a claude VM seat uses the account's sign-in). `--accounts-file <path>` picks the list.
   - Exit codes: 0 ok, 1 failed, 2 usage.
   - Error tokens: `MOE_ACCOUNT_UNKNOWN`, `MOE_ACCOUNT_LOGIN_FAILED`, `MOE_ACCOUNT_LOGOUT_FAILED`, `MOE_ACCOUNT_NOT_SUBSCRIPTION`, `MOE_ACCOUNT_REGISTRY_INVALID`, `MOE_ACCOUNT_LIMIT`, `MOE_ACCOUNT_LABEL_INVALID`, `MOE_CLAUDE_NOT_FOUND`, `MOE_PROTECTED_CLAUDE_REFUSED`, `MOE_PROTECTED_CLAUDE_NOT_FOUND`.
   - `MOE_CLAUDE_BIN` picks the claude binary. On Windows the CLI looks it up on PATH × PATHEXT before running it, so a missing claude is reported as `MOE_CLAUDE_NOT_FOUND`, never as a signed-out account.

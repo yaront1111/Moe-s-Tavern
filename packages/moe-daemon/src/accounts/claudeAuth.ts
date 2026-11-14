@@ -205,23 +205,37 @@ function quoteForCmd(file: string): string {
 /**
  * Run claude with fixed arguments. `interactive` hands it the terminal (sign-in
  * prompts, the browser link); otherwise stdout is captured for the caller and
- * stderr is discarded.
+ * stderr is discarded, and `extra` may give claude's stdin text and the folder
+ * it runs in (a pinned claude keeps its own folder).
  */
-export function runClaude(command: ClaudeCommand, args: string[], env: NodeJS.ProcessEnv, interactive: boolean): ClaudeRun {
+export function runClaude(
+  command: ClaudeCommand,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  interactive: boolean,
+  extra: { input?: string; cwd?: string } = {}
+): ClaudeRun {
   if (command.missing) return { status: null, stdout: '', notFound: true };
   const pinned = command.pinned;
+  const cwd = pinned ? pinned.cwd : extra.cwd;
+  const input = interactive ? undefined : extra.input;
   const options = {
     env: pinned ? pinnedEnv(env, pinned.path) : env,
-    ...(pinned ? { cwd: pinned.cwd } : {}),
+    ...(cwd ? { cwd } : {}),
     encoding: 'utf8' as const,
     windowsHide: !interactive,
-    stdio: interactive ? ('inherit' as const) : (['ignore', 'pipe', 'ignore'] as ['ignore', 'pipe', 'ignore']),
+    stdio: interactive
+      ? ('inherit' as const)
+      : ([input === undefined ? 'ignore' : 'pipe', 'pipe', 'ignore'] as ['ignore' | 'pipe', 'pipe', 'ignore']),
     ...(interactive ? {} : { timeout: PROBE_TIMEOUT_MS }),
+    ...(input === undefined ? {} : { input }),
   };
-  // The arguments are fixed words, so joining them for the shell is safe. A pinned
-  // cmd.exe path still gets cmd's /d /s /c from node, because it ends in cmd.exe.
+  // The arguments are fixed words, so joining them for the shell is safe; an empty
+  // word is quoted so it survives the join. A pinned cmd.exe path still gets cmd's
+  // /d /s /c from node, because it ends in cmd.exe.
+  const words = args.map((arg) => (arg === '' ? '""' : arg));
   const result = command.shell
-    ? spawnSync([quoteForCmd(command.file), ...command.prefix, ...args].join(' '), { ...options, shell: pinned?.cmd ?? true })
+    ? spawnSync([quoteForCmd(command.file), ...command.prefix, ...words].join(' '), { ...options, shell: pinned?.cmd ?? true })
     : spawnSync(command.file, [...command.prefix, ...args], options);
   const errorCode = (result.error as NodeJS.ErrnoException | undefined)?.code;
   return {

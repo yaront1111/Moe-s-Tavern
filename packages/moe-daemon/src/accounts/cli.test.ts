@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { runAccountsCli } from './cli.js';
+import { USAGE_PROBE_ARGS, USAGE_PROBE_PROMPT, runAccountsCli } from './cli.js';
 import { accountEnv, claudeCommand, signInStateOf } from './claudeAuth.js';
 import { accountConfigDir, readRegistry } from './registry.js';
 
@@ -40,6 +40,15 @@ if (command === 'auth status --json') {
 }
 if (command === 'auth logout') {
   if (!process.env.FAKE_LOGOUT_NOOP) fs.rmSync(marker, { force: true });
+  process.exit(0);
+}
+if (args[0] === '-p') {
+  const input = fs.readFileSync(0, 'utf8');
+  const moe = Object.keys(process.env).filter((name) => name.toUpperCase().startsWith('MOE_') || name.toUpperCase() === 'CLAUDE_CODE_PLUGIN_DIRS');
+  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG + '.probe', JSON.stringify({ input, cwd: process.cwd(), moe }) + '\\n');
+  const events = dir ? path.join(dir, 'fake-usage.jsonl') : null;
+  if (!events || !fs.existsSync(events)) process.exit(1);
+  process.stdout.write(fs.readFileSync(events, 'utf8'));
   process.exit(0);
 }
 process.stderr.write('fake claude: unexpected ' + command + '\\n');
@@ -102,6 +111,48 @@ describe('accounts CLI', { timeout: 30_000 }, () => {
       ['acct-2', 'acct-2', 'signed_out', accountConfigDir(file, 'acct-2')].join('\t'),
     ]);
     expect(fakeCalls()).toEqual([]);
+  });
+
+  it('refresh re-measures usage in the temp folder and replaces the stored numbers, a reset included', () => {
+    cli(['add']);
+    cli(['add']);
+    expect(cli(['login', 'acct-1']).code).toBe(0); // acct-2 stays signed out: its probe prints no usage
+    const reset = Math.floor(Date.now() / 1000) + 3 * 86_400;
+    const resetIso = new Date(reset * 1000).toISOString();
+    const usageFile = (id: string) => path.join(dir, 'claude-usage', `${id}.json`);
+    fs.mkdirSync(path.join(dir, 'claude-usage'));
+    // Stored at 90% for the same window the probe reports: a merge would keep 90.
+    fs.writeFileSync(usageFile('acct-1'), JSON.stringify({
+      id: 'acct-1',
+      windows: { seven_day: { percent: 90, resetsAt: resetIso, status: 'allowed_warning', sampledAt: new Date().toISOString() } },
+      refusedUntil: null,
+      updatedAt: new Date().toISOString(),
+    }));
+    fs.writeFileSync(path.join(accountConfigDir(file, 'acct-1'), 'fake-usage.jsonl'), [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'seven_day', resetsAt: reset,
+        unifiedWindows: { seven_day: { utilization: 0.11, resetsAt: reset, status: 'allowed' } } } }),
+      JSON.stringify({ type: 'result', subtype: 'success' }),
+    ].join('\n'));
+
+    const result = cli(['refresh']);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([`acct-1\tacct-1\tseven_day 11% allowed until ${resetIso}`]);
+    expect(result.err.join('\n')).toContain('MOE_ACCOUNT_USAGE_UNKNOWN: claude reported no usage for acct-2');
+    expect(JSON.parse(fs.readFileSync(usageFile('acct-1'), 'utf8')).windows.seven_day.percent).toBe(11);
+    expect(fs.existsSync(usageFile('acct-2'))).toBe(false);
+
+    const probes = fakeCalls().filter((call) => call.args[0] === '-p');
+    expect(probes.map((call) => call.args)).toEqual([[...USAGE_PROBE_ARGS], [...USAGE_PROBE_ARGS]]);
+    expect(probes.map((call) => call.configDir)).toEqual([accountConfigDir(file, 'acct-1'), accountConfigDir(file, 'acct-2')]);
+    expect(probes.every((call) => call.leaked.length === 0)).toBe(true);
+    const real = (p: string) => fs.realpathSync.native(p).toLowerCase();
+    for (const probe of fs.readFileSync(`${logFile}.probe`, 'utf8').trim().split('\n').map((line) => JSON.parse(line))) {
+      expect(probe.input).toBe(USAGE_PROBE_PROMPT);
+      expect(probe.moe).toEqual([]);
+      expect(real(probe.cwd)).toBe(real(os.tmpdir()));
+    }
+    expect(cli(['refresh', 'acct-1']).code).toBe(0);
   });
 
   it('signs in with the subscription login, in the account folder, without the variables that outrank it', () => {

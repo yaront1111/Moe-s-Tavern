@@ -1157,7 +1157,9 @@ account is spent; …` and launches nothing. Its task stays held. #governors get
 The wrapper asks again at the earliest reset, and at least every `MOE_ACCOUNT_RETRY_SEC` seconds (default 300).
 
 **Fix:** wait for the reset, or add and sign in another account. Raising the switch point frees accounts that only
-Moe's threshold holds back, not ones Anthropic refused. Ctrl+C stops the seat; the task stays assigned to it until
+Moe's threshold holds back, not ones Anthropic refused. If you reset an account's limit, run `moe-daemon accounts
+refresh`: Moe measures usage only on running seats and keeps the higher reading inside a window, so a spent
+account's reset is otherwise not seen until its old reset time. Ctrl+C stops the seat; the task stays assigned to it until
 the seat deregisters or the task is released.
 
 ### Seats launch without rotation: `MOE_ACCOUNT_LEASE_UNAVAILABLE` or `MOE_ACCOUNT_SKIPPED`

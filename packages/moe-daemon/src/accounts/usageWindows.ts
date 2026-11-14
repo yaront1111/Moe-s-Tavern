@@ -237,6 +237,63 @@ export function mergeSample(
   return { usage: { id, windows, refusedUntil, updatedAt: iso(nowMs) }, changed: true };
 }
 
+/**
+ * The usage a probe run measured (`accounts refresh`). It replaces the stored
+ * usage instead of merging into it: mergeSample keeps the higher reading inside
+ * a window, so a limit reset that keeps its reset time would stay hidden, and a
+ * spent account gets no seat to report anything lower.
+ */
+export function replaceSample(id: string, sample: AccountSample, nowMs: number): AccountUsage {
+  const windows: Record<string, UsageWindow> = {};
+  for (const [name, incoming] of Object.entries(sample.windows)) {
+    const window = mergeWindow(undefined, incoming, nowMs);
+    if (isLive(window, nowMs)) windows[name] = window;
+  }
+  const refusedUntil = sample.refused ? iso(refusalUntilMs(windows, nowMs)) : null;
+  return { id, windows, refusedUntil, updatedAt: iso(nowMs) };
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  !!value && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * The sample in claude's `--output-format stream-json` output, built as the
+ * launchers' stream parsers build theirs: every rate_limit_event's
+ * unifiedWindows, then the event's own rateLimitType window (its status and
+ * reset); a rejected event marks the sample refused. Null when claude printed
+ * no rate_limit_event (signed out, failed, or the format changed).
+ */
+export function sampleFromStreamJson(stdout: string, nowMs: number): AccountSample | null {
+  const raw: Record<string, Record<string, unknown>> = {};
+  let seen = false;
+  let refused = false;
+  for (const line of stdout.split('\n')) {
+    if (!line.includes('rate_limit_event')) continue;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.type !== 'rate_limit_event' || !isRecord(event.rate_limit_info)) continue;
+    const info = event.rate_limit_info;
+    seen = true;
+    if (isRecord(info.unifiedWindows)) {
+      for (const [name, value] of Object.entries(info.unifiedWindows)) {
+        if (isRecord(value)) raw[name] = { ...raw[name], ...value };
+      }
+    }
+    if (typeof info.rateLimitType === 'string') {
+      const own: Record<string, unknown> = {};
+      if (typeof info.status === 'string') own.status = info.status;
+      if (info.resetsAt !== undefined) own.resetsAt = info.resetsAt;
+      raw[info.rateLimitType] = { ...raw[info.rateLimitType], ...own };
+    }
+    if (info.status === 'rejected') refused = true;
+  }
+  return seen ? { windows: parseUsageWindows(raw, nowMs), refused } : null;
+}
+
 function isWindow(value: unknown): value is UsageWindow {
   const window = value as UsageWindow | null;
   return !!window && typeof window === 'object'

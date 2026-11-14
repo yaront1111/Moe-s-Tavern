@@ -5,6 +5,8 @@ import {
   mergeSample,
   parseUsageWindows,
   peakPercent,
+  replaceSample,
+  sampleFromStreamJson,
   validateUsage,
   type AccountUsage,
   type ParsedWindow,
@@ -122,5 +124,53 @@ describe('views and files', () => {
     expect(validateUsage({ id: 'acct-2', windows: {} }, 'acct-1')).toBeNull();
     expect(validateUsage({ id: 'acct-1', windows: { five_hour: good, seven_day: { percent: 'x' } }, refusedUntil: 7 }, 'acct-1'))
       .toEqual({ id: 'acct-1', windows: { five_hour: good }, refusedUntil: null, updatedAt: new Date(0).toISOString() });
+  });
+});
+
+describe('refresh probe (accounts refresh)', () => {
+  const NOW = Date.parse('2026-11-14T19:45:00.000Z');
+  const reset = Math.floor(NOW / 1000) + 3 * 86_400; // epoch seconds, as claude prints them
+  const event = (info: Record<string, unknown>) => JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info });
+
+  it('reads the windows the launchers read from stream-json, and a rejected event as refused', () => {
+    const stdout = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      event({ status: 'allowed', rateLimitType: 'five_hour', resetsAt: reset,
+        unifiedWindows: { five_hour: { utilization: 0.42, resetsAt: reset }, seven_day: { utilization: 0.1 }, odd: { utilization: true } } }),
+      'not json at all',
+      event({ status: 'rejected', rateLimitType: 'seven_day', resetsAt: reset + 60 }),
+    ].join('\r\n');
+    expect(sampleFromStreamJson(stdout, NOW)).toEqual({
+      windows: {
+        five_hour: { percent: 42, resetsAtMs: reset * 1000, status: 'allowed' },
+        seven_day: { percent: 10, resetsAtMs: (reset + 60) * 1000, status: 'rejected' },
+      },
+      refused: true,
+    });
+    expect(sampleFromStreamJson('{"type":"result","is_error":true}\nNot logged in', NOW)).toBeNull();
+  });
+
+  it('replaces the stored reading even when a reset kept the window reset time', () => {
+    const resetIso = new Date(reset * 1000).toISOString();
+    const stored: AccountUsage = {
+      id: 'acct-5',
+      windows: { seven_day: { percent: 90, resetsAt: resetIso, status: 'allowed_warning', sampledAt: new Date(NOW - 86_400_000).toISOString() } },
+      refusedUntil: new Date(NOW + 3_600_000).toISOString(),
+      updatedAt: new Date(NOW - 86_400_000).toISOString(),
+    };
+    const probe = sampleFromStreamJson(event({ status: 'allowed', rateLimitType: 'seven_day', resetsAt: reset,
+      unifiedWindows: { seven_day: { utilization: 0.11, resetsAt: reset, status: 'allowed' } } }), NOW)!;
+    // The seat-report merge keeps the higher reading inside a window: the reset stays hidden.
+    expect(mergeSample(stored, 'acct-5', probe, 90, NOW).usage.windows.seven_day.percent).toBe(90);
+    const replaced = replaceSample('acct-5', probe, NOW);
+    expect(replaced).toEqual({
+      id: 'acct-5',
+      windows: { seven_day: { percent: 11, resetsAt: resetIso, status: 'allowed', sampledAt: new Date(NOW).toISOString() } },
+      refusedUntil: null,
+      updatedAt: new Date(NOW).toISOString(),
+    });
+    expect(blockedUntilMs(replaced, 90, NOW)).toBeNull();
+    const spent = replaceSample('acct-5', { windows: { seven_day: { percent: 100, resetsAtMs: reset * 1000, status: 'rejected' } }, refused: true }, NOW);
+    expect(spent.refusedUntil).toBe(resetIso);
   });
 });
