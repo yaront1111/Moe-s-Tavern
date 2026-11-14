@@ -4,6 +4,7 @@ import { notFound, invalidState, notAllowed, missingRequired } from '../util/err
 import { assertWorkerHoldsTask, assertContextFetched } from '../util/enforcement.js';
 import { assertExecutionAuthorized } from '../util/executionAuthorization.js';
 import { recommendSkillFor } from '../util/recommendSkill.js';
+import { effectiveStepDescription } from '../util/planAmendments.js';
 import { accountSwitchCause, accountSwitchFor } from '../state/accountStore.js';
 
 export function startStepTool(_state: StateManager): ToolDefinition {
@@ -83,7 +84,7 @@ export function startStepTool(_state: StateManager): ToolDefinition {
       // Heuristic: recommend TDD skill on test-touching steps, adversarial-self-review
       // on the final step, ponytail on every other implementation step (that slot
       // used to be empty - a mid-plan step got no recommendation at all). All advisory.
-      const desc = (step.description || '').toLowerCase();
+      const desc = effectiveStepDescription(step).toLowerCase();
       const files = (step.affectedFiles || []).join(' ').toLowerCase();
       const isTestStep = /\btest|spec\b/.test(desc) || /\.(test|spec)\.|tests?\//.test(files);
       const isFinalStep = stepIndex === steps.length - 1;

@@ -680,6 +680,13 @@ in docs/MCP_SERVER.md) so a worker following an amendment does not read as plan 
 changes step status. Amendment **approval** flows are deliberately out of scope — an amendment takes
 effect immediately.
 
+**How an amended step is served.** A response that hands plan steps to an agent resolves the
+amendment for it: `moe.get_context`, `moe.search_tasks` with `detail: 'full'`, and the `priorAttempt`
+returned by `moe.get_handoff_history`, `moe.request_replan` and a full search. The step arrives with
+`description` set to the effective text and `originalDescription` set to the text as first planned;
+`amendments` and `activeAmendmentId` stay. An unamended step is served as stored. Only the served
+copy differs: the task record and the plugin state feed keep the original in `description`.
+
 **Example:**
 
 ```json

@@ -5,6 +5,7 @@ import type { ExecutionAttempt, ExecutionPolicySnapshot, ExecutionProfile, Task,
 import { invalidInput, invalidState, notFound } from '../util/errors.js';
 import { logger } from '../util/logger.js';
 import { contextNextAction } from '../util/contextNextAction.js';
+import { servedPlan } from '../util/planAmendments.js';
 import { collectAssertedPaths } from '../util/attributionTiers.js';
 import { unmetDependsOn } from '../state/dependencyUnblock.js';
 import { listCandidatesForTask } from '../state/candidateStore.js';
@@ -661,7 +662,7 @@ export function getContextTool(_state: StateManager): ToolDefinition {
               ...(task.rejectionHistory && task.rejectionHistory.length > 0
                 ? { rejectionHistory: task.rejectionHistory.slice(0, 5) }
                 : {}),
-              implementationPlan: task.implementationPlan,
+              implementationPlan: servedPlan(task.implementationPlan),
               planSubmittedAt: task.planSubmittedAt || null,
               planApprovedAt: task.planApprovedAt || null,
               workStartedAt: task.workStartedAt || null,

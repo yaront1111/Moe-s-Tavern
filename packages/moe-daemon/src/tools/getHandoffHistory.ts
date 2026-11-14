@@ -1,6 +1,7 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import { missingRequired, notFound } from '../util/errors.js';
+import { servedPriorAttempt } from '../util/planAmendments.js';
 
 export function getHandoffHistoryTool(_state: StateManager): ToolDefinition {
   return {
@@ -26,7 +27,7 @@ export function getHandoffHistoryTool(_state: StateManager): ToolDefinition {
       return {
         taskId: task.id,
         priorHandoffs: task.priorHandoffs ?? [],
-        priorAttempt: task.priorAttempt ?? null,
+        priorAttempt: task.priorAttempt ? servedPriorAttempt(task.priorAttempt) : null,
       };
     }
   };
