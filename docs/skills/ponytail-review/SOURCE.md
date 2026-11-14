@@ -10,4 +10,5 @@ Vendored from [`DietrichGebert/ponytail`](https://github.com/DietrichGebert/pony
 
 - Added `when_to_use` frontmatter (Moe skill convention).
 - Appended `## Moe integration` footer: run it as a second pass after `moe-qa-loop`, and route findings — rail/DoD breaches into `qa_reject.rejectionDetails`, taste-only findings into the `qa_approve` summary or a follow-up card (a reject for taste burns the reopen counter, and 3 reopens auto-flip the task to PLANNING).
+- The footer limits the QA pass to diffs past about 100 changed lines outside tests (measured on Moe's own board: 12 of the 18 reviews where the pass found anything, and 147 of the 187 lines).
 - Body otherwise byte-identical to upstream (tags, examples, scoring, boundaries unchanged).

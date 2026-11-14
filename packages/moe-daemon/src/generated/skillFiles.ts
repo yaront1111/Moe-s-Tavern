@@ -1389,7 +1389,7 @@ Check the change against each of these. Write one into a step only where this ch
 
 If the task conflicts with an existing rail, requires missing prerequisites, or is ambiguous in a way only a human can resolve — call \`moe.report_blocked\` instead of submitting a bad plan.`,
   'moe-qa-loop/SKILL.md': `---
-# moe-generated: sha=45fa2613b620
+# moe-generated: sha=8a9160f02f78
 name: moe-qa-loop
 description: Use when reviewing a task in REVIEW status as the QA agent. Provides the structured decision flow for moe.qa_approve vs moe.qa_reject, with rejectionDetails that drive a clean fix on the worker side.
 when_to_use: QA agent claims a task in REVIEW status; replaces ad-hoc "looks fine to me" reviews.
@@ -1475,12 +1475,14 @@ Bad rejects produce ping-pong. Good rejects produce one round-trip.
 ## What never to do
 
 - **Never move a rejected task to \`BACKLOG\`.** That deprioritizes work the worker is mid-flow on. Use \`moe.qa_reject\` — it routes the task back to \`WORKING\` for the worker to fix.
-- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity") go in the \`qa_approve\` summary instead.
+- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity", which runs on larger diffs only) go in the \`qa_approve\` summary instead.
 - **Never re-write the worker's code in your reject message.** Describe the gap, don't fix it for them — they need the practice.
 
 ## Second pass: complexity
 
-Once the verdict is settled on correctness, run \`ponytail-review\` over the same diff — a complexity-only pass
+Run it only on a diff that changes more than about 100 lines outside test files (\`git show --stat <sha>\`). On Moe's own board (718 reviews, October–November 2026) the pass found lines to cut in 18 reviews, 187 lines in all. Diffs past that size were about a quarter of the reviews and held 12 of those 18 and 147 of the 187 lines. On a smaller diff skip it and write nothing about it.
+
+Past that size, once the verdict is settled on correctness, run \`ponytail-review\` over the same diff — a complexity-only pass
 (\`delete:\` / \`stdlib:\` / \`native:\` / \`yagni:\` / \`shrink:\`, one line per finding). Route the findings, don't just list them:
 
 - Breaches a rail or a DoD item → a real \`rejectionDetails\` entry.
@@ -1669,7 +1671,7 @@ Vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/po
 - Appended \`## Moe integration\` footer: the daemon's mid-step \`recommendedSkill\` hook, the \`submit_plan\` size gates as the architect-side reason to climb the ladder, the "a step you think is unnecessary is \`complete_step { note }\` / \`report_blocked\` / \`propose_rail\`, never a silent skip" rule, and Moe's \`complete_task\` verification floor overriding the skill's "trivial one-liners need no test".
 - Body otherwise byte-identical to upstream (the ladder, rules, output, intensity table, and "when NOT to be lazy" are unchanged).`,
   'ponytail-review/SKILL.md': `---
-# moe-generated: sha=1c2e8a9267c5
+# moe-generated: sha=a88c1946ffd1
 name: ponytail-review
 description: >
   Code review focused exclusively on over-engineering. Finds what to delete:
@@ -1679,7 +1681,7 @@ description: >
   delete", "is this over-engineered", "simplify review", or invokes
   /ponytail-review. Complements correctness-focused review, this one only
   hunts complexity.
-when_to_use: QA, as a second pass after moe-qa-loop's correctness review; architect or governor auditing a diff for bloat.
+when_to_use: QA, as a second pass after moe-qa-loop's correctness review, on a diff past about 100 changed lines outside tests; architect or governor auditing a diff for bloat.
 license: MIT
 ---
 
@@ -1735,7 +1737,9 @@ Does not apply the fixes, only lists them.
 
 Second pass, never the first. \`moe-qa-loop\` decides the verdict: DoD coverage,
 rails, the re-run of \`task.verification.command\`, the completion commit in
-\`task.commits\`. Run this pass after that one, on the same diff.
+\`task.commits\`. Run this pass after that one, on the same diff, and only when
+the diff changes more than about 100 lines outside test files: on Moe's own
+board smaller diffs gave it almost nothing to find (numbers in \`moe-qa-loop\`).
 
 Routing the findings matters more than finding them:
 
@@ -1748,15 +1752,15 @@ Routing the findings matters more than finding them:
   follow-up card with \`moe.create_task\` (\`dependsOn: []\`, it lands in BACKLOG
   human-gated). Never reject a task for taste; that is a reopen the reopen
   counter will punish, and 3 reopens auto-flip the task back to PLANNING.
-- \`net: -<N> lines possible.\` goes in the summary either way — it is the
-  metric a governor can read across tasks.
+- \`net: -<N> lines possible.\` goes in the summary whenever you ran the pass —
+  it is the metric a governor can read across tasks.
 - A worker's \`ponytail:\` comment naming a ceiling and an upgrade path is
   declared intent, not a finding. Flag it only if the ceiling is wrong or the
   corner breaks a DoD item.
 - The single \`assert\`-based self-check or smoke test a task leaves behind is
   the Moe minimum (\`complete_task\` requires a verification command). Never
   tag it \`delete:\`.`,
-  'ponytail-review/SOURCE.md': `<!-- moe-generated: sha=ba346e4990b3 -->
+  'ponytail-review/SOURCE.md': `<!-- moe-generated: sha=acd131465d2f -->
 
 # Source
 
@@ -1770,6 +1774,7 @@ Vendored from [\`DietrichGebert/ponytail\`](https://github.com/DietrichGebert/po
 
 - Added \`when_to_use\` frontmatter (Moe skill convention).
 - Appended \`## Moe integration\` footer: run it as a second pass after \`moe-qa-loop\`, and route findings — rail/DoD breaches into \`qa_reject.rejectionDetails\`, taste-only findings into the \`qa_approve\` summary or a follow-up card (a reject for taste burns the reopen counter, and 3 reopens auto-flip the task to PLANNING).
+- The footer limits the QA pass to diffs past about 100 changed lines outside tests (measured on Moe's own board: 12 of the 18 reviews where the pass found anything, and 147 of the 187 lines).
 - Body otherwise byte-identical to upstream (tags, examples, scoring, boundaries unchanged).`,
   'receiving-code-review/SKILL.md': `---
 # moe-generated: sha=b87db22bbedb
@@ -30630,7 +30635,7 @@ Vendored from [\`obra/superpowers\`](https://github.com/obra/superpowers).
  * lean "Available Skills" section into the system prompt.
  */
 export const SKILL_MANIFEST = `{
-  "moeGeneratedSha": "08ac55378b0a",
+  "moeGeneratedSha": "c9046b47a20d",
   "version": 1,
   "skills": [
     {
@@ -30707,9 +30712,9 @@ export const SKILL_MANIFEST = `{
     },
     {
       "name": "ponytail-review",
-      "description": "Vendored from DietrichGebert/ponytail. Complexity-only diff review (delete / stdlib / native / yagni / shrink, one line per finding). Second pass after moe-qa-loop; taste-only findings go in the qa_approve summary or a follow-up card, never a reject.",
+      "description": "Vendored from DietrichGebert/ponytail. Complexity-only diff review (delete / stdlib / native / yagni / shrink, one line per finding). Second pass after moe-qa-loop, on diffs past about 100 changed lines outside tests; taste-only findings go in the qa_approve summary or a follow-up card, never a reject.",
       "role": "qa|architect",
-      "triggeredBy": ["after moe-qa-loop's correctness pass on a REVIEW task", "auditing a diff for bloat"]
+      "triggeredBy": ["after moe-qa-loop's correctness pass, on a diff past about 100 changed lines outside tests", "auditing a diff for bloat"]
     },
     {
       "name": "using-git-worktrees",

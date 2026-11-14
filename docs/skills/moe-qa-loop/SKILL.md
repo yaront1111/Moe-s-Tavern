@@ -84,12 +84,14 @@ Bad rejects produce ping-pong. Good rejects produce one round-trip.
 ## What never to do
 
 - **Never move a rejected task to `BACKLOG`.** That deprioritizes work the worker is mid-flow on. Use `moe.qa_reject` — it routes the task back to `WORKING` for the worker to fix.
-- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity") go in the `qa_approve` summary instead.
+- **Never approve with an unmet DoD item or a real defect.** Either it's done or it's not — reject for those. Complexity or taste notes that don't block (see "Second pass: complexity", which runs on larger diffs only) go in the `qa_approve` summary instead.
 - **Never re-write the worker's code in your reject message.** Describe the gap, don't fix it for them — they need the practice.
 
 ## Second pass: complexity
 
-Once the verdict is settled on correctness, run `ponytail-review` over the same diff — a complexity-only pass
+Run it only on a diff that changes more than about 100 lines outside test files (`git show --stat <sha>`). On Moe's own board (718 reviews, October–November 2026) the pass found lines to cut in 18 reviews, 187 lines in all. Diffs past that size were about a quarter of the reviews and held 12 of those 18 and 147 of the 187 lines. On a smaller diff skip it and write nothing about it.
+
+Past that size, once the verdict is settled on correctness, run `ponytail-review` over the same diff — a complexity-only pass
 (`delete:` / `stdlib:` / `native:` / `yagni:` / `shrink:`, one line per finding). Route the findings, don't just list them:
 
 - Breaches a rail or a DoD item → a real `rejectionDetails` entry.

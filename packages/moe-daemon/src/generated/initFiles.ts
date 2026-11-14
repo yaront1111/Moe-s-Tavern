@@ -478,7 +478,7 @@ Follow \`nextAction\` on every Moe tool response. During the bounded commit wait
 The runtime enforces review transitions; never move REVIEW back to BACKLOG. Use \`moe.qa_reject\` to send work back to WORKING.
 
 If intent is ambiguous, ask the assigned worker in the task channel before deciding.`,
-  'qa.reference.md': `<!-- moe-generated: sha=bc29ef40972d -->
+  'qa.reference.md': `<!-- moe-generated: sha=ab03843f0899 -->
 
 # QA — Reference
 
@@ -504,7 +504,7 @@ Read current project/epic/task rails before running commands. All test and re-ru
 |-------|-------|--------------|
 | Claiming a task in REVIEW | \`moe-qa-loop\` | Structured \`qa_approve\` vs \`qa_reject\` decision flow + actionable \`rejectionDetails\` |
 | Reading the diff | \`adversarial-self-review\` | Same checklist the worker should have run — apply it again as the second pair of eyes |
-| After the correctness verdict | \`ponytail-review\` | Complexity-only second pass. Rail/DoD breaches become \`rejectionDetails\`; taste-only findings go in the approve summary or a follow-up card — never a reject |
+| After the correctness verdict, on a diff past about 100 changed lines outside tests | \`ponytail-review\` | Complexity-only second pass; skip it on a smaller diff. Rail/DoD breaches become \`rejectionDetails\`; taste-only findings go in the approve summary or a follow-up card — never a reject |
 
 ## Review order (do not skip)
 
@@ -757,7 +757,7 @@ const SHIPPED_ROLE_BODY_SHAS: Record<string, readonly string[]> = {
   'governor.md': ['169df925b8fe', '2556278c295b', '2bb8f8dcffe4', '3aa528c96f55', '3cc74da53e14', '51008a3c3b0f', '5b0e3fc9406b', '5d0001f387ef', '6542c9ae745b', '669f916cafc6', '6a424808f431', '6cedbe83add8', '9b4b1f77fc16', 'a0c5bc216e41', 'a4a2b1250609', 'b1c15c152e75', 'c23118a34d21', 'c9d4b13ad50b', 'd048b3fddbf1', 'd3da43241c7d', 'f882385984d6'],
   'governor.reference.md': ['00267f739525', '2621926c807a', '62d4b73873ab', '656141cc44f8', '81ea7e05636b', '86f01763da81', '8c117a8d61d4', '93549db35473', '9a404246e6ed', 'ad9aa1bf6271', 'b613fb62e997', 'c4d8411512a0', 'c6bbadd9b263', 'd95b284d3f3c', 'f57ea78fcf8c'],
   'qa.md': ['01fddd0ac2e9', '110188570bd8', '213db26d2afe', '238cdf8a5a75', '30ac5f670af8', '33353d0a6b31', '36b05245a387', '3807a4f08ba9', '3d85e1e8146a', '5267e2ff5337', '52ffd8f5e35c', '546f3f3da3d2', '6cf327f722c6', '7a4154466321', '7f0344ccc9be', '8719e56dc532', '91114123fce3', '92c2a20e7089', '9a582b89c068', '9d69be0c41a9', 'a6f9de8de220', 'ab2a9113b813', 'bdf6c4fed023', 'bed60d21289f', 'ce63bc2f01b1', 'd663617d2440', 'e07cffb350ef', 'e13f67cfacdd', 'ed2d54b4a630', 'fe6ee0d3b5a0'],
-  'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'b3eec7c94327', 'b6ca1c8adb25', 'bc29ef40972d', 'e8b6300b7f5b', 'e9cd45cbf530'],
+  'qa.reference.md': ['20b816870e69', '2165e20c17b9', '4d6939825dc7', '5450908dd463', '5a68f996e738', '685c51fb5510', '7a888e2b306e', '953f8694c26d', 'a3d65d5877c5', 'aa24f568c869', 'ab03843f0899', 'b3eec7c94327', 'b6ca1c8adb25', 'bc29ef40972d', 'e8b6300b7f5b', 'e9cd45cbf530'],
   'worker.md': ['05799e86c64e', '0d4a56256314', '0f3ec8f95bbf', '1927aae853c5', '231c9f69ff5b', '2901ab4e47c9', '2b22d0d22444', '3001e8ef81e6', '31e7962b6c43', '4351f8a02fb9', '4c65ffa9e027', '4f23b6eae966', '53d0feedcec3', '5840723dccb6', '59506c02e30f', '67000c4957ee', '6872916d110c', '6c1965e0baf5', '800173e263f7', '820199a90c00', '8775c3536190', '91be315a1190', '946c8fa3826c', '9e4aab4ea7e2', 'a5557290ca4a', 'a7e172e84fd7', 'a936b3d0bc20', 'b1c51bebaf0a', 'b3d6ccf701eb', 'bb8c2906ee23', 'bbff0ab435ae', 'cc80dfca78c5', 'cdab9a8dac41', 'd303e1f53e05', 'e038bb840bf7', 'e4fa2a4da833', 'e747f82d160d', 'e8f98a76488c', 'f9e6abd6e1a2'],
   'worker.reference.md': ['00d768586ec5', '2345e537ca85', '27bec85d5275', '3b7b35d18aed', '4818eaa4d242', '4b041787b980', '51eab04ce01a', '67ee4edbcc31', '6b8e906e69d9', '73eb0762edac', '7642fd40403b', '766ecf9aea21', '7a2b7f00dfd3', '9a727a066966', 'a2e203c12ef7', 'a383dbfc5ab3', 'b0ef035a319f', 'de20c773900d', 'e6856d2d3801', 'eed9b381756d', 'eef302e11e5d']
 };

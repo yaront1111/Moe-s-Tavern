@@ -22,7 +22,7 @@ Read current project/epic/task rails before running commands. All test and re-ru
 |-------|-------|--------------|
 | Claiming a task in REVIEW | `moe-qa-loop` | Structured `qa_approve` vs `qa_reject` decision flow + actionable `rejectionDetails` |
 | Reading the diff | `adversarial-self-review` | Same checklist the worker should have run — apply it again as the second pair of eyes |
-| After the correctness verdict | `ponytail-review` | Complexity-only second pass. Rail/DoD breaches become `rejectionDetails`; taste-only findings go in the approve summary or a follow-up card — never a reject |
+| After the correctness verdict, on a diff past about 100 changed lines outside tests | `ponytail-review` | Complexity-only second pass; skip it on a smaller diff. Rail/DoD breaches become `rejectionDetails`; taste-only findings go in the approve summary or a follow-up card — never a reject |
 
 ## Review order (do not skip)
 
