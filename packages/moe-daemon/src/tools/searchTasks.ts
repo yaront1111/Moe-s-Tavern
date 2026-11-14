@@ -2,7 +2,7 @@ import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
 import type { TaskStatus } from '../types/schema.js';
 import { invalidInput } from '../util/errors.js';
-import { servedPlan } from '../util/planAmendments.js';
+import { servedPlan, servedPriorAttempt } from '../util/planAmendments.js';
 import {
   DEFAULT_TASK_PREVIEW_CHARS,
   MAX_TASK_PREVIEW_CHARS,
@@ -161,7 +161,11 @@ export function searchTasksTool(_state: StateManager): ToolDefinition {
 
       return {
         tasks: detail === 'full'
-          ? results.map(task => ({ ...task, implementationPlan: servedPlan(task.implementationPlan) }))
+          ? results.map(task => ({
+              ...task,
+              implementationPlan: servedPlan(task.implementationPlan),
+              ...(task.priorAttempt ? { priorAttempt: servedPriorAttempt(task.priorAttempt) } : {}),
+            }))
           : results.map(task => taskSummary(task, {
               includeDescriptionPreview: true,
               maxDescriptionChars,

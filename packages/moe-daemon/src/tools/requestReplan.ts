@@ -4,6 +4,7 @@ import type { PriorAttempt } from '../types/schema.js';
 import { missingRequired, invalidInput, notFound, invalidState } from '../util/errors.js';
 import { assertWorkerOwns } from '../util/enforcement.js';
 import { resolveWorkerRole } from '../util/workerRole.js';
+import { servedPriorAttempt } from '../util/planAmendments.js';
 
 const MAX_REASON_LENGTH = 2000;
 
@@ -129,7 +130,7 @@ export function requestReplanTool(_state: StateManager): ToolDefinition {
         success: true,
         taskId: updated.id,
         status: updated.status,
-        priorAttempt,
+        priorAttempt: servedPriorAttempt(priorAttempt),
         message: `Task ${updated.id} flipped to PLANNING; architect will re-plan with priorAttempt context. Seat freed — this response does not start another task session.`,
         ...(sessionHandoff ? { sessionHandoff } : {}),
       };

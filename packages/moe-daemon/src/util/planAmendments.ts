@@ -1,4 +1,4 @@
-import type { ImplementationStep, StepAmendment } from '../types/schema.js';
+import type { ImplementationStep, PriorAttempt, StepAmendment } from '../types/schema.js';
 
 /**
  * Cap on in-place revisions of a single step. A step amended this many times is
@@ -45,12 +45,13 @@ export function effectiveStepDescription(step: AmendableStep): string {
 
 /**
  * A plan as seats must read it. A step with an active amendment is served with
- * the amended text as `description` and the text it replaced as
+ * the amended text as `description` and the text as first planned as
  * `originalDescription`. `amendments` stays as the audit trail. Every response
  * that hands plan steps to a seat goes through this (moe.get_context,
- * moe.search_tasks detail:'full'), so a reader of `description` never follows
- * superseded instructions. An amended step is served as a new object, and
- * nothing is ever written back to the stored plan.
+ * moe.search_tasks detail:'full', and a prior attempt's plan through
+ * servedPriorAttempt), so a reader of `description` never follows superseded
+ * instructions. An amended step is served as a new object, and nothing is ever
+ * written back to the stored plan.
  */
 export function servedPlan(plan: ImplementationStep[]): ImplementationStep[] {
   // .moe/tasks/*.json is hand-editable, so a non-array here is possible.
@@ -60,4 +61,12 @@ export function servedPlan(plan: ImplementationStep[]): ImplementationStep[] {
   return plan.map((step) => activeAmendment(step)
     ? { ...step, description: effectiveStepDescription(step), originalDescription: step.description }
     : step);
+}
+
+/**
+ * task.priorAttempt as seats must read it. A replan moves the plan there, and
+ * the re-planning architect reads what the worker was told to do from it.
+ */
+export function servedPriorAttempt(prior: PriorAttempt): PriorAttempt {
+  return { ...prior, implementationPlan: servedPlan(prior.implementationPlan) };
 }

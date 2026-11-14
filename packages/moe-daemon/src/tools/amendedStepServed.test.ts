@@ -38,7 +38,7 @@ describe('an amended step is served with its effective text', () => {
       taskId: 'task-1', stepId: 'step-1', workerId: 'architect-1', description: amended, reason: 'the importer still uses it',
     });
   };
-  const expectServed = (plan: ServedStep[]) => {
+  const expectServed = (plan: ServedStep[], stored = () => h.state.getTask('task-1')!.implementationPlan) => {
     expect(plan[0].description).toBe(amended);
     expect(plan[0].originalDescription).toBe(original);
     expect(plan[0].activeAmendmentId).toBe('amend-1');
@@ -47,7 +47,7 @@ describe('an amended step is served with its effective text', () => {
     expect(plan[1].description).toBe('Second step');
     expect(plan[1]).not.toHaveProperty('originalDescription');
     // Serving never rewrites the stored row.
-    expect(h.state.getTask('task-1')!.implementationPlan[0].description).toBe(original);
+    expect(stored()[0].description).toBe(original);
   };
 
   it('moe.get_context', async () => {
@@ -62,6 +62,21 @@ describe('an amended step is served with its effective text', () => {
     const [task] = res.tasks as Array<{ id: string; implementationPlan: ServedStep[] }>;
     expect(task.id).toBe('task-1');
     expectServed(task.implementationPlan);
+  });
+
+  it('a prior attempt: moe.request_replan, moe.get_handoff_history, moe.search_tasks full', async () => {
+    // A replan moves the steps into task.priorAttempt, where the re-planning
+    // architect reads what the worker was told to do.
+    await seedAmended();
+    const replan = await call('moe.request_replan', { taskId: 'task-1', workerId: 'worker-1', reason: 'the plan is wrong' });
+    const history = await call('moe.get_handoff_history', { taskId: 'task-1' });
+    const [found] = (await call('moe.search_tasks', { detail: 'full' })).tasks as Array<Record<string, unknown>>;
+    for (const from of [replan, history, found]) {
+      expectServed(
+        (from.priorAttempt as { implementationPlan: ServedStep[] }).implementationPlan,
+        () => h.state.getTask('task-1')!.priorAttempt!.implementationPlan,
+      );
+    }
   });
 
   it("moe.start_step's skill recommendation reads the amended text", async () => {

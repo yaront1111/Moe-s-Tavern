@@ -226,6 +226,8 @@ When a `workerId` is supplied (or inherited from `MOE_WORKER_ID`), it is appende
 
 A step hint's reason quotes the step's effective text: its active amendment when one is in force.
 
+`task.implementationPlan` is served the same way: an amended step carries its effective text as `description` and the text as first planned as `originalDescription`, with `amendments` and `activeAmendmentId` kept as the audit trail. An unamended step is served as stored.
+
 **Returns:**
 ```typescript
 {
@@ -1426,6 +1428,7 @@ Search tasks by query and filters with relevance ranking.
 - Results are sorted by relevance score (highest first)
 - Filters are applied before search query
 - Default `summary` responses omit full descriptions, DoD, comments, and plans. Use `detail: 'full'` only when necessary.
+- `detail: 'full'` serves plan steps as `moe.get_context` does, in `implementationPlan` and in `priorAttempt.implementationPlan`: an amended step's `description` is its effective text, and `originalDescription` holds the text as first planned.
 - If no query is provided, returns filtered tasks up to limit
 
 ---
@@ -2973,6 +2976,8 @@ Return prior handoff notes + `priorAttempt` for a task. Workers picking up a rel
 }
 ```
 
+`priorAttempt.implementationPlan` is served as `moe.get_context` serves a plan: an amended step's `description` is the text that was in force when the plan was replaced, and `originalDescription` holds the text as first planned.
+
 ---
 
 ### moe.list_metrics
@@ -3034,7 +3039,7 @@ Worker (or governor) hands the task back to the architect for a fresh plan. Snap
   success: true,
   taskId,
   status: "PLANNING",
-  priorAttempt: PriorAttempt,
+  priorAttempt: PriorAttempt,     // served as moe.get_handoff_history serves it
   message,
   sessionHandoff?: { action: "END_SESSION", taskId, workerId, reason }
 }
