@@ -6377,6 +6377,26 @@ wt14_sentinels WT14N
 WT14_RUN=$((WT14_RUN + 1))
 echo "[scenario WT14N] ok"
 
+# pnpm's node_modules also holds paths past MAX_PATH. Without core.longpaths Git for
+# Windows deregisters W, then fails "Filename too long" (exit 255) with W half deleted.
+# The seat reads no system or global git config, so a machine-wide core.longpaths cannot
+# hide that. The repository's own config stays unset: once sparse checkout has set
+# extensions.worktreeConfig, a core.longpaths=false there beats the fix's -c.
+echo "[scenario WT14L] a W holding a path past MAX_PATH is removed from disk"
+wt14_fixture l moe/control task-postflight
+wt14_l_deep="$WT14_P/.worktrees/task-postflight/node_modules/.pnpm/$(printf 'd%.0s' $(seq 120))/node_modules/$(printf 'e%.0s' $(seq 120))"
+mkdir -p "$WT14_P/.git/info" "$wt14_l_deep"
+printf 'node_modules/\n' >> "$WT14_P/.git/info/exclude"
+: > "$TMP_DIR/wt14-l.gitconfig"
+printf 'deep\n' > "$wt14_l_deep/index.js"
+wt14_qa WT14L GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$TMP_DIR/wt14-l.gitconfig"
+[ "$WT14_CODE" -eq 0 ] || wt14_fail WT14L "exit $WT14_CODE, expected 0"
+grep -Eq '\[worktree\] removed .*/\.worktrees/task-postflight on moe/task/task-postflight$' "$WT14_OUT" || wt14_fail WT14L "no [worktree] removed line"
+wt14_gone WT14L task-postflight
+wt14_sentinels WT14L
+WT14_RUN=$((WT14_RUN + 1))
+echo "[scenario WT14L] ok"
+
 echo "[scenario WT14B] a fully landed W holding .moe/x keeps W, its branch, its manifest and .moe/x"
 wt14_fixture b moe/control task-postflight
 mkdir -p "$WT14_P/.worktrees/task-postflight/.moe"
@@ -6412,7 +6432,7 @@ wt14_sentinels WT14U
 WT14_RUN=$((WT14_RUN + 1))
 echo "[scenario WT14U] ok"
 
-wt14_expected=7
+wt14_expected=8
 if [ "$(id -u)" = 0 ]; then
   echo "[scenario WT14D] SKIP (root ignores mode bits)"; wt14_expected=$((wt14_expected - 1))
 elif case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) true ;; *) false ;; esac; then
@@ -6575,7 +6595,7 @@ echo "[scenario WT14I] ok"
 while IFS= read -r wt14_l; do [ ! -L "$wt14_l" ] || rm -f -- "$wt14_l"; done < "$WT14_LINKS"
 wt14_expected=$((wt14_expected + 5))
 if [ "$WT14_RUN" -ne "$wt14_expected" ]; then
-  echo "Expected $wt14_expected WT-14 scenarios (WT14A, WT14N, WT14B, WT14C, WT14U, WT14D (needs a non-root POSIX user), WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $WT14_RUN" >&2
+  echo "Expected $wt14_expected WT-14 scenarios (WT14A, WT14N, WT14L, WT14B, WT14C, WT14U, WT14D (needs a non-root POSIX user), WT14S, WT14E, WT14F, WT14G, WT14H, WT14I); ran $WT14_RUN" >&2
   exit 1
 fi
 echo "[WT-14] ok: $WT14_RUN scenarios"

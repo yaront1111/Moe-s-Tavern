@@ -8352,8 +8352,13 @@ function Remove-MoeLeftoverWorktree([string]$W) {
 # part-way (refused here, branch kept): the next sweep pass names that leftover
 # MOE_WORKTREE_UNREGISTERED. Git for Windows also exits 0 with W left on disk
 # when W holds a junction no manifest lists (pnpm's node_modules is full of
-# them); Remove-MoeLeftoverWorktree finishes that W. Callers hold the sweep lock
-# and have proved every byte landed or rescued. Twin: remove_task_worktree.
+# them); Remove-MoeLeftoverWorktree finishes that W. The remove runs with
+# core.longpaths=true: pnpm's node_modules also holds paths past MAX_PATH, and
+# without it Git for Windows deregisters W, then fails "Filename too long" with
+# W half deleted. A core.longpaths=false in the repository's own config still
+# beats the -c once sparse checkout has set extensions.worktreeConfig. Callers
+# hold the sweep lock and have proved every byte landed or rescued. Twin:
+# remove_task_worktree.
 function Remove-MoeTaskWorktree([string]$Top, [string]$TaskId, [string]$Tip = '') {
     $w = "$Top/.worktrees/$TaskId"
     try {
@@ -8377,7 +8382,7 @@ function Remove-MoeTaskWorktree([string]$Top, [string]$TaskId, [string]$Tip = ''
             try { if ($item.PSIsContainer) { [IO.Directory]::Delete($p) } else { [IO.File]::Delete($p) } } catch {}
             if ($null -ne (Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue)) { Write-MoeWorktreeRemoveRefused $w "the link $rel could not be unlinked"; return $false }
         }
-        $r = Invoke-MoeGit -Top $Top -GitArgs @('worktree', 'remove', '--force', '--force', $w) -MergeStderr
+        $r = Invoke-MoeGit -Top $Top -GitArgs @('-c', 'core.longpaths=true', 'worktree', 'remove', '--force', '--force', $w) -MergeStderr
         if ($r.Rc -ne 0) { Write-MoeWorktreeRemoveRefused $w "git worktree remove failed: $(@($r.Out) | Select-Object -First 1)"; return $false }
         if ($null -ne (Get-Item -LiteralPath $w -Force -ErrorAction SilentlyContinue)) { Remove-MoeLeftoverWorktree $w }
     } catch {
