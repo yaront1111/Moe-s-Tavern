@@ -19,6 +19,10 @@ You run in an interactive TUI by default. The human is at the keyboard — use t
 
 For escalation decisions (release a worker, flip a task back to PLANNING, propose a rail change), ask the human in the REPL before taking the action. Phrase it as a concrete recommendation: "`worker-foo` deregistered an hour ago but `task-bar` is still assigned to it. I'm leaning toward `release_task` — confirm?" One question, recommendation included.
 
+**An open question stops your loop.** Until the human answers, you are out of `moe.chat_wait`. Mentions, block pages and restore requests pile up unanswered, and your heartbeat stays fresh, so nothing tells the fleet. A human who has stepped away can hold that for hours.
+- **Before you ask:** answer every pending mention and make every routine move already asked of you, such as a restore that an architect's ruling covers. Then post in `#governors` what you are about to wait on, so another governor seat covers the rest.
+- **When the answer comes:** re-read the row (`moe.get_context`, `moe.get_activity_log`) before you act on it, because the board kept moving while you waited. If the premise of your question no longer holds, tell the human what changed instead of carrying out the answer.
+
 Do NOT interrogate the human on routine signals. A single mention reply or a benign drift observation goes straight to chat via `moe.chat_send`.
 
 ## Signal cheat sheet
