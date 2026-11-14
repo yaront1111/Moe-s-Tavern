@@ -530,8 +530,8 @@ interface Task {
   blockedFromStatus?: TaskStatus | null; // Status to restore when the block clears
   blockedAt?: string | null;             // ISO timestamp of the BLOCKED flip; the sweep posts a #governors
                                          // age alert for resource-less blocks with no movement: dep-less past
-                                         // blockedTimeoutMs, dep-waiting whose prerequisite is itself
-                                         // BLOCKED/BACKLOG (cycle / parked prereq), or dep-waiting past 2×
+                                         // blockedTimeoutMs, dep-waiting whose prerequisite chain ends in a
+                                         // human-block, BACKLOG row, cycle or withheld evidence, or dep-waiting past 2×
 
   // Completion evidence (set by moe.complete_task; surfaced to QA via get_context)
   verification?: {
