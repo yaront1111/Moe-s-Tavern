@@ -306,11 +306,32 @@ export async function getMessages(state: StateManager,
   channelId: string,
   opts?: { sinceId?: string; limit?: number; hideSystemFeed?: boolean }
 ): Promise<ChatMessage[]> {
+  return (await getMessagePage(state, channelId, opts)).messages;
+}
+
+/** One page of a channel, as getMessagePage reads it. */
+export interface ChatMessagePage {
+  messages: ChatMessage[];
+  /** The page continues from a sinceId found in the read window: its oldest messages after it. */
+  forward: boolean;
+  /** A forward page only: more visible messages follow the page. */
+  hasMore: boolean;
+}
+
+/**
+ * getMessages, plus what the returned slice cannot show by itself: whether it
+ * paged forward from `sinceId` (else it is the newest window), and whether more
+ * messages follow it.
+ */
+export async function getMessagePage(state: StateManager,
+  channelId: string,
+  opts?: { sinceId?: string; limit?: number; hideSystemFeed?: boolean }
+): Promise<ChatMessagePage> {
   const channel = state.channels.get(channelId);
   if (!channel) throw new Error(`Channel not found: ${channelId}`);
 
   const messagesFile = path.join(state.moePath, 'messages', `${channelId}.jsonl`);
-  if (!fs.existsSync(messagesFile)) return [];
+  if (!fs.existsSync(messagesFile)) return { messages: [], forward: false, hasMore: false };
 
   // Bound the read to the newest CHAT_READ_WINDOW_BYTES of the JSONL file to
   // avoid loading arbitrarily large channels into memory.
@@ -320,7 +341,7 @@ export async function getMessages(state: StateManager,
     raw = readTailJsonl(state, messagesFile, CHAT_READ_WINDOW_BYTES);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return [];
+    if (err.code === 'ENOENT') return { messages: [], forward: false, hasMore: false };
     throw error;
   }
 
@@ -360,7 +381,9 @@ export async function getMessages(state: StateManager,
   // the caller's cursor advance would permanently skip the older backlog
   // (incl @mentions). Fresh reads (no/expired cursor) still return the most
   // recent window.
-  return forwardPaging ? result.slice(0, limit) : result.slice(-limit);
+  return forwardPaging
+    ? { messages: result.slice(0, limit), forward: true, hasMore: result.length > limit }
+    : { messages: result.slice(-limit), forward: false, hasMore: false };
 }
 
 /**
