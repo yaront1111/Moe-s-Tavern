@@ -12081,7 +12081,12 @@ $mentionsJson
             $usageLaunchMode = if ($usePrintMode) { 'headless' } else { 'interactive' }
             Start-MoeUsageReceipt 'claude' $usageLaunchMode
             Start-HeartbeatSidecar -ProxyScript $proxyScript -ProjectPath $projectPath -WorkerId $WorkerId | Out-Null
+            $previousClaudeEap = $ErrorActionPreference
             try {
+            # 5.1 throws NativeCommandError on the first redirected stderr line under Stop and
+            # unwinds past the post-flight (claude's ENOSPC transcript warning, 2026-11-16);
+            # the stream parser prints non-JSON lines as text, so Continue is safe here.
+            $ErrorActionPreference = 'Continue'
             Set-MoeAccountEnv
             if ($userPromptForCli) {
                 Write-Host "Command: $Command $($modelArgs -join ' ') --mcp-config `"$mcpConfigFile`" --append-system-prompt-file `"$systemPromptFile`" $($cacheArgs -join ' ') $($accountArgs -join ' ') --effort $iterEffort $($printArgs -join ' ') `"<prompt>`""
@@ -12114,6 +12119,7 @@ $mentionsJson
                 }
             }
             } finally {
+                $ErrorActionPreference = $previousClaudeEap
                 Restore-MoeAccountEnv
                 if ($usePrintMode -and -not $script:MoeUsageResultSeen -and $script:MoeUsageReceiptFile) {
                     try { Invoke-MoeUsageHelper { '' | & node $promptCacheHelper claude-stream | Out-Null } }

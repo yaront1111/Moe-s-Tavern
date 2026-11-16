@@ -596,3 +596,17 @@ for (const [ext, engine] of engines) {
     }
   });
 }
+
+// A claude stderr line must never end the post-flight: Windows PowerShell 5.1 turns the first
+// redirected stderr line into a terminating NativeCommandError under the script-wide
+// $ErrorActionPreference='Stop' (claude's ENOSPC transcript warning killed a landing on 2026-11-16).
+test('moe-agent.ps1 runs the claude --print launch under $ErrorActionPreference Continue', () => {
+  const launch = between(read('ps1'), "Start-MoeUsageReceipt 'claude' $usageLaunchMode", 'Restore-MoeAccountEnv');
+  const saved = launch.indexOf('$previousClaudeEap = $ErrorActionPreference');
+  const guard = launch.indexOf("$ErrorActionPreference = 'Continue'");
+  const firstLaunch = launch.indexOf('@printArgs "$userPromptForCli" 2>&1');
+  const lastLaunch = launch.lastIndexOf('2>&1');
+  const restore = launch.indexOf('$ErrorActionPreference = $previousClaudeEap');
+  assert.ok(saved >= 0 && guard > saved && firstLaunch > guard, 'the 2>&1 claude launches must run under Continue');
+  assert.ok(restore > lastLaunch && /\} finally \{\s*\$ErrorActionPreference = \$previousClaudeEap/.test(launch), 'the finally must restore the saved preference');
+});
