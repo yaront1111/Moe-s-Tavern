@@ -207,6 +207,7 @@ Have more than one Claude subscription account? Sign each one in once, and Moe p
 moe-daemon accounts add --label "Personal"   # prints the new id, e.g. acct-1
 moe-daemon accounts login acct-1             # Claude's own sign-in for that account
 moe-daemon accounts check                    # exits 0 when every account is on a subscription
+moe-daemon accounts refresh                  # re-measure usage, e.g. after you reset an account's limit
 ```
 
 - **No step is cut short.** A worker whose account reaches the switch point finishes its current step and ends its session. The launcher restarts the same task on the next account, and the new session picks up at the next step. A QA seat moves at its next launch. An architect or governor terminal moves between tasks: after a plan is recorded, or while it waits on chat, its session ends by itself and the launcher restarts it on the next account.

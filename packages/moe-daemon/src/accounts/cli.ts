@@ -10,6 +10,8 @@
 //   login <id>                Claude's own subscription sign-in for that account
 //   logout <id>               sign that account out
 //   check [<id>]              re-check sign-ins; exit 0 only when every checked account is on a subscription
+//   refresh [<id>]            re-measure usage with one minimal claude run each and replace the stored
+//                             numbers (a limit reset is otherwise invisible: see replaceSample)
 //   remove <id> [--sign-out]  unregister (signing out first with --sign-out); the directory stays
 //   vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs
 //
@@ -29,6 +31,7 @@
 // over a /mnt path.
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -40,11 +43,14 @@ import {
   recordSignIn,
   registryFilePath,
   removeAccount,
+  accountUsageFile,
+  writeJsonAtomic,
   type RegistryAccount,
   type SignInState,
 } from './registry.js';
 import { ProtectedClaudeRefused, accountEnv, claudeCommand, probeSignIn, protectedClaudeCommand, runClaude, type ClaudeCommand } from './claudeAuth.js';
 import { VM_TOKEN_RE, readHiddenLine, removeVmToken, writeVmToken } from './vmTokens.js';
+import { replaceSample, sampleFromStreamJson, type AccountUsage } from './usageWindows.js';
 
 export interface CliIo {
   out(line: string): void;
@@ -67,6 +73,7 @@ const USAGE = [
   '  login <id>                sign the account in with your Claude subscription',
   '  logout <id>               sign the account out',
   '  check [<id>]              check which accounts are signed in',
+  '  refresh [<id>]            re-measure usage (after a limit reset) and replace the stored numbers',
   '  remove <id> [--sign-out]  remove the account (sign it out first with --sign-out)',
   "  vm-token <id> [--remove]  mint (or delete) the account's long-lived token for Moe VM jobs",
 ];
@@ -131,6 +138,53 @@ function check(io: CliIo, file: string, account: RegistryAccount, claude: Claude
   if (notFound) return 'not-found';
   if (state !== 'unknown') recordSignIn(file, account.id, state);
   return state;
+}
+
+/**
+ * One prompt with no tools (the empty last word disables every tool), no MCP
+ * servers and no saved session, the launchers' renewal run plus stream-json so
+ * claude prints its rate_limit_event. `--tools` is variadic, so the prompt goes
+ * on stdin, never as a positional.
+ */
+export const USAGE_PROBE_ARGS = Object.freeze([
+  '-p', '--model', 'haiku', '--no-session-persistence', '--strict-mcp-config',
+  '--output-format', 'stream-json', '--verbose', '--tools', '',
+]);
+export const USAGE_PROBE_PROMPT = 'Reply with OK.';
+
+/** accountEnv without a seat's identity (every MOE_* name) or Moe's mods (CLAUDE_CODE_PLUGIN_DIRS). */
+function probeEnv(base: NodeJS.ProcessEnv, dir: string): NodeJS.ProcessEnv {
+  const env = accountEnv(base, dir);
+  for (const name of Object.keys(env)) {
+    const key = process.platform === 'win32' ? name.toUpperCase() : name;
+    if (key.startsWith('MOE_') || key === 'CLAUDE_CODE_PLUGIN_DIRS') delete env[name];
+  }
+  return env;
+}
+
+function usageLine(usage: AccountUsage): string {
+  const parts = Object.entries(usage.windows).map(([name, window]) =>
+    [name, window.percent === null ? '?' : `${window.percent}%`, window.status, window.resetsAt && `until ${window.resetsAt}`]
+      .filter(Boolean).join(' '));
+  if (usage.refusedUntil) parts.push(`refused until ${usage.refusedUntil}`);
+  return parts.length > 0 ? parts.join(', ') : 'no usage window reported';
+}
+
+/**
+ * Re-measure the account's usage with one minimal claude run, in the temp
+ * folder so no project's settings load, and store it in place of the old
+ * numbers. Null when claude reported no usage; the stored file is then kept.
+ */
+function refresh(io: CliIo, file: string, account: RegistryAccount, claude: Claude): AccountUsage | 'not-found' | null {
+  const dir = accountConfigDir(file, account.id);
+  const run = runClaude(claude(), [...USAGE_PROBE_ARGS], probeEnv(io.env, dir), false, { input: USAGE_PROBE_PROMPT, cwd: os.tmpdir() });
+  if (run.notFound) return 'not-found';
+  const nowMs = Date.now();
+  const sample = sampleFromStreamJson(run.stdout, nowMs);
+  if (!sample) return null;
+  const usage = replaceSample(account.id, sample, nowMs);
+  writeJsonAtomic(accountUsageFile(file, account.id), usage);
+  return usage;
 }
 
 function signOut(io: CliIo, file: string, account: RegistryAccount, claude: Claude): number {
@@ -263,6 +317,29 @@ function run(argv: string[], io: CliIo): number {
         if (state !== 'subscription') allSubscription = false;
       }
       return allSubscription ? 0 : 1;
+    }
+    case 'refresh': {
+      const registry = readRegistry(file);
+      const accounts = args.positional[0] ? [accountFor(file, args.positional[0])] : registry?.accounts ?? [];
+      if (accounts.length === 0) {
+        io.err(`No Claude accounts in ${file}.`);
+        return 0;
+      }
+      let allMeasured = true;
+      for (const account of accounts) {
+        const usage = refresh(io, file, account, claude);
+        if (usage === 'not-found') {
+          io.err(notFoundMessage(io));
+          return 1;
+        }
+        if (usage === null) {
+          allMeasured = false;
+          io.err(`MOE_ACCOUNT_USAGE_UNKNOWN: claude reported no usage for ${describe(account)} (is it signed in? check ${account.id}); its stored usage is unchanged.`);
+          continue;
+        }
+        io.out([account.id, account.label, usageLine(usage)].join('\t'));
+      }
+      return allMeasured ? 0 : 1;
     }
     case 'remove': {
       const account = accountFor(file, args.positional[0]);
