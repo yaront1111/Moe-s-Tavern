@@ -1,14 +1,14 @@
 import type { ToolDefinition } from './index.js';
 import type { StateManager } from '../state/StateManager.js';
+import { getMessagePage } from '../state/chatStore.js';
 import type { ChatMessage } from '../types/schema.js';
 import { invalidInput, notFound } from '../util/errors.js';
 import {
+  capChatMessagesToResponseBudget,
   countTruncatedMessages,
   DEFAULT_CHAT_CONTENT_CHARS,
   MAX_CHAT_CONTENT_CHARS,
   MAX_CHAT_LIMIT,
-  MAX_CHAT_RESPONSE_CHARS,
-  chatMessageResponseCost,
   truncateChatMessages,
 } from '../util/chatPayload.js';
 
@@ -19,13 +19,17 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       + 'Skips the daemon\'s status lines in #general (system posts that mention nobody) unless includeSystem is true. '
       + 'A read with sinceId is a peek that moves no stored cursor or unread count; in all-channel mode the id applies only '
       + 'to the channel that holds it, and the other channels read from the caller\'s stored cursor. '
-      + 'Omit sinceId to read from and advance your cursor.',
+      + 'Omit sinceId to read from and advance your cursor. '
+      + 'A channel read from sinceId or your cursor returns the oldest messages after it; hasMore: true means more '
+      + 'follow (the limit or the response size cap ended the page): pass nextSinceId as sinceId to read on, or '
+      + 'repeat a cursor read. Both are omitted once you are caught up. An all-channel read sets hasMore, with no '
+      + 'nextSinceId, when it left messages out: read the channels by name to page through them.',
     inputSchema: {
       type: 'object',
       properties: {
         channel: { type: 'string', description: 'Channel id, or name in either "general" or "#general" form (omit to read from all channels)' },
         workerId: { type: 'string', description: 'Worker ID for auto-cursor tracking' },
-        sinceId: { type: 'string', description: 'Return messages after this message ID. A peek: moves no stored cursor and clears no unread count' },
+        sinceId: { type: 'string', description: 'Return messages after this message ID (a page\'s nextSinceId continues it). A peek: moves no stored cursor and clears no unread count' },
         limit: { type: 'number', description: 'Max messages to return (default 10, max 200)' },
         maxContentChars: {
           type: 'number',
@@ -83,6 +87,10 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       let messages: ChatMessage[];
       let sinceId = params.sinceId;
       let allChannelFetchedMessages: ChatMessage[] = [];
+      // A channel read that paged forward from sinceId or the stored cursor.
+      let forward = false;
+      // Messages exist that this response leaves out (set below and by the trim).
+      let hasMore = false;
 
       // An explicit sinceId makes this read a PEEK: it pages from that id but
       // writes no stored cursor and clears no unread count. Otherwise it would
@@ -101,7 +109,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
 
       if (channelId) {
         // Read from a specific channel
-        messages = await state.getMessages(channelId, { sinceId, limit, hideSystemFeed });
+        ({ messages, forward, hasMore } = await getMessagePage(state, channelId, { sinceId, limit, hideSystemFeed }));
       } else {
         // Read from all channels, merge and sort by timestamp
         const channels = state.getChannels();
@@ -120,8 +128,9 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
           const chSinceId = explicitSinceId && state.messageExistsInChannel(ch.id, explicitSinceId)
             ? explicitSinceId
             : existingCursors[ch.id];
-          const chMessages = await state.getMessages(ch.id, { sinceId: chSinceId, limit, hideSystemFeed });
-          allMessages.push(...chMessages);
+          const page = await getMessagePage(state, ch.id, { sinceId: chSinceId, limit, hideSystemFeed });
+          allMessages.push(...page.messages);
+          hasMore ||= page.hasMore;
         }
 
         allChannelFetchedMessages = allMessages.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
@@ -132,22 +141,19 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
       // Bound the RESPONSE, not just each message. `maxContentChars` caps one
       // message; without this a 200-message read still overflowed an MCP
       // client's payload limit and the whole result was rejected — measured at
-      // ~68KB even with maxContentChars: 1, because metadata dominates. Trim
-      // the OLDEST of the window: this read already keeps the newest `limit`
-      // messages, and the cursor below points at the newest delivered one, so
-      // dropping from the front preserves both the semantics and the cursor.
-      // Applied BEFORE the cursor is derived, never after.
-      if (messages.length > 1) {
-        let used = 0;
-        let firstKept = 0;
-        for (let i = messages.length - 1; i >= 0; i--) {
-          used += chatMessageResponseCost(messages[i], maxContentChars);
-          if (used > MAX_CHAT_RESPONSE_CHARS && i < messages.length - 1) {
-            firstKept = i + 1;
-            break;
-          }
-        }
-        if (firstKept > 0) messages = messages.slice(firstKept);
+      // ~68KB even with maxContentChars: 1, because metadata dominates.
+      // Applied BEFORE the cursor is derived, never after. A forward page holds
+      // the OLDEST messages after its position, so it keeps those and cuts the
+      // newest, which nextSinceId reaches. Cutting its oldest instead left a
+      // silent gap right after sinceId, and a cursor read then stored a cursor
+      // past the gap. A newest window (no position, an id older than the read
+      // window, or an all-channel read) keeps its newest.
+      if (forward) {
+        const capped = capChatMessagesToResponseBudget(messages, maxContentChars);
+        messages = capped.delivered;
+        hasMore ||= capped.dropped.length > 0;
+      } else {
+        messages = capChatMessagesToResponseBudget([...messages].reverse(), maxContentChars).delivered.reverse();
       }
 
       const cursor = messages.length > 0 ? messages[messages.length - 1].id : sinceId || null;
@@ -157,6 +163,7 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
           .filter((msg) => !returnedMessageIds.has(msg.id))
           .map((msg) => msg.channel)
       );
+      hasMore ||= allChannelChannelsWithOmittedFetchedMessages.size > 0;
 
       // Update worker's chat cursor atomically if workerId provided (not on a peek)
       if (params.workerId && !peek && messages.length > 0) {
@@ -198,6 +205,8 @@ export function chatReadTool(_state: StateManager): ToolDefinition {
         messages: responseMessages,
         cursor,
         truncated,
+        // nextSinceId continues one channel's page; an all-channel page has none.
+        ...(hasMore ? { hasMore: true, ...(channelId ? { nextSinceId: cursor } : {}) } : {}),
         ...(truncated > 0
           ? { hint: 'Long chat messages are truncated by default. Re-read with maxContentChars: 0 for full content.' }
           : {})

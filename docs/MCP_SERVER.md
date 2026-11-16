@@ -2721,13 +2721,16 @@ Read chat messages with cursor-based pagination. Auto-tracks read position per w
 {
   messages: Array<ChatMessage & { contentTruncated?: boolean, contentOriginalLength?: number }>,
   cursor: string | null,
-  truncated: number
+  truncated: number,
+  hasMore?: true,       // messages exist that this response left out; omitted once caught up
+  nextSinceId?: string  // channel reads with hasMore: the last returned id, to pass as sinceId
 }
 ```
 
 **Notes:**
 - If `workerId` provided without `sinceId`, uses the worker's saved cursor for incremental reads
 - After a cursor-mode read (`workerId`, no `sinceId`), the worker's cursor advances only for the messages returned in the response
+- A channel read from a position (`sinceId`, or the worker's stored cursor) returns the oldest messages after it, with no gap: the 40,000-char response cap cuts such a page from its newest end. When more messages follow the page (it reached `limit`, or the cap cut it), the response carries `hasMore: true` and `nextSinceId`: pass it as `sinceId` to read on, or repeat the cursor read, whose cursor stops at the same id. Both are omitted once the caller is caught up. A read with no position (or an id not in the newest 1 MiB it reads) returns the newest window, which the cap trims from its oldest end, and carries no `hasMore`. An all-channel read sets `hasMore: true` without `nextSinceId` when it left out messages it fetched or a channel holds more after its page; read the channels by name to page through them
 - A read with an explicit `sinceId` is a peek: it moves no stored cursor and clears no unread count, so it can neither rewind the cursor `chat_wait` drains from nor skip unread messages. In all-channel mode the id applies only to the channel that holds it; the other channels read from the caller's stored cursor (their newest window without a `workerId`). An empty `sinceId` is ignored (cursor mode)
 - When no `channel` specified, reads up to `limit` messages per channel, merges them by timestamp, and returns the newest global `limit` messages
 - In all-channel mode, per-channel cursors and unread counts advance/clear only when doing so cannot skip fetched-but-omitted messages; any channel with omitted fetched messages stays unchanged so those messages remain readable on a later call
