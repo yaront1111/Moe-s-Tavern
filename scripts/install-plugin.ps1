@@ -32,7 +32,12 @@ if (Test-Path $destDir) {
     Remove-Item -Recurse -Force $destDir
 }
 
-Expand-Archive -Path $PluginZip -DestinationPath $destDir -Force
+$zipPath = (Resolve-Path -LiteralPath $PluginZip).Path
+# Same reason as install-all.ps1: pwsh's Archive module breaks Expand-Archive under 5.1.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+try { [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $destDir) } catch {
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $destDir -Force
+}
 
 # If the zip contained a top-level folder, flatten it into $destDir.
 $libDir = Join-Path $destDir "lib"
