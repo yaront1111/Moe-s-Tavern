@@ -85,7 +85,12 @@ function Install-JetBrainsPlugin {
     Assert-InstallChild $tmp $env:TEMP
     New-Item -ItemType Directory -Path $tmp | Out-Null
     try {
-        Expand-Archive -LiteralPath $zip.FullName -DestinationPath $tmp
+        # A Windows PowerShell 5.1 child of pwsh inherits pwsh's PSModulePath and loads the newer
+        # Archive module, whose Expand-Archive needs a .NET Core-only ExtractToDirectory overload.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        try { [System.IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $tmp) } catch {
+            Expand-Archive -LiteralPath $zip.FullName -DestinationPath $tmp -Force
+        }
         $payload = if (Test-Path -LiteralPath (Join-Path $tmp 'lib') -PathType Container) { $tmp } else {
             (Get-ChildItem -LiteralPath $tmp -Directory | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'lib') -PathType Container } | Select-Object -First 1).FullName
         }

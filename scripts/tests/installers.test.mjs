@@ -34,7 +34,7 @@ function fixture(t) {
   return dir;
 }
 
-function runPowerShell(dir, args = '', setup = '', failCommand = '') {
+function runPowerShell(dir, args = '', setup = '', failCommand = '', extraEnv = {}) {
   const runner = path.join(dir, 'run.ps1');
   writeFileSync(runner, `
 $ErrorActionPreference = 'Stop'
@@ -52,9 +52,12 @@ try {
 `);
   return spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', runner], {
     encoding: 'utf8', timeout: TIMEOUT_MS,
-    env: { ...process.env, USERPROFILE: path.join(dir, 'profile'), APPDATA: path.join(dir, 'appdata'), TEMP: path.join(dir, 'temp'), MOE_TEST_NPM_LOG: path.join(dir, 'npm.log') },
+    env: { ...process.env, USERPROFILE: path.join(dir, 'profile'), APPDATA: path.join(dir, 'appdata'), TEMP: path.join(dir, 'temp'), MOE_TEST_NPM_LOG: path.join(dir, 'npm.log'), ...extraEnv },
   });
 }
+
+// The first PSModulePath entry pwsh itself ships an Archive module in (its own Modules folder).
+const pwshModules = isWindows ? (spawnSync('pwsh.exe', ['-NoProfile', '-Command', '$env:PSModulePath -split ";" | Where-Object { Test-Path (Join-Path $_ "Microsoft.PowerShell.Archive") } | Select-Object -First 1'], { encoding: 'utf8' }).stdout || '').trim() : '';
 
 function runBash(dir, script, args = []) {
   return spawnSync(bash, [shellPath(path.join(dir, 'scripts', script)), ...args], {
@@ -178,6 +181,15 @@ Compress-Archive -Path ${psQuote(path.join(dir, 'payload/moe-jetbrains'))} -Dest
 test('Windows explicit plugin install supports a detected IntelliJ IDE and relative ZIP', { skip: !isWindows }, t => {
   const dir = fixture(t);
   succeeded(runPowerShell(dir, '-InstallPlugin -PluginZip ./plugin.zip', pluginSetup(dir)));
+  assert.equal(existsSync(path.join(dir, 'appdata/JetBrains/IntelliJIdea2026.2/plugins/moe-jetbrains/lib/new.txt')), true);
+});
+
+test('Windows plugin install survives the PSModulePath a pwsh parent hands to 5.1', { skip: !isWindows || !pwshModules }, t => {
+  // pwsh lists its own Modules first; the Archive module there (1.2.7 with pwsh 7.7) calls an
+  // ExtractToDirectory overload .NET Framework lacks, so Expand-Archive dies under 5.1.
+  const dir = fixture(t);
+  const env = { PSModulePath: `${pwshModules}${path.delimiter}${process.env.PSModulePath || ''}` };
+  succeeded(runPowerShell(dir, '-InstallPlugin -PluginZip ./plugin.zip', pluginSetup(dir), '', env));
   assert.equal(existsSync(path.join(dir, 'appdata/JetBrains/IntelliJIdea2026.2/plugins/moe-jetbrains/lib/new.txt')), true);
 });
 
