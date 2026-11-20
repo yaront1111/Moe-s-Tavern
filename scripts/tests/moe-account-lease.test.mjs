@@ -20,6 +20,7 @@ import {
   findWindowsCommand,
   formatStatus,
   gateLine,
+  holdsRefusal,
   localConfigDir,
   pickLine,
   probeCommand,
@@ -269,6 +270,27 @@ test('statusline prints the account and usage, and writes the sample for the wra
   const badId = helper(['statusline'], { env: cleanEnv({ MOE_ACCOUNT_ID: 'bad id', MOE_ACCOUNT_SAMPLE_FILE: sample }), input });
   assert.equal(badId.stdout, 'Opus | no account | 5h 42% | 7d 63%\n');
   assert.equal(fs.existsSync(sample), false, 'no sample without a valid account id');
+});
+
+// moe-account-switch records claude stopping at the limit as a refused sample; a
+// later refresh must not turn it back into an ordinary one before the wrapper reads it.
+test('statusline keeps the refusal moe-account-switch wrote for the same account', (t) => {
+  const sample = path.join(tempDir(t), 'sample.json');
+  const input = JSON.stringify({ rate_limits: { five_hour: { used_percentage: 88 } } });
+  const refusal = JSON.stringify({ accountId: 'acct-2', windows: { five_hour: { percent: 100, status: 'rejected' } }, refused: true });
+  fs.writeFileSync(sample, refusal);
+  const out = helper(['statusline'], { env: cleanEnv({ MOE_ACCOUNT_ID: 'acct-2', MOE_ACCOUNT_SAMPLE_FILE: sample }), input });
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, 'claude | acct-2 | 5h 88%\n');
+  assert.equal(fs.readFileSync(sample, 'utf8'), refusal);
+  // Another account's refusal, or no refusal, is replaced as before.
+  for (const prior of [refusal.replace('acct-2', 'acct-1'), JSON.stringify({ accountId: 'acct-2', windows: {}, refused: false }), '{oops']) {
+    fs.writeFileSync(sample, prior);
+    helper(['statusline'], { env: cleanEnv({ MOE_ACCOUNT_ID: 'acct-2', MOE_ACCOUNT_SAMPLE_FILE: sample }), input });
+    assert.deepEqual(JSON.parse(fs.readFileSync(sample, 'utf8')), { accountId: 'acct-2', windows: { five_hour: { percent: 88 } }, refused: false });
+  }
+  assert.equal(holdsRefusal(sample, 'acct-2'), false);
+  assert.equal(holdsRefusal(path.join(path.dirname(sample), 'missing.json'), 'acct-2'), false);
 });
 
 // The statusline runs once per refresh, each time a new process: a temp file a
