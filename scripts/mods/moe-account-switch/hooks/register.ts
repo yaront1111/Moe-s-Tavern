@@ -5,7 +5,8 @@ import type { EngineInterface, Register, Timer, ToolCallResult } from 'claude-co
 // relaunches it. Three triggers:
 // - Account switch: the seat moves to the next Claude account the way a
 //   headless worker does. This mod marks submit_plan, chat_wait and
-//   claim_next_task as calls the session can act on (acceptsAccountSwitch) and
+//   claim_next_task as calls the session can act on (acceptsAccountSwitch),
+//   keeps a marked chat_wait under claude's 120 s move to the background, and
 //   notices the accountSwitch a moe reply carries, or claude stopping at the
 //   usage limit. Needs a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by
 //   scripts/moe-agent.{sh,ps1}).
@@ -50,6 +51,14 @@ const MARKED = new Set(['submit_plan', 'chat_wait', 'claim_next_task'])
 const SIGNALS = new Set(['submit_plan', 'chat_wait', 'claim_next_task', 'complete_step'])
 /** Calls that start new work: refused once a switch is due. */
 const HELD = new Set(['claim_next_task', 'wait_for_task', 'chat_wait', 'start_step'])
+/**
+ * The longest wait a marked chat_wait asks for. claude moves a tool call still
+ * running after 120 s to the background ('is still running after 120s. It was
+ * moved to the background as task …'), and its reply then reaches the model as
+ * a notification that no tool.call hook sees. A governor's 600 s wait carried its
+ * switch that way on 11-20, and its session stayed up with its loop off.
+ */
+export const CHAT_WAIT_MAX_MS = 100_000
 
 /** The reply as the model read it: core's text, or a hook's own result. */
 function textOf(r: ToolCallResult): string | undefined {
@@ -284,7 +293,16 @@ export const register: Register = on => {
       return { deny: session.pending }
     }
     const leased = Boolean(await $.env.get('MOE_ACCOUNT_ID'))
-    const r = await next(leased && MARKED.has(tool) ? ({ ...e, acceptsAccountSwitch: true } as typeof e) : e)
+    let sent = e
+    if (leased && MARKED.has(tool)) {
+      sent = { ...e, acceptsAccountSwitch: true } as typeof e
+      const asked = (e as { timeoutMs?: unknown }).timeoutMs
+      // Omitted, the daemon waits 300 s.
+      if (tool === 'chat_wait' && (asked === undefined || (typeof asked === 'number' && asked > CHAT_WAIT_MAX_MS))) {
+        sent = { ...sent, timeoutMs: CHAT_WAIT_MAX_MS } as typeof e
+      }
+    }
+    const r = await next(sent)
     if (leased) session.pending ??= switchInstruction(tool, r)
     const ended = session.pending ? undefined : endSessionInstruction(r, workerId)
     // A -p run draws on no surface, and its session ends with its turn anyway.
