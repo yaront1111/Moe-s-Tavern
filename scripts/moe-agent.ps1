@@ -9231,6 +9231,10 @@ function Update-ResumeBudgetOnProgress {
 # the limit had reset -- twice in one night. Such exits are NOT counted against
 # the resume budget; the relaunch backs off exponentially instead (the held
 # task stays held until the third one, when launch outage mode below releases it).
+# A run claude stopped at its account's usage limit (AccountLimitHit) is one
+# whatever its exit code, and keeps its task through the outage: measured
+# 2026-11-20, an interactive seat's moe-account-switch /exit made each such run
+# exit 0 after ~49 s, five counted, and the seat idled 2.5 h after the reset.
 $script:LaunchFailStreak = 0
 $script:LaunchFailBackoffSec = 0
 $script:CliLaunchedAt = $null
@@ -9254,7 +9258,9 @@ if ($env:MOE_LAUNCH_BACKOFF_MAX_SEC -match '^\d+$') { $launchBackoffMaxSec = [in
 # claims no new task, and relaunches as a taskless launch probe on the same
 # backoff. The first launch that runs ends the outage and claiming resumes.
 # Claude seats that rotate accounts relaunch on the next account instead
-# ($script:AccountRelaunch resets the streak).
+# ($script:AccountRelaunch resets the streak). A third failure claude stopped at
+# the usage limit (AccountLimitHit) enters no outage: the limit resets on its
+# own, so the seat keeps its task and backs off.
 $script:LaunchOutage = $false
 # The task the seat still holds in outage, '' for none: pre-flight then skips
 # claim_next_task, which CLAIMS a task for a worker that holds none.
@@ -9347,6 +9353,10 @@ $script:AccountPrevId = ''
 $script:AccountSampleSent = ''
 $script:AccountWindows = [ordered]@{}
 $script:AccountSampleRefused = $false
+# The last run's sample has a window claude reported `rejected`: claude stopped
+# at the account's usage limit, whatever the run's exit code (an interactive
+# seat's moe-account-switch /exit is exit 0). Set by Send-MoeAccountSample.
+$script:AccountLimitHit = $false
 $script:AccountRelaunch = $false
 $script:AccountLastFailed = ''
 $script:AccountSavedEnv = $null
@@ -9376,6 +9386,7 @@ function Clear-MoeAccountLease {
     $script:AccountSampleSent = ''
     $script:AccountWindows = [ordered]@{}
     $script:AccountSampleRefused = $false
+    $script:AccountLimitHit = $false
     $script:accountArgs = @()
     Remove-Item -LiteralPath $script:AccountSampleFile -Force -ErrorAction SilentlyContinue
 }
@@ -9664,13 +9675,24 @@ function Restore-MoeAccountEnv {
     $script:AccountSavedEnv = $null
 }
 
-# Sends the latest usage sample once. $false only when the daemon did not take it.
+# Sends the latest usage sample (written by the stream parser, the statusline,
+# or moe-account-switch when claude stopped at the limit) once, and sets
+# AccountSampleRefused and AccountLimitHit from it (twin: report_account_sample).
+# $false only when the daemon did not take it.
 function Send-MoeAccountSample {
+    $script:AccountLimitHit = $false
     if (-not $script:AccountLeasedId -or -not (Test-Path -LiteralPath $script:AccountSampleFile)) { return $true }
     $body = try { [IO.File]::ReadAllText($script:AccountSampleFile) } catch { '' }
-    if (-not $body -or $body -ceq $script:AccountSampleSent) { return $true }
+    if (-not $body) { return $true }
     $sample = try { $body | ConvertFrom-Json -ErrorAction Stop } catch { $null }
     if (-not $sample -or [string]$sample.accountId -cne $script:AccountLeasedId) { return $true }
+    if ($sample.refused -eq $true) { $script:AccountSampleRefused = $true }
+    if ($sample.windows) {
+        foreach ($window in $sample.windows.PSObject.Properties) {
+            if ($window.Value -and $window.Value.PSObject.Properties['status'] -and [string]$window.Value.status -ceq 'rejected') { $script:AccountLimitHit = $true }
+        }
+    }
+    if ($body -ceq $script:AccountSampleSent) { return $true }
     $sent = Invoke-MoeRpc -Tool 'report_account_usage' -Args @{ workerId = $WorkerId; accountId = $script:AccountLeasedId
         windows = $sample.windows; refused = ($sample.refused -eq $true) }
     if ($null -eq $sent) { return $false }
@@ -12139,7 +12161,11 @@ $mentionsJson
     # Claude account rotation, after a leased run: report its last usage sample,
     # then ask whether the run failed because of its account. A refusal needs
     # both signals (the CLI said the account is spent, and the run failed); any
-    # other failure checks the account's sign-in. Once the daemon has answered,
+    # other failure checks the account's sign-in. A run claude stopped at the
+    # limit (a `rejected` window, AccountLimitHit) failed whatever its exit
+    # code: moe-account-switch ends that interactive session with /exit, exit 0
+    # (measured 2026-11-20: five such exits paused auto-resume, idle for 2.5 h
+    # after the limit reset). Once the daemon has answered,
     # the account is parked, so the relaunch is immediate and lands on the next
     # one. An unanswered report, or the account the previous account relaunch
     # moved away from failing again (a daemon that hands it back would
@@ -12147,13 +12173,13 @@ $mentionsJson
     # launch-failure classes below.
     if ($script:AccountLeasedId -and -not $script:MoeVmRoute) {
         $moeAccountReported = Send-MoeAccountSample
-        if ($cliExitForLaunch -eq 0) {
+        if ($cliExitForLaunch -eq 0 -and -not $script:AccountLimitHit) {
             $script:AccountLastFailed = ''
         } elseif ($script:AccountLeasedId -cne $script:AccountLastFailed) {
             if ($script:AccountSampleRefused -and $moeAccountReported) {
                 Write-Host "[account] MOE_ACCOUNT_REFUSED account=$($script:AccountLeasedId) exit=$cliExitForLaunch - relaunching on the next account; the held task stays held." -ForegroundColor Yellow
                 $script:AccountRelaunch = $true
-            } else {
+            } elseif ($cliExitForLaunch -ne 0) {
                 $moeProbeWords = @($Command) + @($CommandArgs | Where-Object { $null -ne $_ })
                 # A protected CLI probes extensionless, so the helper resolves PATHEXT in the
                 # trusted dir only: a .ps1 handed to cmd would open by its file association.
@@ -12182,7 +12208,7 @@ $mentionsJson
         if ($script:ResumeAttempts -gt 0) { $script:ResumeAttempts-- }
         $script:LaunchFailStreak = 0
         $script:LaunchFailBackoffSec = 0
-    } elseif ($cliExitForLaunch -ne 0 -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
+    } elseif (($cliExitForLaunch -ne 0 -or $script:AccountLimitHit) -and $cliElapsedSec -ge 0 -and $cliElapsedSec -lt $launchFailSec) {
         $moeCurrentLaunchFailed = $true
         $script:LaunchFailStreak++
         # Not a mid-task death: give the resume attempt back.
@@ -12193,8 +12219,10 @@ $mentionsJson
         if ($script:LaunchFailStreak -eq 3) {
             $script:LaunchFailHead = "@governors ${WorkerId}: CLI exits within ${launchFailSec}s of launch (exit $cliExitForLaunch, $($script:LaunchFailStreak) in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
             # VM seats cannot run a taskless recovery probe. Keep their task and use
-            # the same bounded backoff plus one escalation below.
-            if ($AutoClaim -and $Role -ne 'governor' -and -not $script:MoeVmRoute) {
+            # the same bounded backoff plus one escalation below. So does a seat
+            # claude stopped at the usage limit: the limit resets on its own, and
+            # the seat resumes its task then instead of releasing it.
+            if ($AutoClaim -and $Role -ne 'governor' -and -not $script:MoeVmRoute -and -not $script:AccountLimitHit) {
                 # Launch outage mode (declared above the loop). The release and
                 # its @governors line wait for this iteration's post-flight
                 # (Invoke-MoeLaunchOutagePostflight), so the landing and finalize

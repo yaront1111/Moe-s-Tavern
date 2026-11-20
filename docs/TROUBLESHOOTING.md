@@ -1085,7 +1085,11 @@ on the next account.` After that, the TUI exits by itself. The wrapper relaunche
 - for a governor, at a `chat_wait`.
 
 The toast reads `this Claude account reached its usage limit` instead when claude stopped the session at the limit
-itself.
+itself. The mod then also records the refusal in the seat's usage sample, so the wrapper prints
+`MOE_ACCOUNT_REFUSED account=<id> exit=0`, the daemon parks that account until its window resets, and the seat
+relaunches on the next account with its task held and no resume attempt spent. While every account is spent it waits
+(`MOE_ACCOUNT_WAIT`). A relaunch that claude stops at the limit again within `MOE_LAUNCH_FAIL_SEC` is a launch failure:
+it backs off (`[launch-failure]`) and keeps the task, and never ends in a `pausing auto-resume` escalation.
 
 **Cause:** expected. The wrapper loads the `moe-account-switch` mod (`scripts/mods/`) into a claude TUI whose loop
 relaunches it. The mod ends the session once the turn is over, after either of these:

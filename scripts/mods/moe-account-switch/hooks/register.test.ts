@@ -303,6 +303,60 @@ for (const env of [{ MOE_WORKER_ID: '', MOE_ACCOUNT_ID: 'acct-1' }, { MOE_WORKER
   })
 }
 
+// The wrapper's usage sample: claude stopping at the limit ends the session with
+// exit 0, so the refusal reaches the wrapper only through this file.
+const SAMPLE = '/tmp/moe-account-sample-architect-1.json'
+
+test('a hard limit leaves the wrapper a refused sample of its spent windows, once', async ($, on) => {
+  mock.env(on, { ...SEAT, MOE_ACCOUNT_SAMPLE_FILE: SAMPLE })
+  const writes: { path: string, text: string }[] = []
+  on('fs.write', ($, e) => { writes.push({ path: e.path, text: e.text }); return { value: undefined } })
+  const reset = '2026-11-20T18:30:00.000Z'
+  const seen = engine(on, {}, () => ({ ...usage(), rateLimits: [
+    { kind: 'five_hour', percentUsed: 100, resetsAt: reset }, { kind: 'seven_day', percentUsed: 24 }] }))
+  const clock = mock.clock(on)
+  await $.turn.complete({ ...TURN, turnId: 't1', reason: 'error' })
+  // The engine resolves the path for its platform (D:\tmp\... on Windows).
+  expect(writes.map(w => w.path.replaceAll('\\', '/').endsWith(SAMPLE))).toEqual([true])
+  expect(JSON.parse(writes[0].text)).toEqual({
+    accountId: 'acct-1', windows: { five_hour: { percent: 100, status: 'rejected', resetsAt: reset } }, refused: true,
+  })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual(['exit'])
+  await $.turn.complete({ ...TURN, turnId: 't2', reason: 'error' })
+  expect(writes).toHaveLength(1)
+})
+
+for (const [name, env, percent, reply] of [
+  ['a switch the daemon asked for', { ...SEAT, MOE_ACCOUNT_SAMPLE_FILE: SAMPLE }, 93, WAIT_SWITCH],
+  ['usage below the limit', { ...SEAT, MOE_ACCOUNT_SAMPLE_FILE: SAMPLE }, 99.9, undefined],
+  ['a wrapper that names no sample file', SEAT, 100, undefined],
+] as const) {
+  test(`${name} writes no usage sample`, async ($, on) => {
+    mock.env(on, env)
+    const writes: string[] = []
+    on('fs.write', ($, e) => { writes.push(e.path); return { value: undefined } })
+    const seen = engine(on, reply ? { chat_wait: reply } : {}, () => usage(percent))
+    const clock = mock.clock(on)
+    await $.turn.start({ text: 'govern', turnId: 't1' })
+    if (reply) await call($, 'chat_wait', { workerId: 'governor-1' })
+    await $.turn.complete({ ...TURN, turnId: 't1' })
+    await clock.advance(EXIT_DELAY_MS)
+    expect(writes).toEqual([])
+    expect(seen.commands).toEqual(percent < 100 && !reply ? [] : ['exit'])
+  })
+}
+
+test('a sample that cannot be written still ends the session at the limit', async ($, on) => {
+  mock.env(on, { ...SEAT, MOE_ACCOUNT_SAMPLE_FILE: SAMPLE })
+  on('fs.write', () => { throw new Error('EACCES') })
+  const seen = engine(on, {}, () => usage(100))
+  const clock = mock.clock(on)
+  expect(await $.turn.complete({ ...TURN, turnId: 't1', reason: 'error' })).toEqual({ text: 'ok' })
+  await clock.advance(EXIT_DELAY_MS)
+  expect(seen.commands).toEqual(['exit'])
+})
+
 test('a subagent does not read spent usage but the next main completion does', async ($, on) => {
   mock.env(on, SEAT)
   const seen = engine(on, {}, () => usage(100))

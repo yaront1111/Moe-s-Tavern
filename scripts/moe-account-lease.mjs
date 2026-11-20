@@ -508,6 +508,21 @@ function readStdin() {
   }
 }
 
+/**
+ * True when the sample file already holds a refusal for this account:
+ * moe-account-switch wrote it when claude stopped at the limit, and a later
+ * statusline refresh must not turn it back into an ordinary sample. The wrapper
+ * deletes the file before every launch.
+ */
+export function holdsRefusal(file, accountId) {
+  try {
+    const sample = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return sample?.accountId === accountId && sample.refused === true;
+  } catch {
+    return false;
+  }
+}
+
 function statusline(env) {
   let input = {};
   try {
@@ -517,7 +532,7 @@ function statusline(env) {
   }
   const windows = statuslineSample(input);
   const accountId = ACCOUNT_ID_RE.test(env.MOE_ACCOUNT_ID ?? '') ? env.MOE_ACCOUNT_ID : '';
-  if (accountId && env.MOE_ACCOUNT_SAMPLE_FILE && Object.keys(windows).length) {
+  if (accountId && env.MOE_ACCOUNT_SAMPLE_FILE && Object.keys(windows).length && !holdsRefusal(env.MOE_ACCOUNT_SAMPLE_FILE, accountId)) {
     try {
       writeSample(env.MOE_ACCOUNT_SAMPLE_FILE, { accountId, windows, refused: false });
     } catch {
