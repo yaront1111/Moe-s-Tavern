@@ -1254,7 +1254,7 @@ interface Team {
   role: TeamRole | null;         // Optional team role (null = project team)
   memberIds: string[];           // Worker IDs belonging to this team
   formerMemberIds?: string[];    // Eviction tombstone: members whose worker record was deleted (stale sweep, DEAD prune, restart purge) or DEAD members a join into a full team evicted; read only to auto-rejoin a returning worker, never counted toward maxSize; cleared when it joins or leaves any team
-  maxSize: number;               // Maximum members (default 10)
+  maxSize: number;               // Maximum members: 1 to 10 (default 10). A team saved with a larger value keeps its members but seats no new one past 10
 
   // Timestamps
   createdAt: string;

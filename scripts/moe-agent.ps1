@@ -1833,7 +1833,7 @@ if ($Team -and -not $moeMigration) {
             $joinResult = Invoke-MoeRpcRaw -RpcJson $joinRpc
             if ($joinResult -and $joinResult.PSObject.Properties['error'] -and $joinResult.error) {
                 $teamJoinLastError = [string]$joinResult.error.message
-                Write-Host "[WARN] moe.join_team refused: $($joinResult.error.message) - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Raise the team's maxSize or free a seat; a claiming seat retries the join before every claim." -ForegroundColor Yellow
+                Write-Host "[WARN] moe.join_team refused: $($joinResult.error.message) - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Free a seat or raise the team's maxSize (at most 10); a claiming seat retries the join before every claim." -ForegroundColor Yellow
             } elseif ($null -eq $joinResult) {
                 $teamJoinLastError = "no answer"
                 Write-Host "[WARN] moe.join_team got no answer; team membership is unconfirmed." -ForegroundColor Yellow

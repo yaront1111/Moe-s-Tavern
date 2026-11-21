@@ -2263,7 +2263,7 @@ print(err)
 " <<< "$TEAM_JOIN_RESULT" 2>/dev/null || true)
             if [ -n "$TEAM_JOIN_ERROR" ]; then
                 TEAM_JOIN_LAST_ERROR="$TEAM_JOIN_ERROR"
-                echo -e "${YELLOW}[WARN]${NC} moe.join_team refused: $TEAM_JOIN_ERROR - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Raise the team's maxSize or free a seat; a claiming seat retries the join before every claim."
+                echo -e "${YELLOW}[WARN]${NC} moe.join_team refused: $TEAM_JOIN_ERROR - this seat has NO team, so claim_next_task skips every epic a live worker already holds. Free a seat or raise the team's maxSize (at most 10); a claiming seat retries the join before every claim."
             elif [ -z "$TEAM_JOIN_RESULT" ]; then
                 TEAM_JOIN_LAST_ERROR="no answer"
                 echo -e "${YELLOW}[WARN]${NC} moe.join_team got no answer; team membership is unconfirmed."

@@ -1,6 +1,7 @@
 import type { StateManager } from '../state/StateManager.js';
 import type { Team } from '../types/schema.js';
 import { roleFromWorkerId } from './workerRole.js';
+import { teamSeatLimit } from './teamSeats.js';
 
 /**
  * Team membership survives the worker record it is stored on.
@@ -83,7 +84,7 @@ export async function healTeamMembership(state: StateManager, workerId: string):
   if (!state.getWorker(workerId)) return null;
   // A team that filled up while the worker was gone keeps its seats: healing
   // must never evict a current member, and must never surface as an error.
-  if (tombstoned.memberIds.length >= tombstoned.maxSize) return null;
+  if (tombstoned.memberIds.length >= teamSeatLimit(tombstoned)) return null;
   try {
     return await state.addTeamMember(tombstoned.id, workerId);
   } catch {

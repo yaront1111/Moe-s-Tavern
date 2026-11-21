@@ -41,6 +41,7 @@ import { MAX_STEP_DESCRIPTION_CHARS, MAX_STEP_FILES, MAX_STEP_NOTE_CHARS } from 
 import { normalizeAffectedFile, normalizeAffectedFiles } from '../util/affectedFiles.js';
 import { validateEntityId } from '../util/sanitize.js';
 import { MAX_AMENDMENTS_PER_STEP } from '../util/planAmendments.js';
+import { MAX_TEAM_MEMBERS, teamSeatLimit } from '../util/teamSeats.js';
 
 const MAX_COMMENTS_PER_TASK_DEFAULT = 200;
 const MAX_COMMENTS_PER_TASK_ENV = parseInt(process.env.MOE_MAX_COMMENTS_PER_TASK || `${MAX_COMMENTS_PER_TASK_DEFAULT}`, 10);
@@ -714,7 +715,7 @@ export function validateTeamRole(value: unknown): TeamRole | null {
 }
 
 export function validateTeamMaxSize(value: unknown): number {
-  return validateIntegerValue(value, 'maxSize', 1, 1000);
+  return validateIntegerValue(value, 'maxSize', 1, MAX_TEAM_MEMBERS);
 }
 
 export function validateMemberIds(value: unknown, field = 'memberIds'): string[] {
@@ -737,7 +738,7 @@ export function validateMemberIds(value: unknown, field = 'memberIds'): string[]
 export function validateCreateTeamInput(input: { name: string; role?: TeamRole | null; maxSize?: number }): { name: string; role: TeamRole | null; maxSize: number } {
   const raw = requirePlainObject(input, 'team');
   rejectUnknownFields(raw, ['name', 'role', 'maxSize'], 'team');
-  const maxSize = raw.maxSize === undefined ? 10 : validateTeamMaxSize(raw.maxSize);
+  const maxSize = raw.maxSize === undefined ? MAX_TEAM_MEMBERS : validateTeamMaxSize(raw.maxSize);
   return {
     name: validateTeamName(raw.name),
     role: validateTeamRole(raw.role),
@@ -772,6 +773,12 @@ export function validateTeamUpdates(team: Team, updates: Partial<Team>): Partial
   const nextMaxSize = sanitized.maxSize ?? team.maxSize;
   if (nextMemberIds.length > nextMaxSize) {
     throw invalidInput('maxSize', 'must be at least the number of members');
+  }
+  // A team persisted above the cap keeps its members (removals still apply),
+  // but no update may seat a new member past MAX_TEAM_MEMBERS.
+  const adds = nextMemberIds.some((id) => !team.memberIds.includes(id));
+  if (adds && nextMemberIds.length > teamSeatLimit({ maxSize: nextMaxSize })) {
+    throw invalidInput('memberIds', `must not exceed ${MAX_TEAM_MEMBERS} members`);
   }
 
   return sanitized;

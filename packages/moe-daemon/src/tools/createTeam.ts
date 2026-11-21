@@ -3,6 +3,7 @@ import type { StateManager } from '../state/StateManager.js';
 import type { TeamRole } from '../types/schema.js';
 import { missingRequired, invalidInput } from '../util/errors.js';
 import { validateTeamName } from '../state/validators.js';
+import { MAX_TEAM_MEMBERS } from '../util/teamSeats.js';
 
 const VALID_ROLES: TeamRole[] = ['architect', 'worker', 'qa', 'governor'];
 
@@ -15,7 +16,12 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
       properties: {
         name: { type: 'string', description: 'Team display name (e.g. "Coders")' },
         role: { type: 'string', enum: VALID_ROLES, description: 'Team role: architect, worker, qa, or governor (optional)' },
-        maxSize: { type: 'number', description: 'Maximum number of members (default 10)' }
+        maxSize: {
+          type: 'number',
+          minimum: 1,
+          maximum: MAX_TEAM_MEMBERS,
+          description: `Maximum number of members, 1 to ${MAX_TEAM_MEMBERS} (default ${MAX_TEAM_MEMBERS}). No team holds more than ${MAX_TEAM_MEMBERS}.`
+        }
       },
       required: ['name'],
       additionalProperties: false
@@ -43,8 +49,8 @@ export function createTeamTool(_state: StateManager): ToolDefinition {
         role = params.role as TeamRole;
       }
       if (params.maxSize !== undefined) {
-        if (typeof params.maxSize !== 'number' || !Number.isFinite(params.maxSize) || !Number.isInteger(params.maxSize) || params.maxSize < 1 || params.maxSize > 1000) {
-          throw invalidInput('maxSize', 'must be an integer between 1 and 1000');
+        if (typeof params.maxSize !== 'number' || !Number.isFinite(params.maxSize) || !Number.isInteger(params.maxSize) || params.maxSize < 1 || params.maxSize > MAX_TEAM_MEMBERS) {
+          throw invalidInput('maxSize', `must be an integer between 1 and ${MAX_TEAM_MEMBERS}`);
         }
       }
 

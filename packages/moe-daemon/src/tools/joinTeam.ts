@@ -4,6 +4,7 @@ import type { WorkerType } from '../types/schema.js';
 import { missingRequired, notFound } from '../util/errors.js';
 import { assertTeamHasSeat } from '../state/teamStore.js';
 import { logger } from '../util/logger.js';
+import { MAX_TEAM_MEMBERS } from '../util/teamSeats.js';
 
 // Record<WorkerType, true> makes tsc fail if WorkerType grows without this list.
 const WORKER_TYPES: Record<WorkerType, true> = { CLAUDE: true, CODEX: true, GEMINI: true, GROK: true, COPILOT: true };
@@ -48,7 +49,8 @@ export const WORKER_TYPE_SCHEMA = {
 export function joinTeamTool(_state: StateManager): ToolDefinition {
   return {
     name: 'moe.join_team',
-    description: 'Add a worker to a team. Auto-registers worker if not exists; a successful join revives a DEAD worker to IDLE and records the optional reported workerType.',
+    description: 'Add a worker to a team. Auto-registers worker if not exists; a successful join revives a DEAD worker to IDLE and records the optional reported workerType. ' +
+      `A team seats at most its maxSize members, and never more than ${MAX_TEAM_MEMBERS}: a join past that is refused with TEAM_FULL, while a current member's re-join always succeeds.`,
     inputSchema: {
       type: 'object',
       properties: {

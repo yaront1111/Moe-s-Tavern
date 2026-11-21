@@ -2480,7 +2480,7 @@ Create a team or return an existing team with the same name and role (idempotent
 {
   name: string,          // Required: team display name (e.g. "Coders")
   role?: 'architect' | 'worker' | 'qa' | 'governor', // Optional: team role (omit for project team)
-  maxSize?: number       // Maximum members (default 10)
+  maxSize?: number       // Maximum members: 1 to 10 (default 10). A larger value is refused with INVALID_INPUT
 }
 ```
 
@@ -2499,6 +2499,8 @@ Create a team or return an existing team with the same name and role (idempotent
 ### moe.join_team
 
 Add a worker to a team. Auto-registers the worker if it doesn't exist, and a successful join revives a `DEAD` record to `IDLE` (current task and chat cursors kept; the type follows a supplied `workerType`): the wrappers re-join at every pre-flight, before any chat read, so an idle seat whose record was pruned or deregistered (hot reload) can answer chat under its own id. A refused join leaves a `DEAD` record `DEAD`; heartbeats never revive one.
+
+**No team seats more than 10 members.** A team's seats are its `maxSize`, capped at 10 (`MAX_TEAM_MEMBERS`, `util/teamSeats.ts`). `create_team` and a team update refuse a `maxSize` above 10, and a team update that adds a member past 10 is refused. A team saved with a larger `maxSize` keeps every current member, and removals still apply, but it seats no new member while 10 or more of its members are live.
 
 **A `DEAD` member holds no seat.** When a join finds the team at `maxSize`, every `DEAD` member is first evicted to the team's `formerMemberIds` tombstone, the way the stale prune would later: its record keeps `DEAD` and its `lastActivityAt`, and its `teamId` is cleared. The join is refused only when the live, non-`DEAD` members already fill `maxSize`, and a refused join changes nothing. A `DEAD` member re-joining under its own id (the `wrapper_restart` path) keeps its seat. A team below `maxSize` never evicts.
 
@@ -2521,7 +2523,7 @@ Add a worker to a team. Auto-registers the worker if it doesn't exist, and a suc
 **Errors.** Every refusal writes nothing. JSON-RPC code, then `MoeError.codeName`:
 - `-32602 MISSING_REQUIRED`: `teamId` or `workerId` is missing
 - `-32001 NOT_FOUND`: `Team not found: <teamId>`
-- `-32002 TEAM_FULL`: `Team <name> is full (max N members)`, when the live (non-`DEAD`) members already fill `maxSize`; a current member's re-join is never refused, and a refused seat can retry once a seat frees
+- `-32002 TEAM_FULL`: `Team <name> is full (max N members)`, when the live (non-`DEAD`) members already fill the team's seats (`maxSize`, capped at 10, so N is never above 10); a current member's re-join is never refused, and a refused seat can retry once a seat frees
 
 ---
 
