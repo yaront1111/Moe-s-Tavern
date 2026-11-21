@@ -1,4 +1,4 @@
-import type { EngineInterface, Register, Timer, ToolCallResult } from 'claude-code'
+import type { EngineInterface, Register, SessionRateLimit, Timer, ToolCallResult } from 'claude-code'
 
 // An interactive Moe seat (the wrapper loads this mod only for a claude TUI
 // whose loop relaunches it) ends its session when Moe says so, and the wrapper
@@ -8,8 +8,9 @@ import type { EngineInterface, Register, Timer, ToolCallResult } from 'claude-co
 //   claim_next_task as calls the session can act on (acceptsAccountSwitch),
 //   keeps a marked chat_wait under claude's 120 s move to the background, and
 //   notices the accountSwitch a moe reply carries, or claude stopping at the
-//   usage limit. Needs a leased seat (MOE_WORKER_ID and MOE_ACCOUNT_ID set by
-//   scripts/moe-agent.{sh,ps1}).
+//   usage limit, which it also records as a refused usage sample for the
+//   wrapper (MOE_ACCOUNT_SAMPLE_FILE). Needs a leased seat (MOE_WORKER_ID and
+//   MOE_ACCOUNT_ID set by scripts/moe-agent.{sh,ps1}).
 // - END_SESSION: the sessionHandoff a moe reply addresses to this seat
 //   (report_blocked freed it, or a claim_next_task/wait_for_task refusal over a
 //   resource-held task). A TUI cannot end itself, and the next task needs a
@@ -134,8 +135,30 @@ async function isSeat($: EngineInterface): Promise<boolean> {
 async function checkHardLimit($: EngineInterface, session: Session): Promise<void> {
   if (session.pending || !(await isSeat($))) return
   const { rateLimits } = await $.session.usage()
-  if (rateLimits.some(window => window.percentUsed >= 100)) {
-    session.pending ??= `${MARK} this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.`
+  const spent = rateLimits.filter(window => window.percentUsed >= 100)
+  if (!spent.length) return
+  session.pending ??= `${MARK} this Claude account reached its usage limit. End your turn now: Moe restarts this seat on the next account.`
+  await reportRefusal($, spent)
+}
+
+/**
+ * Tells the wrapper claude stopped at the limit, in the usage sample it sends
+ * Moe after the run (MOE_ACCOUNT_SAMPLE_FILE): a refused sample whose spent
+ * windows say rejected, as the -p stream parser writes for a rejected
+ * rate_limit_event. The /exit below ends with exit 0, which the wrapper read as
+ * a session that died holding its task (2026-11-20: five in a row paused
+ * auto-resume for 2.5 h after the limit reset). Best effort.
+ */
+async function reportRefusal($: EngineInterface, spent: readonly SessionRateLimit[]): Promise<void> {
+  try {
+    const file = await $.env.get('MOE_ACCOUNT_SAMPLE_FILE')
+    const accountId = await $.env.get('MOE_ACCOUNT_ID')
+    if (!file || !accountId) return
+    const windows = Object.fromEntries(spent.map(window =>
+      [window.kind, { percent: window.percentUsed, status: 'rejected', ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }]))
+    await $.fs.write(file, JSON.stringify({ accountId, windows, refused: true }))
+  } catch {
+    // The session still ends; the wrapper then reads an ordinary exit.
   }
 }
 

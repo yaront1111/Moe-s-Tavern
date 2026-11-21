@@ -9467,6 +9467,10 @@ rearm_resume_on_progress() { # $1 = the post-session get_context JSON
 # hours after the limit had reset. Such exits are NOT counted against the
 # resume budget; the relaunch backs off exponentially instead (the held task
 # stays held until the third one, when launch outage mode below releases it).
+# A run claude stopped at its account's usage limit (ACCOUNT_LIMIT_HIT) is one
+# whatever its exit code, and keeps its task through the outage: measured
+# 2026-11-20, an interactive seat's moe-account-switch /exit made each such run
+# exit 0 after ~49 s, five counted, and the seat idled 2.5 h after the reset.
 LAUNCH_FAIL_STREAK=0
 LAUNCH_FAIL_BACKOFF_SEC=0
 CLI_LAUNCHED_AT=""
@@ -9490,7 +9494,9 @@ case "$LAUNCH_BACKOFF_MAX_SEC" in ''|*[!0-9]*) LAUNCH_BACKOFF_MAX_SEC=900 ;; esa
 # keeps it), claims no new task, and relaunches as a taskless launch probe on
 # the same backoff. The first launch that runs ends the outage and claiming
 # resumes. Claude seats that rotate accounts relaunch on the next account
-# instead (ACCOUNT_RELAUNCH resets the streak).
+# instead (ACCOUNT_RELAUNCH resets the streak). A third failure claude stopped
+# at the usage limit (ACCOUNT_LIMIT_HIT) enters no outage: the limit resets on
+# its own, so the seat keeps its task and backs off.
 LAUNCH_OUTAGE=false
 # The task the seat still holds in outage, "" for none: pre-flight then skips
 # claim_next_task, which CLAIMS a task for a worker that holds none.
@@ -9599,6 +9605,10 @@ ACCOUNT_LEASED_DIR=""
 ACCOUNT_PREV_ID=""
 ACCOUNT_SAMPLE_SENT=""
 ACCOUNT_SAMPLE_REFUSED=false
+# The last run's sample has a window claude reported `rejected`: claude stopped
+# at the account's usage limit, whatever the run's exit code (an interactive
+# seat's moe-account-switch /exit is exit 0). Set by report_account_sample.
+ACCOUNT_LIMIT_HIT=false
 ACCOUNT_RELAUNCH=false
 ACCOUNT_LAST_FAILED=""
 ACCOUNT_ARGS=()
@@ -9610,6 +9620,7 @@ clear_account_lease() {
     ACCOUNT_LEASED_ID=""
     ACCOUNT_LEASED_DIR=""
     ACCOUNT_SAMPLE_SENT=""
+    ACCOUNT_LIMIT_HIT=false
     ACCOUNT_ARGS=()
     rm -f "$ACCOUNT_SAMPLE_FILE" 2>/dev/null || true
 }
@@ -9831,22 +9842,30 @@ apply_account_env() {
         CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_FOUNDRY
 }
 
-# Sends the latest usage sample (written by the stream parser or the
-# statusline) once and sets ACCOUNT_SAMPLE_REFUSED from it. Returns 1 only when
+# Sends the latest usage sample (written by the stream parser, the statusline,
+# or moe-account-switch when claude stopped at the limit) once and sets
+# ACCOUNT_SAMPLE_REFUSED and ACCOUNT_LIMIT_HIT from it. Returns 1 only when
 # the daemon did not take it.
 report_account_sample() {
-    local body args
+    local body args out
     ACCOUNT_SAMPLE_REFUSED=false
+    ACCOUNT_LIMIT_HIT=false
     [ -n "$ACCOUNT_LEASED_ID" ] && [ -s "$ACCOUNT_SAMPLE_FILE" ] || return 0
     body=$(cat "$ACCOUNT_SAMPLE_FILE" 2>/dev/null) || return 0
-    args=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
+    out=$(PYTHONIOENCODING=utf-8 $PYTHON_CMD -c '
 import json, sys
 s = json.loads(sys.stdin.read())
 if not isinstance(s, dict) or s.get("accountId") != sys.argv[2]:
     sys.exit(1)
 w = s.get("windows")
-print(json.dumps({"workerId": sys.argv[1], "accountId": sys.argv[2], "windows": w if isinstance(w, dict) else {}, "refused": s.get("refused") is True}))
+w = w if isinstance(w, dict) else {}
+print(json.dumps({"workerId": sys.argv[1], "accountId": sys.argv[2], "windows": w, "refused": s.get("refused") is True}))
+if any(isinstance(v, dict) and v.get("status") == "rejected" for v in w.values()):
+    print("limit")
 ' "$WORKER_ID" "$ACCOUNT_LEASED_ID" <<< "$body" 2>/dev/null) || return 0
+    out=${out//$'\r'/}
+    args=${out%%$'\n'*}
+    case "$out" in *$'\n'limit) ACCOUNT_LIMIT_HIT=true ;; esac
     case "$args" in *'"refused": true}') ACCOUNT_SAMPLE_REFUSED=true ;; esac
     [ "$body" != "$ACCOUNT_SAMPLE_SENT" ] || return 0
     moe_rpc report_account_usage "$args" >/dev/null 2>&1 || return 1
@@ -9856,7 +9875,11 @@ print(json.dumps({"workerId": sys.argv[1], "accountId": sys.argv[2], "windows": 
 # After a leased run: report its last usage sample, then ask whether the run
 # failed because of its account. A refusal needs both signals (the CLI said the
 # account is spent, and the run failed); any other failure checks the account's
-# sign-in. Once the daemon has answered, the account is parked, so the relaunch
+# sign-in. A run claude stopped at the limit (a `rejected` window,
+# ACCOUNT_LIMIT_HIT) failed whatever its exit code: moe-account-switch ends that
+# interactive session with /exit, exit 0 (measured 2026-11-20: five such exits
+# paused auto-resume, idle for 2.5 h after the limit reset). Once the daemon has
+# answered, the account is parked, so the relaunch
 # is immediate and lands on the next one (ACCOUNT_RELAUNCH). An unanswered
 # report, or the account the previous account relaunch moved away from failing
 # again (a daemon that hands it back would otherwise relaunch with no backoff
@@ -9865,7 +9888,7 @@ account_after_exit() {
     local reported=true state
     [ -n "$ACCOUNT_LEASED_ID" ] || return 0
     report_account_sample || reported=false
-    if [ "$1" = 0 ]; then
+    if [ "$1" = 0 ] && [ "$ACCOUNT_LIMIT_HIT" != true ]; then
         ACCOUNT_LAST_FAILED=""
         return 0
     fi
@@ -9875,6 +9898,7 @@ account_after_exit() {
         ACCOUNT_RELAUNCH=true
         return 0
     fi
+    [ "$1" != 0 ] || return 0
     state=$("$NODE_CMD" "$ACCOUNT_HELPER" signin-state "$ACCOUNT_LEASED_DIR" "$COMMAND_BIN" "${COMMAND_ARGV[@]}" 2>/dev/null) || state=""
     case "$state" in signed_out|other) ;; *) return 0 ;; esac
     moe_rpc report_account_usage "{\"workerId\":\"$WORKER_ID\",\"accountId\":\"$ACCOUNT_LEASED_ID\",\"signIn\":\"$state\"}" >/dev/null 2>&1 || return 0
@@ -12668,7 +12692,7 @@ PYEOF
         if [ "$RESUME_ATTEMPTS" -gt 0 ]; then RESUME_ATTEMPTS=$((RESUME_ATTEMPTS - 1)); fi
         LAUNCH_FAIL_STREAK=0
         LAUNCH_FAIL_BACKOFF_SEC=0
-    elif [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
+    elif { [ "$CLI_EXIT_FOR_LAUNCH" != "0" ] || [ "$ACCOUNT_LIMIT_HIT" = true ]; } && [ "$CLI_ELAPSED_SEC" -ge 0 ] && [ "$CLI_ELAPSED_SEC" -lt "$LAUNCH_FAIL_SEC" ]; then
         CURRENT_LAUNCH_FAILED=true
         LAUNCH_FAIL_STREAK=$((LAUNCH_FAIL_STREAK + 1))
         # Not a mid-task death: give the resume attempt back.
@@ -12681,8 +12705,10 @@ PYEOF
         if [ "$LAUNCH_FAIL_STREAK" -eq 3 ]; then
             LAUNCH_FAIL_HEAD="@governors $WORKER_ID: CLI exits within ${LAUNCH_FAIL_SEC}s of launch (exit $CLI_EXIT_FOR_LAUNCH, $LAUNCH_FAIL_STREAK in a row) - provider usage limit, credential problem, or an argv the installed CLI rejects (exit 2: a CLI auto-update dropped a flag the wrapper passes), not a task problem."
             # VM seats cannot run a taskless recovery probe. Keep their task
-            # and use the same bounded backoff plus one escalation below.
-            if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$VM_ROUTE" != true ]; then
+            # and use the same bounded backoff plus one escalation below. So
+            # does a seat claude stopped at the usage limit: the limit resets on
+            # its own, and the seat resumes its task then instead of releasing it.
+            if [ "$AUTO_CLAIM" = true ] && [ "$ROLE" != "governor" ] && [ "$VM_ROUTE" != true ] && [ "$ACCOUNT_LIMIT_HIT" != true ]; then
                 # Launch outage mode (declared above the loop). The release and
                 # its @governors line wait for this iteration's post-flight
                 # (launch_outage_postflight), so the landing and finalize see the
