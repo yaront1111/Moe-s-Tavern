@@ -1,6 +1,6 @@
 import { expect, mock, test, type Engine } from 'claude-code/testing'
 import type { On, RenderSurface, SessionUsage } from 'claude-code'
-import { EXIT_DELAY_MS, IDLE } from './register.ts'
+import { CHAT_WAIT_MAX_MS, EXIT_DELAY_MS, IDLE } from './register.ts'
 
 const SEAT = { MOE_WORKER_ID: 'governor-1', MOE_ACCOUNT_ID: 'acct-1' }
 const CAUSE = 'Claude account One is at 93% of its usage limit (Moe switches at 90%)'
@@ -156,6 +156,28 @@ test('without a leased account an account switch is ignored', async ($, on) => {
   await $.turn.complete({ ...TURN, turnId: 't1' })
   await clock.advance(EXIT_DELAY_MS)
   expect(seen.commands).toEqual([])
+})
+
+// claude moves a tool call still running after 120 s to the background, and the
+// reply never passes this hook (a governor's 600 s wait, 11-20).
+test('a marked chat_wait waits at most CHAT_WAIT_MAX_MS, so its reply comes back through the hook', async ($, on) => {
+  mock.env(on, SEAT)
+  const seen = engine(on)
+  await call($, 'chat_wait', { workerId: 'governor-1', timeoutMs: 600_000 })
+  await call($, 'chat_wait', { workerId: 'governor-1' }) // the daemon's default is 300 s
+  await call($, 'chat_wait', { workerId: 'governor-1', timeoutMs: 5_000 })
+  await call($, 'chat_wait', { workerId: 'governor-1', timeoutMs: 0 })
+  await call($, 'claim_next_task', { statuses: ['PLANNING'] })
+  expect(CHAT_WAIT_MAX_MS).toBeLessThan(120_000)
+  expect(seen.calls.map(c => c.timeoutMs)).toEqual([CHAT_WAIT_MAX_MS, CHAT_WAIT_MAX_MS, 5_000, 0, undefined])
+})
+
+test('an unmarked chat_wait keeps the wait it asked for', async ($, on) => {
+  mock.env(on, { MOE_WORKER_ID: 'governor-1' })
+  const seen = engine(on)
+  await call($, 'chat_wait', { workerId: 'governor-1', timeoutMs: 600_000 })
+  await call($, 'chat_wait', { workerId: 'governor-1' })
+  expect(seen.calls.map(c => c.timeoutMs)).toEqual([600_000, undefined])
 })
 
 // An architect whose row ended without submit_plan (archive_task) claims its
