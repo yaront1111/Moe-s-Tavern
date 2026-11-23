@@ -149,3 +149,35 @@ describe('attributionTiers junk tolerance', () => {
     });
   });
 });
+
+describe('attributionTiers board state', () => {
+  // A landing carries other tasks' records (the wrapper's BOARD tier) and
+  // record_commit stores them in commits[].paths and filesModified. Kept in the
+  // tiers, a peer's record read as contested and complete_task told the seat to
+  // edit daemon-written state (2026-11-22).
+  const BOARD = ['.moe/tasks/task-peer.json', '.moe/tasks/task-own.json', '.moe/epics/epic-1.json', '.moe/project.json'];
+
+  it('drops every .moe/ path from the asserted, planned and declared tiers and keeps the source paths', () => {
+    const task = asTask({
+      id: 'task-own',
+      implementationPlan: [
+        { stepId: 's1', description: 'a', status: 'COMPLETED', affectedFiles: ['src/done.ts', ...BOARD] },
+        { stepId: 's2', description: 'b', status: 'PENDING', affectedFiles: ['src/next.ts', ...BOARD], newFiles: ['src/new.ts', ...BOARD] },
+      ],
+      filesModified: ['src/fm.ts', ...BOARD],
+      // Worker-typed spellings are judged after normalization.
+      declaredFiles: ['src/decl.ts', ...BOARD, './.moe/tasks/task-peer.json', '.moe\\project.json'],
+      touchedFiles: ['src/touched.ts', ...BOARD],
+      inferredPaths: ['src/measured.ts', ...BOARD],
+      // A nested .moe/ directory and a root name that merely starts with .moe are not the board.
+      commits: [{ paths: ['src/committed.ts', ...BOARD, 'src/.moe/fixture.json', '.moerc.json'] }],
+    });
+    const asserted = ['src/done.ts', 'src/fm.ts', 'src/decl.ts', 'src/touched.ts', 'src/committed.ts', 'src/.moe/fixture.json', '.moerc.json'];
+    const planned = ['src/next.ts', 'src/new.ts', 'src/measured.ts'];
+
+    expect(collectAssertedPaths(task)).toEqual(asserted);
+    expect(collectTaskPathTiers(task)).toEqual({ asserted, planned });
+    expect(collectDeclaredPaths(task)).toEqual(['src/decl.ts']);
+    expect(collectPeerPaths(task)).toEqual([...asserted, ...planned]);
+  });
+});

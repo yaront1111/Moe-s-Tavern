@@ -1201,6 +1201,37 @@ describe('moe.complete_task — landing preview (contested holds)', () => {
     expect(previewPosts()).toEqual([]);
   });
 
+  it('previews no board record, though both tasks\' landings carried the same two records', async () => {
+    // 2026-11-22/23: three completions in 45 min previewed a peer's .moe/tasks record
+    // as contested and were told to re-apply it with an editing tool; one landed that
+    // very record. The wrapper lands .moe/** as BOARD or skips it before any contested check.
+    const BOARD = ['.moe/tasks/task-1.json', '.moe/tasks/task-2.json'];
+    const landed = (sha: string, paths: string[]) => ({
+      sha, ref: 'moe/work', kind: 'completion' as const, role: 'worker', sessionId: 'worker-x@t',
+      paths, recordedBy: 'worker-x', recordedAt: '2026-11-22T23:00:00.000Z',
+    });
+    dirty = [OWN, ...BOARD];
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({
+      id: 'task-1', status: 'WORKING', assignedWorkerId: 'worker-a', commits: [landed('a'.repeat(40), BOARD)],
+      implementationPlan: [{ stepId: 'step-1', description: 'd', status: 'COMPLETED', affectedFiles: [OWN] }],
+    });
+    h.createTask({
+      id: 'task-2', status: 'REVIEW', order: 2, assignedWorkerId: null,
+      commits: [landed('b'.repeat(40), ['src/other.ts', ...BOARD])],
+    });
+    await h.state.load();
+    governorsPost = vi.spyOn(h.state, 'postToRoleChannel').mockResolvedValue(undefined);
+
+    const result = await complete();
+    expect(result.status).toBe('REVIEW');
+    expect(result.landingPreview).toBeUndefined();
+    expect((result.nextAction as { tool?: string }).tool).toBe('moe.wait_for_task');
+    expect(gitCalls).toEqual([]);
+    expect(previewPosts()).toEqual([]);
+  });
+
   it('previews a dirty path an idle peer also declares as contested, with the Edit remedy, before the session exits', async () => {
     await boot({ peerStep: 'PENDING', peerWorker: null });
     const result = await complete();
