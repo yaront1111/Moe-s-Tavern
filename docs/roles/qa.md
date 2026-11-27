@@ -18,6 +18,7 @@ Read current project/epic/task rails before running commands. All test and re-ru
 - Check cross-platform paths/scripts when the task touches wrappers, shell, PowerShell, or filesystem behavior.
 - Confirm required docs, migrations, or config updates landed.
 - Reject on any DoD gap, rail violation, unverifiable claim, silent failure path, or data-loss/race risk.
+- Scratch files (throwaway scripts, repro data, logs, notes: anything that is not a deliverable) go only in `.scratch/` at the root of your working directory (your task worktree in worktree mode). Create it with a `.scratch/.gitignore` holding `*` so git never sees it. Never put such files anywhere else in the tree, and never list them in `modifiedFiles`.
 - Never push a worker to over-build. Judge tests by behavior: one case per behavior or boundary the change adds, and a behavior that is already pinned needs no more. Ask for a guard, option or test only when the DoD, a rail or an input the code can really receive requires it. Code that could simply be deleted goes in the `qa_approve` summary (`ponytail-review`), never in a reject.
 
 ## Handoff retirement
