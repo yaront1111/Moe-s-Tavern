@@ -200,6 +200,27 @@ describe('moe.get_commit_scope', () => {
     expect(byPath.has(pathKey('src/mine.ts'))).toBe(false);
   });
 
+  it('puts no board record in the PEER map, even one a peer\'s landing carried', async () => {
+    // The BOARD tier lands other tasks' records with a landing, so they reach the
+    // peer's commits[].paths. They are daemon-written state, never a contested path.
+    h.setupMoeFolder();
+    h.createEpic();
+    h.createTask({ id: 'task-1', status: 'WORKING', implementationPlan: [
+      { stepId: 's1', description: 'a', status: 'COMPLETED', affectedFiles: ['src/mine.ts'] },
+    ] });
+    h.createTask({ id: 'task-p1', status: 'REVIEW', commits: [{
+      sha: 'abc1234', ref: 'moe/work-2026-11-22', kind: 'completion', role: 'worker', sessionId: 'worker-p@t',
+      paths: ['src/peer.ts', '.moe/tasks/task-1.json', '.moe/tasks/task-p1.json', '.moe/epics/epic-1.json', '.moe/project.json'],
+      recordedBy: 'worker-p', recordedAt: '2026-11-22T00:00:00.000Z',
+    }] });
+    await h.state.load();
+
+    const result = await scope();
+    expect(result.peerDeclared.map((e) => e.path)).toEqual(['src/peer.ts']);
+    // The ride-along itself stays: the peer's record is still a BOARD candidate.
+    expect(result.alwaysInclude).toContain('.moe/tasks/task-p1.json');
+  });
+
   it('ignores the plan-declared paths of a peer that waits on this task, but keeps its asserted ones', async () => {
     // The regression (task-435683c2, 2026-09-11): every link of a serialized
     // chain declares the same shared files in its plan. A downstream link that

@@ -242,7 +242,7 @@ A step hint's reason quotes the step's effective text: its active amendment when
     dependsOnUnmet?: string[],          // the dependsOn subset the dependency gate does not yet count as satisfied, judged with THIS task as consumer (CQ-V09) (present alongside dependsOn)
     blockedOnTaskIds?: string[],        // BLOCKED tasks only (with the other blocked* fields): what this row waits on (report_blocked param ∪ ids auto-parsed from the reason) — auto-unblocks when the same gate counts all as satisfied
     filesModified: string[],            // ASSERTED paths: completed steps' modifiedFiles ?? affectedFiles (complete_task) ∪ non-inferred paths landed via record_commit
-    declaredPaths?: string[],           // the full ASSERTED tier (completed steps' modifiedFiles ?? affectedFiles ∪ filesModified ∪ declaredFiles ∪ touchedFiles ∪ non-inferred committed paths) — what the wrapper commits when the dirty bytes are this task's (its moe.declare_files paths regardless of baseline); NOT just the moe.declare_files list
+    declaredPaths?: string[],           // the full ASSERTED tier (completed steps' modifiedFiles ?? affectedFiles ∪ filesModified ∪ declaredFiles ∪ touchedFiles ∪ non-inferred committed paths, minus `.moe/**` board state) — what the wrapper commits when the dirty bytes are this task's (its moe.declare_files paths regardless of baseline); NOT just the moe.declare_files list
     inferredPaths?: string[],           // MEASURED-tier paths the wrapper landed; never promoted to asserted
     unattributedPaths?: string[],       // changed paths the last landing could not attribute (reported, never staged) — claim them with moe.declare_files
     commits?: Array<{ sha, treeId?, ref, kind: "completion" | "checkpoint" | "rescue", status?, pushed?, recordedAt, recordedBy, pathCount, inferredCount }>, // bounded projection of task.commits (moe.record_commit)
@@ -766,11 +766,11 @@ All seven are required; `additionalProperties` is `false`.
                               // claim_next_task's finalizing hold selects it (util/claimEligibility.ts finalizingAttemptsByTask: phase finalizing,
                               // non-blank id/taskId/workerId, safe-integer generation >= 1, the highest generation wins), named whoever holds it,
                               // the caller's own included; null when there is none. Additive: an older daemon omits it — see "Finalizing hold"
-  asserted: string[],         // ⋃ COMPLETED steps' (modifiedFiles ?? affectedFiles) ∪ task.filesModified ∪ task.declaredFiles ∪ task.touchedFiles ∪ non-inferred commits[].paths
+  asserted: string[],         // ⋃ COMPLETED steps' (modifiedFiles ?? affectedFiles) ∪ task.filesModified ∪ task.declaredFiles ∪ task.touchedFiles ∪ non-inferred commits[].paths, minus `.moe/**` (board state: landed by the BOARD rule or excluded, never contested)
   declared: string[],         // task.declaredFiles (moe.declare_files) ⊆ asserted: committed regardless of the pre-task baseline. Every other asserted path is
                               // committed only when this task produced its dirty bytes, else skipped as MOE_ATTR_ASSERTED_FOREIGN. Additive: a wrapper
                               // that predates the field ignores it; a wrapper that finds it absent (older daemon) treats every asserted path as declared
-  planned: string[],          // ⋃ ALL steps' (affectedFiles ∪ newFiles ∪ modifiedFiles) ∪ task.inferredPaths, minus asserted
+  planned: string[],          // ⋃ ALL steps' (affectedFiles ∪ newFiles ∪ modifiedFiles) ∪ task.inferredPaths, minus asserted and `.moe/**`
   touchedFiles: string[],
   inferredPaths: string[],
   unattributedPaths: string[],

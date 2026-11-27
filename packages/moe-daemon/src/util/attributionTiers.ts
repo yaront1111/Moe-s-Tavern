@@ -16,6 +16,11 @@
 // PLANNED  = (⋃_{ALL steps}(affectedFiles ∪ newFiles ∪ modifiedFiles)
 //            ∪ task.inferredPaths) − ASSERTED
 //
+// Board state is never a task's path: all three tiers drop `.moe/**` (compared
+// by pathKey), because the wrapper lands it by its BOARD rule or skips it as
+// MOE_ATTR_EXCLUDED before any attribution check. Dropping it here, on read,
+// also clears rows whose stored commits[] already carry a peer's record.
+//
 // Stored paths are worker-typed (complete_step does no normalization), so
 // every entry is canonicalized through normalizeAffectedFile and deduped by
 // pathKey; entries that cannot be normalized (absolute, traversal) are DROPPED
@@ -124,6 +129,11 @@ export interface TaskPathTiers {
   planned: string[];
 }
 
+/** A normalized path under `.moe/`: board state, never a task's path (see the header). */
+function isBoardPath(normalized: string): boolean {
+  return pathKey(normalized).startsWith('.moe/');
+}
+
 /** ASSERTED tier for one task (see the header for the exact union). */
 export function collectAssertedPaths(task: Task): string[] {
   const set = new PathSet();
@@ -134,7 +144,7 @@ export function collectAssertedPaths(task: Task): string[] {
   for (const commit of asList(task.commits)) {
     if (isRecord(commit)) set.addAll(nonInferredCommitPaths(commit as unknown as TaskCommit));
   }
-  return set.values();
+  return set.values().filter((p) => !isBoardPath(p));
 }
 
 /**
@@ -143,7 +153,7 @@ export function collectAssertedPaths(task: Task): string[] {
  * only when this task produced the dirty bytes.
  */
 export function collectDeclaredPaths(task: Pick<Task, 'declaredFiles'>): string[] {
-  return new PathSet().addAll(task.declaredFiles).values();
+  return new PathSet().addAll(task.declaredFiles).values().filter((p) => !isBoardPath(p));
 }
 
 /** Both tiers for one task; `planned` never overlaps `asserted`. */
@@ -154,13 +164,13 @@ export function collectTaskPathTiers(task: Task): TaskPathTiers {
   for (const step of planSteps(task)) {
     for (const raw of [...asList(step.affectedFiles), ...asList(step.newFiles), ...asList(step.modifiedFiles)]) {
       const normalized = tolerantNormalizePath(raw);
-      if (normalized === null || assertedSet.has(normalized)) continue;
+      if (normalized === null || isBoardPath(normalized) || assertedSet.has(normalized)) continue;
       planned.add(normalized);
     }
   }
   for (const raw of asList(task.inferredPaths)) {
     const normalized = tolerantNormalizePath(raw);
-    if (normalized === null || assertedSet.has(normalized)) continue;
+    if (normalized === null || isBoardPath(normalized) || assertedSet.has(normalized)) continue;
     planned.add(normalized);
   }
   return { asserted, planned: planned.values() };
