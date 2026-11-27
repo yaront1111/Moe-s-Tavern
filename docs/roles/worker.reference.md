@@ -86,7 +86,7 @@ What gets staged is decided per path, never `git add -A`: **ASSERTED** (every co
 
 An unknown push outcome (`MOE_PUSH_OUTCOME_UNKNOWN`) is not unlanded: no ref moves, and the attempt stays finalizing until a pre-flight replay settles it.
 
-There is no baseline and no tier: every dirty path in the worktree lands, untracked ones included (gitignored files never show), so keep scratch files out. DENY still holds: the paths listed above, with no exception for your task record (a worktree has no `.moe/`), plus `.claude/skills/**`. An edit written into the control checkout is never landed or reverted. Post-flight reports it once as `MOE_WORKTREE_STRAY_EDIT`, in a task comment naming the paths, and a human decides. If you pass `currentBranch` to `moe.complete_task`, it must be `moe/task/<taskId>`; otherwise the call fails with `BRANCH-POLICY-FAIL:`.
+There is no baseline and no tier: every dirty path in the worktree lands, untracked ones included (gitignored files never show), so keep scratch files only in `.scratch/`, which its own `.gitignore` (`*`) hides. DENY still holds: the paths listed above, with no exception for your task record (a worktree has no `.moe/`), plus `.claude/skills/**`. An edit written into the control checkout is never landed or reverted. Post-flight reports it once as `MOE_WORKTREE_STRAY_EDIT`, in a task comment naming the paths, and a human decides. If you pass `currentBranch` to `moe.complete_task`, it must be `moe/task/<taskId>`; otherwise the call fails with `BRANCH-POLICY-FAIL:`.
 
 Practical rules:
 
